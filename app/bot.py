@@ -257,7 +257,13 @@ async def show_war(message: Message) -> None:
 
     db = get_storage()
     factions = db.get_factions()
-    lines = [f"• {f['name']}: казна {f['treasury']} RU" for f in factions]
+    current_faction = player.faction or ""
+    own_faction = next((f for f in factions if f["name"] == current_faction), None)
+    own_treasury_text = (
+        f"• {current_faction}: казна {own_faction['treasury']} RU"
+        if own_faction is not None
+        else "• Данные по казне временно недоступны"
+    )
     explainer = (
         "Сценарий войны (базовая версия):\n"
         "• Точки ресурсов приносят деньги группировке.\n"
@@ -265,7 +271,7 @@ async def show_war(message: Message) -> None:
         "• Точки интереса уменьшают время прибытия.\n"
         "• Шанс боя: сила отряда / (сила отряда + сила NPC).\n"
     )
-    await message.answer(explainer + "\nТекущая экономика группировок:\n" + "\n".join(lines))
+    await message.answer(explainer + "\nЭкономика твоей группировки:\n" + own_treasury_text)
     await message.answer(
         "Выбери точку для штурма:",
         reply_markup=locations_keyboard(db.get_locations(), mode="war"),
