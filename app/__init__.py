@@ -1,0 +1,1 @@
+"""Telegram stalker game package."""
