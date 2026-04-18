@@ -17,5 +17,5 @@ def load_settings() -> Settings:
     token = os.getenv("BOT_TOKEN", "").strip()
     if not token:
         raise ValueError("BOT_TOKEN is not set. Put it in .env or environment variables.")
-    db_path = os.getenv("DB_PATH", "stalker_game.db")
+    db_path = os.getenv("DB_PATH", "/data/stalker_game.db")
     return Settings(bot_token=token, db_path=db_path)

@@ -172,6 +172,8 @@ def format_inventory(character: Character) -> str:
 
     return (
         f"👤 {character.nickname} ({character.gender})\n"
+        f"ID-адрес: {character.player_uid}\n"
+        f"Telegram ID: {character.telegram_id}\n"
         f"Фракция: {character.faction or 'не выбрана'}\n"
         f"Локация: {character.location}\n"
         f"Здоровье: {character.health}\n"

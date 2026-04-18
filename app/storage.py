@@ -14,9 +14,14 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def build_player_uid(telegram_id: int) -> str:
+    return f"STK-{telegram_id}"
+
+
 @dataclass
 class Character:
     telegram_id: int
+    player_uid: str
     nickname: str
     gender: str
     faction: str | None
@@ -49,6 +54,7 @@ class Storage:
                 """
                 CREATE TABLE IF NOT EXISTS characters (
                     telegram_id INTEGER PRIMARY KEY,
+                    player_uid TEXT UNIQUE,
                     nickname TEXT NOT NULL,
                     gender TEXT NOT NULL,
                     faction TEXT,
@@ -66,6 +72,7 @@ class Storage:
                 )
                 """
             )
+            self._ensure_characters_schema(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS factions (
@@ -100,14 +107,18 @@ class Storage:
             )
 
     def create_character(self, telegram_id: int, nickname: str, gender: str) -> None:
+        player_uid = build_player_uid(telegram_id)
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO characters(
-                    telegram_id, nickname, gender, energy_updated_at
-                ) VALUES(?, ?, ?, ?)
+                    telegram_id, player_uid, nickname, gender, energy_updated_at
+                ) VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(telegram_id) DO UPDATE SET
+                    nickname = excluded.nickname,
+                    gender = excluded.gender
                 """,
-                (telegram_id, nickname, gender, utc_now().isoformat()),
+                (telegram_id, player_uid, nickname, gender, utc_now().isoformat()),
             )
 
     def get_character(self, telegram_id: int, refresh_energy: bool = True) -> Character | None:
@@ -321,12 +332,32 @@ class Storage:
                 (json.dumps(inventory, ensure_ascii=False), telegram_id),
             )
 
+    def _ensure_characters_schema(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(characters)").fetchall()
+        column_names = {row["name"] for row in columns}
+        if "player_uid" not in column_names:
+            conn.execute("ALTER TABLE characters ADD COLUMN player_uid TEXT")
+
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_player_uid ON characters(player_uid)"
+        )
+        # Backfill ID-address for old rows created before this column existed.
+        rows = conn.execute(
+            "SELECT telegram_id FROM characters WHERE player_uid IS NULL OR TRIM(player_uid) = ''"
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                "UPDATE characters SET player_uid = ? WHERE telegram_id = ?",
+                (build_player_uid(int(row["telegram_id"])), int(row["telegram_id"])),
+            )
+
     @staticmethod
     def _row_to_character(row: sqlite3.Row) -> Character:
         inventory = json.loads(row["inventory_json"])
         equipment = json.loads(row["equipment_json"])
         return Character(
             telegram_id=row["telegram_id"],
+            player_uid=row["player_uid"] or build_player_uid(row["telegram_id"]),
             nickname=row["nickname"],
             gender=row["gender"],
             faction=row["faction"],

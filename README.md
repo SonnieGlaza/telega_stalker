@@ -42,7 +42,7 @@ cp .env.example .env
 
 ```env
 BOT_TOKEN=твой_токен_бота
-DB_PATH=stalker_game.db
+DB_PATH=/data/stalker_game.db
 ```
 
 Запуск:
@@ -80,6 +80,12 @@ chmod +x start.sh
 - `app/game_logic.py` — квесты, торговля, энергия, война, переходы
 - `app/keyboards.py` — reply/inline-клавиатуры
 - `run.py` — точка входа
+
+## Важно для Railway (сохранение персонажа)
+
+- Обязательно укажи `DB_PATH=/data/stalker_game.db`, чтобы база лежала в persistent volume.
+- Если использовать `stalker_game.db` в корне контейнера, при новом деплое данные могут сбрасываться.
+- У каждого игрока есть отдельный ID-адрес вида `STK-<telegram_id>`, он показывается в инвентаре.
 
 ## Дальнейшее развитие
 

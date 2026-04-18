@@ -112,12 +112,13 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     db = get_storage()
-    if db.get_character(callback.from_user.id) is None:
-        db.create_character(callback.from_user.id, nickname=nickname, gender=gender)
+    db.create_character(callback.from_user.id, nickname=nickname, gender=gender)
 
     await state.clear()
+    saved = db.get_character(callback.from_user.id, refresh_energy=False)
+    uid_line = f"\nТвой ID в Зоне: {saved.player_uid}" if saved else ""
     await callback.message.answer(
-        f"Персонаж создан: {nickname} ({gender}).\nВыбери сторону:",
+        f"Персонаж создан: {nickname} ({gender}).{uid_line}\nВыбери сторону:",
         reply_markup=faction_keyboard(),
     )
     await callback.answer()
