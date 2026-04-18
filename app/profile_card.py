@@ -11,8 +11,9 @@ from app.skins import resolve_skin
 from app.storage import Character
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FONT_CANDIDATES = (
-    "/workspace/app/assets/fonts/DejaVuSans.ttf",
+    str(PROJECT_ROOT / "assets" / "fonts" / "DejaVuSans.ttf"),
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
     "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
