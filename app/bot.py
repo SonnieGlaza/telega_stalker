@@ -57,10 +57,18 @@ def player_ready(player: Character) -> bool:
 async def cmd_start(message: Message, state: FSMContext) -> None:
     player = get_storage().get_character(message.from_user.id)
     if player is None:
+        current_state = await state.get_state()
+        if current_state == Registration.nickname.state:
+            await message.answer("Регистрация уже начата. Введи прозвище.")
+            return
+        if current_state == Registration.gender.state:
+            await message.answer("Регистрация уже начата. Выбери пол персонажа:", reply_markup=gender_keyboard())
+            return
         await state.set_state(Registration.nickname)
         await message.answer("Привет, сталкер! Какое у тебя прозвище?")
         return
 
+    await state.clear()
     if not player_ready(player):
         await message.answer(
             "Персонаж уже создан. Теперь выбери группировку:",
@@ -68,7 +76,6 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         )
         return
 
-    await state.clear()
     await message.answer(
         f"С возвращением, {player.nickname}! Добро пожаловать в Зону.",
         reply_markup=main_menu_keyboard(),
@@ -82,6 +89,21 @@ async def cmd_menu(message: Message) -> None:
 
 @router.message(Registration.nickname)
 async def process_nickname(message: Message, state: FSMContext) -> None:
+    existing = get_storage().get_character(message.from_user.id, refresh_energy=False)
+    if existing is not None:
+        await state.clear()
+        if player_ready(existing):
+            await message.answer(
+                f"Персонаж уже зарегистрирован: {existing.nickname}. Открываю меню.",
+                reply_markup=main_menu_keyboard(),
+            )
+        else:
+            await message.answer(
+                "Персонаж уже создан. Осталось выбрать группировку:",
+                reply_markup=faction_keyboard(),
+            )
+        return
+
     nickname = (message.text or "").strip()
     if len(nickname) < 2:
         await message.answer("Прозвище слишком короткое. Введи хотя бы 2 символа.")
@@ -126,7 +148,7 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data.startswith("faction:"))
-async def process_faction(callback: CallbackQuery) -> None:
+async def process_faction(callback: CallbackQuery, state: FSMContext) -> None:
     faction = (callback.data or "").split(":", maxsplit=1)[1]
     db = get_storage()
     player = db.get_character(callback.from_user.id, refresh_energy=False)
@@ -139,6 +161,7 @@ async def process_faction(callback: CallbackQuery) -> None:
         return
 
     db.set_faction(callback.from_user.id, faction)
+    await state.clear()
     await callback.message.answer(
         f"Принято. Теперь ты в группировке «{faction}».\nОткрываю меню персонажа.",
         reply_markup=main_menu_keyboard(),
@@ -315,6 +338,13 @@ async def handle_war(callback: CallbackQuery) -> None:
 
 @router.message()
 async def fallback(message: Message) -> None:
+    player = ensure_character(message)
+    if player is not None:
+        await message.answer(
+            "Команда не распознана. Используй кнопки меню.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
     await message.answer(
         "Команда не распознана. Нажми /start или /menu.",
         reply_markup=main_menu_keyboard(),
