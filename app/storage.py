@@ -135,6 +135,14 @@ class Storage:
             return None
         return self._row_to_character(row)
 
+    def character_exists(self, telegram_id: int) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM characters WHERE telegram_id = ?",
+                (telegram_id,),
+            ).fetchone()
+        return row is not None
+
     def set_faction(self, telegram_id: int, faction: str) -> None:
         with self._connect() as conn:
             conn.execute(

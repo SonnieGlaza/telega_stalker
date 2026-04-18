@@ -23,7 +23,6 @@ from app.game_logic import (
     use_energy_drink,
 )
 from app.keyboards import (
-    avatar_style_keyboard,
     faction_keyboard,
     gender_keyboard,
     locations_keyboard,
@@ -57,7 +56,27 @@ def player_ready(player: Character) -> bool:
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext) -> None:
-    player = get_storage().get_character(message.from_user.id)
+    telegram_id = message.from_user.id
+    db = get_storage()
+    player = db.get_character(telegram_id, refresh_energy=False)
+
+    # Main guard: if ID already exists in DB, never restart registration flow.
+    if player is not None:
+        await state.clear()
+        if not player_ready(player):
+            await message.answer(
+                "Персонаж найден по твоему ID. Выбери группировку:",
+                reply_markup=faction_keyboard(),
+            )
+            return
+        await message.answer(
+            f"С возвращением, {player.nickname}! Добро пожаловать в Зону.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+
+    # No account for this Telegram ID yet -> normal registration flow.
+    player = db.get_character(telegram_id)
     if player is None:
         current_state = await state.get_state()
         if current_state == Registration.nickname.state:
@@ -66,22 +85,12 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         if current_state == Registration.gender.state:
             await message.answer("Регистрация уже начата. Выбери пол персонажа:", reply_markup=gender_keyboard())
             return
+        await state.clear()
         await state.set_state(Registration.nickname)
         await message.answer("Привет, сталкер! Какое у тебя прозвище?")
         return
-
-    await state.clear()
-    if not player_ready(player):
-        await message.answer(
-            "Персонаж уже создан. Теперь выбери группировку:",
-            reply_markup=faction_keyboard(),
-        )
-        return
-
-    await message.answer(
-        f"С возвращением, {player.nickname}! Добро пожаловать в Зону.",
-        reply_markup=main_menu_keyboard(),
-    )
+    # Defensive fallback (should be unreachable).
+    await message.answer("Сбой проверки аккаунта. Попробуй /start еще раз.")
 
 
 @router.message(Command("menu"))
@@ -205,51 +214,6 @@ async def show_profile(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     await send_profile_snapshot(message, player)
-
-
-@router.message(F.text == "🎨 Стиль аватара")
-async def show_avatar_style_menu(message: Message) -> None:
-    player = ensure_character(message)
-    if player is None:
-        await message.answer("Сначала создай персонажа через /start.")
-        return
-    style_title = "Реалистичный" if player.avatar_style == "realistic" else "Классический"
-    await message.answer(
-        f"Текущий стиль аватара: {style_title}\nВыбери новый стиль:",
-        reply_markup=avatar_style_keyboard(player.avatar_style),
-    )
-
-
-@router.callback_query(F.data.startswith("avatar"))
-async def handle_avatar_style(callback: CallbackQuery) -> None:
-    raw_data = callback.data or ""
-    if raw_data.startswith("avatar_style:"):
-        style = raw_data.split(":", maxsplit=1)[1]
-    elif raw_data.startswith("avatarstyle:"):
-        # Backward compatibility for old inline keyboards still visible in chat history.
-        style = raw_data.split(":", maxsplit=1)[1]
-    else:
-        await callback.answer("Неизвестная команда стиля", show_alert=True)
-        return
-
-    if style not in {"classic", "realistic"}:
-        await callback.answer("Неизвестный стиль", show_alert=True)
-        return
-    await callback.answer("Применяю стиль...")
-
-    db = get_storage()
-    player = db.get_character(callback.from_user.id, refresh_energy=False)
-    if player is None:
-        await callback.answer("Сначала создай персонажа", show_alert=True)
-        return
-    db.set_avatar_style(callback.from_user.id, style)
-    updated = db.get_character(callback.from_user.id, refresh_energy=False)
-    if updated is None:
-        await callback.answer("Ошибка обновления стиля", show_alert=True)
-        return
-    style_title = "Реалистичный" if style == "realistic" else "Классический"
-    await callback.message.answer(f"Стиль аватара обновлен: {style_title}.")
-    await send_profile_snapshot(callback.message, updated)
 
 
 @router.message(F.text == "🛒 Торговец")
