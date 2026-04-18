@@ -216,7 +216,6 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
     return ActionResult(
         False,
         f"Провал задания «{quest.title}». Шанс {breakdown.chance}% (бросок {roll}).\n"
-        f"Формула: база {breakdown.base_chance}% + патроны {breakdown.ammo_bonus}% + аптечки {breakdown.medkit_bonus}%.\n"
         f"Расход: патроны {quest.ammo_required}, аптечки {quest.medkit_required}.\n"
         f"Потери на расходники: {penalty} RU.",
     )
