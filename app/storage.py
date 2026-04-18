@@ -254,6 +254,14 @@ class Storage:
         self._set_inventory(telegram_id, inventory)
         return True
 
+    def set_equipment_item(self, telegram_id: int, slot: str, value: str) -> None:
+        character = self.get_character(telegram_id, refresh_energy=False)
+        if character is None:
+            return
+        equipment = dict(character.equipment)
+        equipment[slot] = value
+        self._set_equipment(telegram_id, equipment)
+
     def set_truck_owned(self, telegram_id: int) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -330,6 +338,13 @@ class Storage:
             conn.execute(
                 "UPDATE characters SET inventory_json = ? WHERE telegram_id = ?",
                 (json.dumps(inventory, ensure_ascii=False), telegram_id),
+            )
+
+    def _set_equipment(self, telegram_id: int, equipment: dict[str, str]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET equipment_json = ? WHERE telegram_id = ?",
+                (json.dumps(equipment, ensure_ascii=False), telegram_id),
             )
 
     def _ensure_characters_schema(self, conn: sqlite3.Connection) -> None:

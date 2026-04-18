@@ -15,10 +15,9 @@ from app.config import load_settings
 from app.game_logic import (
     attack_location,
     buy_item,
-    calculate_quest_success,
+    build_quest_overview,
     format_inventory,
     run_quest,
-    quest_ammo_requirements,
     sell_item,
     travel_to,
     use_energy_drink,
@@ -250,19 +249,13 @@ async def show_quests(message: Message) -> None:
         await message.answer("Сначала выбери группировку.")
         return
 
-    lines = ["Выбери сложность задания.", "Шанс успеха зависит от снаряги и амуниции:"]
-    for key, quest in (
-        ("easy", "Легко"),
-        ("hard", "Сложно"),
-        ("heavy", "Тяжело"),
-        ("impossible", "Невозможно"),
-    ):
-        req = quest_ammo_requirements(key)
-        chance = calculate_quest_success(player, key)
-        lines.append(
-            f"• {quest}: шанс {chance}% (патроны {req['ammo_pack']}, аптечки {req['medkit']})"
-        )
-    await message.answer("\n".join(lines), reply_markup=quests_keyboard())
+    overview = build_quest_overview(player)
+    await message.answer(
+        "Выбери сложность задания.\n"
+        "Шанс успеха зависит от снаряги и амуниции.\n\n"
+        f"{overview}",
+        reply_markup=quests_keyboard(),
+    )
 
 
 @router.callback_query(F.data.startswith("quest:"))

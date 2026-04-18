@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PIL import Image, ImageDraw
 
 from app.storage import Character
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+AVATAR_DIR = PROJECT_ROOT / "assets" / "avatars"
 
 
 def _tier(character: Character) -> int:
@@ -49,7 +55,34 @@ def _palette(tier: int) -> dict[str, tuple[int, int, int]]:
     return palettes[tier]
 
 
-def render_stalker_avatar(character: Character, width: int = 260, height: int = 360) -> Image.Image:
+def _avatar_candidates(tier: int) -> tuple[Path, ...]:
+    return (
+        AVATAR_DIR / f"stalker_t{tier}.png",
+        AVATAR_DIR / f"stalker_{tier}.png",
+        AVATAR_DIR / f"tier_{tier}.png",
+        AVATAR_DIR / "stalker_default.png",
+    )
+
+
+def _load_avatar_asset(tier: int, width: int, height: int) -> Image.Image | None:
+    for candidate in _avatar_candidates(tier):
+        if not candidate.exists():
+            continue
+        try:
+            source = Image.open(candidate).convert("RGBA")
+        except OSError:
+            continue
+        fitted = source.copy()
+        fitted.thumbnail((width, height), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        offset_x = (width - fitted.width) // 2
+        offset_y = height - fitted.height
+        canvas.paste(fitted, (offset_x, offset_y), fitted)
+        return canvas
+    return None
+
+
+def _render_stalker_avatar_fallback(character: Character, width: int = 260, height: int = 360) -> Image.Image:
     tier = _tier(character)
     p = _palette(tier)
 
@@ -103,3 +136,11 @@ def render_stalker_avatar(character: Character, width: int = 260, height: int = 
         draw.ellipse((center_x - 8, 88, center_x + 8, 104), fill=(240, 220, 118))
 
     return image
+
+
+def render_avatar(character: Character, width: int = 260, height: int = 360) -> Image.Image:
+    tier = _tier(character)
+    asset_avatar = _load_avatar_asset(tier, width=width, height=height)
+    if asset_avatar is not None:
+        return asset_avatar
+    return _render_stalker_avatar_fallback(character, width=width, height=height)

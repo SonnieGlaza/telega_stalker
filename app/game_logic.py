@@ -126,6 +126,30 @@ def build_quest_overview(character: Character) -> str:
     return "\n".join(lines)
 
 
+def quest_ammo_requirements(quest_key: str) -> dict[str, int]:
+    quest = QUESTS.get(quest_key)
+    if quest is None:
+        return {"ammo_pack": 0, "medkit": 0}
+    return {"ammo_pack": quest.ammo_required, "medkit": quest.medkit_required}
+
+
+def calculate_quest_success_by_key(character: Character, quest_key: str) -> int:
+    quest = QUESTS.get(quest_key)
+    if quest is None:
+        return 0
+    ammo_stock = int(character.inventory.get("ammo_pack", 0))
+    medkit_stock = int(character.inventory.get("medkit", 0))
+    breakdown = calculate_quest_success(
+        gear_power=character.gear_power,
+        max_success=quest.max_success,
+        ammo_stock=ammo_stock,
+        medkit_stock=medkit_stock,
+        ammo_required=quest.ammo_required,
+        medkit_required=quest.medkit_required,
+    )
+    return breakdown.chance
+
+
 def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResult:
     character = storage.get_character(telegram_id)
     if character is None:
