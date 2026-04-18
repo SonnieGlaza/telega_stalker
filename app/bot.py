@@ -220,12 +220,23 @@ async def show_avatar_style_menu(message: Message) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("avatarstyle:"))
+@router.callback_query(F.data.startswith("avatar"))
 async def handle_avatar_style(callback: CallbackQuery) -> None:
-    style = (callback.data or "").split(":", maxsplit=1)[1]
+    raw_data = callback.data or ""
+    if raw_data.startswith("avatar_style:"):
+        style = raw_data.split(":", maxsplit=1)[1]
+    elif raw_data.startswith("avatarstyle:"):
+        # Backward compatibility for old inline keyboards still visible in chat history.
+        style = raw_data.split(":", maxsplit=1)[1]
+    else:
+        await callback.answer("Неизвестная команда стиля", show_alert=True)
+        return
+
     if style not in {"classic", "realistic"}:
         await callback.answer("Неизвестный стиль", show_alert=True)
         return
+    await callback.answer("Применяю стиль...")
+
     db = get_storage()
     player = db.get_character(callback.from_user.id, refresh_energy=False)
     if player is None:
@@ -239,7 +250,6 @@ async def handle_avatar_style(callback: CallbackQuery) -> None:
     style_title = "Реалистичный" if style == "realistic" else "Классический"
     await callback.message.answer(f"Стиль аватара обновлен: {style_title}.")
     await send_profile_snapshot(callback.message, updated)
-    await callback.answer("Стиль сохранен.")
 
 
 @router.message(F.text == "🛒 Торговец")
