@@ -104,24 +104,14 @@ def build_quest_overview(character: Character) -> str:
     ammo_stock = int(character.inventory.get("ammo_pack", 0))
     medkit_stock = int(character.inventory.get("medkit", 0))
     lines = [
-        "Текущие модификаторы успеха:",
+        "Текущие запасы расходников:",
         f"• Запас патронов: {ammo_stock}",
         f"• Запас аптечек: {medkit_stock}",
         "",
     ]
     for quest in QUESTS.values():
-        breakdown = calculate_quest_success(
-            gear_power=character.gear_power,
-            max_success=quest.max_success,
-            ammo_stock=ammo_stock,
-            medkit_stock=medkit_stock,
-            ammo_required=quest.ammo_required,
-            medkit_required=quest.medkit_required,
-        )
-        enough_supplies = ammo_stock >= quest.ammo_required and medkit_stock >= quest.medkit_required
-        marker = "✅" if enough_supplies else "⚠️"
         lines.append(
-            f"{marker} {quest.title}: ~{breakdown.chance}% | расход: патроны {quest.ammo_required}, аптечки {quest.medkit_required}"
+            f"• {quest.title}: расход патроны {quest.ammo_required}, аптечки {quest.medkit_required}"
         )
     return "\n".join(lines)
 

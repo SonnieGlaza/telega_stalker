@@ -262,7 +262,7 @@ async def show_quests(message: Message) -> None:
     overview = build_quest_overview(player)
     await message.answer(
         "Выбери сложность задания.\n"
-        "Шанс успеха зависит от снаряги и амуниции.\n\n"
+        "Ниже указан обязательный расход амуниции.\n\n"
         f"{overview}",
         reply_markup=quests_keyboard(),
     )
