@@ -370,6 +370,7 @@ async def run_bot() -> None:
     global storage
     storage = Storage(settings.db_path)
     storage.init_db()
+    storage.restore_from_snapshot_if_empty()
 
     bot = Bot(
         token=settings.bot_token,

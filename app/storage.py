@@ -42,12 +42,106 @@ class Character:
 class Storage:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        db_parent = Path(db_path).parent
+        db_parent.mkdir(parents=True, exist_ok=True)
+        self.snapshot_path = Path(db_path).with_suffix(".backup.json")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _write_snapshot(self) -> None:
+        try:
+            with self._connect() as conn:
+                characters = [dict(row) for row in conn.execute("SELECT * FROM characters").fetchall()]
+                factions = [dict(row) for row in conn.execute("SELECT * FROM factions").fetchall()]
+                locations = [dict(row) for row in conn.execute("SELECT * FROM locations").fetchall()]
+            payload = {
+                "version": 1,
+                "characters": characters,
+                "factions": factions,
+                "locations": locations,
+            }
+            self.snapshot_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            # Не ломаем игру, если в окружении временно нет прав на запись backup-файла.
+            return
+
+    def _restore_from_snapshot_if_needed(self, conn: sqlite3.Connection) -> None:
+        count_row = conn.execute("SELECT COUNT(*) AS cnt FROM characters").fetchone()
+        existing_count = int(count_row["cnt"]) if count_row else 0
+        if existing_count > 0:
+            return
+        if not self.snapshot_path.exists():
+            return
+        try:
+            payload = json.loads(self.snapshot_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        characters = payload.get("characters") or []
+        factions = payload.get("factions") or []
+        locations = payload.get("locations") or []
+        if not characters:
+            return
+
+        for row in factions:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO factions(name, treasury)
+                VALUES(?, ?)
+                """,
+                (row.get("name"), int(row.get("treasury", 0))),
+            )
+        for row in locations:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO locations(name, point_type, controlled_by, npc_power)
+                VALUES(?, ?, ?, ?)
+                """,
+                (
+                    row.get("name"),
+                    row.get("point_type"),
+                    row.get("controlled_by"),
+                    int(row.get("npc_power", 30)),
+                ),
+            )
+        for row in characters:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO characters(
+                    telegram_id, player_uid, avatar_style, nickname, gender, faction, money,
+                    energy, max_energy, energy_updated_at, health, gear_power, location,
+                    inventory_json, equipment_json, truck_owned, fuel
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(row.get("telegram_id")),
+                    row.get("player_uid") or build_player_uid(int(row.get("telegram_id"))),
+                    row.get("avatar_style") or "classic",
+                    row.get("nickname") or "Сталкер",
+                    row.get("gender") or "Мужской",
+                    row.get("faction"),
+                    int(row.get("money", 1000)),
+                    int(row.get("energy", 100)),
+                    int(row.get("max_energy", 100)),
+                    row.get("energy_updated_at") or utc_now().isoformat(),
+                    int(row.get("health", 100)),
+                    int(row.get("gear_power", 2)),
+                    row.get("location") or "База новичков",
+                    row.get("inventory_json") or "{}",
+                    row.get("equipment_json") or '{"weapon":"Нож","armor":"Куртка новичка"}',
+                    int(row.get("truck_owned", 0)),
+                    int(row.get("fuel", 0)),
+                ),
+            )
+
+    def save_snapshot(self) -> None:
+        self._write_snapshot()
+
+    def restore_from_snapshot(self) -> None:
+        with self._connect() as conn:
+            self._restore_from_snapshot_if_needed(conn)
 
     def init_db(self) -> None:
         with self._connect() as conn:
@@ -107,6 +201,7 @@ class Storage:
                     ("Радар", "точка интереса", None, 35),
                 ],
             )
+            self._restore_from_snapshot_if_needed(conn)
 
     def create_character(self, telegram_id: int, nickname: str, gender: str) -> None:
         player_uid = build_player_uid(telegram_id)
@@ -122,6 +217,7 @@ class Storage:
                 """,
                 (telegram_id, player_uid, nickname, gender, utc_now().isoformat()),
             )
+        self.save_snapshot()
 
     def get_character(self, telegram_id: int, refresh_energy: bool = True) -> Character | None:
         if refresh_energy:
@@ -149,6 +245,7 @@ class Storage:
                 "UPDATE characters SET faction = ? WHERE telegram_id = ?",
                 (faction, telegram_id),
             )
+        self.save_snapshot()
 
     def set_location(self, telegram_id: int, location: str) -> None:
         with self._connect() as conn:
@@ -156,6 +253,7 @@ class Storage:
                 "UPDATE characters SET location = ? WHERE telegram_id = ?",
                 (location, telegram_id),
             )
+        self.save_snapshot()
 
     def spend_energy(self, telegram_id: int, amount: int) -> bool:
         character = self.get_character(telegram_id, refresh_energy=True)
@@ -171,6 +269,7 @@ class Storage:
                 """,
                 (new_energy, utc_now().isoformat(), telegram_id),
             )
+        self.save_snapshot()
         return True
 
     def restore_energy(self, telegram_id: int, amount: int) -> None:
@@ -183,6 +282,7 @@ class Storage:
                 "UPDATE characters SET energy = ?, energy_updated_at = ? WHERE telegram_id = ?",
                 (new_energy, utc_now().isoformat(), telegram_id),
             )
+        self.save_snapshot()
 
     def recover_energy(self, telegram_id: int) -> None:
         with self._connect() as conn:
@@ -227,6 +327,7 @@ class Storage:
                 "UPDATE characters SET money = ? WHERE telegram_id = ?",
                 (new_money, telegram_id),
             )
+        self.save_snapshot()
         return True
 
     def change_gear_power(self, telegram_id: int, delta: int) -> None:
@@ -239,6 +340,7 @@ class Storage:
                 "UPDATE characters SET gear_power = ? WHERE telegram_id = ?",
                 (new_power, telegram_id),
             )
+        self.save_snapshot()
 
     def add_item(self, telegram_id: int, item_key: str, amount: int = 1) -> None:
         character = self.get_character(telegram_id, refresh_energy=False)
@@ -247,6 +349,7 @@ class Storage:
         inventory = dict(character.inventory)
         inventory[item_key] = inventory.get(item_key, 0) + amount
         self._set_inventory(telegram_id, inventory)
+        self.save_snapshot()
 
     def remove_item(self, telegram_id: int, item_key: str, amount: int = 1) -> bool:
         character = self.get_character(telegram_id, refresh_energy=False)
@@ -262,6 +365,7 @@ class Storage:
         else:
             inventory[item_key] = new_amount
         self._set_inventory(telegram_id, inventory)
+        self.save_snapshot()
         return True
 
     def set_equipment_item(self, telegram_id: int, slot: str, value: str) -> None:
@@ -271,6 +375,7 @@ class Storage:
         equipment = dict(character.equipment)
         equipment[slot] = value
         self._set_equipment(telegram_id, equipment)
+        self.save_snapshot()
 
     def set_avatar_style(self, telegram_id: int, style: str) -> None:
         if style not in {"classic", "realistic"}:
@@ -280,6 +385,7 @@ class Storage:
                 "UPDATE characters SET avatar_style = ? WHERE telegram_id = ?",
                 (style, telegram_id),
             )
+        self.save_snapshot()
 
     def set_truck_owned(self, telegram_id: int) -> None:
         with self._connect() as conn:
@@ -287,6 +393,7 @@ class Storage:
                 "UPDATE characters SET truck_owned = 1 WHERE telegram_id = ?",
                 (telegram_id,),
             )
+        self.save_snapshot()
 
     def change_fuel(self, telegram_id: int, delta: int) -> bool:
         character = self.get_character(telegram_id, refresh_energy=False)
@@ -300,6 +407,7 @@ class Storage:
                 "UPDATE characters SET fuel = ? WHERE telegram_id = ?",
                 (new_fuel, telegram_id),
             )
+        self.save_snapshot()
         return True
 
     def get_faction_power(self, faction: str) -> int:
@@ -320,6 +428,7 @@ class Storage:
                 "UPDATE factions SET treasury = treasury + ? WHERE name = ?",
                 (delta, faction),
             )
+        self.save_snapshot()
 
     def get_factions(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
@@ -351,6 +460,7 @@ class Storage:
                 "UPDATE locations SET controlled_by = ? WHERE name = ?",
                 (faction, location_name),
             )
+        self.save_snapshot()
 
     def _set_inventory(self, telegram_id: int, inventory: dict[str, int]) -> None:
         with self._connect() as conn:
