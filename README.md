@@ -107,6 +107,7 @@ chmod +x start.sh
 - `app/keyboards.py` — reply/inline-клавиатуры
 - `app/profile_card.py` — генерация PNG-карточки профиля игрока
 - `app/avatar_render.py` — генерация визуальной авы сталкера по уровню снаряги
+- `assets/avatars/stalker_t1..t4.png` — готовые шаблоны аватаров под 4 тира экипировки
 - `run.py` — точка входа
 
 ## Важно для Railway (сохранение персонажа)
