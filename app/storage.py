@@ -143,6 +143,10 @@ class Storage:
         with self._connect() as conn:
             self._restore_from_snapshot_if_needed(conn)
 
+    # Backward-compatible alias for older bot startup code.
+    def restore_from_snapshot_if_empty(self) -> None:
+        self.restore_from_snapshot()
+
     def init_db(self) -> None:
         with self._connect() as conn:
             conn.execute(
