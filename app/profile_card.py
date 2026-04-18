@@ -223,7 +223,6 @@ def build_character_card(character: Character) -> bytes:
 
     avatar = render_avatar(character)
     img.paste(avatar, (88, 354))
-    draw.text((94, 580), f"Сила снаряжения: {character.gear_power}", fill=(232, 232, 232), font=small_font)
 
     draw.rounded_rectangle((454, 108, 1156, 676), radius=16, fill=(33, 35, 44), outline=(66, 68, 82), width=2)
     draw.text((480, 132), f"Игрок: {character.nickname}", fill=(240, 240, 240), font=subtitle_font)
@@ -244,12 +243,13 @@ def build_character_card(character: Character) -> bytes:
     draw.text((730, 450), "Энергия", fill=(220, 220, 220), font=small_font)
     draw.text((730, 476), "Снаряжение", fill=(220, 220, 220), font=small_font)
 
+    equipment_lines = [f"Сила снаряжения: {character.gear_power}", *_equipment_lines(character)]
     _draw_text_block(
         draw=draw,
         x=480,
         y=522,
         header="Снаряжение",
-        lines=_equipment_lines(character),
+        lines=equipment_lines,
         header_font=small_font,
         body_font=small_font,
         max_lines=3,
