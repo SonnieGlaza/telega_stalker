@@ -15,13 +15,15 @@ class QuestType:
     energy_cost: int
     reward_min: int
     reward_max: int
+    ammo_required: int
+    medkit_required: int
 
 
 QUESTS: dict[str, QuestType] = {
-    "easy": QuestType("easy", "Легко", 90, 12, 150, 300),
-    "hard": QuestType("hard", "Сложно", 80, 16, 250, 450),
-    "heavy": QuestType("heavy", "Тяжело", 70, 22, 400, 650),
-    "impossible": QuestType("impossible", "Невозможно", 60, 28, 550, 900),
+    "easy": QuestType("easy", "Легко", 90, 12, 150, 300, 1, 0),
+    "hard": QuestType("hard", "Сложно", 80, 16, 250, 450, 2, 0),
+    "heavy": QuestType("heavy", "Тяжело", 70, 22, 400, 650, 3, 1),
+    "impossible": QuestType("impossible", "Невозможно", 60, 28, 550, 900, 4, 1),
 }
 
 
@@ -43,16 +45,85 @@ ITEM_LABELS = {
 }
 
 
+GEAR_PROGRESS: tuple[tuple[int, str, str], ...] = (
+    (0, "Куртка новичка", "Нож"),
+    (4, "Бронежилет сталкера", "ПМ"),
+    (8, "Усиленный бронекостюм", "АКС-74У"),
+    (13, "Штурмовой экзоскелет", "АН-94"),
+)
+
+
 @dataclass(frozen=True)
 class ActionResult:
     ok: bool
     text: str
 
 
-def calculate_quest_success(gear_power: int, max_success: int) -> int:
-    # Чем лучше снаряга, тем выше шанс, но не выше лимита задания.
-    base_chance = 35 + gear_power * 7
-    return max(10, min(max_success, base_chance))
+@dataclass(frozen=True)
+class QuestChanceBreakdown:
+    chance: int
+    base_chance: int
+    ammo_bonus: int
+    medkit_bonus: int
+
+
+def resolve_equipment_by_power(gear_power: int) -> tuple[str, str]:
+    armor = GEAR_PROGRESS[0][1]
+    weapon = GEAR_PROGRESS[0][2]
+    for threshold, armor_name, weapon_name in GEAR_PROGRESS:
+        if gear_power >= threshold:
+            armor = armor_name
+            weapon = weapon_name
+    return armor, weapon
+
+
+def calculate_quest_success(
+    gear_power: int,
+    max_success: int,
+    ammo_stock: int,
+    medkit_stock: int,
+    ammo_required: int,
+    medkit_required: int,
+) -> QuestChanceBreakdown:
+    # Шанс складывается из силы снаряги и запасов амуниции/аптечек.
+    base_chance = 28 + gear_power * 6
+    extra_ammo = max(0, ammo_stock - ammo_required)
+    extra_medkits = max(0, medkit_stock - medkit_required)
+    ammo_bonus = min(18, extra_ammo * 2)
+    medkit_bonus = min(12, extra_medkits * 4)
+    chance = max(10, min(max_success, base_chance + ammo_bonus + medkit_bonus))
+    return QuestChanceBreakdown(
+        chance=chance,
+        base_chance=base_chance,
+        ammo_bonus=ammo_bonus,
+        medkit_bonus=medkit_bonus,
+    )
+
+
+def build_quest_overview(character: Character) -> str:
+    ammo_stock = int(character.inventory.get("ammo_pack", 0))
+    medkit_stock = int(character.inventory.get("medkit", 0))
+    lines = [
+        "Текущие модификаторы успеха:",
+        f"• Запас патронов: {ammo_stock}",
+        f"• Запас аптечек: {medkit_stock}",
+        "",
+    ]
+    for quest in QUESTS.values():
+        breakdown = calculate_quest_success(
+            gear_power=character.gear_power,
+            max_success=quest.max_success,
+            ammo_stock=ammo_stock,
+            medkit_stock=medkit_stock,
+            ammo_required=quest.ammo_required,
+            medkit_required=quest.medkit_required,
+        )
+        enough_supplies = ammo_stock >= quest.ammo_required and medkit_stock >= quest.medkit_required
+        marker = "✅" if enough_supplies else "⚠️"
+        lines.append(
+            f"{marker} {quest.title}: ~{breakdown.chance}% | расход: патроны {quest.ammo_required}, аптечки {quest.medkit_required}"
+        )
+    return "\n".join(lines)
 
 
 def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResult:
@@ -65,19 +136,49 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
     quest = QUESTS.get(quest_key)
     if quest is None:
         return ActionResult(False, "Неизвестный тип задания.")
+
+    ammo_stock = int(character.inventory.get("ammo_pack", 0))
+    medkit_stock = int(character.inventory.get("medkit", 0))
+    if ammo_stock < quest.ammo_required:
+        return ActionResult(
+            False,
+            f"Недостаточно патронов. Для задания нужно {quest.ammo_required}, у тебя {ammo_stock}.",
+        )
+    if medkit_stock < quest.medkit_required:
+        return ActionResult(
+            False,
+            f"Недостаточно аптечек. Для задания нужно {quest.medkit_required}, у тебя {medkit_stock}.",
+        )
+
     if not storage.spend_energy(telegram_id, quest.energy_cost):
         return ActionResult(
             False,
             f"Не хватает энергии. Нужно {quest.energy_cost} ед., восстанови её или купи энергетик.",
         )
+    if not storage.remove_item(telegram_id, "ammo_pack", quest.ammo_required):
+        storage.restore_energy(telegram_id, quest.energy_cost)
+        return ActionResult(False, "Ошибка расхода патронов, задание отменено.")
+    if quest.medkit_required > 0 and not storage.remove_item(telegram_id, "medkit", quest.medkit_required):
+        storage.add_item(telegram_id, "ammo_pack", quest.ammo_required)
+        storage.restore_energy(telegram_id, quest.energy_cost)
+        return ActionResult(False, "Ошибка расхода аптечек, задание отменено.")
 
     updated = storage.get_character(telegram_id, refresh_energy=False)
     if updated is None:
         return ActionResult(False, "Персонаж не найден.")
 
-    chance = calculate_quest_success(updated.gear_power, quest.max_success)
+    ammo_after = int(updated.inventory.get("ammo_pack", 0))
+    medkit_after = int(updated.inventory.get("medkit", 0))
+    breakdown = calculate_quest_success(
+        gear_power=updated.gear_power,
+        max_success=quest.max_success,
+        ammo_stock=ammo_after,
+        medkit_stock=medkit_after,
+        ammo_required=quest.ammo_required,
+        medkit_required=quest.medkit_required,
+    )
     roll = random.randint(1, 100)
-    success = roll <= chance
+    success = roll <= breakdown.chance
 
     if success:
         reward = random.randint(quest.reward_min, quest.reward_max)
@@ -90,7 +191,9 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
             extra = ""
         return ActionResult(
             True,
-            f"Задание «{quest.title}» выполнено! Шанс {chance}% (бросок {roll}).\n"
+            f"Задание «{quest.title}» выполнено! Шанс {breakdown.chance}% (бросок {roll}).\n"
+            f"Формула: база {breakdown.base_chance}% + патроны {breakdown.ammo_bonus}% + аптечки {breakdown.medkit_bonus}%.\n"
+            f"Расход: патроны {quest.ammo_required}, аптечки {quest.medkit_required}.\n"
             f"Награда: {reward} RU.{extra}",
         )
 
@@ -98,7 +201,9 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
     storage.change_money(telegram_id, -penalty)
     return ActionResult(
         False,
-        f"Провал задания «{quest.title}». Шанс {chance}% (бросок {roll}).\n"
+        f"Провал задания «{quest.title}». Шанс {breakdown.chance}% (бросок {roll}).\n"
+        f"Формула: база {breakdown.base_chance}% + патроны {breakdown.ammo_bonus}% + аптечки {breakdown.medkit_bonus}%.\n"
+        f"Расход: патроны {quest.ammo_required}, аптечки {quest.medkit_required}.\n"
         f"Потери на расходники: {penalty} RU.",
     )
 
@@ -129,6 +234,16 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
 
     if item_key == "gear_upgrade":
         storage.change_gear_power(telegram_id, 1)
+        updated = storage.get_character(telegram_id, refresh_energy=False)
+        if updated is not None:
+            armor_name, weapon_name = resolve_equipment_by_power(updated.gear_power)
+            storage.set_equipment_item(telegram_id, "armor", armor_name)
+            storage.set_equipment_item(telegram_id, "weapon", weapon_name)
+            return ActionResult(
+                True,
+                f"Ты улучшил снарягу (+1 сила). Потрачено {price} RU.\n"
+                f"Новый комплект: {armor_name}, оружие: {weapon_name}.",
+            )
         return ActionResult(True, f"Ты улучшил снарягу (+1 сила). Потрачено {price} RU.")
     if item_key == "truck":
         storage.set_truck_owned(telegram_id)

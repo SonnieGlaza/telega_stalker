@@ -6,6 +6,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from app.avatar_render import render_avatar
 from app.game_logic import ITEM_LABELS
 from app.skins import resolve_skin
 from app.storage import Character
@@ -220,16 +221,8 @@ def build_character_card(character: Character) -> bytes:
     draw.text((62, 258), f"Группировка: {character.faction or 'не выбрана'}", fill=(248, 248, 248), font=small_font)
     draw.text((62, 288), f"Скин персонажа: {skin.title}", fill=(248, 248, 248), font=small_font)
 
-    # Схематичная фигура сталкера.
-    draw.ellipse((154, 376, 250, 472), fill=skin.visor_color, outline=(225, 225, 225))
-    draw.rounded_rectangle((138, 462, 266, 552), radius=12, fill=skin.coat_color, outline=(225, 225, 225), width=2)
-    draw.rectangle((266, 488, 364, 504), fill=skin.accent_color)
-    draw.rounded_rectangle((138, 478, 266, 492), radius=4, fill=skin.accent_color)
-    if skin.key in {"heavy", "legend"}:
-        draw.rectangle((120, 474, 138, 506), fill=skin.coat_color)
-        draw.rectangle((266, 474, 284, 506), fill=skin.coat_color)
-    if skin.key == "legend":
-        draw.ellipse((182, 392, 218, 428), fill=(245, 225, 120))
+    avatar = render_avatar(character)
+    img.paste(avatar, (88, 354))
     draw.text((94, 580), f"Сила снаряжения: {character.gear_power}", fill=(232, 232, 232), font=small_font)
 
     draw.rounded_rectangle((454, 108, 1156, 676), radius=16, fill=(33, 35, 44), outline=(66, 68, 82), width=2)
