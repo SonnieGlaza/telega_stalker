@@ -4,6 +4,7 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw, ImageFont
 
+from app.skins import resolve_skin
 from app.storage import Character
 
 
@@ -67,6 +68,7 @@ def build_character_card(character: Character) -> bytes:
 
     faction_color = _faction_color(character.faction)
     location_color = _location_color(character.location)
+    skin = resolve_skin(character)
 
     draw.rectangle((0, 0, width, 74), fill=(28, 31, 40))
     draw.text((24, 18), f"STALKER PROFILE • {character.player_uid}", fill=(235, 235, 235), font=title_font)
@@ -75,13 +77,18 @@ def build_character_card(character: Character) -> bytes:
     draw.text((46, 120), "Текущая позиция", fill=(220, 220, 220), font=subtitle_font)
     draw.rounded_rectangle((46, 164, 368, 334), radius=12, fill=location_color, outline=(210, 210, 210), width=2)
     draw.text((62, 228), character.location, fill=(248, 248, 248), font=subtitle_font)
+    draw.text((46, 306), f"Скин: {skin.title}", fill=(248, 248, 248), font=small_font)
 
     # Схематичная фигура сталкера.
-    armor_tint = min(200, 80 + character.gear_power * 8)
-    suit_color = (armor_tint, armor_tint, armor_tint - 20)
-    draw.ellipse((140, 350, 220, 430), fill=(145, 145, 145), outline=(225, 225, 225))
-    draw.rounded_rectangle((126, 420, 234, 494), radius=12, fill=suit_color, outline=(225, 225, 225), width=2)
-    draw.rectangle((230, 442, 315, 455), fill=(95, 95, 95))
+    draw.ellipse((140, 350, 220, 430), fill=skin.visor_color, outline=(225, 225, 225))
+    draw.rounded_rectangle((126, 420, 234, 494), radius=12, fill=skin.coat_color, outline=(225, 225, 225), width=2)
+    draw.rectangle((230, 442, 315, 455), fill=skin.accent_color)
+    draw.rounded_rectangle((126, 434, 234, 446), radius=4, fill=skin.accent_color)
+    if skin.key in {"heavy", "legend"}:
+        draw.rectangle((110, 430, 126, 454), fill=skin.coat_color)
+        draw.rectangle((234, 430, 250, 454), fill=skin.coat_color)
+    if skin.key == "legend":
+        draw.ellipse((166, 366, 194, 394), fill=(245, 225, 120))
     draw.text((92, 458), f"Сила снаряги: {character.gear_power}", fill=(232, 232, 232), font=small_font)
 
     draw.rounded_rectangle((420, 98, 936, 510), radius=16, fill=(33, 35, 44), outline=(66, 68, 82), width=2)
@@ -92,14 +99,15 @@ def build_character_card(character: Character) -> bytes:
     draw.text((446, 256), f"Энергия: {character.energy}/{character.max_energy}", fill=(225, 225, 225), font=body_font)
     draw.text((446, 288), f"Топливо: {character.fuel}", fill=(225, 225, 225), font=body_font)
     draw.text((446, 320), f"Транспорт: {'Грузовик' if character.truck_owned else 'Нет'}", fill=(225, 225, 225), font=body_font)
+    draw.text((446, 350), f"Класс скина: {skin.title}", fill=skin.accent_color, font=body_font)
 
-    draw.text((446, 364), "Индикаторы", fill=(210, 210, 210), font=body_font)
-    _draw_power_bar(draw, 446, 396, character.health, 100, (190, 70, 70))
-    _draw_power_bar(draw, 446, 422, character.energy, max(1, character.max_energy), (70, 150, 220))
-    _draw_power_bar(draw, 446, 448, character.gear_power, 20, (170, 170, 95))
-    draw.text((694, 392), "Здоровье", fill=(220, 220, 220), font=small_font)
-    draw.text((694, 418), "Энергия", fill=(220, 220, 220), font=small_font)
-    draw.text((694, 444), "Снаряга", fill=(220, 220, 220), font=small_font)
+    draw.text((446, 380), "Индикаторы", fill=(210, 210, 210), font=body_font)
+    _draw_power_bar(draw, 446, 412, character.health, 100, (190, 70, 70))
+    _draw_power_bar(draw, 446, 438, character.energy, max(1, character.max_energy), (70, 150, 220))
+    _draw_power_bar(draw, 446, 464, character.gear_power, 20, (170, 170, 95))
+    draw.text((694, 408), "Здоровье", fill=(220, 220, 220), font=small_font)
+    draw.text((694, 434), "Энергия", fill=(220, 220, 220), font=small_font)
+    draw.text((694, 460), "Снаряга", fill=(220, 220, 220), font=small_font)
 
     buffer = BytesIO()
     img.save(buffer, format="PNG")

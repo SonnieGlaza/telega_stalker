@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
+from app.skins import resolve_skin
 from app.storage import Character, Storage
 
 
@@ -159,6 +160,7 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
 
 
 def format_inventory(character: Character) -> str:
+    skin = resolve_skin(character)
     if character.inventory:
         items = "\n".join(
             f"• {ITEM_LABELS.get(key, key)} x{amount}"
@@ -179,6 +181,7 @@ def format_inventory(character: Character) -> str:
         f"Здоровье: {character.health}\n"
         f"Энергия: {character.energy}/{character.max_energy}\n"
         f"Сила снаряги: {character.gear_power}\n"
+        f"Скин: {skin.title}\n"
         f"Баланс: {character.money} RU\n"
         f"Транспорт: {vehicle}\n"
         f"Топливо: {character.fuel}\n\n"
