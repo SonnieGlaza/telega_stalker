@@ -12,8 +12,11 @@ from app.storage import Character
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+LOCAL_FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "DejaVuSans.ttf"
+LOCAL_NOTO_FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "NotoSans-Regular.ttf"
 FONT_CANDIDATES = (
-    str(PROJECT_ROOT / "assets" / "fonts" / "DejaVuSans.ttf"),
+    str(LOCAL_NOTO_FONT_PATH),
+    str(LOCAL_FONT_PATH),
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
     "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
@@ -24,7 +27,7 @@ FONT_CANDIDATES = (
 
 
 def _font_supports_cyrillic(font: ImageFont.ImageFont) -> bool:
-    test_text = "Русский текст"
+    test_text = "Карточка персонажа"
     try:
         bbox = font.getbbox(test_text)
     except Exception:
@@ -34,11 +37,50 @@ def _font_supports_cyrillic(font: ImageFont.ImageFont) -> bool:
         return False
     width = bbox[2] - bbox[0]
     height = bbox[3] - bbox[1]
-    return width > 0 and height > 0
+    if width <= 0 or height <= 0:
+        return False
+    # Exclude fallback "tofu" glyphs that appear as repeated squares.
+    missing_patterns = set()
+    for probe in ("□", "\u25a1", "?", "\ufffd"):
+        try:
+            missing_patterns.add(bytes(font.getmask(probe)))
+        except Exception:
+            continue
+    samples = []
+    for probe in ("К", "Я", "Ж", "Ы", "Ч"):
+        try:
+            samples.append(bytes(font.getmask(probe)))
+        except Exception:
+            return False
+    if not samples:
+        return False
+    if any(sample in missing_patterns for sample in samples):
+        return False
+    # Cyrillic glyphs should not all be identical.
+    return len(set(samples)) > 1
+
+
+@lru_cache(maxsize=1)
+def _read_local_font_bytes(path: Path) -> bytes | None:
+    if not path.exists():
+        return None
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
 
 
 @lru_cache(maxsize=8)
-def _resolve_font_path() -> str | None:
+def _resolve_font_path() -> tuple[str | None, str]:
+    for local_path in (LOCAL_NOTO_FONT_PATH, LOCAL_FONT_PATH):
+        local_font = _read_local_font_bytes(local_path)
+        if local_font is not None:
+            try:
+                font = ImageFont.truetype(BytesIO(local_font), size=22)
+                if _font_supports_cyrillic(font):
+                    return (str(local_path), "локальный файл")
+            except OSError:
+                pass
     for path in FONT_CANDIDATES:
         if not Path(path).exists():
             continue
@@ -47,14 +89,26 @@ def _resolve_font_path() -> str | None:
         except OSError:
             continue
         if _font_supports_cyrillic(font):
-            return path
-    return None
+            return (path, "системный файл")
+    return (None, "встроенный PIL (ограниченный)")
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
-    resolved_path = _resolve_font_path()
+    resolved_path, _ = _resolve_font_path()
+    for local_path in (LOCAL_NOTO_FONT_PATH, LOCAL_FONT_PATH):
+        local_font = _read_local_font_bytes(local_path)
+        if local_font is not None:
+            try:
+                font = ImageFont.truetype(BytesIO(local_font), size=size)
+                if _font_supports_cyrillic(font):
+                    return font
+            except OSError:
+                continue
     if resolved_path is not None:
-        return ImageFont.truetype(resolved_path, size=size)
+        try:
+            return ImageFont.truetype(resolved_path, size=size)
+        except OSError:
+            pass
     return ImageFont.load_default()
 
 
