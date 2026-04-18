@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from io import BytesIO
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -9,16 +11,49 @@ from app.skins import resolve_skin
 from app.storage import Character
 
 
-def _load_font(size: int) -> ImageFont.ImageFont:
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    ]
-    for path in candidates:
+FONT_CANDIDATES = (
+    "/workspace/app/assets/fonts/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSerif-Regular.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+)
+
+
+def _font_supports_cyrillic(font: ImageFont.ImageFont) -> bool:
+    test_text = "Русский текст"
+    try:
+        bbox = font.getbbox(test_text)
+    except Exception:
+        return False
+    # Invalid or empty bbox often indicates missing glyphs.
+    if bbox is None:
+        return False
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    return width > 0 and height > 0
+
+
+@lru_cache(maxsize=8)
+def _resolve_font_path() -> str | None:
+    for path in FONT_CANDIDATES:
+        if not Path(path).exists():
+            continue
         try:
-            return ImageFont.truetype(path, size=size)
+            font = ImageFont.truetype(path, size=22)
         except OSError:
             continue
+        if _font_supports_cyrillic(font):
+            return path
+    return None
+
+
+def _load_font(size: int) -> ImageFont.ImageFont:
+    resolved_path = _resolve_font_path()
+    if resolved_path is not None:
+        return ImageFont.truetype(resolved_path, size=size)
     return ImageFont.load_default()
 
 
