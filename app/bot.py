@@ -9,7 +9,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from app.config import load_settings
 from app.game_logic import (
@@ -29,6 +29,7 @@ from app.keyboards import (
     quests_keyboard,
     trader_keyboard,
 )
+from app.profile_card import build_character_card
 from app.storage import Character, Storage
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,17 @@ def ensure_character(message: Message) -> Character | None:
     return player
 
 
+async def send_profile_snapshot(message: Message, player: Character) -> None:
+    caption = (
+        f"Профиль сталкера {player.nickname}\n"
+        f"ID: {player.player_uid}\n"
+        f"Фракция: {player.faction or 'не выбрана'}"
+    )
+    image_bytes = build_character_card(player)
+    image = BufferedInputFile(image_bytes, filename=f"{player.player_uid}.png")
+    await message.answer_photo(photo=image, caption=caption)
+
+
 @router.message(F.text == "🎒 Инвентарь")
 async def show_inventory(message: Message) -> None:
     player = ensure_character(message)
@@ -159,6 +171,15 @@ async def show_inventory(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     await message.answer(format_inventory(player))
+
+
+@router.message(F.text == "🧾 Профиль")
+async def show_profile(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    await send_profile_snapshot(message, player)
 
 
 @router.message(F.text == "🛒 Торговец")
@@ -176,8 +197,13 @@ async def show_trader(message: Message) -> None:
 @router.callback_query(F.data.startswith("buy:"))
 async def handle_buy(callback: CallbackQuery) -> None:
     item_key = (callback.data or "").split(":", maxsplit=1)[1]
-    result = buy_item(get_storage(), callback.from_user.id, item_key)
+    db = get_storage()
+    result = buy_item(db, callback.from_user.id, item_key)
     await callback.message.answer(result.text)
+    if result.ok and item_key in {"gear_upgrade", "truck"}:
+        player = db.get_character(callback.from_user.id, refresh_energy=False)
+        if player is not None:
+            await send_profile_snapshot(callback.message, player)
     await callback.answer()
 
 

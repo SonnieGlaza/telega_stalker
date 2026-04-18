@@ -26,9 +26,10 @@ def faction_keyboard() -> InlineKeyboardMarkup:
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🎒 Инвентарь"), KeyboardButton(text="🛒 Торговец")],
-            [KeyboardButton(text="📋 Задания"), KeyboardButton(text="⚔️ Война")],
-            [KeyboardButton(text="🗺 Переход"), KeyboardButton(text="⚡ Выпить энергетик")],
+            [KeyboardButton(text="🎒 Инвентарь"), KeyboardButton(text="🧾 Профиль")],
+            [KeyboardButton(text="🛒 Торговец"), KeyboardButton(text="📋 Задания")],
+            [KeyboardButton(text="⚔️ Война"), KeyboardButton(text="🗺 Переход")],
+            [KeyboardButton(text="⚡ Выпить энергетик")],
         ],
         resize_keyboard=True,
     )
