@@ -64,6 +64,17 @@ def _avatar_candidates(tier: int) -> tuple[Path, ...]:
     )
 
 
+def _realistic_avatar_candidates(tier: int) -> tuple[Path, ...]:
+    return (
+        AVATAR_DIR / "realistic" / f"stalker_t{tier}.png",
+        AVATAR_DIR / "realistic" / f"stalker_{tier}.png",
+        AVATAR_DIR / "realistic" / "stalker_default.png",
+        AVATAR_DIR / f"realistic_t{tier}.png",
+        AVATAR_DIR / f"realistic_{tier}.png",
+        AVATAR_DIR / "realistic_default.png",
+    )
+
+
 def _load_avatar_asset(tier: int, width: int, height: int) -> Image.Image | None:
     for candidate in _avatar_candidates(tier):
         if not candidate.exists():
@@ -144,3 +155,33 @@ def render_avatar(character: Character, width: int = 260, height: int = 360) -> 
     if asset_avatar is not None:
         return asset_avatar
     return _render_stalker_avatar_fallback(character, width=width, height=height)
+
+
+def render_avatar_by_style(
+    character: Character,
+    style: str = "classic",
+    width: int = 260,
+    height: int = 360,
+) -> Image.Image:
+    tier = _tier(character)
+    style_key = (style or "classic").strip().lower()
+
+    if style_key == "realistic":
+        for candidate in _realistic_avatar_candidates(tier):
+            if not candidate.exists():
+                continue
+            try:
+                source = Image.open(candidate).convert("RGBA")
+            except OSError:
+                continue
+            fitted = source.copy()
+            fitted.thumbnail((width, height), Image.Resampling.LANCZOS)
+            canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+            offset_x = (width - fitted.width) // 2
+            offset_y = height - fitted.height
+            canvas.paste(fitted, (offset_x, offset_y), fitted)
+            return canvas
+        # fallback to classic style if realistic assets are missing
+        return render_avatar(character, width=width, height=height)
+
+    return render_avatar(character, width=width, height=height)

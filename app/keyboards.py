@@ -27,11 +27,23 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="🎒 Инвентарь"), KeyboardButton(text="🧾 Профиль")],
+            [KeyboardButton(text="🎨 Стиль аватара")],
             [KeyboardButton(text="🛒 Торговец"), KeyboardButton(text="📋 Задания")],
             [KeyboardButton(text="⚔️ Война"), KeyboardButton(text="🗺 Переход")],
             [KeyboardButton(text="⚡ Выпить энергетик")],
         ],
         resize_keyboard=True,
+    )
+
+
+def avatar_style_keyboard(current_style: str) -> InlineKeyboardMarkup:
+    classic_mark = "✅ " if current_style == "classic" else ""
+    realistic_mark = "✅ " if current_style == "realistic" else ""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"{classic_mark}Классический", callback_data="avatar_style:classic")],
+            [InlineKeyboardButton(text=f"{realistic_mark}Реалистичный", callback_data="avatar_style:realistic")],
+        ]
     )
 
 

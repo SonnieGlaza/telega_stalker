@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from app.avatar_render import render_avatar
+from app.avatar_render import render_avatar_by_style
 from app.game_logic import ITEM_LABELS
 from app.skins import resolve_skin
 from app.storage import Character
@@ -221,7 +221,7 @@ def build_character_card(character: Character) -> bytes:
     draw.text((62, 258), f"Группировка: {character.faction or 'не выбрана'}", fill=(248, 248, 248), font=small_font)
     draw.text((62, 288), f"Скин персонажа: {skin.title}", fill=(248, 248, 248), font=small_font)
 
-    avatar = render_avatar(character)
+    avatar = render_avatar_by_style(character, style=character.avatar_style)
     img.paste(avatar, (88, 354))
     draw.text((94, 580), f"Сила снаряжения: {character.gear_power}", fill=(232, 232, 232), font=small_font)
 

@@ -23,6 +23,7 @@ from app.game_logic import (
     use_energy_drink,
 )
 from app.keyboards import (
+    avatar_style_keyboard,
     faction_keyboard,
     gender_keyboard,
     locations_keyboard,
@@ -204,6 +205,41 @@ async def show_profile(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     await send_profile_snapshot(message, player)
+
+
+@router.message(F.text == "🎨 Стиль аватара")
+async def show_avatar_style_menu(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    style_title = "Реалистичный" if player.avatar_style == "realistic" else "Классический"
+    await message.answer(
+        f"Текущий стиль аватара: {style_title}\nВыбери новый стиль:",
+        reply_markup=avatar_style_keyboard(player.avatar_style),
+    )
+
+
+@router.callback_query(F.data.startswith("avatarstyle:"))
+async def handle_avatar_style(callback: CallbackQuery) -> None:
+    style = (callback.data or "").split(":", maxsplit=1)[1]
+    if style not in {"classic", "realistic"}:
+        await callback.answer("Неизвестный стиль", show_alert=True)
+        return
+    db = get_storage()
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа", show_alert=True)
+        return
+    db.set_avatar_style(callback.from_user.id, style)
+    updated = db.get_character(callback.from_user.id, refresh_energy=False)
+    if updated is None:
+        await callback.answer("Ошибка обновления стиля", show_alert=True)
+        return
+    style_title = "Реалистичный" if style == "realistic" else "Классический"
+    await callback.message.answer(f"Стиль аватара обновлен: {style_title}.")
+    await send_profile_snapshot(callback.message, updated)
+    await callback.answer("Стиль сохранен.")
 
 
 @router.message(F.text == "🛒 Торговец")

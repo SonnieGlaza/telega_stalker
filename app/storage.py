@@ -22,6 +22,7 @@ def build_player_uid(telegram_id: int) -> str:
 class Character:
     telegram_id: int
     player_uid: str
+    avatar_style: str
     nickname: str
     gender: str
     faction: str | None
@@ -55,6 +56,7 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS characters (
                     telegram_id INTEGER PRIMARY KEY,
                     player_uid TEXT UNIQUE,
+                    avatar_style TEXT NOT NULL DEFAULT 'classic',
                     nickname TEXT NOT NULL,
                     gender TEXT NOT NULL,
                     faction TEXT,
@@ -262,6 +264,15 @@ class Storage:
         equipment[slot] = value
         self._set_equipment(telegram_id, equipment)
 
+    def set_avatar_style(self, telegram_id: int, style: str) -> None:
+        if style not in {"classic", "realistic"}:
+            return
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET avatar_style = ? WHERE telegram_id = ?",
+                (style, telegram_id),
+            )
+
     def set_truck_owned(self, telegram_id: int) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -352,6 +363,8 @@ class Storage:
         column_names = {row["name"] for row in columns}
         if "player_uid" not in column_names:
             conn.execute("ALTER TABLE characters ADD COLUMN player_uid TEXT")
+        if "avatar_style" not in column_names:
+            conn.execute("ALTER TABLE characters ADD COLUMN avatar_style TEXT")
 
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_player_uid ON characters(player_uid)"
@@ -365,6 +378,13 @@ class Storage:
                 "UPDATE characters SET player_uid = ? WHERE telegram_id = ?",
                 (build_player_uid(int(row["telegram_id"])), int(row["telegram_id"])),
             )
+        conn.execute(
+            """
+            UPDATE characters
+            SET avatar_style = 'classic'
+            WHERE avatar_style IS NULL OR TRIM(avatar_style) = ''
+            """
+        )
 
     @staticmethod
     def _row_to_character(row: sqlite3.Row) -> Character:
@@ -373,6 +393,7 @@ class Storage:
         return Character(
             telegram_id=row["telegram_id"],
             player_uid=row["player_uid"] or build_player_uid(row["telegram_id"]),
+            avatar_style=(row["avatar_style"] or "classic"),
             nickname=row["nickname"],
             gender=row["gender"],
             faction=row["faction"],
