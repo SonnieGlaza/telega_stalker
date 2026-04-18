@@ -215,7 +215,7 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
     storage.change_money(telegram_id, -penalty)
     return ActionResult(
         False,
-        f"Провал задания «{quest.title}». Шанс {breakdown.chance}% (бросок {roll}).\n"
+        f"Провал задания «{quest.title}».\n"
         f"Расход: патроны {quest.ammo_required}, аптечки {quest.medkit_required}.\n"
         f"Потери на расходники: {penalty} RU.",
     )
