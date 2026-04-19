@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 class Settings:
     bot_token: str
     db_path: str
+    snapshot_path: str
 
 
 def _is_writable_dir(path: Path) -> bool:
@@ -25,16 +26,15 @@ def _is_writable_dir(path: Path) -> bool:
 
 
 def _resolve_default_db_path() -> str:
-    # Preserve legacy path if it already contains user data.
-    legacy_path = Path("stalker_game.db")
-    modern_path = Path("/data/stalker_game.db")
-    if modern_path.exists():
-        return str(modern_path)
-    if legacy_path.exists():
-        return str(legacy_path)
-    if _is_writable_dir(modern_path.parent):
-        return str(modern_path)
-    return str(legacy_path)
+    # Use a single canonical DB path to avoid split progress.
+    canonical_path = Path("/data/stalker_game.db")
+    if _is_writable_dir(canonical_path.parent):
+        return str(canonical_path)
+    return "stalker_game.db"
+
+
+def _resolve_default_snapshot_path(db_path: str) -> str:
+    return str(Path(db_path).with_suffix(".backup.json"))
 
 
 def load_settings() -> Settings:
@@ -43,4 +43,5 @@ def load_settings() -> Settings:
     if not token:
         raise ValueError("BOT_TOKEN is not set. Put it in .env or environment variables.")
     db_path = os.getenv("DB_PATH", "").strip() or _resolve_default_db_path()
-    return Settings(bot_token=token, db_path=db_path)
+    snapshot_path = os.getenv("SNAPSHOT_PATH", "").strip() or _resolve_default_snapshot_path(db_path)
+    return Settings(bot_token=token, db_path=db_path, snapshot_path=snapshot_path)

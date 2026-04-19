@@ -40,11 +40,15 @@ class Character:
 
 
 class Storage:
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, snapshot_path: str | None = None) -> None:
         self.db_path = db_path
         db_parent = Path(db_path).parent
         db_parent.mkdir(parents=True, exist_ok=True)
-        self.snapshot_path = Path(db_path).with_suffix(".backup.json")
+        if snapshot_path:
+            self.snapshot_path = Path(snapshot_path)
+        else:
+            self.snapshot_path = Path(db_path).with_suffix(".backup.json")
+        self.snapshot_path.parent.mkdir(parents=True, exist_ok=True)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -464,6 +468,9 @@ class Storage:
                 "UPDATE locations SET controlled_by = ? WHERE name = ?",
                 (faction, location_name),
             )
+        self.save_snapshot()
+
+    def run_periodic_sync(self) -> None:
         self.save_snapshot()
 
     def _set_inventory(self, telegram_id: int, inventory: dict[str, int]) -> None:

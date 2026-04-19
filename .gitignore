@@ -1,6 +1,7 @@
 .env
 *.db
 *.snapshot.json
+*.backup.json
 __pycache__/
 *.pyc
 .venv/

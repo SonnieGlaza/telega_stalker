@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 storage: Storage | None = None
+SNAPSHOT_SYNC_SECONDS = 300
 
 
 class Registration(StatesGroup):
@@ -368,9 +369,19 @@ async def run_bot() -> None:
     logging.basicConfig(level=logging.INFO)
     settings = load_settings()
     global storage
-    storage = Storage(settings.db_path)
+    storage = Storage(settings.db_path, snapshot_path=settings.snapshot_path)
     storage.init_db()
     storage.restore_from_snapshot_if_empty()
+
+    async def periodic_snapshot_sync() -> None:
+        while True:
+            await asyncio.sleep(SNAPSHOT_SYNC_SECONDS)
+            try:
+                get_storage().save_snapshot()
+            except Exception:
+                logger.exception("Periodic snapshot sync failed")
+
+    sync_task = asyncio.create_task(periodic_snapshot_sync())
 
     bot = Bot(
         token=settings.bot_token,
@@ -378,7 +389,10 @@ async def run_bot() -> None:
     )
     dp = Dispatcher()
     dp.include_router(router)
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        sync_task.cancel()
 
 
 def main() -> None:
