@@ -609,9 +609,20 @@ async def join_raid_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "raid:launch")
-async def launch_raid_callback(callback: CallbackQuery) -> None:
+async def launch_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
     result = launch_open_raid(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
+    notified: set[int] = set()
+    if result.notify_member_ids:
+        for member_id in result.notify_member_ids:
+            if member_id in notified:
+                continue
+            notified.add(member_id)
+            try:
+                await bot.send_message(member_id, f"📣 Итог рейда:\n{result.text}")
+            except Exception:
+                logger.exception("Failed to deliver raid result to member %s", member_id)
+    if callback.from_user.id not in notified:
+        await callback.message.answer(result.text)
     await callback.answer()
 
 

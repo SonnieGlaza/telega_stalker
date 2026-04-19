@@ -78,6 +78,13 @@ class ActionResult:
 
 
 @dataclass(frozen=True)
+class RaidLaunchResult:
+    ok: bool
+    text: str
+    notify_member_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class QuestChanceBreakdown:
     chance: int
     base_chance: int
@@ -599,28 +606,28 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
     )
 
 
-def launch_open_raid(storage: Storage, telegram_id: int) -> ActionResult:
+def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
     leader = storage.get_character(telegram_id, refresh_energy=False)
     if leader is None:
-        return ActionResult(False, "Сначала создай персонажа.")
+        return RaidLaunchResult(False, "Сначала создай персонажа.", ())
     if leader.faction is None:
-        return ActionResult(False, "Сначала выбери группировку.")
+        return RaidLaunchResult(False, "Сначала выбери группировку.", ())
 
     open_raid = storage.get_open_raid_for_faction(leader.faction)
     if open_raid is None:
-        return ActionResult(False, "У твоей группировки нет открытого рейда.")
+        return RaidLaunchResult(False, "У твоей группировки нет открытого рейда.", ())
     if int(open_raid["leader_id"]) != telegram_id:
-        return ActionResult(False, "Запускать рейд может только лидер, который его создал.")
+        return RaidLaunchResult(False, "Запускать рейд может только лидер, который его создал.", ())
 
     raid_id = int(open_raid["id"])
     member_ids = storage.get_raid_member_ids(raid_id)
     if len(member_ids) < 2:
-        return ActionResult(False, "Для отрядного рейда нужно минимум 2 игрока.")
+        return RaidLaunchResult(False, "Для отрядного рейда нужно минимум 2 игрока.", ())
 
     members = storage.get_characters_by_ids(member_ids)
     members = [member for member in members if member.faction == leader.faction and member.health > 0]
     if len(members) < 2:
-        return ActionResult(False, "Недостаточно бойцов с нормальным здоровьем для запуска рейда.")
+        return RaidLaunchResult(False, "Недостаточно бойцов с нормальным здоровьем для запуска рейда.", ())
 
     raid_energy_cost = 18
     ready_members: list[Character] = []
@@ -628,15 +635,16 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> ActionResult:
         if storage.spend_energy(member.telegram_id, raid_energy_cost):
             ready_members.append(member)
     if len(ready_members) < 2:
-        return ActionResult(
+        return RaidLaunchResult(
             False,
             "У бойцов не хватает энергии для начала рейда. Нужно минимум 2 подготовленных сталкера.",
+            (),
         )
 
     location_name = str(open_raid["location"])
     location = storage.get_location(location_name)
     if location is None:
-        return ActionResult(False, "Локация рейда недоступна.")
+        return RaidLaunchResult(False, "Локация рейда недоступна.", ())
 
     event_modifier = _active_location_event_modifier(storage, location_name)
     enemy_power = max(10, int(location["npc_power"]) + event_modifier)
@@ -658,13 +666,14 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> ActionResult:
             status="success",
             result_text=f"Рейд успешен. Критов: {battle['total_crits']}.",
         )
-        return ActionResult(
+        return RaidLaunchResult(
             True,
             f"Рейд #{raid_id} завершен успешно на «{location_name}».\n"
             f"Бойцов: {len(ready_members)}, критические попадания: {battle['total_crits']}.\n"
             f"Личная награда каждому: {personal_reward} RU.\n"
             f"В казну группировки: {treasury_gain} RU.\n"
             f"Раненых: {len(battle['wounds'])}.",
+            tuple(member_ids),
         )
 
     for member in ready_members:
@@ -679,11 +688,12 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> ActionResult:
         status="failed",
         result_text=f"Рейд провален. Остаток силы противника: {battle['enemy_hp_left']}.",
     )
-    return ActionResult(
+    return RaidLaunchResult(
         False,
         f"Рейд #{raid_id} провален на «{location_name}».\n"
         f"Сила врага осталась: {battle['enemy_hp_left']}.\n"
         "Каждый участник потерял 110 RU и получил ранения.",
+        tuple(member_ids),
     )
 
 
