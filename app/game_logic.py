@@ -344,7 +344,13 @@ def format_inventory(character: Character) -> str:
         items = "• Пусто"
 
     vehicle = "Есть грузовик" if character.truck_owned else "Нет транспорта"
-    equipment = "\n".join(f"• {k}: {v}" for k, v in character.equipment.items())
+    equipment_labels = {
+        "weapon": "Оружие",
+        "armor": "Броня",
+    }
+    equipment = "\n".join(
+        f"• {equipment_labels.get(k, k)}: {v}" for k, v in character.equipment.items()
+    )
 
     return (
         f"👤 {character.nickname} ({character.gender})\n"
