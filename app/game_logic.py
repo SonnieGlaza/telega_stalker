@@ -424,6 +424,9 @@ def attack_location(storage: Storage, telegram_id: int, location_name: str) -> A
         return ActionResult(False, "Локация не найдена.")
 
     target = locations[location_name]
+    if target["point_type"] == "база" and target["controlled_by"] == character.faction:
+        return ActionResult(False, "Нельзя атаковать собственную базу своей группировки.")
+
     faction_power = storage.get_faction_power(character.faction)
     squad_power = max(1, faction_power)
     enemy_power = int(target["npc_power"])
