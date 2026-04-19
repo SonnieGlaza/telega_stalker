@@ -22,10 +22,10 @@ class QuestType:
 
 
 QUESTS: dict[str, QuestType] = {
-    "easy": QuestType("easy", "Легко", 90, 12, 150, 300, 1, 0),
-    "hard": QuestType("hard", "Сложно", 80, 16, 250, 450, 2, 0),
-    "heavy": QuestType("heavy", "Тяжело", 70, 22, 400, 650, 3, 1),
-    "impossible": QuestType("impossible", "Невозможно", 60, 28, 550, 900, 4, 1),
+    "easy": QuestType("easy", "Легко", 90, 12, 150, 300, 0, 0),
+    "hard": QuestType("hard", "Сложно", 80, 16, 250, 450, 0, 0),
+    "heavy": QuestType("heavy", "Тяжело", 70, 22, 400, 650, 2, 1),
+    "impossible": QuestType("impossible", "Невозможно", 60, 28, 550, 900, 3, 1),
 }
 
 
