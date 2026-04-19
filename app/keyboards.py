@@ -29,6 +29,8 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🎒 Инвентарь"), KeyboardButton(text="🧾 Профиль")],
             [KeyboardButton(text="🛒 Торговец"), KeyboardButton(text="📋 Задания")],
             [KeyboardButton(text="⚔️ Война"), KeyboardButton(text="🗺 Переход")],
+            [KeyboardButton(text="🪖 Рейды"), KeyboardButton(text="🛰 События")],
+            [KeyboardButton(text="🏦 Экономика")],
             [KeyboardButton(text="⚡ Выпить энергетик"), KeyboardButton(text="⭐ Пополнить")],
         ],
         resize_keyboard=True,
@@ -82,5 +84,34 @@ def topup_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⭐ 10 звезд (100 RU)", callback_data="topup:10")],
             [InlineKeyboardButton(text="⭐ 25 звезд (250 RU)", callback_data="topup:25")],
             [InlineKeyboardButton(text="⭐ Другое количество", callback_data="topup:custom")],
+        ]
+    )
+
+
+def raid_keyboard(locations: list[dict[str, str | int | None]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="➕ Присоединиться к открытому рейду", callback_data="raid:join")],
+        [InlineKeyboardButton(text="🚀 Запустить мой открытый рейд", callback_data="raid:launch")],
+    ]
+    for location in locations:
+        name = str(location["name"])
+        rows.append([InlineKeyboardButton(text=f"Создать рейд: {name}", callback_data=f"raid:create:{name}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def economy_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📦 Склад группировки", callback_data="eco:warehouse:view")],
+            [InlineKeyboardButton(text="📥 Сдать 1 патроны на склад", callback_data="eco:warehouse:deposit:ammo_pack")],
+            [InlineKeyboardButton(text="📤 Забрать 1 патроны со склада", callback_data="eco:warehouse:withdraw:ammo_pack")],
+            [InlineKeyboardButton(text="📥 Сдать 1 аптечку на склад", callback_data="eco:warehouse:deposit:medkit")],
+            [InlineKeyboardButton(text="📤 Забрать 1 аптечку со склада", callback_data="eco:warehouse:withdraw:medkit")],
+            [InlineKeyboardButton(text="⚖️ Биржа: создать лот артефакт", callback_data="eco:auction:create:artifact")],
+            [InlineKeyboardButton(text="⚖️ Биржа: создать лот патроны", callback_data="eco:auction:create:ammo_pack")],
+            [InlineKeyboardButton(text="⚖️ Биржа: создать лот аптечки", callback_data="eco:auction:create:medkit")],
+            [InlineKeyboardButton(text="⚖️ Биржа: купить первый лот", callback_data="eco:auction:buy:first")],
+            [InlineKeyboardButton(text="🛑 Биржа: отменить мой первый лот", callback_data="eco:auction:cancel:mine")],
+            [InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:run")],
         ]
     )

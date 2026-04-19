@@ -13,21 +13,35 @@ from aiogram.types import BufferedInputFile, CallbackQuery, LabeledPrice, Messag
 
 from app.config import load_settings
 from app.game_logic import (
+    apply_dynamic_zone_event,
     attack_location,
+    attempt_smuggling,
+    build_economy_overview,
+    build_events_overview,
+    build_raids_overview,
     buy_item,
+    buy_first_faction_auction,
+    cancel_own_first_auction,
+    create_faction_auction,
+    create_or_join_faction_raid,
+    launch_open_raid,
     build_quest_overview,
+    deposit_to_faction_warehouse,
     format_inventory,
     run_quest,
     sell_item,
     travel_to,
     use_energy_drink,
+    withdraw_from_faction_warehouse,
 )
 from app.keyboards import (
+    economy_keyboard,
     faction_keyboard,
     gender_keyboard,
     locations_keyboard,
     main_menu_keyboard,
     quests_keyboard,
+    raid_keyboard,
     topup_keyboard,
     trader_keyboard,
 )
@@ -553,6 +567,130 @@ async def show_war(message: Message) -> None:
 async def handle_war(callback: CallbackQuery) -> None:
     location = (callback.data or "").split(":", maxsplit=1)[1]
     result = attack_location(get_storage(), callback.from_user.id, location)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.message(F.text == "🪖 Рейды")
+async def show_raids(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if not player_ready(player):
+        await message.answer("Сначала выбери группировку.")
+        return
+    db = get_storage()
+    text = build_raids_overview(db, player.telegram_id)
+    await message.answer(text, reply_markup=raid_keyboard(db.get_locations()))
+
+
+@router.callback_query(F.data.startswith("raid:create:"))
+async def create_raid_callback(callback: CallbackQuery) -> None:
+    location = (callback.data or "").split(":", maxsplit=2)[2]
+    result = create_or_join_faction_raid(get_storage(), callback.from_user.id, location)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "raid:join")
+async def join_raid_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Нужен персонаж с группировкой.", show_alert=True)
+        return
+    open_raid = get_storage().get_open_raid_for_faction(player.faction)
+    if open_raid is None:
+        await callback.answer("Открытых рейдов нет.", show_alert=True)
+        return
+    result = create_or_join_faction_raid(get_storage(), callback.from_user.id, str(open_raid["location"]))
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "raid:launch")
+async def launch_raid_callback(callback: CallbackQuery) -> None:
+    result = launch_open_raid(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.message(F.text == "🛰 События")
+async def show_events(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    result = apply_dynamic_zone_event(get_storage())
+    overview = build_events_overview(get_storage())
+    await message.answer(result.text + "\n\n" + overview)
+
+
+@router.message(F.text == "🏦 Экономика")
+async def show_economy(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if not player_ready(player):
+        await message.answer("Сначала выбери группировку.")
+        return
+    text = build_economy_overview(get_storage(), player.telegram_id)
+    await message.answer(text, reply_markup=economy_keyboard())
+
+
+@router.callback_query(F.data.startswith("eco:warehouse:deposit:"))
+async def warehouse_deposit_callback(callback: CallbackQuery) -> None:
+    item_key = (callback.data or "").split(":", maxsplit=3)[3]
+    result = deposit_to_faction_warehouse(get_storage(), callback.from_user.id, item_key, 1)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("eco:warehouse:withdraw:"))
+async def warehouse_withdraw_callback(callback: CallbackQuery) -> None:
+    item_key = (callback.data or "").split(":", maxsplit=3)[3]
+    result = withdraw_from_faction_warehouse(get_storage(), callback.from_user.id, item_key, 1)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "eco:warehouse:view")
+async def warehouse_view_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Персонаж не найден.", show_alert=True)
+        return
+    text = build_economy_overview(get_storage(), player.telegram_id)
+    await callback.message.answer(text)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("eco:auction:create:"))
+async def auction_create_callback(callback: CallbackQuery) -> None:
+    lot_key = (callback.data or "").split(":", maxsplit=3)[3]
+    result = create_faction_auction(get_storage(), callback.from_user.id, lot_key)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "eco:auction:buy:first")
+async def auction_buy_first_callback(callback: CallbackQuery) -> None:
+    result = buy_first_faction_auction(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "eco:auction:cancel:mine")
+async def auction_cancel_mine_callback(callback: CallbackQuery) -> None:
+    result = cancel_own_first_auction(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "eco:smuggle:run")
+async def smuggle_callback(callback: CallbackQuery) -> None:
+    result = attempt_smuggling(get_storage(), callback.from_user.id)
     await callback.message.answer(result.text)
     await callback.answer()
 

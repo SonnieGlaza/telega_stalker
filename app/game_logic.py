@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from app.skins import resolve_skin
 from app.storage import Character, Storage
@@ -43,6 +45,22 @@ ITEM_LABELS = {
     "ammo_pack": "Патроны",
     "artifact": "Артефакт",
 }
+
+WAREHOUSE_ITEM_KEYS = ("ammo_pack", "medkit", "energy_drink", "artifact")
+
+AUCTION_DEFAULT_LOTS: dict[str, tuple[str, int, int]] = {
+    "artifact": ("artifact", 1, 900),
+    "ammo_pack": ("ammo_pack", 5, 520),
+    "medkit": ("medkit", 2, 420),
+}
+
+ZONE_EVENT_POOL: tuple[tuple[str, int, str], ...] = (
+    ("mutant_swarm", 10, "Миграция мутантов: сопротивление на локации выросло."),
+    ("bandit_ambush", 7, "Бандитские засады усилили гарнизон противника."),
+    ("anomaly_flux", -6, "Аномальный шторм спутал вражеские патрули."),
+    ("merc_support", 5, "Наемники временно усилили местных NPC."),
+    ("silent_night", -4, "Тихая ночь: активность NPC снижена."),
+)
 
 
 GEAR_PROGRESS: tuple[tuple[int, str, str], ...] = (
@@ -434,3 +452,503 @@ def attack_location(storage: Storage, telegram_id: int, location_name: str) -> A
         f"Штурм провален. Шанс {chance}% (бросок {roll}).\n"
         f"Потери отряда на снабжение: {loss} RU.",
     )
+
+
+def _weapon_rating(weapon_name: str) -> int:
+    return {
+        "Нож": 1,
+        "ПМ": 3,
+        "АКС-74У": 6,
+        "АН-94": 9,
+    }.get(weapon_name, 2)
+
+
+def _armor_rating(armor_name: str) -> int:
+    return {
+        "Куртка новичка": 1,
+        "Бронежилет сталкера": 3,
+        "Усиленный бронекостюм": 5,
+        "Штурмовой экзоскелет": 8,
+    }.get(armor_name, 2)
+
+
+def _safe_fromiso(value: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return datetime.now(timezone.utc)
+
+
+def _active_location_event_modifier(storage: Storage, location_name: str) -> int:
+    now = datetime.now(timezone.utc)
+    modifier = 0
+    for event in storage.get_map_events():
+        if str(event.get("location")) != location_name:
+            continue
+        expires_at = _safe_fromiso(str(event.get("expires_at", "")))
+        if expires_at > now:
+            modifier += int(event.get("modifier", 0))
+    return modifier
+
+
+def _simulate_raid_battle(
+    members: list[Character],
+    enemy_power: int,
+) -> dict[str, Any]:
+    squad_hp: dict[int, int] = {}
+    squad_attack_bonus: dict[int, int] = {}
+    squad_armor_bonus: dict[int, int] = {}
+    for member in members:
+        weapon_bonus = _weapon_rating(member.equipment.get("weapon", ""))
+        armor_bonus = _armor_rating(member.equipment.get("armor", ""))
+        squad_attack_bonus[member.telegram_id] = weapon_bonus
+        squad_armor_bonus[member.telegram_id] = armor_bonus
+        squad_hp[member.telegram_id] = 75 + member.gear_power * 4 + armor_bonus * 3
+
+    enemy_hp = max(80, enemy_power * 7)
+    enemy_damage_base = max(8, enemy_power // 2)
+    total_crits = 0
+    wounds: list[int] = []
+
+    for _round in range(1, 8):
+        active_ids = [mid for mid, hp in squad_hp.items() if hp > 0]
+        if not active_ids or enemy_hp <= 0:
+            break
+
+        for member in members:
+            member_hp = squad_hp.get(member.telegram_id, 0)
+            if member_hp <= 0 or enemy_hp <= 0:
+                continue
+            base_damage = 6 + member.gear_power * 2 + squad_attack_bonus[member.telegram_id]
+            damage = base_damage + random.randint(0, 8)
+            crit_chance = min(35, 8 + member.gear_power * 2)
+            if random.randint(1, 100) <= crit_chance:
+                damage = int(damage * 1.7)
+                total_crits += 1
+            enemy_hp -= damage
+
+        if enemy_hp <= 0:
+            break
+
+        target_id = random.choice(active_ids)
+        armor_block = squad_armor_bonus.get(target_id, 0) * 2
+        incoming = max(3, enemy_damage_base + random.randint(0, 7) - armor_block)
+        squad_hp[target_id] = max(0, squad_hp[target_id] - incoming)
+        if squad_hp[target_id] == 0 and target_id not in wounds:
+            wounds.append(target_id)
+
+    survivors = [mid for mid, hp in squad_hp.items() if hp > 0]
+    success = enemy_hp <= 0 and bool(survivors)
+    member_damage_taken: dict[int, int] = {}
+    for member in members:
+        max_hp = 75 + member.gear_power * 4 + squad_armor_bonus[member.telegram_id] * 3
+        member_damage_taken[member.telegram_id] = max(0, max_hp - squad_hp[member.telegram_id])
+
+    return {
+        "success": success,
+        "enemy_hp_left": max(0, enemy_hp),
+        "total_crits": total_crits,
+        "wounds": wounds,
+        "member_damage_taken": member_damage_taken,
+        "survivors": survivors,
+    }
+
+
+def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+
+    location = storage.get_location(location_name)
+    if location is None:
+        return ActionResult(False, "Локация для рейда не найдена.")
+
+    open_raid = storage.get_open_raid_for_faction(player.faction)
+    if open_raid is None:
+        raid_id = storage.create_raid(player.faction, location_name, telegram_id)
+        return ActionResult(
+            True,
+            f"Создан рейд #{raid_id} на локацию «{location_name}».\n"
+            "Позови товарищей по группировке и нажми «Запустить».",
+        )
+
+    if str(open_raid["location"]) != location_name:
+        return ActionResult(
+            False,
+            f"У твоей группировки уже есть открытый рейд #{open_raid['id']} на «{open_raid['location']}».\n"
+            "Сначала запусти или закрой его.",
+        )
+
+    raid_id = int(open_raid["id"])
+    if not storage.add_raid_member(raid_id, telegram_id):
+        return ActionResult(False, "Не удалось присоединиться к рейду.")
+    member_ids = storage.get_raid_member_ids(raid_id)
+    return ActionResult(
+        True,
+        f"Ты в составе рейда #{raid_id} на «{location_name}».\n"
+        f"Состав рейда: {len(member_ids)} бойцов.",
+    )
+
+
+def launch_open_raid(storage: Storage, telegram_id: int) -> ActionResult:
+    leader = storage.get_character(telegram_id, refresh_energy=False)
+    if leader is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if leader.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+
+    open_raid = storage.get_open_raid_for_faction(leader.faction)
+    if open_raid is None:
+        return ActionResult(False, "У твоей группировки нет открытого рейда.")
+    if int(open_raid["leader_id"]) != telegram_id:
+        return ActionResult(False, "Запускать рейд может только лидер, который его создал.")
+
+    raid_id = int(open_raid["id"])
+    member_ids = storage.get_raid_member_ids(raid_id)
+    if len(member_ids) < 2:
+        return ActionResult(False, "Для отрядного рейда нужно минимум 2 игрока.")
+
+    members = storage.get_characters_by_ids(member_ids)
+    members = [member for member in members if member.faction == leader.faction and member.health > 0]
+    if len(members) < 2:
+        return ActionResult(False, "Недостаточно бойцов с нормальным здоровьем для запуска рейда.")
+
+    raid_energy_cost = 18
+    ready_members: list[Character] = []
+    for member in members:
+        if storage.spend_energy(member.telegram_id, raid_energy_cost):
+            ready_members.append(member)
+    if len(ready_members) < 2:
+        return ActionResult(
+            False,
+            "У бойцов не хватает энергии для начала рейда. Нужно минимум 2 подготовленных сталкера.",
+        )
+
+    location_name = str(open_raid["location"])
+    location = storage.get_location(location_name)
+    if location is None:
+        return ActionResult(False, "Локация рейда недоступна.")
+
+    event_modifier = _active_location_event_modifier(storage, location_name)
+    enemy_power = max(10, int(location["npc_power"]) + event_modifier)
+    battle = _simulate_raid_battle(ready_members, enemy_power)
+
+    if battle["success"]:
+        storage.set_location_control(location_name, leader.faction)
+        treasury_gain = 1400 + len(ready_members) * 180
+        storage.change_faction_treasury(leader.faction, treasury_gain)
+        personal_reward = 240 + len(ready_members) * 35
+        for member in ready_members:
+            storage.change_money(member.telegram_id, personal_reward)
+            if member.telegram_id in battle["wounds"]:
+                storage.change_health(member.telegram_id, -14)
+        new_npc_power = max(12, enemy_power - random.randint(4, 10))
+        storage.set_location_npc_power(location_name, new_npc_power)
+        storage.finish_raid(
+            raid_id,
+            status="success",
+            result_text=f"Рейд успешен. Критов: {battle['total_crits']}.",
+        )
+        return ActionResult(
+            True,
+            f"Рейд #{raid_id} завершен успешно на «{location_name}».\n"
+            f"Бойцов: {len(ready_members)}, критические попадания: {battle['total_crits']}.\n"
+            f"Личная награда каждому: {personal_reward} RU.\n"
+            f"В казну группировки: {treasury_gain} RU.\n"
+            f"Раненых: {len(battle['wounds'])}.",
+        )
+
+    for member in ready_members:
+        storage.change_money(member.telegram_id, -110)
+        damage_taken = int(battle["member_damage_taken"].get(member.telegram_id, 0))
+        health_penalty = min(30, max(8, damage_taken // 4))
+        storage.change_health(member.telegram_id, -health_penalty)
+    new_npc_power = min(80, enemy_power + random.randint(2, 7))
+    storage.set_location_npc_power(location_name, new_npc_power)
+    storage.finish_raid(
+        raid_id,
+        status="failed",
+        result_text=f"Рейд провален. Остаток силы противника: {battle['enemy_hp_left']}.",
+    )
+    return ActionResult(
+        False,
+        f"Рейд #{raid_id} провален на «{location_name}».\n"
+        f"Сила врага осталась: {battle['enemy_hp_left']}.\n"
+        "Каждый участник потерял 110 RU и получил ранения.",
+    )
+
+
+def build_raids_overview(storage: Storage, telegram_id: int) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return "Рейды доступны только после выбора группировки."
+
+    open_raid = storage.get_open_raid_for_faction(player.faction)
+    if open_raid is None:
+        return (
+            "Отрядные рейды:\n"
+            "• Создай рейд на нужную локацию.\n"
+            "• Другие бойцы твоей группировки могут присоединиться.\n"
+            "• Для запуска нужно минимум 2 участника."
+        )
+
+    raid_id = int(open_raid["id"])
+    member_ids = storage.get_raid_member_ids(raid_id)
+    members = storage.get_characters_by_ids(member_ids)
+    members_text = "\n".join(
+        f"• {member.nickname} (сила {member.gear_power}, HP {member.health})"
+        for member in members
+    )
+    location_name = str(open_raid["location"])
+    location = storage.get_location(location_name)
+    npc_power = int(location["npc_power"]) if location else 0
+    event_modifier = _active_location_event_modifier(storage, location_name)
+    return (
+        f"Открытый рейд #{raid_id}\n"
+        f"Локация: {location_name}\n"
+        f"Лидер: {open_raid['leader_id']}\n"
+        f"Участников: {len(member_ids)}\n"
+        f"Сила NPC: {npc_power} (модификатор событий {event_modifier:+d})\n\n"
+        f"Состав:\n{members_text or '• Пока пусто'}"
+    )
+
+
+def _normalize_item_key(item_key: str) -> str:
+    return item_key if item_key in WAREHOUSE_ITEM_KEYS else "ammo_pack"
+
+
+def deposit_to_faction_warehouse(
+    storage: Storage,
+    telegram_id: int,
+    item_key: str,
+    amount: int,
+) -> ActionResult:
+    if amount <= 0:
+        return ActionResult(False, "Некорректное количество для склада.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Склад доступен только бойцам группировки.")
+    key = _normalize_item_key(item_key)
+    if not storage.remove_item(telegram_id, key, amount):
+        return ActionResult(False, "В инвентаре недостаточно предметов для сдачи.")
+    if not storage.change_faction_warehouse_item(player.faction, key, amount):
+        storage.add_item(telegram_id, key, amount)
+        return ActionResult(False, "Не удалось обновить склад группировки.")
+    return ActionResult(True, f"На склад {player.faction} отправлено: {ITEM_LABELS.get(key, key)} x{amount}.")
+
+
+def withdraw_from_faction_warehouse(
+    storage: Storage,
+    telegram_id: int,
+    item_key: str,
+    amount: int,
+) -> ActionResult:
+    if amount <= 0:
+        return ActionResult(False, "Некорректное количество для выдачи.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Склад доступен только бойцам группировки.")
+    key = _normalize_item_key(item_key)
+    if not storage.change_faction_warehouse_item(player.faction, key, -amount):
+        return ActionResult(False, "На складе недостаточно ресурсов.")
+    storage.add_item(telegram_id, key, amount)
+    return ActionResult(True, f"Со склада получено: {ITEM_LABELS.get(key, key)} x{amount}.")
+
+
+def create_faction_auction(storage: Storage, telegram_id: int, lot_key: str) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Аукцион доступен только бойцам группировки.")
+    lot = AUCTION_DEFAULT_LOTS.get(lot_key)
+    if lot is None:
+        return ActionResult(False, "Неизвестный тип лота.")
+    item_key, amount, price = lot
+    if not storage.remove_item(telegram_id, item_key, amount):
+        return ActionResult(False, f"Недостаточно предметов ({ITEM_LABELS.get(item_key, item_key)}) для лота.")
+    auction_id = storage.create_auction(
+        seller_id=telegram_id,
+        faction=player.faction,
+        item_key=item_key,
+        amount=amount,
+        price=price,
+    )
+    return ActionResult(
+        True,
+        f"Лот #{auction_id} создан: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.",
+    )
+
+
+def buy_first_faction_auction(storage: Storage, telegram_id: int) -> ActionResult:
+    buyer = storage.get_character(telegram_id, refresh_energy=False)
+    if buyer is None or buyer.faction is None:
+        return ActionResult(False, "Покупка на аукционе доступна только бойцам группировки.")
+    auctions = storage.list_open_auctions(buyer.faction)
+    target = next((a for a in auctions if int(a["seller_id"]) != telegram_id), None)
+    if target is None:
+        return ActionResult(False, "Подходящих открытых лотов нет.")
+
+    auction_id = int(target["id"])
+    price = int(target["price"])
+    item_key = str(target["item_key"])
+    amount = int(target["amount"])
+    seller_id = int(target["seller_id"])
+
+    if not storage.change_money(telegram_id, -price):
+        return ActionResult(False, "Недостаточно денег для покупки лота.")
+    if not storage.close_auction(auction_id, buyer_id=telegram_id, status="sold"):
+        storage.change_money(telegram_id, price)
+        return ActionResult(False, "Лот уже недоступен.")
+    storage.change_money(seller_id, price)
+    storage.add_item(telegram_id, item_key, amount)
+    return ActionResult(
+        True,
+        f"Куплен лот #{auction_id}: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.",
+    )
+
+
+def cancel_own_first_auction(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Сначала создай персонажа и выбери группировку.")
+    auctions = storage.list_open_auctions(player.faction)
+    target = next((a for a in auctions if int(a["seller_id"]) == telegram_id), None)
+    if target is None:
+        return ActionResult(False, "У тебя нет открытых лотов для отмены.")
+
+    auction_id = int(target["id"])
+    item_key = str(target["item_key"])
+    amount = int(target["amount"])
+    if not storage.close_auction(auction_id, buyer_id=None, status="cancelled"):
+        return ActionResult(False, "Не удалось отменить лот.")
+    storage.add_item(telegram_id, item_key, amount)
+    return ActionResult(
+        True,
+        f"Лот #{auction_id} отменен, предметы возвращены: {ITEM_LABELS.get(item_key, item_key)} x{amount}.",
+    )
+
+
+def build_economy_overview(storage: Storage, telegram_id: int) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return "Экономика доступна только после выбора группировки."
+
+    warehouse = storage.get_faction_warehouse(player.faction)
+    factions = storage.get_factions()
+    faction_info = next((f for f in factions if f["name"] == player.faction), None)
+    treasury = int(faction_info["treasury"]) if faction_info else 0
+    auctions = storage.list_open_auctions(player.faction)
+    warehouse_lines = [
+        f"• {ITEM_LABELS.get(k, k)}: {v}"
+        for k, v in sorted(warehouse.items())
+        if v > 0
+    ]
+    if not warehouse_lines:
+        warehouse_lines = ["• Склад пуст"]
+
+    auctions_lines = [
+        f"• #{a['id']} {ITEM_LABELS.get(str(a['item_key']), str(a['item_key']))} x{a['amount']} "
+        f"за {a['price']} RU (продавец {a['seller_id']})"
+        for a in auctions[:5]
+    ]
+    if not auctions_lines:
+        auctions_lines = ["• Открытых лотов нет"]
+
+    return (
+        f"Экономика группировки «{player.faction}»\n"
+        f"Казна: {treasury} RU\n\n"
+        f"Склад:\n{chr(10).join(warehouse_lines)}\n\n"
+        f"Аукцион:\n{chr(10).join(auctions_lines)}"
+    )
+
+
+def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+
+    energy_cost = 14
+    if not storage.spend_energy(telegram_id, energy_cost):
+        return ActionResult(False, f"Не хватает энергии для контрабанды (нужно {energy_cost}).")
+
+    truck_bonus = 12 if player.truck_owned and player.fuel > 0 else 0
+    if truck_bonus > 0 and not storage.change_fuel(telegram_id, -1):
+        truck_bonus = 0
+    event_modifier = _active_location_event_modifier(storage, player.location)
+    chance = min(90, max(20, 42 + player.gear_power * 3 + truck_bonus - max(0, event_modifier)))
+    roll = random.randint(1, 100)
+    success = roll <= chance
+
+    if success:
+        reward = random.randint(280, 520)
+        warehouse_bonus = random.randint(1, 3)
+        storage.change_money(telegram_id, reward)
+        storage.change_faction_treasury(player.faction, reward // 3)
+        storage.change_faction_warehouse_item(player.faction, "ammo_pack", warehouse_bonus)
+        return ActionResult(
+            True,
+            f"Контрабанда удалась! Шанс {chance}% (бросок {roll}).\n"
+            f"Ты получил {reward} RU, в казну ушло {reward // 3} RU.\n"
+            f"На склад добавлено патронов: +{warehouse_bonus}.",
+        )
+
+    penalty = random.randint(120, 240)
+    storage.change_money(telegram_id, -penalty)
+    storage.change_health(telegram_id, -12)
+    return ActionResult(
+        False,
+        f"Контрабанда сорвана. Шанс {chance}% (бросок {roll}).\n"
+        f"Потери: {penalty} RU и ранение (-12 HP).",
+    )
+
+
+def apply_dynamic_zone_event(storage: Storage) -> ActionResult:
+    storage.delete_expired_map_events()
+    locations = storage.get_locations()
+    if not locations:
+        return ActionResult(False, "Локации пока недоступны.")
+    target = random.choice(locations)
+    event_type, modifier, description = random.choice(ZONE_EVENT_POOL)
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=45)).isoformat()
+    location_name = str(target["name"])
+    storage.upsert_map_event(
+        location=location_name,
+        event_type=event_type,
+        modifier=modifier,
+        description=description,
+        expires_at=expires_at,
+    )
+
+    # Динамический спавн/ослабление NPC под событие.
+    current_power = int(target["npc_power"])
+    mutated_power = max(8, current_power + random.randint(-3, 7) + modifier // 2)
+    storage.set_location_npc_power(location_name, mutated_power)
+    return ActionResult(
+        True,
+        f"Новое событие в Зоне: {location_name}\n{description}\n"
+        f"Модификатор силы NPC: {modifier:+d}, текущая сила NPC: {mutated_power}.",
+    )
+
+
+def build_events_overview(storage: Storage) -> str:
+    storage.delete_expired_map_events()
+    events = storage.get_map_events()
+    if not events:
+        return "Активных событий на карте нет. Зона затихла."
+
+    now = datetime.now(timezone.utc)
+    by_location = {loc["name"]: int(loc["npc_power"]) for loc in storage.get_locations()}
+    lines = ["Активные события Зоны:"]
+    for event in events:
+        location = str(event.get("location"))
+        expires_at = _safe_fromiso(str(event.get("expires_at", "")))
+        minutes_left = max(0, int((expires_at - now).total_seconds() // 60))
+        modifier = int(event.get("modifier", 0))
+        npc_power = by_location.get(location, 0)
+        lines.append(
+            f"• {location}: {event.get('description')} (мод {modifier:+d}, NPC {npc_power}, ~{minutes_left} мин)"
+        )
+    return "\n".join(lines)

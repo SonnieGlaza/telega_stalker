@@ -62,12 +62,22 @@ class Storage:
                 factions = [dict(row) for row in conn.execute("SELECT * FROM factions").fetchall()]
                 locations = [dict(row) for row in conn.execute("SELECT * FROM locations").fetchall()]
                 topup_payments = [dict(row) for row in conn.execute("SELECT * FROM topup_payments").fetchall()]
+                faction_warehouse = [dict(row) for row in conn.execute("SELECT * FROM faction_warehouse").fetchall()]
+                auctions = [dict(row) for row in conn.execute("SELECT * FROM auctions").fetchall()]
+                raids = [dict(row) for row in conn.execute("SELECT * FROM raids").fetchall()]
+                raid_members = [dict(row) for row in conn.execute("SELECT * FROM raid_members").fetchall()]
+                map_events = [dict(row) for row in conn.execute("SELECT * FROM map_events").fetchall()]
             payload = {
                 "version": 1,
                 "characters": characters,
                 "factions": factions,
                 "locations": locations,
                 "topup_payments": topup_payments,
+                "faction_warehouse": faction_warehouse,
+                "auctions": auctions,
+                "raids": raids,
+                "raid_members": raid_members,
+                "map_events": map_events,
             }
             self.snapshot_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         except OSError:
@@ -89,6 +99,11 @@ class Storage:
         factions = payload.get("factions") or []
         locations = payload.get("locations") or []
         topup_payments = payload.get("topup_payments") or []
+        faction_warehouse = payload.get("faction_warehouse") or []
+        auctions = payload.get("auctions") or []
+        raids = payload.get("raids") or []
+        raid_members = payload.get("raid_members") or []
+        map_events = payload.get("map_events") or []
         if not characters:
             return
 
@@ -157,6 +172,85 @@ class Storage:
                     row.get("created_at") or utc_now().isoformat(),
                 ),
             )
+        for row in faction_warehouse:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO faction_warehouse(faction, item_key, amount)
+                VALUES(?, ?, ?)
+                """,
+                (
+                    row.get("faction"),
+                    row.get("item_key"),
+                    int(row.get("amount", 0)),
+                ),
+            )
+        for row in auctions:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO auctions(
+                    id, seller_id, faction, item_key, amount, price, status, buyer_id, created_at, closed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(row.get("id")),
+                    int(row.get("seller_id")),
+                    row.get("faction"),
+                    row.get("item_key"),
+                    int(row.get("amount", 1)),
+                    int(row.get("price", 0)),
+                    row.get("status") or "open",
+                    row.get("buyer_id"),
+                    row.get("created_at") or utc_now().isoformat(),
+                    row.get("closed_at"),
+                ),
+            )
+        for row in raids:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO raids(
+                    id, faction, location, leader_id, status, created_at, started_at, finished_at, result_text
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(row.get("id")),
+                    row.get("faction"),
+                    row.get("location"),
+                    int(row.get("leader_id")),
+                    row.get("status") or "open",
+                    row.get("created_at") or utc_now().isoformat(),
+                    row.get("started_at"),
+                    row.get("finished_at"),
+                    row.get("result_text"),
+                ),
+            )
+        for row in raid_members:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO raid_members(raid_id, telegram_id, joined_at)
+                VALUES(?, ?, ?)
+                """,
+                (
+                    int(row.get("raid_id")),
+                    int(row.get("telegram_id")),
+                    row.get("joined_at") or utc_now().isoformat(),
+                ),
+            )
+        for row in map_events:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO map_events(
+                    location, event_type, modifier, description, expires_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row.get("location"),
+                    row.get("event_type"),
+                    int(row.get("modifier", 0)),
+                    row.get("description") or "",
+                    row.get("expires_at") or utc_now().isoformat(),
+                    row.get("updated_at") or utc_now().isoformat(),
+                ),
+            )
 
     def save_snapshot(self) -> None:
         self._write_snapshot()
@@ -221,6 +315,69 @@ class Storage:
                     stars_amount INTEGER NOT NULL,
                     ru_amount INTEGER NOT NULL,
                     created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS faction_warehouse (
+                    faction TEXT NOT NULL,
+                    item_key TEXT NOT NULL,
+                    amount INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(faction, item_key)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS auctions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    seller_id INTEGER NOT NULL,
+                    faction TEXT NOT NULL,
+                    item_key TEXT NOT NULL,
+                    amount INTEGER NOT NULL,
+                    price INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    buyer_id INTEGER,
+                    created_at TEXT NOT NULL,
+                    closed_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS raids (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    faction TEXT NOT NULL,
+                    location TEXT NOT NULL,
+                    leader_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    result_text TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS raid_members (
+                    raid_id INTEGER NOT NULL,
+                    telegram_id INTEGER NOT NULL,
+                    joined_at TEXT NOT NULL,
+                    PRIMARY KEY(raid_id, telegram_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS map_events (
+                    location TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    modifier INTEGER NOT NULL,
+                    description TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 )
                 """
             )
@@ -447,6 +604,19 @@ class Storage:
         self.save_snapshot()
         return True
 
+    def change_health(self, telegram_id: int, delta: int) -> bool:
+        character = self.get_character(telegram_id, refresh_energy=False)
+        if character is None:
+            return False
+        new_health = max(0, min(100, character.health + delta))
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET health = ? WHERE telegram_id = ?",
+                (new_health, telegram_id),
+            )
+        self.save_snapshot()
+        return True
+
     def get_faction_power(self, faction: str) -> int:
         with self._connect() as conn:
             row = conn.execute(
@@ -491,6 +661,20 @@ class Storage:
             for row in rows
         ]
 
+    def get_location(self, location_name: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT name, point_type, controlled_by, npc_power
+                FROM locations
+                WHERE name = ?
+                """,
+                (location_name,),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
     def set_location_control(self, location_name: str, faction: str | None) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -499,8 +683,266 @@ class Storage:
             )
         self.save_snapshot()
 
+    def set_location_npc_power(self, location_name: str, npc_power: int) -> None:
+        safe_power = max(5, npc_power)
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE locations SET npc_power = ? WHERE name = ?",
+                (safe_power, location_name),
+            )
+        self.save_snapshot()
+
     def run_periodic_sync(self) -> None:
         self.save_snapshot()
+
+    def get_characters_by_ids(self, telegram_ids: list[int]) -> list[Character]:
+        if not telegram_ids:
+            return []
+        placeholders = ",".join("?" for _ in telegram_ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM characters WHERE telegram_id IN ({placeholders})",  # noqa: S608
+                tuple(telegram_ids),
+            ).fetchall()
+        return [self._row_to_character(row) for row in rows]
+
+    def get_open_raid_for_faction(self, faction: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, faction, location, leader_id, status, created_at, started_at, finished_at, result_text
+                FROM raids
+                WHERE faction = ? AND status = 'open'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (faction,),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def create_raid(self, faction: str, location: str, leader_id: int) -> int:
+        now_iso = utc_now().isoformat()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO raids(faction, location, leader_id, status, created_at)
+                VALUES (?, ?, ?, 'open', ?)
+                """,
+                (faction, location, leader_id, now_iso),
+            )
+            raid_id = int(cursor.lastrowid)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO raid_members(raid_id, telegram_id, joined_at)
+                VALUES (?, ?, ?)
+                """,
+                (raid_id, leader_id, now_iso),
+            )
+        self.save_snapshot()
+        return raid_id
+
+    def add_raid_member(self, raid_id: int, telegram_id: int) -> bool:
+        with self._connect() as conn:
+            raid_row = conn.execute(
+                "SELECT status FROM raids WHERE id = ?",
+                (raid_id,),
+            ).fetchone()
+            if raid_row is None or raid_row["status"] != "open":
+                return False
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO raid_members(raid_id, telegram_id, joined_at)
+                VALUES (?, ?, ?)
+                """,
+                (raid_id, telegram_id, utc_now().isoformat()),
+            )
+        self.save_snapshot()
+        return True
+
+    def get_raid(self, raid_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, faction, location, leader_id, status, created_at, started_at, finished_at, result_text
+                FROM raids
+                WHERE id = ?
+                """,
+                (raid_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def get_raid_member_ids(self, raid_id: int) -> list[int]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT telegram_id FROM raid_members WHERE raid_id = ? ORDER BY joined_at",
+                (raid_id,),
+            ).fetchall()
+        return [int(row["telegram_id"]) for row in rows]
+
+    def finish_raid(self, raid_id: int, status: str, result_text: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE raids
+                SET status = ?, started_at = COALESCE(started_at, ?), finished_at = ?, result_text = ?
+                WHERE id = ?
+                """,
+                (status, utc_now().isoformat(), utc_now().isoformat(), result_text, raid_id),
+            )
+        self.save_snapshot()
+
+    def get_faction_warehouse(self, faction: str) -> dict[str, int]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT item_key, amount FROM faction_warehouse WHERE faction = ? ORDER BY item_key",
+                (faction,),
+            ).fetchall()
+        return {str(row["item_key"]): int(row["amount"]) for row in rows}
+
+    def change_faction_warehouse_item(self, faction: str, item_key: str, delta: int) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT amount FROM faction_warehouse
+                WHERE faction = ? AND item_key = ?
+                """,
+                (faction, item_key),
+            ).fetchone()
+            current = int(row["amount"]) if row else 0
+            new_amount = current + delta
+            if new_amount < 0:
+                return False
+            conn.execute(
+                """
+                INSERT INTO faction_warehouse(faction, item_key, amount)
+                VALUES (?, ?, ?)
+                ON CONFLICT(faction, item_key) DO UPDATE SET amount = excluded.amount
+                """,
+                (faction, item_key, new_amount),
+            )
+        self.save_snapshot()
+        return True
+
+    def create_auction(
+        self,
+        seller_id: int,
+        faction: str,
+        item_key: str,
+        amount: int,
+        price: int,
+    ) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO auctions(seller_id, faction, item_key, amount, price, status, created_at)
+                VALUES (?, ?, ?, ?, ?, 'open', ?)
+                """,
+                (seller_id, faction, item_key, amount, price, utc_now().isoformat()),
+            )
+            auction_id = int(cursor.lastrowid)
+        self.save_snapshot()
+        return auction_id
+
+    def list_open_auctions(self, faction: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, seller_id, faction, item_key, amount, price, status, buyer_id, created_at, closed_at
+                FROM auctions
+                WHERE status = 'open' AND faction = ?
+                ORDER BY id DESC
+                """,
+                (faction,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_open_auction(self, auction_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, seller_id, faction, item_key, amount, price, status, buyer_id, created_at, closed_at
+                FROM auctions
+                WHERE id = ? AND status = 'open'
+                """,
+                (auction_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def close_auction(
+        self,
+        auction_id: int,
+        buyer_id: int | None = None,
+        status: str = "sold",
+    ) -> bool:
+        if status not in {"sold", "cancelled"}:
+            return False
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT status FROM auctions WHERE id = ?",
+                (auction_id,),
+            ).fetchone()
+            if row is None or row["status"] != "open":
+                return False
+            conn.execute(
+                """
+                UPDATE auctions
+                SET status = ?, buyer_id = ?, closed_at = ?
+                WHERE id = ?
+                """,
+                (status, buyer_id, utc_now().isoformat(), auction_id),
+            )
+        self.save_snapshot()
+        return True
+
+    def upsert_map_event(
+        self,
+        location: str,
+        event_type: str,
+        modifier: int,
+        description: str,
+        expires_at: str,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO map_events(location, event_type, modifier, description, expires_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(location) DO UPDATE SET
+                    event_type = excluded.event_type,
+                    modifier = excluded.modifier,
+                    description = excluded.description,
+                    expires_at = excluded.expires_at,
+                    updated_at = excluded.updated_at
+                """,
+                (location, event_type, modifier, description, expires_at, utc_now().isoformat()),
+            )
+        self.save_snapshot()
+
+    def delete_expired_map_events(self) -> None:
+        now_iso = utc_now().isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM map_events WHERE expires_at <= ?",
+                (now_iso,),
+            )
+        self.save_snapshot()
+
+    def get_map_events(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT location, event_type, modifier, description, expires_at, updated_at
+                FROM map_events
+                ORDER BY location
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def apply_topup_payment(
         self,
