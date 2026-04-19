@@ -589,6 +589,14 @@ class Storage:
             )
         self.save_snapshot()
 
+    def clear_truck_owned(self, telegram_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET truck_owned = 0 WHERE telegram_id = ?",
+                (telegram_id,),
+            )
+        self.save_snapshot()
+
     def change_fuel(self, telegram_id: int, delta: int) -> bool:
         character = self.get_character(telegram_id, refresh_energy=False)
         if character is None:

@@ -398,6 +398,12 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
     character = storage.get_character(telegram_id, refresh_energy=False)
     if character is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
+    if item_key == "truck":
+        if not character.truck_owned:
+            return ActionResult(False, "У тебя нет грузовика для продажи.")
+        storage.clear_truck_owned(telegram_id)
+        storage.change_money(telegram_id, sell_price)
+        return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
     if item_key in WEAPON_CATALOG:
         weapon_name = str(item["name"])
         equipped_weapon = character.equipment.get("weapon", "")

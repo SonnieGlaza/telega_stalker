@@ -57,22 +57,49 @@ def trader_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def trader_buy_keyboard() -> InlineKeyboardMarkup:
+def trader_buy_categories_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🧰 Расходники", callback_data="trade:buy:consumables")],
+            [InlineKeyboardButton(text="🛡 Снаряжение", callback_data="trade:buy:gear")],
+            [InlineKeyboardButton(text="🔫 Оружие", callback_data="trade:buy:weapons")],
+            [InlineKeyboardButton(text="⬅️ Назад в Торговец", callback_data="trade:menu:root")],
+        ]
+    )
+
+
+def trader_buy_consumables_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Купить энергетик (350)", callback_data="buy:energy_drink")],
             [InlineKeyboardButton(text="Купить аптечку (260)", callback_data="buy:medkit")],
             [InlineKeyboardButton(text="Купить патроны (120)", callback_data="buy:ammo_pack")],
+            [InlineKeyboardButton(text="Купить топливо +5 (450)", callback_data="buy:fuel_can")],
+            [InlineKeyboardButton(text="⬅️ Назад к категориям покупки", callback_data="trade:menu:buy")],
+        ]
+    )
+
+
+def trader_buy_gear_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
             [InlineKeyboardButton(text="Улучшить снарягу (1200)", callback_data="buy:gear_upgrade")],
             [InlineKeyboardButton(text="Купить грузовик (7000)", callback_data="buy:truck")],
-            [InlineKeyboardButton(text="Купить топливо +5 (450)", callback_data="buy:fuel_can")],
+            [InlineKeyboardButton(text="⬅️ Назад к категориям покупки", callback_data="trade:menu:buy")],
+        ]
+    )
+
+
+def trader_buy_weapons_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
             [InlineKeyboardButton(text="Купить ПМ (900)", callback_data="buy:weapon_pm")],
-            [InlineKeyboardButton(text="Купить Фора-12 (1100)", callback_data="buy:weapon_fora12")],
+            [InlineKeyboardButton(text="Купить Фора-12 (1300)", callback_data="buy:weapon_fora12")],
             [InlineKeyboardButton(text="Купить Обрез (1200)", callback_data="buy:weapon_sawedoff")],
             [InlineKeyboardButton(text="Купить Гадюка-5 (2200)", callback_data="buy:weapon_mp5")],
+            [InlineKeyboardButton(text="Купить Chaser-13 (2500)", callback_data="buy:weapon_chaser13")],
             [InlineKeyboardButton(text="Купить АКС-74У (2600)", callback_data="buy:weapon_aks74u")],
             [InlineKeyboardButton(text="Купить АК-74 (3400)", callback_data="buy:weapon_ak74")],
-            [InlineKeyboardButton(text="Купить Chaser-13 (2500)", callback_data="buy:weapon_chaser13")],
             [InlineKeyboardButton(text="Купить СПАС-12 (3900)", callback_data="buy:weapon_spas12")],
             [InlineKeyboardButton(text="Купить TRs 301 (5000)", callback_data="buy:weapon_lr300")],
             [InlineKeyboardButton(text="Купить ИЛ86 (5200)", callback_data="buy:weapon_il86")],
@@ -82,25 +109,53 @@ def trader_buy_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Купить СВДм-2 (9800)", callback_data="buy:weapon_svd")],
             [InlineKeyboardButton(text="Купить РП-74 (10500)", callback_data="buy:weapon_rp74")],
             [InlineKeyboardButton(text="Купить Гаусс-пушку (22000)", callback_data="buy:weapon_gauss")],
+            [InlineKeyboardButton(text="⬅️ Назад к категориям покупки", callback_data="trade:menu:buy")],
+        ]
+    )
+
+
+def trader_sell_categories_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🧰 Расходники", callback_data="trade:sell:consumables")],
+            [InlineKeyboardButton(text="🛡 Снаряжение", callback_data="trade:sell:gear")],
+            [InlineKeyboardButton(text="🔫 Оружие", callback_data="trade:sell:weapons")],
             [InlineKeyboardButton(text="⬅️ Назад в Торговец", callback_data="trade:menu:root")],
         ]
     )
 
 
-def trader_sell_keyboard() -> InlineKeyboardMarkup:
+def trader_sell_consumables_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Продать энергетик (170)", callback_data="sell:energy_drink")],
             [InlineKeyboardButton(text="Продать аптечку (120)", callback_data="sell:medkit")],
             [InlineKeyboardButton(text="Продать патроны (55)", callback_data="sell:ammo_pack")],
             [InlineKeyboardButton(text="Продать топливо +5 (200)", callback_data="sell:fuel_can")],
+            [InlineKeyboardButton(text="⬅️ Назад к категориям продажи", callback_data="trade:menu:sell")],
+        ]
+    )
+
+
+def trader_sell_gear_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Продать грузовик (3500)", callback_data="sell:truck")],
+            [InlineKeyboardButton(text="⬅️ Назад к категориям продажи", callback_data="trade:menu:sell")],
+        ]
+    )
+
+
+def trader_sell_weapons_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
             [InlineKeyboardButton(text="Продать ПМ (420)", callback_data="sell:weapon_pm")],
-            [InlineKeyboardButton(text="Продать Фора-12 (520)", callback_data="sell:weapon_fora12")],
+            [InlineKeyboardButton(text="Продать Фора-12 (620)", callback_data="sell:weapon_fora12")],
             [InlineKeyboardButton(text="Продать Обрез (560)", callback_data="sell:weapon_sawedoff")],
             [InlineKeyboardButton(text="Продать Гадюка-5 (1050)", callback_data="sell:weapon_mp5")],
+            [InlineKeyboardButton(text="Продать Chaser-13 (1200)", callback_data="sell:weapon_chaser13")],
             [InlineKeyboardButton(text="Продать АКС-74У (1200)", callback_data="sell:weapon_aks74u")],
             [InlineKeyboardButton(text="Продать АК-74 (1600)", callback_data="sell:weapon_ak74")],
-            [InlineKeyboardButton(text="Продать Chaser-13 (1200)", callback_data="sell:weapon_chaser13")],
             [InlineKeyboardButton(text="Продать СПАС-12 (1900)", callback_data="sell:weapon_spas12")],
             [InlineKeyboardButton(text="Продать TRs 301 (2400)", callback_data="sell:weapon_lr300")],
             [InlineKeyboardButton(text="Продать ИЛ86 (2500)", callback_data="sell:weapon_il86")],
@@ -110,7 +165,7 @@ def trader_sell_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Продать СВДм-2 (4800)", callback_data="sell:weapon_svd")],
             [InlineKeyboardButton(text="Продать РП-74 (5200)", callback_data="sell:weapon_rp74")],
             [InlineKeyboardButton(text="Продать Гаусс-пушку (11000)", callback_data="sell:weapon_gauss")],
-            [InlineKeyboardButton(text="⬅️ Назад в Торговец", callback_data="trade:menu:root")],
+            [InlineKeyboardButton(text="⬅️ Назад к категориям продажи", callback_data="trade:menu:sell")],
         ]
     )
 
