@@ -225,7 +225,7 @@ def build_character_card(character: Character) -> bytes:
     panel_left = 46
     panel_right = 408
     panel_bottom = 676
-    avatar_y = 350  # Ставим под блоком локации и выше предыдущей позиции.
+    avatar_y = 347  # Поднимаем еще выше: сразу под блоком локации.
 
     available_w = max(1, panel_right - panel_left)
     available_h = max(1, panel_bottom - avatar_y - 2)
