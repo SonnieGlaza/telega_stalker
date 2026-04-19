@@ -55,6 +55,7 @@ from app.keyboards import (
 )
 from app.profile_card import build_character_card
 from app.storage import Character, Storage
+from app.zone_map import build_zone_map_image
 
 logger = logging.getLogger(__name__)
 
@@ -584,6 +585,21 @@ async def show_travel(message: Message) -> None:
         "Выбирай локацию для перехода. Переходы расходуют энергию, "
         "грузовик ускоряет путь, но тратит топливо.",
         reply_markup=locations_keyboard(locations, mode="travel"),
+    )
+
+
+@router.message(F.text == "🗺 Карта")
+async def show_zone_map(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    locations = get_storage().get_locations()
+    image_bytes = build_zone_map_image(locations, current_location=player.location, player_faction=player.faction)
+    image = BufferedInputFile(image_bytes, filename="zone_map.png")
+    await message.answer_photo(
+        photo=image,
+        caption="Карта Зоны: точки, типы и текущий контроль.",
     )
 
 
