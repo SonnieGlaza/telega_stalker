@@ -222,7 +222,19 @@ def build_character_card(character: Character) -> bytes:
     draw.text((62, 288), f"Скин персонажа: {skin.title}", fill=(248, 248, 248), font=small_font)
 
     avatar = render_avatar(character)
-    img.paste(avatar, (88, 354))
+    avatar_x = 88
+    avatar_y = 332  # Поднимаем персонажа выше в блоке профиля.
+    if avatar.mode in {"RGBA", "LA"}:
+        # Сохраняем прозрачность, чтобы не появлялся темный фон вокруг спрайта.
+        img.paste(avatar, (avatar_x, avatar_y), avatar)
+    else:
+        img.paste(avatar, (avatar_x, avatar_y))
+
+    # Если после сдвига вниз остается пустая зона, заливаем ее цветом панели.
+    avatar_bottom = avatar_y + avatar.height
+    panel_bottom = 676
+    if avatar_bottom < panel_bottom:
+        draw.rectangle((46, avatar_bottom, 408, panel_bottom - 2), fill=(34, 36, 48))
 
     draw.rounded_rectangle((454, 108, 1156, 676), radius=16, fill=(33, 35, 44), outline=(66, 68, 82), width=2)
     draw.text((480, 132), f"Игрок: {character.nickname}", fill=(240, 240, 240), font=subtitle_font)
