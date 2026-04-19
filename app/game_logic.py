@@ -38,12 +38,69 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "fuel_can": {"name": "Канистра топлива (+5)", "buy_price": 450, "sell_price": 200},
 }
 
+WEAPON_CATALOG: dict[str, dict[str, int | str]] = {
+    "weapon_pm": {"name": "ПМ", "buy_price": 900, "sell_price": 420},
+    "weapon_fort12": {"name": "Фора-12", "buy_price": 1300, "sell_price": 620},
+    "weapon_sawedoff": {"name": "Обрез", "buy_price": 1200, "sell_price": 560},
+    "weapon_chaser13": {"name": "Chaser-13", "buy_price": 2500, "sell_price": 1200},
+    "weapon_spas12": {"name": "СПАС-12", "buy_price": 3900, "sell_price": 1900},
+    "weapon_mp5": {"name": "Гадюка-5", "buy_price": 2200, "sell_price": 1050},
+    "weapon_aks74u": {"name": "АКС-74У", "buy_price": 2600, "sell_price": 1200},
+    "weapon_ak74": {"name": "АК-74", "buy_price": 3400, "sell_price": 1600},
+    "weapon_lr300": {"name": "TRs 301", "buy_price": 5000, "sell_price": 2400},
+    "weapon_il86": {"name": "ИЛ86", "buy_price": 5200, "sell_price": 2500},
+    "weapon_gp37": {"name": "ГП37", "buy_price": 7900, "sell_price": 3900},
+    "weapon_an94": {"name": "АН-94", "buy_price": 6200, "sell_price": 3000},
+    "weapon_vintar": {"name": "Винтарь ВС", "buy_price": 8700, "sell_price": 4300},
+    "weapon_svd": {"name": "СВДм-2", "buy_price": 9800, "sell_price": 4800},
+    "weapon_rp74": {"name": "РП-74", "buy_price": 10500, "sell_price": 5200},
+    "weapon_gauss": {"name": "Гаусс-пушка", "buy_price": 22000, "sell_price": 11000},
+}
+
+SHOP_ITEMS.update(WEAPON_CATALOG)
+
+WEAPON_RATING_BY_NAME: dict[str, int] = {
+    "Нож": 1,
+    "ПМ": 3,
+    "Фора-12": 4,
+    "Обрез": 4,
+    "Chaser-13": 6,
+    "СПАС-12": 8,
+    "Гадюка-5": 5,
+    "АКС-74У": 6,
+    "АК-74": 7,
+    "TRs 301": 8,
+    "ИЛ86": 8,
+    "ГП37": 10,
+    "СВДм-2": 11,
+    "Винтарь ВС": 11,
+    "РП-74": 12,
+    "АН-94": 10,
+    "Гаусс-пушка": 16,
+}
+
 
 ITEM_LABELS = {
     "energy_drink": "Энергетик",
     "medkit": "Аптечка",
     "ammo_pack": "Патроны",
     "artifact": "Артефакт",
+    "weapon_pm": "ПМ",
+    "weapon_fort12": "Фора-12",
+    "weapon_sawedoff": "Обрез",
+    "weapon_chaser13": "Chaser-13",
+    "weapon_spas12": "СПАС-12",
+    "weapon_mp5": "Гадюка-5",
+    "weapon_aks74u": "АКС-74У",
+    "weapon_ak74": "АК-74",
+    "weapon_lr300": "TRs 301",
+    "weapon_il86": "ИЛ86",
+    "weapon_gp37": "ГП37",
+    "weapon_an94": "АН-94",
+    "weapon_vintar": "Винтарь ВС",
+    "weapon_svd": "СВДм-2",
+    "weapon_rp74": "РП-74",
+    "weapon_gauss": "Гаусс-пушка",
 }
 
 WAREHOUSE_ITEM_KEYS = ("ammo_pack", "medkit", "energy_drink", "artifact")
@@ -114,12 +171,7 @@ def calculate_equipment_bonus(character: Character) -> int:
         "Усиленный бронекостюм": 6,
         "Штурмовой экзоскелет": 9,
     }.get(armor_name, 0)
-    weapon_bonus = {
-        "Нож": 0,
-        "ПМ": 2,
-        "АКС-74У": 4,
-        "АН-94": 6,
-    }.get(weapon_name, 0)
+    weapon_bonus = max(0, _weapon_rating(weapon_name) - 1)
     return armor_bonus + weapon_bonus
 
 
@@ -295,6 +347,11 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
 
     if item_key == "truck" and character.truck_owned:
         return ActionResult(False, "У тебя уже есть грузовик.")
+    if item_key in WEAPON_CATALOG:
+        weapon_name = str(item["name"])
+        current_weapon = character.equipment.get("weapon", "")
+        if current_weapon == weapon_name:
+            return ActionResult(False, f"У тебя уже экипировано оружие: {weapon_name}.")
 
     if not storage.change_money(telegram_id, -price):
         return ActionResult(False, f"Недостаточно денег для покупки: {title}.")
@@ -318,6 +375,13 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
     if item_key == "fuel_can":
         storage.change_fuel(telegram_id, 5)
         return ActionResult(True, f"Куплена канистра топлива. Топливо +5 (стоимость {price} RU).")
+    if item_key in WEAPON_CATALOG:
+        weapon_name = str(item["name"])
+        storage.set_equipment_item(telegram_id, "weapon", weapon_name)
+        return ActionResult(
+            True,
+            f"Куплено и экипировано оружие: {weapon_name} (стоимость {price} RU).",
+        )
 
     storage.add_item(telegram_id, item_key, 1)
     return ActionResult(True, f"Куплено: {title}.")
@@ -331,11 +395,22 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
     title = str(item["name"])
     if sell_price <= 0:
         return ActionResult(False, f"{title} торговец не выкупает.")
+    character = storage.get_character(telegram_id, refresh_energy=False)
+    if character is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if item_key in WEAPON_CATALOG:
+        weapon_name = str(item["name"])
+        equipped_weapon = character.equipment.get("weapon", "")
+        if equipped_weapon != weapon_name:
+            return ActionResult(False, f"Нельзя продать {weapon_name}: это оружие не экипировано.")
+        if weapon_name == "Нож":
+            return ActionResult(False, "Нож продать нельзя.")
+        storage.set_equipment_item(telegram_id, "weapon", "Нож")
     if item_key == "fuel_can":
         if not storage.change_fuel(telegram_id, -5):
             return ActionResult(False, "Недостаточно топлива для продажи канистры.")
     else:
-        if not storage.remove_item(telegram_id, item_key, 1):
+        if item_key not in WEAPON_CATALOG and not storage.remove_item(telegram_id, item_key, 1):
             return ActionResult(False, f"У тебя нет предмета: {title}.")
     storage.change_money(telegram_id, sell_price)
     return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
@@ -472,12 +547,7 @@ def attack_location(storage: Storage, telegram_id: int, location_name: str) -> A
 
 
 def _weapon_rating(weapon_name: str) -> int:
-    return {
-        "Нож": 1,
-        "ПМ": 3,
-        "АКС-74У": 6,
-        "АН-94": 9,
-    }.get(weapon_name, 2)
+    return WEAPON_RATING_BY_NAME.get(weapon_name, 2)
 
 
 def _armor_rating(armor_name: str) -> int:

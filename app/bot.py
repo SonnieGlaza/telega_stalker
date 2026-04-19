@@ -43,7 +43,9 @@ from app.keyboards import (
     quests_keyboard,
     raid_keyboard,
     topup_keyboard,
+    trader_buy_keyboard,
     trader_keyboard,
+    trader_sell_keyboard,
 )
 from app.profile_card import build_character_card
 from app.storage import Character, Storage
@@ -445,9 +447,27 @@ async def show_trader(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     await message.answer(
-        "Торговец на связи. Покупай/продавай и строй экономику отряда:",
+        "Торговец на связи. Выбери раздел:",
         reply_markup=trader_keyboard(),
     )
+
+
+@router.callback_query(F.data == "trade:menu:buy")
+async def show_buy_menu(callback: CallbackQuery) -> None:
+    await callback.message.answer("Раздел покупки:", reply_markup=trader_buy_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "trade:menu:sell")
+async def show_sell_menu(callback: CallbackQuery) -> None:
+    await callback.message.answer("Раздел продажи:", reply_markup=trader_sell_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "trade:menu:root")
+async def show_trade_root(callback: CallbackQuery) -> None:
+    await callback.message.answer("Торговец на связи. Выбери раздел:", reply_markup=trader_keyboard())
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("buy:"))
@@ -456,7 +476,10 @@ async def handle_buy(callback: CallbackQuery) -> None:
     db = get_storage()
     result = buy_item(db, callback.from_user.id, item_key)
     await callback.message.answer(result.text)
-    if result.ok and item_key in {"gear_upgrade", "truck"}:
+    if result.ok and (
+        item_key in {"gear_upgrade", "truck"}
+        or item_key.startswith("weapon_")
+    ):
         player = db.get_character(callback.from_user.id, refresh_energy=False)
         if player is not None:
             await send_profile_snapshot(callback.message, player)
