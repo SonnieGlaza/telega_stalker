@@ -38,7 +38,11 @@ def _load_font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def build_zone_map(locations: list[dict[str, str | int | None]]) -> bytes:
+def build_zone_map_image(
+    locations: list[dict[str, str | int | None]],
+    current_location: str | None = None,
+    player_faction: str | None = None,
+) -> bytes:
     width, height = 960, 640
     canvas = Image.new("RGB", (width, height), (22, 28, 26))
     draw = ImageDraw.Draw(canvas)
@@ -79,11 +83,18 @@ def build_zone_map(locations: list[dict[str, str | int | None]]) -> bytes:
         # Inner owner marker.
         draw.ellipse((x - 8, y - 8, x + 8, y + 8), fill=owner_color, outline=(15, 15, 15), width=1)
 
-        draw.text((x + 20, y - 16), name, fill=(232, 232, 232), font=body_font)
+        label_color = (232, 232, 232)
+        if current_location and name == current_location:
+            label_color = (255, 245, 170)
+            draw.ellipse((x - 22, y - 22, x + 22, y + 22), outline=(255, 240, 120), width=2)
+        draw.text((x + 20, y - 16), name, fill=label_color, font=body_font)
         owner_text = str(controlled_by) if controlled_by else "нейтрал"
+        owner_marker = ""
+        if player_faction and controlled_by == player_faction:
+            owner_marker = " (союз)"
         draw.text(
             (x + 20, y + 12),
-            f"{point_type}; {owner_text}; NPC {npc_power}",
+            f"{point_type}; {owner_text}{owner_marker}; NPC {npc_power}",
             fill=(185, 196, 190),
             font=small_font,
         )
@@ -100,3 +111,16 @@ def build_zone_map(locations: list[dict[str, str | int | None]]) -> bytes:
     output = BytesIO()
     canvas.save(output, format="PNG")
     return output.getvalue()
+
+
+def build_zone_map(
+    locations: list[dict[str, str | int | None]],
+    current_location: str | None = None,
+    player_faction: str | None = None,
+) -> bytes:
+    """Backward-compatible alias for older call sites."""
+    return build_zone_map_image(
+        locations,
+        current_location=current_location,
+        player_faction=player_faction,
+    )
