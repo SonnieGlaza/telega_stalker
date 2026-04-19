@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from app.skins import resolve_skin
 from app.storage import Character, Storage
@@ -57,6 +57,9 @@ WEAPON_CATALOG: dict[str, dict[str, int | str]] = {
     "weapon_gauss": {"name": "Гаусс-пушка", "buy_price": 22000, "sell_price": 11000},
 }
 
+# Legacy callback alias used in keyboards.
+WEAPON_CATALOG["weapon_fora12"] = WEAPON_CATALOG["weapon_fort12"]
+
 SHOP_ITEMS.update(WEAPON_CATALOG)
 
 WEAPON_RATING_BY_NAME: dict[str, int] = {
@@ -87,6 +90,7 @@ ITEM_LABELS = {
     "artifact": "Артефакт",
     "weapon_pm": "ПМ",
     "weapon_fort12": "Фора-12",
+    "weapon_fora12": "Фора-12",
     "weapon_sawedoff": "Обрез",
     "weapon_chaser13": "Chaser-13",
     "weapon_spas12": "СПАС-12",
@@ -127,6 +131,30 @@ GEAR_PROGRESS: tuple[tuple[int, str, str], ...] = (
     (13, "Штурмовой экзоскелет", "АН-94"),
 )
 
+MAX_DURABILITY = 100
+MIN_EFFECTIVE_DURABILITY = 15
+RATING_REWARD = {
+    "quest_success": 12,
+    "quest_fail": 2,
+    "war_success": 22,
+    "war_fail": 6,
+    "raid_success": 26,
+    "raid_fail": 8,
+    "smuggle_success": 10,
+    "smuggle_fail": 3,
+    "trade_action": 4,
+}
+
+
+@dataclass(frozen=True)
+class AchievementRule:
+    key: str
+    title: str
+    description: str
+    reward_ru: int
+    reward_rating: int
+    check: Callable[[dict[str, int], Character], bool]
+
 
 @dataclass(frozen=True)
 class ActionResult:
@@ -160,9 +188,223 @@ def resolve_equipment_by_power(gear_power: int) -> tuple[str, str]:
     return armor, weapon
 
 
+def _durability_percent(character: Character, slot: str) -> int:
+    key = f"{slot}_durability"
+    raw = character.equipment.get(key, MAX_DURABILITY)
+    if isinstance(raw, (int, float)):
+        value = int(raw)
+    else:
+        try:
+            value = int(str(raw))
+        except ValueError:
+            value = MAX_DURABILITY
+    return max(0, min(MAX_DURABILITY, value))
+
+
+def _durability_penalty(percent: int, max_penalty: int) -> int:
+    if percent >= MIN_EFFECTIVE_DURABILITY:
+        return 0
+    missing = MIN_EFFECTIVE_DURABILITY - percent
+    return int(round((missing / MIN_EFFECTIVE_DURABILITY) * max_penalty))
+
+
+def _apply_durability_decay(storage: Storage, telegram_id: int, weapon_loss: int, armor_loss: int) -> str:
+    character = storage.get_character(telegram_id, refresh_energy=False)
+    if character is None:
+        return ""
+    weapon_old = _durability_percent(character, "weapon")
+    armor_old = _durability_percent(character, "armor")
+    weapon_new = max(0, weapon_old - max(0, weapon_loss))
+    armor_new = max(0, armor_old - max(0, armor_loss))
+    if weapon_new == weapon_old and armor_new == armor_old:
+        return ""
+    storage.update_equipment_fields(
+        telegram_id,
+        {"weapon_durability": weapon_new, "armor_durability": armor_new},
+    )
+    warning = ""
+    if weapon_new <= 10 or armor_new <= 10:
+        warning = "\n⚠️ Снаряжение на грани поломки: загляни в ремонт у торговца."
+    return (
+        f"\nИзнос: оружие {weapon_old}%→{weapon_new}%, броня {armor_old}%→{armor_new}%."
+        f"{warning}"
+    )
+
+
+def _add_rating(storage: Storage, telegram_id: int, amount: int) -> None:
+    if amount == 0:
+        return
+    storage.add_player_stat(telegram_id, "rating_points", amount)
+
+
+def _achievement_rules() -> tuple[AchievementRule, ...]:
+    return (
+        AchievementRule(
+            key="quest_5",
+            title="Полевой сталкер",
+            description="Выполни 5 заданий",
+            reward_ru=300,
+            reward_rating=20,
+            check=lambda stats, _: stats["quests_completed"] >= 5,
+        ),
+        AchievementRule(
+            key="quest_25",
+            title="Легенда поручений",
+            description="Выполни 25 заданий",
+            reward_ru=900,
+            reward_rating=65,
+            check=lambda stats, _: stats["quests_completed"] >= 25,
+        ),
+        AchievementRule(
+            key="raid_5",
+            title="Рейд-лидер",
+            description="Заверши 5 успешных рейдов",
+            reward_ru=700,
+            reward_rating=55,
+            check=lambda stats, _: stats["raids_completed"] >= 5,
+        ),
+        AchievementRule(
+            key="war_3",
+            title="Захватчик",
+            description="Выиграй 3 штурма точек",
+            reward_ru=600,
+            reward_rating=45,
+            check=lambda stats, _: stats["wars_won"] >= 3,
+        ),
+        AchievementRule(
+            key="smuggle_10",
+            title="Контрабандист",
+            description="Успешно проведи 10 контрабанд",
+            reward_ru=500,
+            reward_rating=35,
+            check=lambda stats, _: stats["smuggling_success"] >= 10,
+        ),
+        AchievementRule(
+            key="trade_30",
+            title="Барыга Зоны",
+            description="Соверши 30 сделок у торговца",
+            reward_ru=550,
+            reward_rating=40,
+            check=lambda stats, _: stats["trades_done"] >= 30,
+        ),
+        AchievementRule(
+            key="money_20000",
+            title="Толстый кошелек",
+            description="Заработай суммарно 20 000 RU",
+            reward_ru=1200,
+            reward_rating=80,
+            check=lambda stats, _: stats["money_earned"] >= 20_000,
+        ),
+        AchievementRule(
+            key="gear_14",
+            title="Экзоветеран",
+            description="Достигни силы снаряги 14+",
+            reward_ru=1000,
+            reward_rating=70,
+            check=lambda _stats, character: character.gear_power >= 14,
+        ),
+    )
+
+
+ACHIEVEMENT_RULES = _achievement_rules()
+ACHIEVEMENT_BY_KEY = {rule.key: rule for rule in ACHIEVEMENT_RULES}
+
+
+def _progress_and_unlock_achievements(storage: Storage, telegram_id: int) -> str:
+    character = storage.get_character(telegram_id, refresh_energy=False)
+    if character is None:
+        return ""
+    stats = storage.get_player_stats(telegram_id)
+    already = storage.get_player_achievement_keys(telegram_id)
+    unlocked: list[AchievementRule] = []
+    for rule in ACHIEVEMENT_RULES:
+        if rule.key in already:
+            continue
+        if not rule.check(stats, character):
+            continue
+        if not storage.unlock_player_achievement(telegram_id, rule.key):
+            continue
+        storage.add_player_stat(telegram_id, "achievements_unlocked", 1)
+        storage.change_money(telegram_id, rule.reward_ru)
+        _add_rating(storage, telegram_id, rule.reward_rating)
+        storage.add_player_stat(telegram_id, "money_earned", rule.reward_ru)
+        unlocked.append(rule)
+    if not unlocked:
+        return ""
+    lines = ["", "🏅 Новые достижения:"]
+    for rule in unlocked:
+        lines.append(
+            f"• {rule.title} — {rule.description}. Награда: +{rule.reward_ru} RU, +{rule.reward_rating} рейтинга."
+        )
+    return "\n".join(lines)
+
+
+def build_achievements_overview(storage: Storage, telegram_id: int) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return "Сначала создай персонажа через /start."
+    stats = storage.get_player_stats(telegram_id)
+    unlocked_rows = storage.list_player_achievements(telegram_id)
+    unlocked_keys = {str(row["achievement_key"]) for row in unlocked_rows}
+    total = len(ACHIEVEMENT_RULES)
+    unlocked_count = len(unlocked_rows)
+    recent_rows = unlocked_rows[-5:]
+    recent_lines: list[str] = []
+    for row in recent_rows:
+        key = str(row["achievement_key"])
+        rule = ACHIEVEMENT_BY_KEY.get(key)
+        title = rule.title if rule else key
+        recent_lines.append(f"• {title}")
+    progress_lines = []
+    for rule in ACHIEVEMENT_RULES[:6]:
+        marker = "✅" if rule.key in unlocked_keys else "⬜"
+        progress_lines.append(f"{marker} {rule.title} — {rule.description}")
+    if not recent_lines:
+        recent_lines = ["• Пока нет открытых достижений"]
+    return (
+        "🎖 Система достижений\n"
+        "Выполняй задания, соревнуйся и забирай награды!\n\n"
+        f"Открыто: {unlocked_count}/{total}\n"
+        f"Рейтинг: {stats['rating_points']}\n"
+        f"Получено RU за карьеру: {stats['money_earned']}\n\n"
+        "Последние достижения:\n"
+        f"{chr(10).join(recent_lines)}\n\n"
+        "Прогресс:\n"
+        f"{chr(10).join(progress_lines)}"
+    )
+
+
+def build_rating_overview(storage: Storage, requester_id: int, limit: int = 10) -> str:
+    top = storage.get_rating_leaderboard(limit=limit)
+    if not top:
+        return "🏆 Рейтинг пока пуст. Стань первым сталкером!"
+    requester_rank = None
+    lines = ["🏆 Рейтинг сталкеров (по очкам)"]
+    for idx, row in enumerate(top, start=1):
+        faction = row.get("faction") or "нейтрал"
+        nickname = str(row.get("nickname") or f"Игрок {row.get('telegram_id')}")
+        rating = int(row.get("rating_points") or 0)
+        achievements = int(row.get("achievements_unlocked") or 0)
+        marker = "👑 " if idx == 1 else ""
+        lines.append(f"{idx}. {marker}{nickname} [{faction}] — {rating} очк., достижений {achievements}")
+        if int(row.get("telegram_id") or 0) == requester_id:
+            requester_rank = idx
+    if requester_rank is None:
+        all_top = storage.get_rating_leaderboard(limit=25)
+        for idx, row in enumerate(all_top, start=1):
+            if int(row.get("telegram_id") or 0) == requester_id:
+                requester_rank = idx
+                break
+    if requester_rank is not None:
+        lines.append(f"\nТвоя позиция: #{requester_rank}")
+    return "\n".join(lines)
+
+
 def calculate_equipment_bonus(character: Character) -> int:
     armor_name = character.equipment.get("armor", "")
     weapon_name = character.equipment.get("weapon", "")
+    weapon_durability = _durability_percent(character, "weapon")
+    armor_durability = _durability_percent(character, "armor")
 
     # Явный бонус от фактической экипировки (не только от числовой силы).
     armor_bonus = {
@@ -172,7 +414,9 @@ def calculate_equipment_bonus(character: Character) -> int:
         "Штурмовой экзоскелет": 9,
     }.get(armor_name, 0)
     weapon_bonus = max(0, _weapon_rating(weapon_name) - 1)
-    return armor_bonus + weapon_bonus
+    armor_penalty = _durability_penalty(armor_durability, max_penalty=4)
+    weapon_penalty = _durability_penalty(weapon_durability, max_penalty=5)
+    return max(0, armor_bonus + weapon_bonus - armor_penalty - weapon_penalty)
 
 
 def calculate_quest_success(
@@ -299,31 +543,38 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
     roll = random.randint(1, 100)
     success = roll <= breakdown.chance
 
+    durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=3, armor_loss=2)
     if success:
         reward = random.randint(quest.reward_min, quest.reward_max)
         storage.change_money(telegram_id, reward)
+        _add_rating(storage, telegram_id, RATING_REWARD["quest_success"])
+        storage.add_player_stat(telegram_id, "quests_completed", 1)
+        storage.add_player_stat(telegram_id, "money_earned", reward)
 
         if random.random() < 0.30:
             storage.add_item(telegram_id, "artifact", 1)
             extra = "\nТы нашел редкий артефакт!"
         else:
             extra = ""
+        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
         return ActionResult(
             True,
             f"Задание «{quest.title}» выполнено! Шанс {breakdown.chance}% (бросок {roll}).\n"
             f"Формула: база {breakdown.base_chance}% (включая снарягу +{breakdown.gear_bonus}%) "
             f"+ патроны {breakdown.ammo_bonus}% + аптечки {breakdown.medkit_bonus}%.\n"
             f"Расход: патроны {quest.ammo_required}, аптечки {quest.medkit_required}.\n"
-            f"Награда: {reward} RU.{extra}",
+            f"Награда: {reward} RU.{extra}{durability_text}{achievements_text}",
         )
 
     penalty = random.randint(50, 120)
     storage.change_money(telegram_id, -penalty)
+    _add_rating(storage, telegram_id, -RATING_REWARD["quest_fail"])
+    storage.add_player_stat(telegram_id, "quests_failed", 1)
     return ActionResult(
         False,
         f"Провал задания «{quest.title}».\n"
         f"Расход: патроны {quest.ammo_required}, аптечки {quest.medkit_required}.\n"
-        f"Потери на расходники: {penalty} RU.",
+        f"Потери на расходники: {penalty} RU.{durability_text}",
     )
 
 
@@ -422,6 +673,31 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
     return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
 
 
+def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if target not in {"weapon", "armor"}:
+        return ActionResult(False, "Неизвестный тип ремонта.")
+    item_name = str(player.equipment.get(target, "—"))
+    current = _durability_percent(player, target)
+    if current >= MAX_DURABILITY:
+        return ActionResult(False, f"{'Оружие' if target == 'weapon' else 'Броня'} уже в идеальном состоянии.")
+    missing = MAX_DURABILITY - current
+    price = max(80, missing * 7)
+    if not storage.change_money(telegram_id, -price):
+        return ActionResult(False, f"Недостаточно денег на ремонт ({price} RU).")
+    storage.update_equipment_fields(telegram_id, {f"{target}_durability": MAX_DURABILITY})
+    storage.add_player_stat(telegram_id, "trades_done", 1)
+    _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    target_label = "Оружие" if target == "weapon" else "Броня"
+    return ActionResult(
+        True,
+        f"{target_label} «{item_name}» полностью отремонтировано за {price} RU.{achievements_text}",
+    )
+
+
 def format_inventory(character: Character) -> str:
     skin = resolve_skin(character)
     if character.inventory:
@@ -437,8 +713,20 @@ def format_inventory(character: Character) -> str:
         "weapon": "Оружие",
         "armor": "Броня",
     }
+    weapon_durability = _durability_percent(character, "weapon")
+    armor_durability = _durability_percent(character, "armor")
     equipment = "\n".join(
-        f"• {equipment_labels.get(k, k)}: {v}" for k, v in character.equipment.items()
+        (
+            f"• {equipment_labels.get(k, k)}: {v}"
+            if k in {"weapon", "armor"}
+            else f"• {k}: {v}"
+        )
+        for k, v in character.equipment.items()
+        if k in {"weapon", "armor"}
+    )
+    durability_block = (
+        f"• Прочность оружия: {weapon_durability}%\n"
+        f"• Прочность брони: {armor_durability}%"
     )
 
     return (
@@ -454,7 +742,7 @@ def format_inventory(character: Character) -> str:
         f"Баланс: {character.money} RU\n"
         f"Транспорт: {vehicle}\n"
         f"Топливо: {character.fuel}\n\n"
-        f"Снаряга:\n{equipment}\n\n"
+        f"Снаряга:\n{equipment}\n{durability_block}\n\n"
         f"Вещи:\n{items}"
     )
 
@@ -519,9 +807,13 @@ def attack_location(storage: Storage, telegram_id: int, location_name: str) -> A
 
     chance = int(round((squad_power / (squad_power + enemy_power)) * 100))
     chance = max(10, min(90, chance))
+    weapon_penalty = _durability_penalty(_durability_percent(character, "weapon"), max_penalty=18)
+    armor_penalty = _durability_penalty(_durability_percent(character, "armor"), max_penalty=12)
+    chance = max(8, chance - weapon_penalty - armor_penalty // 2)
     roll = random.randint(1, 100)
     success = roll <= chance
 
+    durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=5, armor_loss=4)
     if success:
         storage.set_location_control(location_name, character.faction)
         personal_reward = 250
@@ -535,20 +827,25 @@ def attack_location(storage: Storage, telegram_id: int, location_name: str) -> A
             storage.change_faction_treasury(character.faction, treasury_reward)
 
         storage.change_money(telegram_id, personal_reward)
+        _add_rating(storage, telegram_id, RATING_REWARD["war_success"])
+        storage.add_player_stat(telegram_id, "wars_won", 1)
+        storage.add_player_stat(telegram_id, "money_earned", personal_reward)
+        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
         return ActionResult(
             True,
             f"Штурм успешен! Шанс {chance}% (бросок {roll}).\n"
             f"Точка «{location_name}» под контролем {character.faction}.\n"
             f"Личная награда: {personal_reward} RU.\n"
-            f"В казну группировки: {treasury_reward} RU.",
+            f"В казну группировки: {treasury_reward} RU.{durability_text}{achievements_text}",
         )
 
     loss = random.randint(80, 170)
     storage.change_money(telegram_id, -loss)
+    _add_rating(storage, telegram_id, -RATING_REWARD["war_fail"])
     return ActionResult(
         False,
         f"Штурм провален. Шанс {chance}% (бросок {roll}).\n"
-        f"Потери отряда на снабжение: {loss} RU.",
+        f"Потери отряда на снабжение: {loss} RU.{durability_text}",
     )
 
 
@@ -734,10 +1031,23 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
         treasury_gain = 1400 + len(ready_members) * 180
         storage.change_faction_treasury(leader.faction, treasury_gain)
         personal_reward = 240 + len(ready_members) * 35
+        notes: list[str] = []
         for member in ready_members:
+            durability_text = _apply_durability_decay(
+                storage,
+                member.telegram_id,
+                weapon_loss=6,
+                armor_loss=5,
+            )
             storage.change_money(member.telegram_id, personal_reward)
+            _add_rating(storage, member.telegram_id, RATING_REWARD["raid_success"])
+            storage.add_player_stat(member.telegram_id, "raids_completed", 1)
+            storage.add_player_stat(member.telegram_id, "money_earned", personal_reward)
             if member.telegram_id in battle["wounds"]:
                 storage.change_health(member.telegram_id, -14)
+            achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
+            if member.telegram_id == leader.telegram_id:
+                notes.append(durability_text + achievement_text)
         new_npc_power = max(12, enemy_power - random.randint(4, 10))
         storage.set_location_npc_power(location_name, new_npc_power)
         storage.finish_raid(
@@ -751,15 +1061,28 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
             f"Бойцов: {len(ready_members)}, критические попадания: {battle['total_crits']}.\n"
             f"Личная награда каждому: {personal_reward} RU.\n"
             f"В казну группировки: {treasury_gain} RU.\n"
-            f"Раненых: {len(battle['wounds'])}.",
+            f"Раненых: {len(battle['wounds'])}."
+            f"{''.join(notes)}",
             tuple(member_ids),
         )
 
+    notes: list[str] = []
     for member in ready_members:
+        durability_text = _apply_durability_decay(
+            storage,
+            member.telegram_id,
+            weapon_loss=7,
+            armor_loss=6,
+        )
         storage.change_money(member.telegram_id, -110)
+        _add_rating(storage, member.telegram_id, -RATING_REWARD["raid_fail"])
+        storage.add_player_stat(member.telegram_id, "raids_failed", 1)
         damage_taken = int(battle["member_damage_taken"].get(member.telegram_id, 0))
         health_penalty = min(30, max(8, damage_taken // 4))
         storage.change_health(member.telegram_id, -health_penalty)
+        achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
+        if member.telegram_id == leader.telegram_id:
+            notes.append(durability_text + achievement_text)
     new_npc_power = min(80, enemy_power + random.randint(2, 7))
     storage.set_location_npc_power(location_name, new_npc_power)
     storage.finish_raid(
@@ -771,7 +1094,7 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
         False,
         f"Рейд #{raid_id} провален на «{location_name}».\n"
         f"Сила врага осталась: {battle['enemy_hp_left']}.\n"
-        "Каждый участник потерял 110 RU и получил ранения.",
+        f"Каждый участник потерял 110 RU и получил ранения.{''.join(notes)}",
         tuple(member_ids),
     )
 
@@ -870,9 +1193,12 @@ def create_faction_auction(storage: Storage, telegram_id: int, lot_key: str) -> 
         amount=amount,
         price=price,
     )
+    storage.add_player_stat(telegram_id, "trades_done", 1)
+    _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     return ActionResult(
         True,
-        f"Лот #{auction_id} создан: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.",
+        f"Лот #{auction_id} создан: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.{achievements_text}",
     )
 
 
@@ -898,9 +1224,17 @@ def buy_first_faction_auction(storage: Storage, telegram_id: int) -> ActionResul
         return ActionResult(False, "Лот уже недоступен.")
     storage.change_money(seller_id, price)
     storage.add_item(telegram_id, item_key, amount)
+    storage.add_player_stat(telegram_id, "trades_done", 1)
+    storage.add_player_stat(seller_id, "trades_done", 1)
+    _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
+    _add_rating(storage, seller_id, RATING_REWARD["trade_action"])
+    storage.add_player_stat(seller_id, "money_earned", price)
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    seller_achievements = _progress_and_unlock_achievements(storage, seller_id)
+    suffix = achievements_text + seller_achievements
     return ActionResult(
         True,
-        f"Куплен лот #{auction_id}: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.",
+        f"Куплен лот #{auction_id}: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.{suffix}",
     )
 
 
@@ -981,23 +1315,30 @@ def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
     if success:
         reward = random.randint(280, 520)
         warehouse_bonus = random.randint(1, 3)
+        durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=4, armor_loss=2)
         storage.change_money(telegram_id, reward)
         storage.change_faction_treasury(player.faction, reward // 3)
         storage.change_faction_warehouse_item(player.faction, "ammo_pack", warehouse_bonus)
+        _add_rating(storage, telegram_id, RATING_REWARD["smuggle_success"])
+        storage.add_player_stat(telegram_id, "smuggling_success", 1)
+        storage.add_player_stat(telegram_id, "money_earned", reward)
+        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
         return ActionResult(
             True,
             f"Контрабанда удалась! Шанс {chance}% (бросок {roll}).\n"
             f"Ты получил {reward} RU, в казну ушло {reward // 3} RU.\n"
-            f"На склад добавлено патронов: +{warehouse_bonus}.",
+            f"На склад добавлено патронов: +{warehouse_bonus}.{durability_text}{achievements_text}",
         )
 
     penalty = random.randint(120, 240)
+    durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=5, armor_loss=3)
     storage.change_money(telegram_id, -penalty)
     storage.change_health(telegram_id, -12)
+    _add_rating(storage, telegram_id, -RATING_REWARD["smuggle_fail"])
     return ActionResult(
         False,
         f"Контрабанда сорвана. Шанс {chance}% (бросок {roll}).\n"
-        f"Потери: {penalty} RU и ранение (-12 HP).",
+        f"Потери: {penalty} RU и ранение (-12 HP).{durability_text}",
     )
 
 

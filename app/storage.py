@@ -33,7 +33,7 @@ class Character:
     gear_power: int
     location: str
     inventory: dict[str, int]
-    equipment: dict[str, str]
+    equipment: dict[str, Any]
     truck_owned: bool
     fuel: int
     energy_updated_at: datetime
@@ -67,8 +67,12 @@ class Storage:
                 raids = [dict(row) for row in conn.execute("SELECT * FROM raids").fetchall()]
                 raid_members = [dict(row) for row in conn.execute("SELECT * FROM raid_members").fetchall()]
                 map_events = [dict(row) for row in conn.execute("SELECT * FROM map_events").fetchall()]
+                player_stats = [dict(row) for row in conn.execute("SELECT * FROM player_stats").fetchall()]
+                player_achievements = [
+                    dict(row) for row in conn.execute("SELECT * FROM player_achievements").fetchall()
+                ]
             payload = {
-                "version": 1,
+                "version": 2,
                 "characters": characters,
                 "factions": factions,
                 "locations": locations,
@@ -78,6 +82,8 @@ class Storage:
                 "raids": raids,
                 "raid_members": raid_members,
                 "map_events": map_events,
+                "player_stats": player_stats,
+                "player_achievements": player_achievements,
             }
             self.snapshot_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         except OSError:
@@ -104,6 +110,8 @@ class Storage:
         raids = payload.get("raids") or []
         raid_members = payload.get("raid_members") or []
         map_events = payload.get("map_events") or []
+        player_stats = payload.get("player_stats") or []
+        player_achievements = payload.get("player_achievements") or []
         if not characters:
             return
 
@@ -251,6 +259,42 @@ class Storage:
                     row.get("updated_at") or utc_now().isoformat(),
                 ),
             )
+        for row in player_stats:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO player_stats(
+                    telegram_id, quests_completed, quests_failed, raids_completed, raids_failed,
+                    wars_won, smuggling_success, trades_done, money_earned, rating_points,
+                    achievements_unlocked
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(row.get("telegram_id")),
+                    int(row.get("quests_completed", 0)),
+                    int(row.get("quests_failed", 0)),
+                    int(row.get("raids_completed", 0)),
+                    int(row.get("raids_failed", 0)),
+                    int(row.get("wars_won", 0)),
+                    int(row.get("smuggling_success", 0)),
+                    int(row.get("trades_done", 0)),
+                    int(row.get("money_earned", 0)),
+                    int(row.get("rating_points", 0)),
+                    int(row.get("achievements_unlocked", 0)),
+                ),
+            )
+        for row in player_achievements:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO player_achievements(
+                    telegram_id, achievement_key, unlocked_at
+                ) VALUES (?, ?, ?)
+                """,
+                (
+                    int(row.get("telegram_id")),
+                    row.get("achievement_key"),
+                    row.get("unlocked_at") or utc_now().isoformat(),
+                ),
+            )
 
     def save_snapshot(self) -> None:
         self._write_snapshot()
@@ -282,7 +326,7 @@ class Storage:
                     gear_power INTEGER NOT NULL DEFAULT 2,
                     location TEXT NOT NULL DEFAULT 'База новичков',
                     inventory_json TEXT NOT NULL DEFAULT '{}',
-                    equipment_json TEXT NOT NULL DEFAULT '{"weapon":"Нож","armor":"Куртка новичка"}',
+                    equipment_json TEXT NOT NULL DEFAULT '{"weapon":"Нож","armor":"Куртка новичка","weapon_durability":100,"armor_durability":100}',
                     truck_owned INTEGER NOT NULL DEFAULT 0,
                     fuel INTEGER NOT NULL DEFAULT 0
                 )
@@ -381,6 +425,33 @@ class Storage:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS player_stats (
+                    telegram_id INTEGER PRIMARY KEY,
+                    quests_completed INTEGER NOT NULL DEFAULT 0,
+                    quests_failed INTEGER NOT NULL DEFAULT 0,
+                    raids_completed INTEGER NOT NULL DEFAULT 0,
+                    raids_failed INTEGER NOT NULL DEFAULT 0,
+                    wars_won INTEGER NOT NULL DEFAULT 0,
+                    smuggling_success INTEGER NOT NULL DEFAULT 0,
+                    trades_done INTEGER NOT NULL DEFAULT 0,
+                    money_earned INTEGER NOT NULL DEFAULT 0,
+                    rating_points INTEGER NOT NULL DEFAULT 0,
+                    achievements_unlocked INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS player_achievements (
+                    telegram_id INTEGER NOT NULL,
+                    achievement_key TEXT NOT NULL,
+                    unlocked_at TEXT NOT NULL,
+                    PRIMARY KEY(telegram_id, achievement_key)
+                )
+                """
+            )
             conn.executemany(
                 "INSERT OR IGNORE INTO factions(name, treasury) VALUES(?, ?)",
                 [("Долг", 20000), ("Свобода", 20000)],
@@ -396,6 +467,7 @@ class Storage:
                 ],
             )
             self._restore_from_snapshot_if_needed(conn)
+            self._ensure_player_stats_rows(conn)
 
     def create_character(self, telegram_id: int, nickname: str, gender: str) -> None:
         player_uid = build_player_uid(telegram_id)
@@ -411,6 +483,7 @@ class Storage:
                 """,
                 (telegram_id, player_uid, nickname, gender, utc_now().isoformat()),
             )
+            self._ensure_player_stats_row(conn, telegram_id)
         self.save_snapshot()
 
     def get_character(self, telegram_id: int, refresh_energy: bool = True) -> Character | None:
@@ -562,7 +635,7 @@ class Storage:
         self.save_snapshot()
         return True
 
-    def set_equipment_item(self, telegram_id: int, slot: str, value: str) -> None:
+    def set_equipment_item(self, telegram_id: int, slot: str, value: Any) -> None:
         character = self.get_character(telegram_id, refresh_energy=False)
         if character is None:
             return
@@ -570,6 +643,147 @@ class Storage:
         equipment[slot] = value
         self._set_equipment(telegram_id, equipment)
         self.save_snapshot()
+
+    def update_equipment_fields(self, telegram_id: int, updates: dict[str, Any]) -> bool:
+        character = self.get_character(telegram_id, refresh_energy=False)
+        if character is None:
+            return False
+        equipment = dict(character.equipment)
+        equipment.update(updates)
+        self._set_equipment(telegram_id, equipment)
+        self.save_snapshot()
+        return True
+
+    def add_player_stat(self, telegram_id: int, stat_key: str, delta: int = 1) -> bool:
+        allowed_columns = {
+            "quests_completed": "quests_completed",
+            "quests_failed": "quests_failed",
+            "raids_completed": "raids_completed",
+            "raids_failed": "raids_failed",
+            "wars_won": "wars_won",
+            "smuggling_success": "smuggling_success",
+            "trades_done": "trades_done",
+            "money_earned": "money_earned",
+            "rating_points": "rating_points",
+            "achievements_unlocked": "achievements_unlocked",
+        }
+        column = allowed_columns.get(stat_key)
+        if column is None or delta == 0:
+            return False
+        with self._connect() as conn:
+            self._ensure_player_stats_row(conn, telegram_id)
+            conn.execute(
+                f"UPDATE player_stats SET {column} = MAX(0, {column} + ?) WHERE telegram_id = ?",  # noqa: S608
+                (delta, telegram_id),
+            )
+        self.save_snapshot()
+        return True
+
+    def get_player_stats(self, telegram_id: int) -> dict[str, int]:
+        with self._connect() as conn:
+            self._ensure_player_stats_row(conn, telegram_id)
+            row = conn.execute(
+                """
+                SELECT quests_completed, quests_failed, raids_completed, raids_failed, wars_won,
+                       smuggling_success, trades_done, money_earned, rating_points, achievements_unlocked
+                FROM player_stats
+                WHERE telegram_id = ?
+                """,
+                (telegram_id,),
+            ).fetchone()
+        if row is None:
+            return {
+                "quests_completed": 0,
+                "quests_failed": 0,
+                "raids_completed": 0,
+                "raids_failed": 0,
+                "wars_won": 0,
+                "smuggling_success": 0,
+                "trades_done": 0,
+                "money_earned": 0,
+                "rating_points": 0,
+                "achievements_unlocked": 0,
+            }
+        return {
+            "quests_completed": int(row["quests_completed"]),
+            "quests_failed": int(row["quests_failed"]),
+            "raids_completed": int(row["raids_completed"]),
+            "raids_failed": int(row["raids_failed"]),
+            "wars_won": int(row["wars_won"]),
+            "smuggling_success": int(row["smuggling_success"]),
+            "trades_done": int(row["trades_done"]),
+            "money_earned": int(row["money_earned"]),
+            "rating_points": int(row["rating_points"]),
+            "achievements_unlocked": int(row["achievements_unlocked"]),
+        }
+
+    def unlock_player_achievement(self, telegram_id: int, achievement_key: str) -> bool:
+        if not achievement_key.strip():
+            return False
+        with self._connect() as conn:
+            self._ensure_player_stats_row(conn, telegram_id)
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO player_achievements(telegram_id, achievement_key, unlocked_at)
+                VALUES (?, ?, ?)
+                """,
+                (telegram_id, achievement_key, utc_now().isoformat()),
+            )
+            inserted = cursor.rowcount > 0
+        if inserted:
+            self.save_snapshot()
+        return inserted
+
+    def get_player_achievement_keys(self, telegram_id: int) -> set[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT achievement_key
+                FROM player_achievements
+                WHERE telegram_id = ?
+                ORDER BY unlocked_at
+                """,
+                (telegram_id,),
+            ).fetchall()
+        return {str(row["achievement_key"]) for row in rows}
+
+    def list_player_achievements(self, telegram_id: int) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT achievement_key, unlocked_at
+                FROM player_achievements
+                WHERE telegram_id = ?
+                ORDER BY unlocked_at
+                """,
+                (telegram_id,),
+            ).fetchall()
+        return [{"achievement_key": row["achievement_key"], "unlocked_at": row["unlocked_at"]} for row in rows]
+
+    def get_rating_leaderboard(self, limit: int = 10) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(25, limit))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    c.telegram_id,
+                    c.nickname,
+                    c.faction,
+                    c.gear_power,
+                    c.money,
+                    COALESCE(ps.rating_points, 0) AS rating_points,
+                    COALESCE(ps.quests_completed, 0) AS quests_completed,
+                    COALESCE(ps.raids_completed, 0) AS raids_completed,
+                    COALESCE(ps.wars_won, 0) AS wars_won,
+                    COALESCE(ps.achievements_unlocked, 0) AS achievements_unlocked
+                FROM characters c
+                LEFT JOIN player_stats ps ON ps.telegram_id = c.telegram_id
+                ORDER BY rating_points DESC, c.money DESC, c.gear_power DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def set_avatar_style(self, telegram_id: int, style: str) -> None:
         if style not in {"classic", "realistic"}:
@@ -1007,12 +1221,26 @@ class Storage:
                 (json.dumps(inventory, ensure_ascii=False), telegram_id),
             )
 
-    def _set_equipment(self, telegram_id: int, equipment: dict[str, str]) -> None:
+    def _set_equipment(self, telegram_id: int, equipment: dict[str, Any]) -> None:
         with self._connect() as conn:
             conn.execute(
                 "UPDATE characters SET equipment_json = ? WHERE telegram_id = ?",
                 (json.dumps(equipment, ensure_ascii=False), telegram_id),
             )
+
+    def _ensure_player_stats_rows(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO player_stats(telegram_id)
+            SELECT telegram_id FROM characters
+            """
+        )
+
+    def _ensure_player_stats_row(self, conn: sqlite3.Connection, telegram_id: int) -> None:
+        conn.execute(
+            "INSERT OR IGNORE INTO player_stats(telegram_id) VALUES (?)",
+            (telegram_id,),
+        )
 
     def _ensure_characters_schema(self, conn: sqlite3.Connection) -> None:
         columns = conn.execute("PRAGMA table_info(characters)").fetchall()
@@ -1041,11 +1269,57 @@ class Storage:
             WHERE avatar_style IS NULL OR TRIM(avatar_style) = ''
             """
         )
+        rows = conn.execute(
+            "SELECT telegram_id, equipment_json FROM characters"
+        ).fetchall()
+        for row in rows:
+            try:
+                equipment = json.loads(row["equipment_json"] or "{}")
+            except json.JSONDecodeError:
+                equipment = {}
+            if not isinstance(equipment, dict):
+                equipment = {}
+            changed = False
+            if "weapon" not in equipment:
+                equipment["weapon"] = "Нож"
+                changed = True
+            if "armor" not in equipment:
+                equipment["armor"] = "Куртка новичка"
+                changed = True
+            if "weapon_durability" not in equipment:
+                equipment["weapon_durability"] = 100
+                changed = True
+            if "armor_durability" not in equipment:
+                equipment["armor_durability"] = 100
+                changed = True
+            if changed:
+                conn.execute(
+                    "UPDATE characters SET equipment_json = ? WHERE telegram_id = ?",
+                    (json.dumps(equipment, ensure_ascii=False), int(row["telegram_id"])),
+                )
 
     @staticmethod
     def _row_to_character(row: sqlite3.Row) -> Character:
         inventory = json.loads(row["inventory_json"])
+        if not isinstance(inventory, dict):
+            inventory = {}
         equipment = json.loads(row["equipment_json"])
+        if not isinstance(equipment, dict):
+            equipment = {"weapon": "Нож", "armor": "Куртка новичка"}
+        if "weapon" not in equipment:
+            equipment["weapon"] = "Нож"
+        if "armor" not in equipment:
+            equipment["armor"] = "Куртка новичка"
+        try:
+            weapon_durability = int(equipment.get("weapon_durability", 100))
+        except (TypeError, ValueError):
+            weapon_durability = 100
+        try:
+            armor_durability = int(equipment.get("armor_durability", 100))
+        except (TypeError, ValueError):
+            armor_durability = 100
+        equipment["weapon_durability"] = max(0, min(100, weapon_durability))
+        equipment["armor_durability"] = max(0, min(100, armor_durability))
         return Character(
             telegram_id=row["telegram_id"],
             player_uid=row["player_uid"] or build_player_uid(row["telegram_id"]),

@@ -16,9 +16,11 @@ from app.game_logic import (
     apply_dynamic_zone_event,
     attack_location,
     attempt_smuggling,
+    build_achievements_overview,
     build_economy_overview,
     build_events_overview,
     build_raids_overview,
+    build_rating_overview,
     buy_item,
     buy_first_faction_auction,
     cancel_own_first_auction,
@@ -28,6 +30,7 @@ from app.game_logic import (
     build_quest_overview,
     deposit_to_faction_warehouse,
     format_inventory,
+    repair_gear,
     run_quest,
     sell_item,
     travel_to,
@@ -42,6 +45,7 @@ from app.keyboards import (
     main_menu_keyboard,
     quests_keyboard,
     raid_keyboard,
+    ratings_keyboard,
     topup_keyboard,
     trader_buy_categories_keyboard,
     trader_buy_consumables_keyboard,
@@ -503,7 +507,7 @@ async def show_sell_consumables(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "trade:sell:gear")
 async def show_sell_gear(callback: CallbackQuery) -> None:
-    await callback.message.answer("Продажа снаряжения:", reply_markup=trader_sell_gear_keyboard())
+    await callback.message.answer("Продажа/ремонт снаряжения:", reply_markup=trader_sell_gear_keyboard())
     await callback.answer()
 
 
@@ -537,6 +541,20 @@ async def handle_sell(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "repair:weapon")
+async def repair_weapon_callback(callback: CallbackQuery) -> None:
+    result = repair_gear(get_storage(), callback.from_user.id, "weapon")
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "repair:armor")
+async def repair_armor_callback(callback: CallbackQuery) -> None:
+    result = repair_gear(get_storage(), callback.from_user.id, "armor")
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
 @router.message(F.text == "📋 Задания")
 async def show_quests(message: Message) -> None:
     player = ensure_character(message)
@@ -561,6 +579,48 @@ async def handle_quest(callback: CallbackQuery) -> None:
     quest_key = (callback.data or "").split(":", maxsplit=1)[1]
     result = run_quest(get_storage(), callback.from_user.id, quest_key)
     await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.message(F.text == "🎖 Достижения")
+async def show_achievements(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    text = build_achievements_overview(get_storage(), player.telegram_id)
+    await message.answer(text)
+
+
+@router.message(F.text == "🏆 Рейтинг")
+async def show_rating(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    text = build_rating_overview(get_storage(), player.telegram_id, limit=10)
+    await message.answer(text, reply_markup=ratings_keyboard())
+
+
+@router.callback_query(F.data == "ratings:achievements")
+async def show_achievements_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    text = build_achievements_overview(get_storage(), player.telegram_id)
+    await callback.message.answer(text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "ratings:leaderboard")
+async def show_rating_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    text = build_rating_overview(get_storage(), player.telegram_id, limit=10)
+    await callback.message.answer(text, reply_markup=ratings_keyboard())
     await callback.answer()
 
 

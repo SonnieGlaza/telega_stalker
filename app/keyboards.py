@@ -31,6 +31,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="⚔️ Война"), KeyboardButton(text="🗺 Переход")],
             [KeyboardButton(text="🗺 Карта"), KeyboardButton(text="🪖 Рейды")],
             [KeyboardButton(text="🛰 События"), KeyboardButton(text="🏦 Экономика")],
+            [KeyboardButton(text="🎖 Достижения"), KeyboardButton(text="🏆 Рейтинг")],
             [KeyboardButton(text="⚡ Выпить энергетик"), KeyboardButton(text="⭐ Пополнить")],
         ],
         resize_keyboard=True,
@@ -84,6 +85,8 @@ def trader_buy_gear_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Улучшить снарягу (1200)", callback_data="buy:gear_upgrade")],
+            [InlineKeyboardButton(text="Ремонт оружия", callback_data="repair:weapon")],
+            [InlineKeyboardButton(text="Ремонт брони", callback_data="repair:armor")],
             [InlineKeyboardButton(text="Купить грузовик (7000)", callback_data="buy:truck")],
             [InlineKeyboardButton(text="⬅️ Назад к категориям покупки", callback_data="trade:menu:buy")],
         ]
@@ -218,5 +221,14 @@ def economy_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⚖️ Биржа: купить первый лот", callback_data="eco:auction:buy:first")],
             [InlineKeyboardButton(text="🛑 Биржа: отменить мой первый лот", callback_data="eco:auction:cancel:mine")],
             [InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:run")],
+        ]
+    )
+
+
+def ratings_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎖 Мои достижения", callback_data="ratings:achievements")],
+            [InlineKeyboardButton(text="🏆 Топ сталкеров", callback_data="ratings:leaderboard")],
         ]
     )
