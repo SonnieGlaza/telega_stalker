@@ -151,9 +151,10 @@ def build_quest_overview(character: Character) -> str:
         "",
     ]
     for quest in QUESTS.values():
-        lines.append(
-            f"• {quest.title}: расход патроны {quest.ammo_required}, аптечки {quest.medkit_required}"
-        )
+        if quest.ammo_required == 0 and quest.medkit_required == 0:
+            lines.append(f"• {quest.title}: без обязательного расхода расходников")
+            continue
+        lines.append(f"• {quest.title}: расход патроны {quest.ammo_required}, аптечки {quest.medkit_required}")
     return "\n".join(lines)
 
 
