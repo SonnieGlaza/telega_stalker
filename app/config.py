@@ -30,7 +30,11 @@ def _is_writable_dir(path: Path) -> bool:
 
 def _resolve_default_db_path() -> str:
     canonical_path = Path("/data/stalker_game.db")
-    legacy_path = Path("stalker_game.db")
+    legacy_candidates = (
+        Path("stalker_game.db"),
+        Path("/workspace/stalker_game.db"),
+        Path("/app/stalker_game.db"),
+    )
 
     def has_character_data(path: Path) -> bool:
         if not path.exists():
@@ -55,8 +59,14 @@ def _resolve_default_db_path() -> str:
     if canonical_has_data:
         return str(canonical_path)
 
-    legacy_has_data = has_character_data(legacy_path)
-    if legacy_has_data:
+    seen: set[Path] = set()
+    for legacy_path in legacy_candidates:
+        if legacy_path in seen:
+            continue
+        seen.add(legacy_path)
+        legacy_has_data = has_character_data(legacy_path)
+        if not legacy_has_data:
+            continue
         if _is_writable_dir(canonical_path.parent):
             try:
                 shutil.copy2(legacy_path, canonical_path)
@@ -67,7 +77,7 @@ def _resolve_default_db_path() -> str:
 
     if _is_writable_dir(canonical_path.parent):
         return str(canonical_path)
-    return str(legacy_path)
+    return str(legacy_candidates[0])
 
 
 def _resolve_default_snapshot_path(db_path: str) -> str:
@@ -75,8 +85,18 @@ def _resolve_default_snapshot_path(db_path: str) -> str:
     if primary.exists():
         return str(primary)
 
-    legacy = Path("stalker_game.backup.json")
-    if legacy.exists() and primary != legacy:
+    legacy_candidates = (
+        Path("stalker_game.backup.json"),
+        Path("/workspace/stalker_game.backup.json"),
+        Path("/app/stalker_game.backup.json"),
+    )
+    seen: set[Path] = set()
+    for legacy in legacy_candidates:
+        if legacy in seen:
+            continue
+        seen.add(legacy)
+        if not legacy.exists() or primary == legacy:
+            continue
         try:
             primary.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(legacy, primary)
