@@ -600,7 +600,7 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
 
     raid_id = int(open_raid["id"])
     if not storage.add_raid_member(raid_id, telegram_id):
-        return ActionResult(False, "Не удалось присоединиться к рейду.")
+        return ActionResult(False, "Не удалось присоединиться к рейду. Вступать могут только бойцы той же группировки.")
     member_ids = storage.get_raid_member_ids(raid_id)
     return ActionResult(
         True,

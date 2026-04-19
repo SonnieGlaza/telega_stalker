@@ -746,10 +746,16 @@ class Storage:
     def add_raid_member(self, raid_id: int, telegram_id: int) -> bool:
         with self._connect() as conn:
             raid_row = conn.execute(
-                "SELECT status FROM raids WHERE id = ?",
+                "SELECT status, faction FROM raids WHERE id = ?",
                 (raid_id,),
             ).fetchone()
             if raid_row is None or raid_row["status"] != "open":
+                return False
+            member_row = conn.execute(
+                "SELECT faction FROM characters WHERE telegram_id = ?",
+                (telegram_id,),
+            ).fetchone()
+            if member_row is None or member_row["faction"] != raid_row["faction"]:
                 return False
             conn.execute(
                 """
