@@ -9,7 +9,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
 
 from app.config import load_settings
 from app.game_logic import (
@@ -28,6 +28,7 @@ from app.keyboards import (
     locations_keyboard,
     main_menu_keyboard,
     quests_keyboard,
+    topup_keyboard,
     trader_keyboard,
 )
 from app.profile_card import build_character_card
@@ -39,6 +40,9 @@ router = Router()
 storage: Storage | None = None
 admin_ids: tuple[int, ...] = ()
 SNAPSHOT_SYNC_SECONDS = 300
+TOPUP_RATE_RU_PER_STAR = 10
+TOPUP_PAYLOAD_PREFIX = "topup_stars:"
+TOPUP_ALLOWED_AMOUNTS = {1, 5, 10, 25}
 
 
 class Registration(StatesGroup):
@@ -58,6 +62,19 @@ def is_admin_user(user_id: int) -> bool:
 
 def player_ready(player: Character) -> bool:
     return player.faction is not None
+
+
+def parse_topup_stars_amount(payload: str) -> int | None:
+    if not payload.startswith(TOPUP_PAYLOAD_PREFIX):
+        return None
+    stars_part = payload.replace(TOPUP_PAYLOAD_PREFIX, "", 1)
+    try:
+        stars_amount = int(stars_part)
+    except ValueError:
+        return None
+    if stars_amount not in TOPUP_ALLOWED_AMOUNTS:
+        return None
+    return stars_amount
 
 
 @router.message(Command("start"))
@@ -102,6 +119,108 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 @router.message(Command("menu"))
 async def cmd_menu(message: Message) -> None:
     await message.answer("Главное меню открыто.", reply_markup=main_menu_keyboard())
+
+
+@router.message(F.text == "⭐ Пополнить")
+async def show_topup(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    await message.answer(
+        "Выбери пакет пополнения.\nКурс: 1 звезда = 10 RU.",
+        reply_markup=topup_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("topup:"))
+async def handle_topup(callback: CallbackQuery, bot: Bot) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+
+    parts = (callback.data or "").split(":", maxsplit=1)
+    if len(parts) != 2:
+        await callback.answer("Некорректный пакет пополнения.", show_alert=True)
+        return
+    try:
+        stars_amount = int(parts[1])
+    except ValueError:
+        await callback.answer("Некорректный пакет пополнения.", show_alert=True)
+        return
+    if stars_amount not in TOPUP_ALLOWED_AMOUNTS:
+        await callback.answer("Пакет пополнения недоступен.", show_alert=True)
+        return
+
+    ru_amount = stars_amount * TOPUP_RATE_RU_PER_STAR
+    payload = f"{TOPUP_PAYLOAD_PREFIX}{stars_amount}"
+    prices = [LabeledPrice(label=f"{ru_amount} RU в игре", amount=stars_amount)]
+    await bot.send_invoice(
+        chat_id=callback.from_user.id,
+        title="Пополнение игровой валюты",
+        description=f"{stars_amount}⭐ = {ru_amount} RU",
+        payload=payload,
+        currency="XTR",
+        prices=prices,
+        provider_token="",
+    )
+    await callback.answer()
+
+
+@router.pre_checkout_query()
+async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery) -> None:
+    payload = pre_checkout_query.invoice_payload or ""
+    stars_amount = parse_topup_stars_amount(payload)
+    if stars_amount is None:
+        await pre_checkout_query.answer(ok=False, error_message="Некорректный платеж.")
+        return
+    if pre_checkout_query.currency != "XTR":
+        await pre_checkout_query.answer(ok=False, error_message="Поддерживается только оплата звездами.")
+        return
+    if pre_checkout_query.total_amount != stars_amount:
+        await pre_checkout_query.answer(ok=False, error_message="Сумма платежа не совпадает с пакетом.")
+        return
+    await pre_checkout_query.answer(ok=True)
+
+
+@router.message(F.successful_payment)
+async def successful_payment_handler(message: Message) -> None:
+    payment = message.successful_payment
+    if payment is None:
+        return
+    payload = payment.invoice_payload or ""
+    stars_amount = parse_topup_stars_amount(payload)
+    if stars_amount is None:
+        return
+    if payment.currency != "XTR":
+        await message.answer("Платеж получен в неподдерживаемой валюте.")
+        return
+    if payment.total_amount != stars_amount:
+        await message.answer("Платеж получен, но сумма не совпадает с пакетом пополнения.")
+        return
+
+    ru_amount = stars_amount * TOPUP_RATE_RU_PER_STAR
+    db = get_storage()
+    applied, already_applied = db.apply_topup_payment(
+        telegram_id=message.from_user.id,
+        payment_charge_id=payment.telegram_payment_charge_id,
+        stars_amount=stars_amount,
+        ru_amount=ru_amount,
+    )
+    if already_applied:
+        await message.answer("Этот платеж уже был зачислен ранее.")
+        return
+    if not applied:
+        await message.answer("Платеж успешен, но начисление не выполнено. Обратись к администратору.")
+        return
+    player = db.get_character(message.from_user.id, refresh_energy=False)
+    balance = player.money if player is not None else "неизвестно"
+    await message.answer(
+        f"Оплата прошла успешно: {stars_amount}⭐.\n"
+        f"Зачислено: {ru_amount} RU.\n"
+        f"Баланс: {balance} RU."
+    )
 
 
 @router.message(Command("give"))

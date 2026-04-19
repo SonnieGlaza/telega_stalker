@@ -61,11 +61,13 @@ class Storage:
                 characters = [dict(row) for row in conn.execute("SELECT * FROM characters").fetchall()]
                 factions = [dict(row) for row in conn.execute("SELECT * FROM factions").fetchall()]
                 locations = [dict(row) for row in conn.execute("SELECT * FROM locations").fetchall()]
+                topup_payments = [dict(row) for row in conn.execute("SELECT * FROM topup_payments").fetchall()]
             payload = {
                 "version": 1,
                 "characters": characters,
                 "factions": factions,
                 "locations": locations,
+                "topup_payments": topup_payments,
             }
             self.snapshot_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         except OSError:
@@ -86,6 +88,7 @@ class Storage:
         characters = payload.get("characters") or []
         factions = payload.get("factions") or []
         locations = payload.get("locations") or []
+        topup_payments = payload.get("topup_payments") or []
         if not characters:
             return
 
@@ -137,6 +140,21 @@ class Storage:
                     row.get("equipment_json") or '{"weapon":"Нож","armor":"Куртка новичка"}',
                     int(row.get("truck_owned", 0)),
                     int(row.get("fuel", 0)),
+                ),
+            )
+        for row in topup_payments:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO topup_payments(
+                    payment_charge_id, telegram_id, stars_amount, ru_amount, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    row.get("payment_charge_id"),
+                    int(row.get("telegram_id")),
+                    int(row.get("stars_amount", 0)),
+                    int(row.get("ru_amount", 0)),
+                    row.get("created_at") or utc_now().isoformat(),
                 ),
             )
 
@@ -192,6 +210,17 @@ class Storage:
                     point_type TEXT NOT NULL,
                     controlled_by TEXT,
                     npc_power INTEGER NOT NULL DEFAULT 30
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS topup_payments (
+                    payment_charge_id TEXT PRIMARY KEY,
+                    telegram_id INTEGER NOT NULL,
+                    stars_amount INTEGER NOT NULL,
+                    ru_amount INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
                 )
                 """
             )
@@ -472,6 +501,48 @@ class Storage:
 
     def run_periodic_sync(self) -> None:
         self.save_snapshot()
+
+    def apply_topup_payment(
+        self,
+        telegram_id: int,
+        payment_charge_id: str,
+        stars_amount: int,
+        ru_amount: int,
+    ) -> tuple[bool, bool]:
+        if stars_amount <= 0 or ru_amount <= 0 or not payment_charge_id.strip():
+            return False, False
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT money FROM characters WHERE telegram_id = ?",
+                (telegram_id,),
+            ).fetchone()
+            if row is None:
+                return False, False
+            new_money = int(row["money"]) + ru_amount
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO topup_payments(
+                        payment_charge_id, telegram_id, stars_amount, ru_amount, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        payment_charge_id,
+                        telegram_id,
+                        stars_amount,
+                        ru_amount,
+                        utc_now().isoformat(),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                return False, True
+
+            conn.execute(
+                "UPDATE characters SET money = ? WHERE telegram_id = ?",
+                (new_money, telegram_id),
+            )
+        self.save_snapshot()
+        return True, False
 
     def _set_inventory(self, telegram_id: int, inventory: dict[str, int]) -> None:
         with self._connect() as conn:

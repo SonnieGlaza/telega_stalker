@@ -29,7 +29,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🎒 Инвентарь"), KeyboardButton(text="🧾 Профиль")],
             [KeyboardButton(text="🛒 Торговец"), KeyboardButton(text="📋 Задания")],
             [KeyboardButton(text="⚔️ Война"), KeyboardButton(text="🗺 Переход")],
-            [KeyboardButton(text="⚡ Выпить энергетик")],
+            [KeyboardButton(text="⚡ Выпить энергетик"), KeyboardButton(text="⭐ Пополнить")],
         ],
         resize_keyboard=True,
     )
@@ -72,3 +72,14 @@ def locations_keyboard(locations: list[dict[str, str | int | None]], mode: str) 
         text = f"{name} [{ptype}, {owner}]"
         rows.append([InlineKeyboardButton(text=text, callback_data=f"{mode}:{name}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def topup_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⭐ 1 звезда (10 RU)", callback_data="topup:1")],
+            [InlineKeyboardButton(text="⭐ 5 звезд (50 RU)", callback_data="topup:5")],
+            [InlineKeyboardButton(text="⭐ 10 звезд (100 RU)", callback_data="topup:10")],
+            [InlineKeyboardButton(text="⭐ 25 звезд (250 RU)", callback_data="topup:25")],
+        ]
+    )
