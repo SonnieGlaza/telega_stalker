@@ -63,6 +63,7 @@ class ActionResult:
 class QuestChanceBreakdown:
     chance: int
     base_chance: int
+    gear_bonus: int
     ammo_bonus: int
     medkit_bonus: int
 
@@ -77,16 +78,37 @@ def resolve_equipment_by_power(gear_power: int) -> tuple[str, str]:
     return armor, weapon
 
 
+def calculate_equipment_bonus(character: Character) -> int:
+    armor_name = character.equipment.get("armor", "")
+    weapon_name = character.equipment.get("weapon", "")
+
+    # Явный бонус от фактической экипировки (не только от числовой силы).
+    armor_bonus = {
+        "Куртка новичка": 0,
+        "Бронежилет сталкера": 3,
+        "Усиленный бронекостюм": 6,
+        "Штурмовой экзоскелет": 9,
+    }.get(armor_name, 0)
+    weapon_bonus = {
+        "Нож": 0,
+        "ПМ": 2,
+        "АКС-74У": 4,
+        "АН-94": 6,
+    }.get(weapon_name, 0)
+    return armor_bonus + weapon_bonus
+
+
 def calculate_quest_success(
     gear_power: int,
+    gear_bonus: int,
     max_success: int,
     ammo_stock: int,
     medkit_stock: int,
     ammo_required: int,
     medkit_required: int,
 ) -> QuestChanceBreakdown:
-    # Шанс складывается из силы снаряги и запасов амуниции/аптечек.
-    base_chance = 28 + gear_power * 6
+    # Шанс складывается из силы и качества снаряги + запасов амуниции/аптечек.
+    base_chance = 18 + gear_power * 4 + gear_bonus
     extra_ammo = max(0, ammo_stock - ammo_required)
     extra_medkits = max(0, medkit_stock - medkit_required)
     ammo_bonus = min(18, extra_ammo * 2)
@@ -95,6 +117,7 @@ def calculate_quest_success(
     return QuestChanceBreakdown(
         chance=chance,
         base_chance=base_chance,
+        gear_bonus=gear_bonus,
         ammo_bonus=ammo_bonus,
         medkit_bonus=medkit_bonus,
     )
@@ -129,8 +152,10 @@ def calculate_quest_success_by_key(character: Character, quest_key: str) -> int:
         return 0
     ammo_stock = int(character.inventory.get("ammo_pack", 0))
     medkit_stock = int(character.inventory.get("medkit", 0))
+    gear_bonus = calculate_equipment_bonus(character)
     breakdown = calculate_quest_success(
         gear_power=character.gear_power,
+        gear_bonus=gear_bonus,
         max_success=quest.max_success,
         ammo_stock=ammo_stock,
         medkit_stock=medkit_stock,
@@ -183,8 +208,10 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
 
     ammo_after = int(updated.inventory.get("ammo_pack", 0))
     medkit_after = int(updated.inventory.get("medkit", 0))
+    gear_bonus = calculate_equipment_bonus(updated)
     breakdown = calculate_quest_success(
         gear_power=updated.gear_power,
+        gear_bonus=gear_bonus,
         max_success=quest.max_success,
         ammo_stock=ammo_after,
         medkit_stock=medkit_after,
@@ -206,7 +233,8 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
         return ActionResult(
             True,
             f"Задание «{quest.title}» выполнено! Шанс {breakdown.chance}% (бросок {roll}).\n"
-            f"Формула: база {breakdown.base_chance}% + патроны {breakdown.ammo_bonus}% + аптечки {breakdown.medkit_bonus}%.\n"
+            f"Формула: база {breakdown.base_chance}% (включая снарягу +{breakdown.gear_bonus}%) "
+            f"+ патроны {breakdown.ammo_bonus}% + аптечки {breakdown.medkit_bonus}%.\n"
             f"Расход: патроны {quest.ammo_required}, аптечки {quest.medkit_required}.\n"
             f"Награда: {reward} RU.{extra}",
         )

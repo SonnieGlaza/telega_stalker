@@ -440,6 +440,16 @@ async def run_bot() -> None:
         await dp.start_polling(bot)
     finally:
         sync_task.cancel()
+        try:
+            await sync_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Snapshot sync task finished with error")
+        try:
+            get_storage().save_snapshot()
+        except Exception:
+            logger.exception("Final snapshot save failed during shutdown")
 
 
 def main() -> None:
