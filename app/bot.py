@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 storage: Storage | None = None
+admin_ids: tuple[int, ...] = ()
 SNAPSHOT_SYNC_SECONDS = 300
 
 
@@ -49,6 +50,10 @@ def get_storage() -> Storage:
     if storage is None:
         raise RuntimeError("Storage is not initialized")
     return storage
+
+
+def is_admin_user(user_id: int) -> bool:
+    return user_id in admin_ids
 
 
 def player_ready(player: Character) -> bool:
@@ -97,6 +102,47 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 @router.message(Command("menu"))
 async def cmd_menu(message: Message) -> None:
     await message.answer("Главное меню открыто.", reply_markup=main_menu_keyboard())
+
+
+@router.message(Command("give"))
+async def cmd_give(message: Message) -> None:
+    sender_id = message.from_user.id
+    if not is_admin_user(sender_id):
+        await message.answer("Команда доступна только администратору.")
+        return
+
+    parts = (message.text or "").strip().split()
+    if len(parts) != 3:
+        await message.answer("Использование: /give <telegram_id> <amount>")
+        return
+
+    try:
+        target_telegram_id = int(parts[1])
+        amount = int(parts[2])
+    except ValueError:
+        await message.answer("Telegram ID и amount должны быть целыми числами.")
+        return
+
+    if amount <= 0:
+        await message.answer("Сумма должна быть положительным числом.")
+        return
+
+    db = get_storage()
+    target = db.get_character(target_telegram_id, refresh_energy=False)
+    if target is None:
+        await message.answer("Игрок с таким Telegram ID не найден.")
+        return
+
+    if not db.change_money(target_telegram_id, amount):
+        await message.answer("Не удалось зачислить валюту.")
+        return
+
+    updated_target = db.get_character(target_telegram_id, refresh_energy=False)
+    updated_balance = updated_target.money if updated_target else target.money
+    await message.answer(
+        f"Выдано {amount} RU игроку {target.nickname} ({target_telegram_id}).\n"
+        f"Новый баланс: {updated_balance} RU."
+    )
 
 
 @router.message(Registration.nickname)
@@ -368,7 +414,8 @@ async def fallback(message: Message) -> None:
 async def run_bot() -> None:
     logging.basicConfig(level=logging.INFO)
     settings = load_settings()
-    global storage
+    global storage, admin_ids
+    admin_ids = settings.admin_ids
     storage = Storage(settings.db_path, snapshot_path=settings.snapshot_path)
     storage.init_db()
     storage.restore_from_snapshot_if_empty()
