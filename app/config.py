@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,15 +29,61 @@ def _is_writable_dir(path: Path) -> bool:
 
 
 def _resolve_default_db_path() -> str:
-    # Use a single canonical DB path to avoid split progress.
     canonical_path = Path("/data/stalker_game.db")
+    legacy_path = Path("stalker_game.db")
+
+    def has_character_data(path: Path) -> bool:
+        if not path.exists():
+            return False
+        try:
+            with sqlite3.connect(path) as conn:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS cnt
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'characters'
+                    """
+                ).fetchone()
+                if row is None or int(row[0]) == 0:
+                    return False
+                count_row = conn.execute("SELECT COUNT(*) FROM characters").fetchone()
+                return bool(count_row and int(count_row[0]) > 0)
+        except sqlite3.Error:
+            return False
+
+    canonical_has_data = has_character_data(canonical_path)
+    if canonical_has_data:
+        return str(canonical_path)
+
+    legacy_has_data = has_character_data(legacy_path)
+    if legacy_has_data:
+        if _is_writable_dir(canonical_path.parent):
+            try:
+                shutil.copy2(legacy_path, canonical_path)
+                return str(canonical_path)
+            except OSError:
+                return str(legacy_path)
+        return str(legacy_path)
+
     if _is_writable_dir(canonical_path.parent):
         return str(canonical_path)
-    return "stalker_game.db"
+    return str(legacy_path)
 
 
 def _resolve_default_snapshot_path(db_path: str) -> str:
-    return str(Path(db_path).with_suffix(".backup.json"))
+    primary = Path(db_path).with_suffix(".backup.json")
+    if primary.exists():
+        return str(primary)
+
+    legacy = Path("stalker_game.backup.json")
+    if legacy.exists() and primary != legacy:
+        try:
+            primary.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(legacy, primary)
+            return str(primary)
+        except OSError:
+            return str(legacy)
+    return str(primary)
 
 
 def _parse_admin_ids(raw_value: str) -> tuple[int, ...]:
