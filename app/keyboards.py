@@ -40,10 +40,10 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
 def quests_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Легко (до 90%)", callback_data="quest:easy")],
-            [InlineKeyboardButton(text="Сложно (до 80%)", callback_data="quest:hard")],
-            [InlineKeyboardButton(text="Тяжело (до 70%)", callback_data="quest:heavy")],
-            [InlineKeyboardButton(text="Невозможно (до 60%)", callback_data="quest:impossible")],
+            [InlineKeyboardButton(text="Легко", callback_data="quest:easy")],
+            [InlineKeyboardButton(text="Сложно", callback_data="quest:hard")],
+            [InlineKeyboardButton(text="Тяжело", callback_data="quest:heavy")],
+            [InlineKeyboardButton(text="Невозможно", callback_data="quest:impossible")],
         ]
     )
 
