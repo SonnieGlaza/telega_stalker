@@ -81,5 +81,6 @@ def topup_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⭐ 5 звезд (50 RU)", callback_data="topup:5")],
             [InlineKeyboardButton(text="⭐ 10 звезд (100 RU)", callback_data="topup:10")],
             [InlineKeyboardButton(text="⭐ 25 звезд (250 RU)", callback_data="topup:25")],
+            [InlineKeyboardButton(text="⭐ Другое количество", callback_data="topup:custom")],
         ]
     )

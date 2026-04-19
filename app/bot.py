@@ -43,11 +43,14 @@ SNAPSHOT_SYNC_SECONDS = 300
 TOPUP_RATE_RU_PER_STAR = 10
 TOPUP_PAYLOAD_PREFIX = "topup_stars:"
 TOPUP_ALLOWED_AMOUNTS = {1, 5, 10, 25}
+TOPUP_MIN_STARS = 1
+TOPUP_MAX_STARS = 10000
 
 
 class Registration(StatesGroup):
     nickname = State()
     gender = State()
+    topup_custom_stars = State()
 
 
 def get_storage() -> Storage:
@@ -72,9 +75,24 @@ def parse_topup_stars_amount(payload: str) -> int | None:
         stars_amount = int(stars_part)
     except ValueError:
         return None
-    if stars_amount not in TOPUP_ALLOWED_AMOUNTS:
+    if stars_amount < TOPUP_MIN_STARS or stars_amount > TOPUP_MAX_STARS:
         return None
     return stars_amount
+
+
+async def send_topup_invoice(bot: Bot, chat_id: int, stars_amount: int) -> None:
+    ru_amount = stars_amount * TOPUP_RATE_RU_PER_STAR
+    payload = f"{TOPUP_PAYLOAD_PREFIX}{stars_amount}"
+    prices = [LabeledPrice(label=f"{ru_amount} RU в игре", amount=stars_amount)]
+    await bot.send_invoice(
+        chat_id=chat_id,
+        title="Пополнение игровой валюты",
+        description=f"{stars_amount}⭐ = {ru_amount} RU",
+        payload=payload,
+        currency="XTR",
+        prices=prices,
+        provider_token="",
+    )
 
 
 @router.message(Command("start"))
@@ -122,11 +140,12 @@ async def cmd_menu(message: Message) -> None:
 
 
 @router.message(F.text == "⭐ Пополнить")
-async def show_topup(message: Message) -> None:
+async def show_topup(message: Message, state: FSMContext) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
+    await state.clear()
     await message.answer(
         "Выбери пакет пополнения.\nКурс: 1 звезда = 10 RU.",
         reply_markup=topup_keyboard(),
@@ -134,7 +153,7 @@ async def show_topup(message: Message) -> None:
 
 
 @router.callback_query(F.data.startswith("topup:"))
-async def handle_topup(callback: CallbackQuery, bot: Bot) -> None:
+async def handle_topup(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     if player is None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
@@ -144,8 +163,17 @@ async def handle_topup(callback: CallbackQuery, bot: Bot) -> None:
     if len(parts) != 2:
         await callback.answer("Некорректный пакет пополнения.", show_alert=True)
         return
+    option = parts[1]
+    if option == "custom":
+        await state.set_state(Registration.topup_custom_stars)
+        await callback.message.answer(
+            f"Введи количество звезд для пополнения (от {TOPUP_MIN_STARS} до {TOPUP_MAX_STARS})."
+        )
+        await callback.answer()
+        return
+
     try:
-        stars_amount = int(parts[1])
+        stars_amount = int(option)
     except ValueError:
         await callback.answer("Некорректный пакет пополнения.", show_alert=True)
         return
@@ -153,19 +181,33 @@ async def handle_topup(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer("Пакет пополнения недоступен.", show_alert=True)
         return
 
-    ru_amount = stars_amount * TOPUP_RATE_RU_PER_STAR
-    payload = f"{TOPUP_PAYLOAD_PREFIX}{stars_amount}"
-    prices = [LabeledPrice(label=f"{ru_amount} RU в игре", amount=stars_amount)]
-    await bot.send_invoice(
-        chat_id=callback.from_user.id,
-        title="Пополнение игровой валюты",
-        description=f"{stars_amount}⭐ = {ru_amount} RU",
-        payload=payload,
-        currency="XTR",
-        prices=prices,
-        provider_token="",
-    )
+    await state.clear()
+    await send_topup_invoice(bot=bot, chat_id=callback.from_user.id, stars_amount=stars_amount)
     await callback.answer()
+
+
+@router.message(Registration.topup_custom_stars)
+async def process_custom_topup_stars(message: Message, state: FSMContext, bot: Bot) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await state.clear()
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+
+    raw_value = (message.text or "").strip()
+    try:
+        stars_amount = int(raw_value)
+    except ValueError:
+        await message.answer("Нужно ввести целое число звезд, например: 7")
+        return
+    if stars_amount < TOPUP_MIN_STARS or stars_amount > TOPUP_MAX_STARS:
+        await message.answer(
+            f"Некорректное количество. Допустимо от {TOPUP_MIN_STARS} до {TOPUP_MAX_STARS} звезд."
+        )
+        return
+
+    await state.clear()
+    await send_topup_invoice(bot=bot, chat_id=message.from_user.id, stars_amount=stars_amount)
 
 
 @router.pre_checkout_query()
