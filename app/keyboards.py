@@ -134,6 +134,7 @@ def trader_sell_consumables_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Продать энергетик (170)", callback_data="sell:energy_drink")],
             [InlineKeyboardButton(text="Продать аптечку (120)", callback_data="sell:medkit")],
             [InlineKeyboardButton(text="Продать патроны (55)", callback_data="sell:ammo_pack")],
+            [InlineKeyboardButton(text="Продать артефакт (650)", callback_data="sell:artifact")],
             [InlineKeyboardButton(text="Продать топливо +5 (200)", callback_data="sell:fuel_can")],
             [InlineKeyboardButton(text="⬅️ Назад к категориям продажи", callback_data="trade:menu:sell")],
         ]

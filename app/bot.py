@@ -555,6 +555,13 @@ async def repair_armor_callback(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "equip:artifact")
+async def equip_artifact_callback(callback: CallbackQuery) -> None:
+    result = equip_artifact(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
 @router.message(F.text == "📋 Задания")
 async def show_quests(message: Message) -> None:
     player = ensure_character(message)

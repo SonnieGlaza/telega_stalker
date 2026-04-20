@@ -33,6 +33,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "energy_drink": {"name": "Энергетик", "buy_price": 250, "sell_price": 170},
     "medkit": {"name": "Аптечка", "buy_price": 260, "sell_price": 120},
     "ammo_pack": {"name": "Патроны", "buy_price": 120, "sell_price": 55},
+    "artifact": {"name": "Артефакт", "buy_price": 0, "sell_price": 900},
     "gear_upgrade": {"name": "Улучшение снаряги", "buy_price": 1200, "sell_price": 0},
     "truck": {"name": "Грузовик", "buy_price": 7000, "sell_price": 0},
     "fuel_can": {"name": "Канистра топлива (+5)", "buy_price": 450, "sell_price": 200},
@@ -403,6 +404,7 @@ def build_rating_overview(storage: Storage, requester_id: int, limit: int = 10) 
 def calculate_equipment_bonus(character: Character) -> int:
     armor_name = character.equipment.get("armor", "")
     weapon_name = character.equipment.get("weapon", "")
+    artifact_name = str(character.equipment.get("artifact", "Нет"))
     weapon_durability = _durability_percent(character, "weapon")
     armor_durability = _durability_percent(character, "armor")
 
@@ -414,9 +416,10 @@ def calculate_equipment_bonus(character: Character) -> int:
         "Штурмовой экзоскелет": 9,
     }.get(armor_name, 0)
     weapon_bonus = max(0, _weapon_rating(weapon_name) - 1)
+    artifact_bonus = 2 if artifact_name and artifact_name != "Нет" else 0
     armor_penalty = _durability_penalty(armor_durability, max_penalty=4)
     weapon_penalty = _durability_penalty(weapon_durability, max_penalty=5)
-    return max(0, armor_bonus + weapon_bonus - armor_penalty - weapon_penalty)
+    return max(0, armor_bonus + weapon_bonus + artifact_bonus - armor_penalty - weapon_penalty)
 
 
 def calculate_quest_success(
@@ -663,6 +666,16 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
         if weapon_name == "Нож":
             return ActionResult(False, "Нож продать нельзя.")
         storage.set_equipment_item(telegram_id, "weapon", "Нож")
+    if item_key == "artifact":
+        removed_from_inventory = storage.remove_item(telegram_id, "artifact", 1)
+        if not removed_from_inventory:
+            equipped_artifact = str(character.equipment.get("artifact", "Нет"))
+            if equipped_artifact and equipped_artifact != "Нет":
+                storage.set_equipment_item(telegram_id, "artifact", "Нет")
+            else:
+                return ActionResult(False, "У тебя нет артефакта для продажи.")
+        storage.change_money(telegram_id, sell_price)
+        return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
     if item_key == "fuel_can":
         if not storage.change_fuel(telegram_id, -5):
             return ActionResult(False, "Недостаточно топлива для продажи канистры.")
@@ -698,6 +711,20 @@ def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult
     )
 
 
+def equip_artifact(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    equipped_artifact = str(player.equipment.get("artifact", "Нет"))
+    if equipped_artifact != "Нет":
+        return ActionResult(False, "Артефакт уже экипирован.")
+    if not storage.remove_item(telegram_id, "artifact", 1):
+        return ActionResult(False, "У тебя нет артефакта в инвентаре.")
+    storage.set_equipment_item(telegram_id, "artifact", "Артефакт Зоны")
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    return ActionResult(True, f"Артефакт экипирован. Бонус к выживаемости активирован.{achievements_text}")
+
+
 def format_inventory(character: Character) -> str:
     skin = resolve_skin(character)
     if character.inventory:
@@ -712,6 +739,7 @@ def format_inventory(character: Character) -> str:
     equipment_labels = {
         "weapon": "Оружие",
         "armor": "Броня",
+        "artifact": "Артефакт",
     }
     weapon_durability = _durability_percent(character, "weapon")
     armor_durability = _durability_percent(character, "armor")
@@ -722,7 +750,7 @@ def format_inventory(character: Character) -> str:
             else f"• {k}: {v}"
         )
         for k, v in character.equipment.items()
-        if k in {"weapon", "armor"}
+        if k in {"weapon", "armor", "artifact"}
     )
     durability_block = (
         f"• Прочность оружия: {weapon_durability}%\n"
