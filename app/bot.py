@@ -55,6 +55,7 @@ from app.keyboards import (
     trader_sell_categories_keyboard,
     trader_sell_consumables_keyboard,
     trader_sell_gear_keyboard,
+    trader_sell_gear_armor_keyboard,
     trader_sell_weapons_keyboard,
 )
 from app.profile_card import build_character_card
@@ -508,6 +509,12 @@ async def show_sell_consumables(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "trade:sell:gear")
 async def show_sell_gear(callback: CallbackQuery) -> None:
     await callback.message.answer("Продажа/ремонт снаряжения:", reply_markup=trader_sell_gear_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "trade:sell:gear:armor")
+async def show_sell_gear_armor(callback: CallbackQuery) -> None:
+    await callback.message.answer("Продажа брони и костюмов:", reply_markup=trader_sell_gear_armor_keyboard())
     await callback.answer()
 
 

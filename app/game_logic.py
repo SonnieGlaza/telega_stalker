@@ -39,6 +39,17 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "fuel_can": {"name": "Канистра топлива (+5)", "buy_price": 450, "sell_price": 200},
 }
 
+ARMOR_CATALOG: dict[str, dict[str, int | str]] = {
+    "armor_leather_jacket": {"name": "Кожаная куртка", "buy_price": 900, "sell_price": 420},
+    "armor_stalker_vest": {"name": "Сталкерский бронежилет", "buy_price": 1800, "sell_price": 850},
+    "armor_psz7d": {"name": "ПСЗ-7 «Долг»", "buy_price": 2900, "sell_price": 1400},
+    "armor_sunrise": {"name": "Комбинезон «Заря»", "buy_price": 3800, "sell_price": 1850},
+    "armor_berill5m": {"name": "Берилл-5М", "buy_price": 5200, "sell_price": 2550},
+    "armor_seva": {"name": "Костюм СЕВА", "buy_price": 7600, "sell_price": 3700},
+    "armor_exoskeleton": {"name": "Экзоскелет", "buy_price": 12000, "sell_price": 5800},
+    "armor_nosorog": {"name": "Носорог", "buy_price": 18000, "sell_price": 8800},
+}
+
 WEAPON_CATALOG: dict[str, dict[str, int | str]] = {
     "weapon_pm": {"name": "ПМ", "buy_price": 900, "sell_price": 420},
     "weapon_fort12": {"name": "Фора-12", "buy_price": 1300, "sell_price": 620},
@@ -61,6 +72,7 @@ WEAPON_CATALOG: dict[str, dict[str, int | str]] = {
 # Legacy callback alias used in keyboards.
 WEAPON_CATALOG["weapon_fora12"] = WEAPON_CATALOG["weapon_fort12"]
 
+SHOP_ITEMS.update(ARMOR_CATALOG)
 SHOP_ITEMS.update(WEAPON_CATALOG)
 
 WEAPON_RATING_BY_NAME: dict[str, int] = {
@@ -83,12 +95,40 @@ WEAPON_RATING_BY_NAME: dict[str, int] = {
     "Гаусс-пушка": 16,
 }
 
+ARMOR_BONUS_BY_NAME: dict[str, int] = {
+    "Куртка новичка": 0,
+    "Кожаная куртка": 1,
+    "Бронежилет сталкера": 3,
+    "Сталкерский бронежилет": 4,
+    "ПСЗ-7 «Долг»": 5,
+    "Комбинезон «Заря»": 6,
+    "Усиленный бронекостюм": 6,
+    "Берилл-5М": 7,
+    "Костюм СЕВА": 8,
+    "Штурмовой экзоскелет": 9,
+    "Экзоскелет": 10,
+    "Носорог": 12,
+}
+
+ARMOR_RATING_BY_NAME: dict[str, int] = {
+    armor_name: max(1, bonus + 1)
+    for armor_name, bonus in ARMOR_BONUS_BY_NAME.items()
+}
+
 
 ITEM_LABELS = {
     "energy_drink": "Энергетик",
     "medkit": "Аптечка",
     "ammo_pack": "Патроны",
     "artifact": "Артефакт",
+    "armor_leather_jacket": "Кожаная куртка",
+    "armor_stalker_vest": "Сталкерский бронежилет",
+    "armor_psz7d": "ПСЗ-7 «Долг»",
+    "armor_sunrise": "Комбинезон «Заря»",
+    "armor_berill5m": "Берилл-5М",
+    "armor_seva": "Костюм СЕВА",
+    "armor_exoskeleton": "Экзоскелет",
+    "armor_nosorog": "Носорог",
     "weapon_pm": "ПМ",
     "weapon_fort12": "Фора-12",
     "weapon_fora12": "Фора-12",
