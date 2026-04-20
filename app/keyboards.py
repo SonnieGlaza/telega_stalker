@@ -72,7 +72,7 @@ def trader_buy_categories_keyboard() -> InlineKeyboardMarkup:
 def trader_buy_consumables_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Купить энергетик (350)", callback_data="buy:energy_drink")],
+            [InlineKeyboardButton(text="Купить энергетик (250)", callback_data="buy:energy_drink")],
             [InlineKeyboardButton(text="Купить аптечку (260)", callback_data="buy:medkit")],
             [InlineKeyboardButton(text="Купить патроны (120)", callback_data="buy:ammo_pack")],
             [InlineKeyboardButton(text="Купить топливо +5 (450)", callback_data="buy:fuel_can")],

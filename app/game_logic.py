@@ -30,7 +30,7 @@ QUESTS: dict[str, QuestType] = {
 
 
 SHOP_ITEMS: dict[str, dict[str, int | str]] = {
-    "energy_drink": {"name": "Энергетик", "buy_price": 350, "sell_price": 170},
+    "energy_drink": {"name": "Энергетик", "buy_price": 250, "sell_price": 170},
     "medkit": {"name": "Аптечка", "buy_price": 260, "sell_price": 120},
     "ammo_pack": {"name": "Патроны", "buy_price": 120, "sell_price": 55},
     "gear_upgrade": {"name": "Улучшение снаряги", "buy_price": 1200, "sell_price": 0},
