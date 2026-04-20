@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 ENERGY_REGEN_PER_MINUTE = 2
+BASE_LOCATION_NPC_POWER = 100
+REGULAR_LOCATION_NPC_POWER = 60
 
 
 def utc_now() -> datetime:
@@ -133,7 +135,7 @@ class Storage:
                     row.get("name"),
                     row.get("point_type"),
                     row.get("controlled_by"),
-                    int(row.get("npc_power", 30)),
+                    int(row.get("npc_power", REGULAR_LOCATION_NPC_POWER)),
                 ),
             )
         for row in characters:
@@ -347,7 +349,7 @@ class Storage:
                     name TEXT PRIMARY KEY,
                     point_type TEXT NOT NULL,
                     controlled_by TEXT,
-                    npc_power INTEGER NOT NULL DEFAULT 30
+                    npc_power INTEGER NOT NULL DEFAULT 60
                 )
                 """
             )
@@ -459,14 +461,15 @@ class Storage:
             conn.executemany(
                 "INSERT OR IGNORE INTO locations(name, point_type, controlled_by, npc_power) VALUES(?, ?, ?, ?)",
                 [
-                    ("Росток", "база", "Долг", 20),
-                    ("Армейские склады", "база", "Свобода", 20),
-                    ("Янтарь", "точка ресурсов", None, 30),
-                    ("Темная долина", "точка интереса", None, 30),
-                    ("Радар", "точка интереса", None, 35),
+                    ("Росток", "база", "Долг", BASE_LOCATION_NPC_POWER),
+                    ("Армейские склады", "база", "Свобода", BASE_LOCATION_NPC_POWER),
+                    ("Янтарь", "точка ресурсов", None, REGULAR_LOCATION_NPC_POWER),
+                    ("Темная долина", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
+                    ("Радар", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                 ],
             )
             self._restore_from_snapshot_if_needed(conn)
+            self._enforce_location_power_baseline(conn)
             self._ensure_player_stats_rows(conn)
 
     def create_character(self, telegram_id: int, nickname: str, gender: str) -> None:
@@ -906,8 +909,17 @@ class Storage:
         self.save_snapshot()
 
     def set_location_npc_power(self, location_name: str, npc_power: int) -> None:
-        safe_power = max(5, npc_power)
         with self._connect() as conn:
+            row = conn.execute(
+                "SELECT point_type FROM locations WHERE name = ?",
+                (location_name,),
+            ).fetchone()
+            min_power = (
+                BASE_LOCATION_NPC_POWER
+                if row is not None and row["point_type"] == "база"
+                else REGULAR_LOCATION_NPC_POWER
+            )
+            safe_power = max(min_power, npc_power)
             conn.execute(
                 "UPDATE locations SET npc_power = ? WHERE name = ?",
                 (safe_power, location_name),
@@ -1240,6 +1252,24 @@ class Storage:
         conn.execute(
             "INSERT OR IGNORE INTO player_stats(telegram_id) VALUES (?)",
             (telegram_id,),
+        )
+
+    def _enforce_location_power_baseline(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            UPDATE locations
+            SET npc_power = CASE
+                WHEN point_type = 'база' AND npc_power < ? THEN ?
+                WHEN point_type <> 'база' AND npc_power < ? THEN ?
+                ELSE npc_power
+            END
+            """,
+            (
+                BASE_LOCATION_NPC_POWER,
+                BASE_LOCATION_NPC_POWER,
+                REGULAR_LOCATION_NPC_POWER,
+                REGULAR_LOCATION_NPC_POWER,
+            ),
         )
 
     def _ensure_characters_schema(self, conn: sqlite3.Connection) -> None:
