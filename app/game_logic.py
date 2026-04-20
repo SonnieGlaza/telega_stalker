@@ -21,12 +21,199 @@ class QuestType:
     medkit_required: int
 
 
+@dataclass(frozen=True)
+class RaidLocation:
+    key: str
+    title: str
+    description: str
+    location_type: str          # mutant_lair | lab | bandit_base | anomaly_zone | military_base
+    difficulty: int             # 1–5
+    enemy_strength: int         # base NPC power for raid battle
+    reward_min: int
+    reward_max: int
+    treasury_bonus: int         # extra RU added to faction treasury on success
+    ammo_required: int
+    medkit_required: int
+    energy_cost: int
+    faction_bonus: str | None   # faction that gets +10% success chance, or None
+
+
 QUESTS: dict[str, QuestType] = {
     "easy": QuestType("easy", "Легко", 90, 12, 150, 300, 0, 0),
     "hard": QuestType("hard", "Сложно", 80, 16, 250, 450, 0, 0),
     "heavy": QuestType("heavy", "Тяжело", 70, 22, 400, 650, 2, 1),
     "impossible": QuestType("impossible", "Невозможно", 60, 28, 550, 900, 3, 1),
 }
+
+# ---------------------------------------------------------------------------
+# Raid locations — used by the new location-based raid system.
+# Each entry defines a specific target with its own difficulty, enemy strength,
+# reward range, and resource requirements.
+# ---------------------------------------------------------------------------
+RAID_LOCATIONS: dict[str, RaidLocation] = {
+    "mutant_lair_agroprom": RaidLocation(
+        key="mutant_lair_agroprom",
+        title="Логово мутантов (Агропром)",
+        description="Заброшенный агропромышленный комплекс, захваченный стаями псевдособак и кровососов.",
+        location_type="mutant_lair",
+        difficulty=2,
+        enemy_strength=45,
+        reward_min=320,
+        reward_max=560,
+        treasury_bonus=800,
+        ammo_required=3,
+        medkit_required=1,
+        energy_cost=20,
+        faction_bonus=None,
+    ),
+    "mutant_lair_swamp": RaidLocation(
+        key="mutant_lair_swamp",
+        title="Логово мутантов (Болота)",
+        description="Топкие болота кишат химерами и болотными кровососами. Высокая влажность снижает точность оружия.",
+        location_type="mutant_lair",
+        difficulty=3,
+        enemy_strength=65,
+        reward_min=480,
+        reward_max=750,
+        treasury_bonus=1100,
+        ammo_required=4,
+        medkit_required=2,
+        energy_cost=24,
+        faction_bonus=None,
+    ),
+    "lab_x18": RaidLocation(
+        key="lab_x18",
+        title="Лаборатория X-18",
+        description="Подземная лаборатория с аномальными ловушками и зомбированными учёными. Высокий радиационный фон.",
+        location_type="lab",
+        difficulty=4,
+        enemy_strength=80,
+        reward_min=650,
+        reward_max=1050,
+        treasury_bonus=1600,
+        ammo_required=5,
+        medkit_required=2,
+        energy_cost=28,
+        faction_bonus=None,
+    ),
+    "lab_x16": RaidLocation(
+        key="lab_x16",
+        title="Лаборатория X-16",
+        description="Секретный объект с излучателем «Выжигатель мозгов». Псионические атаки снижают боеспособность отряда.",
+        location_type="lab",
+        difficulty=5,
+        enemy_strength=100,
+        reward_min=900,
+        reward_max=1400,
+        treasury_bonus=2200,
+        ammo_required=6,
+        medkit_required=3,
+        energy_cost=32,
+        faction_bonus=None,
+    ),
+    "bandit_base_dark_valley": RaidLocation(
+        key="bandit_base_dark_valley",
+        title="База бандитов (Тёмная долина)",
+        description="Укреплённый лагерь бандитов с тяжёлым вооружением и снайперами на вышках.",
+        location_type="bandit_base",
+        difficulty=3,
+        enemy_strength=60,
+        reward_min=450,
+        reward_max=720,
+        treasury_bonus=1000,
+        ammo_required=4,
+        medkit_required=1,
+        energy_cost=22,
+        faction_bonus="Долг",
+    ),
+    "bandit_base_garbage": RaidLocation(
+        key="bandit_base_garbage",
+        title="База бандитов (Свалка)",
+        description="Разветвлённая сеть укреплений на Свалке. Бандиты хорошо знают местность.",
+        location_type="bandit_base",
+        difficulty=2,
+        enemy_strength=40,
+        reward_min=300,
+        reward_max=520,
+        treasury_bonus=750,
+        ammo_required=3,
+        medkit_required=1,
+        energy_cost=18,
+        faction_bonus="Долг",
+    ),
+    "anomaly_zone_yantar": RaidLocation(
+        key="anomaly_zone_yantar",
+        title="Аномальная зона (Янтарь)",
+        description="Плотное скопление аномалий «Электра» и «Воронка» вокруг озера. Артефакты высокой ценности.",
+        location_type="anomaly_zone",
+        difficulty=3,
+        enemy_strength=55,
+        reward_min=500,
+        reward_max=820,
+        treasury_bonus=1200,
+        ammo_required=2,
+        medkit_required=2,
+        energy_cost=22,
+        faction_bonus="Свобода",
+    ),
+    "anomaly_zone_radar": RaidLocation(
+        key="anomaly_zone_radar",
+        title="Аномальная зона (Радар)",
+        description="Зона вокруг антенного поля ЗГРЛС. Аномалии нестабильны, мутанты агрессивны.",
+        location_type="anomaly_zone",
+        difficulty=4,
+        enemy_strength=85,
+        reward_min=700,
+        reward_max=1100,
+        treasury_bonus=1800,
+        ammo_required=5,
+        medkit_required=3,
+        energy_cost=30,
+        faction_bonus="Свобода",
+    ),
+    "military_base_army_warehouses": RaidLocation(
+        key="military_base_army_warehouses",
+        title="Военная база (Армейские склады)",
+        description="Хорошо охраняемые армейские склады с бронетехникой и регулярными патрулями.",
+        location_type="military_base",
+        difficulty=4,
+        enemy_strength=90,
+        reward_min=750,
+        reward_max=1200,
+        treasury_bonus=2000,
+        ammo_required=6,
+        medkit_required=2,
+        energy_cost=30,
+        faction_bonus=None,
+    ),
+    "military_base_rostok": RaidLocation(
+        key="military_base_rostok",
+        title="Военный блокпост (Росток)",
+        description="Укреплённый блокпост у завода «Росток». Военные используют бронежилеты и тяжёлое вооружение.",
+        location_type="military_base",
+        difficulty=5,
+        enemy_strength=110,
+        reward_min=1000,
+        reward_max=1600,
+        treasury_bonus=2500,
+        ammo_required=7,
+        medkit_required=3,
+        energy_cost=34,
+        faction_bonus=None,
+    ),
+}
+
+MIN_RAID_PLAYERS = 5
+
+LOCATION_TYPE_EMOJI: dict[str, str] = {
+    "mutant_lair": "🐺",
+    "lab": "🔬",
+    "bandit_base": "💀",
+    "anomaly_zone": "☢️",
+    "military_base": "🪖",
+}
+
+DIFFICULTY_STARS = {1: "★☆☆☆☆", 2: "★★☆☆☆", 3: "★★★☆☆", 4: "★★★★☆", 5: "★★★★★"}
 
 
 SHOP_ITEMS: dict[str, dict[str, int | str]] = {
@@ -1020,30 +1207,261 @@ def _simulate_raid_battle(
     }
 
 
-def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
+def raid_success_chance(
+    members: list[Character],
+    location: RaidLocation,
+) -> int:
+    """Calculate the percentage chance (0–95) that a raid group succeeds.
+
+    Formula:
+    - Base chance: 50% minus 8% per difficulty level above 1.
+    - Team power bonus: sum of each member's gear_power * 2 (capped at +30).
+    - Armor bonus: average armor rating across the team (capped at +15).
+    - Weapon bonus: average weapon rating across the team (capped at +15).
+    - Faction bonus: +10 if the location has a preferred faction and the
+      majority of members belong to it.
+    - Size bonus: +2 per member beyond the minimum 5 (capped at +10).
+    """
+    if not members:
+        return 0
+
+    base = 50 - (location.difficulty - 1) * 8
+
+    total_gear = sum(m.gear_power for m in members)
+    gear_bonus = min(30, total_gear * 2)
+
+    avg_armor = sum(_armor_rating(m.equipment.get("armor", "")) for m in members) / len(members)
+    armor_bonus = min(15, int(avg_armor * 2))
+
+    avg_weapon = sum(_weapon_rating(m.equipment.get("weapon", "")) for m in members) / len(members)
+    weapon_bonus = min(15, int(avg_weapon * 1.5))
+
+    faction_bonus = 0
+    if location.faction_bonus is not None:
+        matching = sum(1 for m in members if m.faction == location.faction_bonus)
+        if matching > len(members) // 2:
+            faction_bonus = 10
+
+    size_bonus = min(10, (len(members) - MIN_RAID_PLAYERS) * 2)
+
+    chance = base + gear_bonus + armor_bonus + weapon_bonus + faction_bonus + size_bonus
+    return max(5, min(95, chance))
+
+
+def run_raid(storage: Storage, telegram_id: int, location_key: str) -> RaidLaunchResult:
+    """Execute a location-based raid.
+
+    Requires at least MIN_RAID_PLAYERS (5) members in the open raid group.
+    Checks team composition, calculates success chance using raid_success_chance(),
+    distributes rewards to all members, applies durability damage, and awards
+    rating points.
+    """
+    leader = storage.get_character(telegram_id, refresh_energy=False)
+    if leader is None:
+        return RaidLaunchResult(False, "Сначала создай персонажа.", ())
+    if leader.faction is None:
+        return RaidLaunchResult(False, "Сначала выбери группировку.", ())
+
+    location = RAID_LOCATIONS.get(location_key)
+    if location is None:
+        return RaidLaunchResult(False, "Неизвестная локация для рейда.", ())
+
+    open_raid = storage.get_open_raid_for_faction(leader.faction)
+    if open_raid is None:
+        return RaidLaunchResult(False, "У твоей группировки нет открытого рейда.", ())
+    if int(open_raid["leader_id"]) != telegram_id:
+        return RaidLaunchResult(False, "Запускать рейд может только лидер, который его создал.", ())
+    if str(open_raid["location"]) != location_key:
+        return RaidLaunchResult(
+            False,
+            f"Открытый рейд нацелен на «{open_raid['location']}», а не на «{location_key}».",
+            (),
+        )
+
+    raid_id = int(open_raid["id"])
+    member_ids = storage.get_raid_member_ids(raid_id)
+
+    if len(member_ids) < MIN_RAID_PLAYERS:
+        return RaidLaunchResult(
+            False,
+            f"Для рейда нужно минимум {MIN_RAID_PLAYERS} игроков. "
+            f"Сейчас в группе: {len(member_ids)}.",
+            (),
+        )
+
+    members = storage.get_characters_by_ids(member_ids)
+    members = [m for m in members if m.faction == leader.faction and m.health > 0]
+    if len(members) < MIN_RAID_PLAYERS:
+        return RaidLaunchResult(
+            False,
+            f"Недостаточно боеспособных бойцов (нужно {MIN_RAID_PLAYERS}, "
+            f"готовы {len(members)}).",
+            (),
+        )
+
+    # Check ammo and medkit requirements per member.
+    short_ammo = [m.nickname for m in members if int(m.inventory.get("ammo_pack", 0)) < location.ammo_required]
+    short_medkits = [m.nickname for m in members if int(m.inventory.get("medkit", 0)) < location.medkit_required]
+    if short_ammo:
+        return RaidLaunchResult(
+            False,
+            f"Бойцам не хватает патронов (нужно {location.ammo_required} каждому): "
+            f"{', '.join(short_ammo[:3])}{'...' if len(short_ammo) > 3 else ''}.",
+            (),
+        )
+    if short_medkits:
+        return RaidLaunchResult(
+            False,
+            f"Бойцам не хватает аптечек (нужно {location.medkit_required} каждому): "
+            f"{', '.join(short_medkits[:3])}{'...' if len(short_medkits) > 3 else ''}.",
+            (),
+        )
+
+    # Spend energy and consume supplies for each member.
+    ready_members: list[Character] = []
+    for member in members:
+        if not storage.spend_energy(member.telegram_id, location.energy_cost):
+            continue
+        if not storage.remove_item(member.telegram_id, "ammo_pack", location.ammo_required):
+            storage.restore_energy(member.telegram_id, location.energy_cost)
+            continue
+        if location.medkit_required > 0 and not storage.remove_item(
+            member.telegram_id, "medkit", location.medkit_required
+        ):
+            storage.add_item(member.telegram_id, "ammo_pack", location.ammo_required)
+            storage.restore_energy(member.telegram_id, location.energy_cost)
+            continue
+        ready_members.append(member)
+
+    if len(ready_members) < MIN_RAID_PLAYERS:
+        # Rollback already-spent resources for ready members.
+        for member in ready_members:
+            storage.restore_energy(member.telegram_id, location.energy_cost)
+            storage.add_item(member.telegram_id, "ammo_pack", location.ammo_required)
+            if location.medkit_required > 0:
+                storage.add_item(member.telegram_id, "medkit", location.medkit_required)
+        return RaidLaunchResult(
+            False,
+            f"После проверки ресурсов осталось только {len(ready_members)} готовых бойцов. "
+            f"Нужно минимум {MIN_RAID_PLAYERS}.",
+            (),
+        )
+
+    # Calculate success chance and roll.
+    chance = raid_success_chance(ready_members, location)
+    roll = random.randint(1, 100)
+    success = roll <= chance
+
+    emoji = LOCATION_TYPE_EMOJI.get(location.location_type, "⚔️")
+    stars = DIFFICULTY_STARS.get(location.difficulty, "?")
+
+    if success:
+        personal_reward = random.randint(location.reward_min, location.reward_max)
+        storage.change_faction_treasury(leader.faction, location.treasury_bonus)
+        notes: list[str] = []
+        for member in ready_members:
+            durability_text = _apply_durability_decay(
+                storage, member.telegram_id, weapon_loss=5, armor_loss=4
+            )
+            storage.change_money(member.telegram_id, personal_reward)
+            _add_rating(storage, member.telegram_id, RATING_REWARD["raid_success"])
+            storage.add_player_stat(member.telegram_id, "raids_completed", 1)
+            storage.add_player_stat(member.telegram_id, "money_earned", personal_reward)
+            # 25% chance to find an artifact in labs and anomaly zones.
+            if location.location_type in {"lab", "anomaly_zone"} and random.random() < 0.25:
+                storage.add_item(member.telegram_id, "artifact", 1)
+            if member.telegram_id in [m.telegram_id for m in ready_members if random.random() < 0.2]:
+                storage.change_health(member.telegram_id, -8)
+            achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
+            if member.telegram_id == leader.telegram_id:
+                notes.append(durability_text + achievement_text)
+
+        storage.finish_raid(
+            raid_id,
+            status="success",
+            result_text=f"Рейд на {location.title} успешен. Шанс {chance}%, бросок {roll}.",
+        )
+        return RaidLaunchResult(
+            True,
+            f"{emoji} Рейд #{raid_id} — {location.title}\n"
+            f"Сложность: {stars}\n"
+            f"Шанс успеха: {chance}% (бросок {roll}) — УСПЕХ!\n\n"
+            f"Бойцов в отряде: {len(ready_members)}\n"
+            f"Личная награда каждому: {personal_reward} RU\n"
+            f"В казну группировки: {location.treasury_bonus} RU\n"
+            f"{''.join(notes)}",
+            tuple(member_ids),
+        )
+
+    # Failure path.
+    penalty = random.randint(100, 200)
+    notes_fail: list[str] = []
+    for member in ready_members:
+        durability_text = _apply_durability_decay(
+            storage, member.telegram_id, weapon_loss=7, armor_loss=6
+        )
+        storage.change_money(member.telegram_id, -penalty)
+        _add_rating(storage, member.telegram_id, -RATING_REWARD["raid_fail"])
+        storage.add_player_stat(member.telegram_id, "raids_failed", 1)
+        storage.change_health(member.telegram_id, -random.randint(10, 25))
+        achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
+        if member.telegram_id == leader.telegram_id:
+            notes_fail.append(durability_text + achievement_text)
+
+    storage.finish_raid(
+        raid_id,
+        status="failed",
+        result_text=f"Рейд на {location.title} провален. Шанс {chance}%, бросок {roll}.",
+    )
+    return RaidLaunchResult(
+        False,
+        f"{emoji} Рейд #{raid_id} — {location.title}\n"
+        f"Сложность: {stars}\n"
+        f"Шанс успеха: {chance}% (бросок {roll}) — ПРОВАЛ\n\n"
+        f"Бойцов в отряде: {len(ready_members)}\n"
+        f"Каждый участник потерял {penalty} RU и получил ранения.\n"
+        f"{''.join(notes_fail)}",
+        tuple(member_ids),
+    )
+
+
+def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_key: str) -> ActionResult:
+    """Create a new raid or join an existing open raid for the player's faction.
+
+    Uses RAID_LOCATIONS keys instead of DB location names.
+    """
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа.")
     if player.faction is None:
         return ActionResult(False, "Сначала выбери группировку.")
 
-    location = storage.get_location(location_name)
-    if location is None:
-        return ActionResult(False, "Локация для рейда не найдена.")
+    raid_location = RAID_LOCATIONS.get(location_key)
+    if raid_location is None:
+        return ActionResult(False, "Неизвестная локация для рейда.")
 
     open_raid = storage.get_open_raid_for_faction(player.faction)
     if open_raid is None:
-        raid_id = storage.create_raid(player.faction, location_name, telegram_id)
+        raid_id = storage.create_raid(player.faction, location_key, telegram_id)
+        emoji = LOCATION_TYPE_EMOJI.get(raid_location.location_type, "⚔️")
+        stars = DIFFICULTY_STARS.get(raid_location.difficulty, "?")
         return ActionResult(
             True,
-            f"Создан рейд #{raid_id} на локацию «{location_name}».\n"
-            "Позови товарищей по группировке и нажми «Запустить».",
+            f"{emoji} Создан рейд #{raid_id} — {raid_location.title}\n"
+            f"Сложность: {stars}\n"
+            f"{raid_location.description}\n\n"
+            f"Требования: патроны ×{raid_location.ammo_required}, аптечки ×{raid_location.medkit_required}\n"
+            f"Энергия: {raid_location.energy_cost} ед.\n\n"
+            f"Позови товарищей по группировке (нужно минимум {MIN_RAID_PLAYERS} бойцов) "
+            f"и нажми «🚀 Запустить рейд».",
         )
 
-    if str(open_raid["location"]) != location_name:
+    if str(open_raid["location"]) != location_key:
+        existing_loc = RAID_LOCATIONS.get(str(open_raid["location"]))
+        existing_title = existing_loc.title if existing_loc else open_raid["location"]
         return ActionResult(
             False,
-            f"У твоей группировки уже есть открытый рейд #{open_raid['id']} на «{open_raid['location']}».\n"
+            f"У твоей группировки уже есть открытый рейд #{open_raid['id']} на «{existing_title}».\n"
             "Сначала запусти или закрой его.",
         )
 
@@ -1051,14 +1469,20 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
     if not storage.add_raid_member(raid_id, telegram_id):
         return ActionResult(False, "Не удалось присоединиться к рейду. Вступать могут только бойцы той же группировки.")
     member_ids = storage.get_raid_member_ids(raid_id)
+    emoji = LOCATION_TYPE_EMOJI.get(raid_location.location_type, "⚔️")
     return ActionResult(
         True,
-        f"Ты в составе рейда #{raid_id} на «{location_name}».\n"
-        f"Состав рейда: {len(member_ids)} бойцов.",
+        f"{emoji} Ты в составе рейда #{raid_id} — {raid_location.title}\n"
+        f"Участников: {len(member_ids)}/{MIN_RAID_PLAYERS} (минимум для запуска).",
     )
 
 
 def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
+    """Launch the caller's open faction raid.
+
+    Delegates to run_raid() which enforces the MIN_RAID_PLAYERS (5) requirement
+    and uses RAID_LOCATIONS for location-specific mechanics.
+    """
     leader = storage.get_character(telegram_id, refresh_energy=False)
     if leader is None:
         return RaidLaunchResult(False, "Сначала создай персонажа.", ())
@@ -1071,122 +1495,34 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
     if int(open_raid["leader_id"]) != telegram_id:
         return RaidLaunchResult(False, "Запускать рейд может только лидер, который его создал.", ())
 
-    raid_id = int(open_raid["id"])
-    member_ids = storage.get_raid_member_ids(raid_id)
-    if len(member_ids) < 2:
-        return RaidLaunchResult(False, "Для отрядного рейда нужно минимум 2 игрока.", ())
-
-    members = storage.get_characters_by_ids(member_ids)
-    members = [member for member in members if member.faction == leader.faction and member.health > 0]
-    if len(members) < 2:
-        return RaidLaunchResult(False, "Недостаточно бойцов с нормальным здоровьем для запуска рейда.", ())
-
-    raid_energy_cost = 18
-    ready_members: list[Character] = []
-    for member in members:
-        if storage.spend_energy(member.telegram_id, raid_energy_cost):
-            ready_members.append(member)
-    if len(ready_members) < 2:
-        return RaidLaunchResult(
-            False,
-            "У бойцов не хватает энергии для начала рейда. Нужно минимум 2 подготовленных сталкера.",
-            (),
-        )
-
-    location_name = str(open_raid["location"])
-    location = storage.get_location(location_name)
-    if location is None:
-        return RaidLaunchResult(False, "Локация рейда недоступна.", ())
-
-    event_modifier = _active_location_event_modifier(storage, location_name)
-    enemy_power = max(10, int(location["npc_power"]) + event_modifier)
-    battle = _simulate_raid_battle(ready_members, enemy_power)
-
-    if battle["success"]:
-        storage.set_location_control(location_name, leader.faction)
-        treasury_gain = 1400 + len(ready_members) * 180
-        storage.change_faction_treasury(leader.faction, treasury_gain)
-        personal_reward = 240 + len(ready_members) * 35
-        notes: list[str] = []
-        for member in ready_members:
-            durability_text = _apply_durability_decay(
-                storage,
-                member.telegram_id,
-                weapon_loss=6,
-                armor_loss=5,
-            )
-            storage.change_money(member.telegram_id, personal_reward)
-            _add_rating(storage, member.telegram_id, RATING_REWARD["raid_success"])
-            storage.add_player_stat(member.telegram_id, "raids_completed", 1)
-            storage.add_player_stat(member.telegram_id, "money_earned", personal_reward)
-            if member.telegram_id in battle["wounds"]:
-                storage.change_health(member.telegram_id, -14)
-            achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
-            if member.telegram_id == leader.telegram_id:
-                notes.append(durability_text + achievement_text)
-        new_npc_power = max(12, enemy_power - random.randint(4, 10))
-        storage.set_location_npc_power(location_name, new_npc_power)
-        storage.finish_raid(
-            raid_id,
-            status="success",
-            result_text=f"Рейд успешен. Критов: {battle['total_crits']}.",
-        )
-        return RaidLaunchResult(
-            True,
-            f"Рейд #{raid_id} завершен успешно на «{location_name}».\n"
-            f"Бойцов: {len(ready_members)}, критические попадания: {battle['total_crits']}.\n"
-            f"Личная награда каждому: {personal_reward} RU.\n"
-            f"В казну группировки: {treasury_gain} RU.\n"
-            f"Раненых: {len(battle['wounds'])}."
-            f"{''.join(notes)}",
-            tuple(member_ids),
-        )
-
-    notes: list[str] = []
-    for member in ready_members:
-        durability_text = _apply_durability_decay(
-            storage,
-            member.telegram_id,
-            weapon_loss=7,
-            armor_loss=6,
-        )
-        storage.change_money(member.telegram_id, -110)
-        _add_rating(storage, member.telegram_id, -RATING_REWARD["raid_fail"])
-        storage.add_player_stat(member.telegram_id, "raids_failed", 1)
-        damage_taken = int(battle["member_damage_taken"].get(member.telegram_id, 0))
-        health_penalty = min(30, max(8, damage_taken // 4))
-        storage.change_health(member.telegram_id, -health_penalty)
-        achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
-        if member.telegram_id == leader.telegram_id:
-            notes.append(durability_text + achievement_text)
-    new_npc_power = min(80, enemy_power + random.randint(2, 7))
-    storage.set_location_npc_power(location_name, new_npc_power)
-    storage.finish_raid(
-        raid_id,
-        status="failed",
-        result_text=f"Рейд провален. Остаток силы противника: {battle['enemy_hp_left']}.",
-    )
-    return RaidLaunchResult(
-        False,
-        f"Рейд #{raid_id} провален на «{location_name}».\n"
-        f"Сила врага осталась: {battle['enemy_hp_left']}.\n"
-        f"Каждый участник потерял 110 RU и получил ранения.{''.join(notes)}",
-        tuple(member_ids),
-    )
+    location_key = str(open_raid["location"])
+    return run_raid(storage, telegram_id, location_key)
 
 
 def build_raids_overview(storage: Storage, telegram_id: int) -> str:
+    """Build a human-readable overview of the raid system and any open raid."""
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction is None:
         return "Рейды доступны только после выбора группировки."
 
     open_raid = storage.get_open_raid_for_faction(player.faction)
     if open_raid is None:
+        loc_lines = []
+        for loc in RAID_LOCATIONS.values():
+            emoji = LOCATION_TYPE_EMOJI.get(loc.location_type, "⚔️")
+            stars = DIFFICULTY_STARS.get(loc.difficulty, "?")
+            loc_lines.append(
+                f"{emoji} {loc.title} [{stars}] — "
+                f"награда {loc.reward_min}–{loc.reward_max} RU, "
+                f"патроны ×{loc.ammo_required}, аптечки ×{loc.medkit_required}"
+            )
         return (
-            "Отрядные рейды:\n"
-            "• Создай рейд на нужную локацию.\n"
-            "• Другие бойцы твоей группировки могут присоединиться.\n"
-            "• Для запуска нужно минимум 2 участника."
+            f"🪖 Рейды группировки «{player.faction}»\n\n"
+            f"Рейды — командные вылазки на опасные локации Зоны.\n"
+            f"Минимум бойцов для запуска: {MIN_RAID_PLAYERS}\n\n"
+            "Доступные цели:\n"
+            + "\n".join(loc_lines)
+            + "\n\nВыбери локацию ниже, чтобы создать рейд."
         )
 
     raid_id = int(open_raid["id"])
@@ -1196,16 +1532,36 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
         f"• {member.nickname} (сила {member.gear_power}, HP {member.health})"
         for member in members
     )
-    location_name = str(open_raid["location"])
-    location = storage.get_location(location_name)
-    npc_power = int(location["npc_power"]) if location else 0
-    event_modifier = _active_location_event_modifier(storage, location_name)
+    location_key = str(open_raid["location"])
+    raid_location = RAID_LOCATIONS.get(location_key)
+    if raid_location is not None:
+        emoji = LOCATION_TYPE_EMOJI.get(raid_location.location_type, "⚔️")
+        stars = DIFFICULTY_STARS.get(raid_location.difficulty, "?")
+        location_line = f"{emoji} {raid_location.title} [{stars}]"
+        req_line = (
+            f"Требования: патроны ×{raid_location.ammo_required}, "
+            f"аптечки ×{raid_location.medkit_required}, "
+            f"энергия {raid_location.energy_cost} ед."
+        )
+        reward_line = f"Награда: {raid_location.reward_min}–{raid_location.reward_max} RU каждому"
+    else:
+        location_line = location_key
+        req_line = ""
+        reward_line = ""
+
+    ready_count = len(member_ids)
+    missing = max(0, MIN_RAID_PLAYERS - ready_count)
+    status_line = (
+        f"✅ Готов к запуску!" if missing == 0
+        else f"⏳ Нужно ещё {missing} бойцов"
+    )
     return (
         f"Открытый рейд #{raid_id}\n"
-        f"Локация: {location_name}\n"
-        f"Лидер: {open_raid['leader_id']}\n"
-        f"Участников: {len(member_ids)}\n"
-        f"Сила NPC: {npc_power} (модификатор событий {event_modifier:+d})\n\n"
+        f"Цель: {location_line}\n"
+        f"{req_line}\n"
+        f"{reward_line}\n\n"
+        f"Лидер ID: {open_raid['leader_id']}\n"
+        f"Участников: {ready_count}/{MIN_RAID_PLAYERS} — {status_line}\n\n"
         f"Состав:\n{members_text or '• Пока пусто'}"
     )
 

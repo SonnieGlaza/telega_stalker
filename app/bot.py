@@ -32,6 +32,7 @@ from app.game_logic import (
     format_inventory,
     repair_gear,
     run_quest,
+    run_raid,
     sell_item,
     travel_to,
     use_energy_drink,
@@ -45,6 +46,8 @@ from app.keyboards import (
     main_menu_keyboard,
     quests_keyboard,
     raid_keyboard,
+    raid_location_keyboard,
+    raid_menu_keyboard,
     ratings_keyboard,
     topup_keyboard,
     trader_buy_categories_keyboard,
@@ -744,14 +747,52 @@ async def show_raids(message: Message) -> None:
         return
     db = get_storage()
     text = build_raids_overview(db, player.telegram_id)
-    await message.answer(text, reply_markup=raid_keyboard(db.get_locations()))
+    await message.answer(text, reply_markup=raid_menu_keyboard())
+
+
+@router.callback_query(F.data == "raid:menu:create")
+async def show_raid_create_menu(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Нужен персонаж с группировкой.", show_alert=True)
+        return
+    await callback.message.answer(
+        "Выбери локацию для рейда.\n"
+        "Каждая цель имеет свою сложность, требования к снаряжению и награду.",
+        reply_markup=raid_location_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "raid:menu:status")
+async def show_raid_status(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Нужен персонаж с группировкой.", show_alert=True)
+        return
+    db = get_storage()
+    text = build_raids_overview(db, player.telegram_id)
+    await callback.message.answer(text, reply_markup=raid_menu_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "raid:menu:back")
+async def raid_menu_back(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Нужен персонаж с группировкой.", show_alert=True)
+        return
+    db = get_storage()
+    text = build_raids_overview(db, player.telegram_id)
+    await callback.message.answer(text, reply_markup=raid_menu_keyboard())
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("raid:create:"))
 async def create_raid_callback(callback: CallbackQuery) -> None:
-    location = (callback.data or "").split(":", maxsplit=2)[2]
-    result = create_or_join_faction_raid(get_storage(), callback.from_user.id, location)
-    await callback.message.answer(result.text)
+    location_key = (callback.data or "").split(":", maxsplit=2)[2]
+    result = create_or_join_faction_raid(get_storage(), callback.from_user.id, location_key)
+    await callback.message.answer(result.text, reply_markup=raid_menu_keyboard())
     await callback.answer()
 
 
@@ -763,10 +804,13 @@ async def join_raid_callback(callback: CallbackQuery) -> None:
         return
     open_raid = get_storage().get_open_raid_for_faction(player.faction)
     if open_raid is None:
-        await callback.answer("Открытых рейдов нет.", show_alert=True)
+        await callback.answer(
+            "Открытых рейдов нет. Попроси лидера группировки создать рейд.",
+            show_alert=True,
+        )
         return
     result = create_or_join_faction_raid(get_storage(), callback.from_user.id, str(open_raid["location"]))
-    await callback.message.answer(result.text)
+    await callback.message.answer(result.text, reply_markup=raid_menu_keyboard())
     await callback.answer()
 
 

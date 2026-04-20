@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
+from app.game_logic import DIFFICULTY_STARS, LOCATION_TYPE_EMOJI, MIN_RAID_PLAYERS, RAID_LOCATIONS
+
 
 def gender_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -232,15 +234,56 @@ def topup_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def raid_keyboard(locations: list[dict[str, str | int | None]]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="➕ Присоединиться к открытому рейду", callback_data="raid:join")],
-        [InlineKeyboardButton(text="🚀 Запустить мой открытый рейд", callback_data="raid:launch")],
-    ]
-    for location in locations:
-        name = str(location["name"])
-        rows.append([InlineKeyboardButton(text=f"Создать рейд: {name}", callback_data=f"raid:create:{name}")])
+def raid_menu_keyboard() -> InlineKeyboardMarkup:
+    """Main raid menu: create, join, launch, and status buttons."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⚔️ Создать рейд", callback_data="raid:menu:create")],
+            [InlineKeyboardButton(text="➕ Присоединиться к рейду", callback_data="raid:join")],
+            [InlineKeyboardButton(text="🚀 Запустить рейд", callback_data="raid:launch")],
+            [InlineKeyboardButton(text="📋 Мои рейды", callback_data="raid:menu:status")],
+        ]
+    )
+
+
+def raid_location_keyboard() -> InlineKeyboardMarkup:
+    """Location selection keyboard for raid creation, grouped by type."""
+    type_order = ["mutant_lair", "bandit_base", "anomaly_zone", "lab", "military_base"]
+    type_labels = {
+        "mutant_lair": "🐺 Логова мутантов",
+        "bandit_base": "💀 Базы бандитов",
+        "anomaly_zone": "☢️ Аномальные зоны",
+        "lab": "🔬 Лаборатории",
+        "military_base": "🪖 Военные объекты",
+    }
+    rows: list[list[InlineKeyboardButton]] = []
+    by_type: dict[str, list] = {t: [] for t in type_order}
+    for loc in RAID_LOCATIONS.values():
+        if loc.location_type in by_type:
+            by_type[loc.location_type].append(loc)
+
+    for loc_type in type_order:
+        locs = by_type[loc_type]
+        if not locs:
+            continue
+        for loc in locs:
+            emoji = LOCATION_TYPE_EMOJI.get(loc.location_type, "⚔️")
+            stars = DIFFICULTY_STARS.get(loc.difficulty, "?")
+            rows.append([
+                InlineKeyboardButton(
+                    text=f"{emoji} {loc.title} [{stars}] — {loc.reward_min}–{loc.reward_max} RU",
+                    callback_data=f"raid:create:{loc.key}",
+                )
+            ])
+
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="raid:menu:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# Keep backward-compatible alias used in older bot code.
+def raid_keyboard(locations: list[dict[str, str | int | None]] | None = None) -> InlineKeyboardMarkup:
+    """Backward-compatible wrapper — returns the new raid menu keyboard."""
+    return raid_menu_keyboard()
 
 
 def economy_keyboard() -> InlineKeyboardMarkup:
