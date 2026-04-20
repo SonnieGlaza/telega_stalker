@@ -48,14 +48,15 @@ from app.keyboards import (
     ratings_keyboard,
     topup_keyboard,
     trader_buy_categories_keyboard,
+    trader_buy_armor_keyboard,
     trader_buy_consumables_keyboard,
     trader_buy_gear_keyboard,
     trader_buy_weapons_keyboard,
     trader_keyboard,
     trader_sell_categories_keyboard,
+    trader_sell_armor_keyboard,
     trader_sell_consumables_keyboard,
     trader_sell_gear_keyboard,
-    trader_sell_gear_armor_keyboard,
     trader_sell_weapons_keyboard,
 )
 from app.profile_card import build_character_card
@@ -494,6 +495,12 @@ async def show_buy_gear(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "trade:buy:armor")
+async def show_buy_armor(callback: CallbackQuery) -> None:
+    await callback.message.answer("Покупка брони и костюмов:", reply_markup=trader_buy_armor_keyboard())
+    await callback.answer()
+
+
 @router.callback_query(F.data == "trade:buy:weapons")
 async def show_buy_weapons(callback: CallbackQuery) -> None:
     await callback.message.answer("Покупка оружия:", reply_markup=trader_buy_weapons_keyboard())
@@ -514,7 +521,7 @@ async def show_sell_gear(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "trade:sell:gear:armor")
 async def show_sell_gear_armor(callback: CallbackQuery) -> None:
-    await callback.message.answer("Продажа брони и костюмов:", reply_markup=trader_sell_gear_armor_keyboard())
+    await callback.message.answer("Продажа брони и костюмов:", reply_markup=trader_sell_armor_keyboard())
     await callback.answer()
 
 

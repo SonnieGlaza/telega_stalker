@@ -40,13 +40,14 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
 }
 
 ARMOR_CATALOG: dict[str, dict[str, int | str]] = {
-    "armor_leather_jacket": {"name": "Кожаная куртка", "buy_price": 900, "sell_price": 420},
+    "armor_leather": {"name": "Кожаная куртка", "buy_price": 900, "sell_price": 420},
     "armor_stalker_vest": {"name": "Сталкерский бронежилет", "buy_price": 1800, "sell_price": 850},
     "armor_psz7d": {"name": "ПСЗ-7 «Долг»", "buy_price": 2900, "sell_price": 1400},
-    "armor_sunrise": {"name": "Комбинезон «Заря»", "buy_price": 3800, "sell_price": 1850},
-    "armor_berill5m": {"name": "Берилл-5М", "buy_price": 5200, "sell_price": 2550},
+    "armor_zarya": {"name": "Комбинезон «Заря»", "buy_price": 3800, "sell_price": 1850},
+    "armor_bulat": {"name": "ПСЗ-9д «Булат»", "buy_price": 5200, "sell_price": 2550},
     "armor_seva": {"name": "Костюм СЕВА", "buy_price": 7600, "sell_price": 3700},
-    "armor_exoskeleton": {"name": "Экзоскелет", "buy_price": 12000, "sell_price": 5800},
+    "armor_scientific": {"name": "Научный костюм", "buy_price": 9800, "sell_price": 4800},
+    "armor_exo": {"name": "Экзоскелет", "buy_price": 12000, "sell_price": 5800},
     "armor_nosorog": {"name": "Носорог", "buy_price": 18000, "sell_price": 8800},
 }
 
@@ -71,6 +72,9 @@ WEAPON_CATALOG: dict[str, dict[str, int | str]] = {
 
 # Legacy callback alias used in keyboards.
 WEAPON_CATALOG["weapon_fora12"] = WEAPON_CATALOG["weapon_fort12"]
+ARMOR_CATALOG["armor_sunrise"] = ARMOR_CATALOG["armor_zarya"]
+ARMOR_CATALOG["armor_berill5m"] = ARMOR_CATALOG["armor_bulat"]
+ARMOR_CATALOG["armor_exoskeleton"] = ARMOR_CATALOG["armor_exo"]
 
 SHOP_ITEMS.update(ARMOR_CATALOG)
 SHOP_ITEMS.update(WEAPON_CATALOG)
@@ -121,14 +125,18 @@ ITEM_LABELS = {
     "medkit": "Аптечка",
     "ammo_pack": "Патроны",
     "artifact": "Артефакт",
-    "armor_leather_jacket": "Кожаная куртка",
+    "armor_leather": "Кожаная куртка",
     "armor_stalker_vest": "Сталкерский бронежилет",
     "armor_psz7d": "ПСЗ-7 «Долг»",
-    "armor_sunrise": "Комбинезон «Заря»",
-    "armor_berill5m": "Берилл-5М",
+    "armor_zarya": "Комбинезон «Заря»",
+    "armor_bulat": "ПСЗ-9д «Булат»",
     "armor_seva": "Костюм СЕВА",
-    "armor_exoskeleton": "Экзоскелет",
+    "armor_scientific": "Научный костюм",
+    "armor_exo": "Экзоскелет",
     "armor_nosorog": "Носорог",
+    "armor_sunrise": "Комбинезон «Заря»",
+    "armor_berill5m": "ПСЗ-9д «Булат»",
+    "armor_exoskeleton": "Экзоскелет",
     "weapon_pm": "ПМ",
     "weapon_fort12": "Фора-12",
     "weapon_fora12": "Фора-12",
