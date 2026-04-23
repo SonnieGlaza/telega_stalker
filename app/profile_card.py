@@ -152,6 +152,9 @@ def _equipment_lines(character: Character) -> list[str]:
     key_map = {
         "weapon": "Оружие",
         "armor": "Броня",
+        "weapon_durability": "Прочность оружия",
+        "armor_durability": "Прочность брони",
+        "artifact": "Артефакт",
     }
     if not character.equipment:
         return ["Нет данных"]
@@ -180,15 +183,36 @@ def _draw_text_block(
     header_font: ImageFont.ImageFont,
     body_font: ImageFont.ImageFont,
     max_lines: int,
+    max_width: int = 300,
 ) -> None:
     draw.text((x, y), header, fill=(218, 218, 218), font=header_font)
-    draw.line((x, y + 30, x + 400, y + 30), fill=(90, 92, 108), width=1)
+    draw.line((x, y + 30, x + max_width, y + 30), fill=(90, 92, 108), width=1)
     visible = lines[:max_lines]
     hidden = len(lines) - len(visible)
     for i, line in enumerate(visible):
-        draw.text((x, y + 38 + i * 26), line, fill=(230, 230, 230), font=body_font)
+        draw.text(
+            (x, y + 38 + i * 26),
+            _ellipsize_text(draw, line, body_font, max_width),
+            fill=(230, 230, 230),
+            font=body_font,
+        )
     if hidden > 0:
         draw.text((x, y + 38 + len(visible) * 26), f"Еще записей: {hidden}", fill=(180, 180, 180), font=body_font)
+
+
+def _ellipsize_text(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.ImageFont,
+    max_width: int,
+) -> str:
+    if draw.textlength(text, font=font) <= max_width:
+        return text
+    suffix = "..."
+    current = text
+    while current and draw.textlength(current + suffix, font=font) > max_width:
+        current = current[:-1]
+    return (current + suffix) if current else suffix
 
 
 def build_character_card(character: Character) -> bytes:
@@ -197,9 +221,9 @@ def build_character_card(character: Character) -> bytes:
     draw = ImageDraw.Draw(img)
 
     title_font = _load_font(34)
-    subtitle_font = _load_font(24)
-    body_font = _load_font(20)
-    small_font = _load_font(18)
+    subtitle_font = _load_font(22)
+    body_font = _load_font(18)
+    small_font = _load_font(16)
 
     faction_color = _faction_color(character.faction)
     location_color = _location_color(character.location)
@@ -248,44 +272,68 @@ def build_character_card(character: Character) -> bytes:
         draw.rectangle((46, avatar_bottom, 408, panel_bottom - 2), fill=(34, 36, 48))
 
     draw.rounded_rectangle((454, 108, 1156, 676), radius=16, fill=(33, 35, 44), outline=(66, 68, 82), width=2)
-    draw.text((480, 132), f"Игрок: {character.nickname}", fill=(240, 240, 240), font=subtitle_font)
-    draw.text((480, 166), f"Пол: {character.gender}", fill=(220, 220, 220), font=body_font)
-    draw.text((480, 194), f"Группировка: {character.faction or 'не выбрана'}", fill=faction_color, font=body_font)
-    draw.text((480, 222), f"Баланс: {character.money} рублей", fill=(225, 225, 225), font=body_font)
-    draw.text((480, 250), f"Здоровье: {character.health} из 100", fill=(225, 225, 225), font=body_font)
-    draw.text((480, 278), f"Энергия: {character.energy} из {character.max_energy}", fill=(225, 225, 225), font=body_font)
-    draw.text((480, 306), f"Транспорт: {'Грузовик' if character.truck_owned else 'Отсутствует'}", fill=(225, 225, 225), font=body_font)
-    draw.text((480, 334), f"Топливо: {character.fuel}", fill=(225, 225, 225), font=body_font)
-    draw.text((480, 362), f"Текущий скин: {skin.title}", fill=skin.accent_color, font=body_font)
+    right_x = 480
+    right_max_width = 650
+    draw.text(
+        (right_x, 132),
+        _ellipsize_text(draw, f"Игрок: {character.nickname}", subtitle_font, right_max_width),
+        fill=(240, 240, 240),
+        font=subtitle_font,
+    )
+    draw.text((right_x, 164), f"Пол: {character.gender}", fill=(220, 220, 220), font=body_font)
+    draw.text(
+        (right_x, 190),
+        _ellipsize_text(draw, f"Группировка: {character.faction or 'не выбрана'}", body_font, right_max_width),
+        fill=faction_color,
+        font=body_font,
+    )
+    draw.text((right_x, 216), f"Баланс: {character.money} рублей", fill=(225, 225, 225), font=body_font)
+    draw.text((right_x, 242), f"Здоровье: {character.health} из 100", fill=(225, 225, 225), font=body_font)
+    draw.text((right_x, 268), f"Энергия: {character.energy} из {character.max_energy}", fill=(225, 225, 225), font=body_font)
+    draw.text(
+        (right_x, 294),
+        f"Транспорт: {'Грузовик' if character.truck_owned else 'Отсутствует'}",
+        fill=(225, 225, 225),
+        font=body_font,
+    )
+    draw.text((right_x, 320), f"Топливо: {character.fuel}", fill=(225, 225, 225), font=body_font)
+    draw.text(
+        (right_x, 346),
+        _ellipsize_text(draw, f"Текущий скин: {skin.title}", body_font, right_max_width),
+        fill=skin.accent_color,
+        font=body_font,
+    )
 
-    draw.text((480, 394), "Индикаторы состояния", fill=(210, 210, 210), font=body_font)
-    _draw_power_bar(draw, 480, 428, character.health, 100, (190, 70, 70))
-    _draw_power_bar(draw, 480, 454, character.energy, max(1, character.max_energy), (70, 150, 220))
-    _draw_power_bar(draw, 480, 480, character.gear_power, 20, (170, 170, 95))
-    draw.text((730, 424), "Здоровье", fill=(220, 220, 220), font=small_font)
-    draw.text((730, 450), "Энергия", fill=(220, 220, 220), font=small_font)
-    draw.text((730, 476), "Снаряжение", fill=(220, 220, 220), font=small_font)
+    draw.text((right_x, 374), "Индикаторы состояния", fill=(210, 210, 210), font=body_font)
+    _draw_power_bar(draw, right_x, 404, character.health, 100, (190, 70, 70))
+    _draw_power_bar(draw, right_x, 430, character.energy, max(1, character.max_energy), (70, 150, 220))
+    _draw_power_bar(draw, right_x, 456, character.gear_power, 20, (170, 170, 95))
+    draw.text((730, 400), "Здоровье", fill=(220, 220, 220), font=small_font)
+    draw.text((730, 426), "Энергия", fill=(220, 220, 220), font=small_font)
+    draw.text((730, 452), "Снаряжение", fill=(220, 220, 220), font=small_font)
 
     equipment_lines = [f"Сила снаряжения: {character.gear_power}", *_equipment_lines(character)]
     _draw_text_block(
         draw=draw,
         x=480,
-        y=522,
+        y=492,
         header="Снаряжение",
         lines=equipment_lines,
         header_font=small_font,
         body_font=small_font,
-        max_lines=3,
+        max_lines=4,
+        max_width=300,
     )
     _draw_text_block(
         draw=draw,
         x=810,
-        y=522,
+        y=492,
         header="Инвентарь",
         lines=_inventory_lines(character),
         header_font=small_font,
         body_font=small_font,
-        max_lines=3,
+        max_lines=4,
+        max_width=320,
     )
 
     buffer = BytesIO()
