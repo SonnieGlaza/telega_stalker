@@ -86,12 +86,44 @@ def trader_buy_gear_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Экипировать артефакт", callback_data="equip:artifact")],
+            [InlineKeyboardButton(text="Экипировать оружие", callback_data="equip:menu:weapon")],
+            [InlineKeyboardButton(text="Экипировать броню", callback_data="equip:menu:armor")],
             [InlineKeyboardButton(text="Ремонт оружия", callback_data="repair:weapon")],
             [InlineKeyboardButton(text="Ремонт брони", callback_data="repair:armor")],
             [InlineKeyboardButton(text="Купить грузовик (7000)", callback_data="buy:truck")],
             [InlineKeyboardButton(text="⬅️ Назад к категориям покупки", callback_data="trade:menu:buy")],
         ]
     )
+
+
+def equip_weapon_keyboard(available_weapons: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for weapon_key, title, amount in available_weapons:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"Надеть: {title} (x{amount})",
+                    callback_data=f"equip:weapon:{weapon_key}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад к снаряжению", callback_data="trade:buy:gear")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def equip_armor_keyboard(available_armor: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for armor_key, title, amount in available_armor:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"Надеть: {title} (x{amount})",
+                    callback_data=f"equip:armor:{armor_key}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад к снаряжению", callback_data="trade:buy:gear")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def trader_buy_armor_keyboard() -> InlineKeyboardMarkup:

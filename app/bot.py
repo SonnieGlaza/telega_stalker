@@ -36,6 +36,10 @@ from app.game_logic import (
     travel_to,
     use_energy_drink,
     withdraw_from_faction_warehouse,
+    equip_armor,
+    equip_weapon,
+    list_equippable_armor,
+    list_equippable_weapons,
 )
 from app.keyboards import (
     economy_keyboard,
@@ -58,6 +62,8 @@ from app.keyboards import (
     trader_sell_consumables_keyboard,
     trader_sell_gear_keyboard,
     trader_sell_weapons_keyboard,
+    equip_armor_keyboard,
+    equip_weapon_keyboard,
 )
 from app.profile_card import build_character_card
 from app.storage import Character, Storage
@@ -537,10 +543,7 @@ async def handle_buy(callback: CallbackQuery) -> None:
     db = get_storage()
     result = buy_item(db, callback.from_user.id, item_key)
     await callback.message.answer(result.text)
-    if result.ok and (
-        item_key in {"gear_upgrade", "truck"}
-        or item_key.startswith("weapon_")
-    ):
+    if result.ok and item_key == "truck":
         player = db.get_character(callback.from_user.id, refresh_energy=False)
         if player is not None:
             await send_profile_snapshot(callback.message, player)
@@ -573,6 +576,66 @@ async def repair_armor_callback(callback: CallbackQuery) -> None:
 async def equip_artifact_callback(callback: CallbackQuery) -> None:
     result = equip_artifact(get_storage(), callback.from_user.id)
     await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "equip:menu:weapon")
+async def equip_weapon_menu_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    options = list_equippable_weapons(player)
+    if not options:
+        await callback.answer("В инвентаре нет оружия для экипировки.", show_alert=True)
+        return
+    await callback.message.answer(
+        "Выбери оружие для экипировки:",
+        reply_markup=equip_weapon_keyboard(options),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "equip:menu:armor")
+async def equip_armor_menu_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    options = list_equippable_armor(player)
+    if not options:
+        await callback.answer("В инвентаре нет брони для экипировки.", show_alert=True)
+        return
+    await callback.message.answer(
+        "Выбери броню для экипировки:",
+        reply_markup=equip_armor_keyboard(options),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("equip:weapon:"))
+async def equip_weapon_callback(callback: CallbackQuery) -> None:
+    item_key = (callback.data or "").split(":", maxsplit=2)[2]
+    db = get_storage()
+    result = equip_weapon(db, callback.from_user.id, item_key)
+    await callback.message.answer(result.text)
+    if result.ok:
+        player = db.get_character(callback.from_user.id, refresh_energy=False)
+        if player is not None:
+            await send_profile_snapshot(callback.message, player)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("equip:armor:"))
+async def equip_armor_callback(callback: CallbackQuery) -> None:
+    item_key = (callback.data or "").split(":", maxsplit=2)[2]
+    db = get_storage()
+    result = equip_armor(db, callback.from_user.id, item_key)
+    await callback.message.answer(result.text)
+    if result.ok:
+        player = db.get_character(callback.from_user.id, refresh_energy=False)
+        if player is not None:
+            await send_profile_snapshot(callback.message, player)
     await callback.answer()
 
 

@@ -661,12 +661,6 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
 
     if item_key == "truck" and character.truck_owned:
         return ActionResult(False, "У тебя уже есть грузовик.")
-    if item_key in WEAPON_CATALOG:
-        weapon_name = str(item["name"])
-        current_weapon = character.equipment.get("weapon", "")
-        if current_weapon == weapon_name:
-            return ActionResult(False, f"У тебя уже экипировано оружие: {weapon_name}.")
-
     if not storage.change_money(telegram_id, -price):
         return ActionResult(False, f"Недостаточно денег для покупки: {title}.")
 
@@ -690,11 +684,18 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
         storage.change_fuel(telegram_id, 5)
         return ActionResult(True, f"Куплена канистра топлива. Топливо +5 (стоимость {price} RU).")
     if item_key in WEAPON_CATALOG:
-        weapon_name = str(item["name"])
-        storage.set_equipment_item(telegram_id, "weapon", weapon_name)
+        storage.add_item(telegram_id, item_key, 1)
         return ActionResult(
             True,
-            f"Куплено и экипировано оружие: {weapon_name} (стоимость {price} RU).",
+            f"Куплено оружие: {title} (стоимость {price} RU).\n"
+            "Предмет добавлен в инвентарь, экипируй его вручную в разделе снаряжения.",
+        )
+    if item_key in ARMOR_CATALOG:
+        storage.add_item(telegram_id, item_key, 1)
+        return ActionResult(
+            True,
+            f"Куплена броня: {title}.\n"
+            "Предмет добавлен в инвентарь, экипируй его вручную в разделе снаряжения.",
         )
 
     storage.add_item(telegram_id, item_key, 1)
@@ -720,12 +721,15 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
         return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
     if item_key in WEAPON_CATALOG:
         weapon_name = str(item["name"])
-        equipped_weapon = character.equipment.get("weapon", "")
-        if equipped_weapon != weapon_name:
-            return ActionResult(False, f"Нельзя продать {weapon_name}: это оружие не экипировано.")
-        if weapon_name == "Нож":
-            return ActionResult(False, "Нож продать нельзя.")
-        storage.set_equipment_item(telegram_id, "weapon", "Нож")
+        equipped_weapon = str(character.equipment.get("weapon", "Нож"))
+        if equipped_weapon == weapon_name:
+            if weapon_name == "Нож":
+                return ActionResult(False, "Нож продать нельзя.")
+            storage.set_equipment_item(telegram_id, "weapon", "Нож")
+        elif not storage.remove_item(telegram_id, item_key, 1):
+            return ActionResult(False, f"У тебя нет оружия: {weapon_name}.")
+        storage.change_money(telegram_id, sell_price)
+        return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
     if item_key == "artifact":
         removed_from_inventory = storage.remove_item(telegram_id, "artifact", 1)
         if not removed_from_inventory:
@@ -744,6 +748,76 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
             return ActionResult(False, f"У тебя нет предмета: {title}.")
     storage.change_money(telegram_id, sell_price)
     return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
+
+
+def _primary_keys_by_name(catalog: dict[str, dict[str, int | str]]) -> dict[str, str]:
+    by_name: dict[str, str] = {}
+    for key, entry in catalog.items():
+        name = str(entry["name"])
+        by_name.setdefault(name, key)
+    return by_name
+
+
+def list_equippable_weapons(character: Character) -> list[tuple[str, str, int]]:
+    options: list[tuple[str, str, int]] = []
+    for key, amount in sorted(character.inventory.items()):
+        if key in WEAPON_CATALOG and amount > 0:
+            title = str(WEAPON_CATALOG[key]["name"])
+            options.append((key, title, int(amount)))
+    return options
+
+
+def list_equippable_armor(character: Character) -> list[tuple[str, str, int]]:
+    options: list[tuple[str, str, int]] = []
+    for key, amount in sorted(character.inventory.items()):
+        if key in ARMOR_CATALOG and amount > 0:
+            title = str(ARMOR_CATALOG[key]["name"])
+            options.append((key, title, int(amount)))
+    return options
+
+
+def equip_weapon(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if item_key not in WEAPON_CATALOG:
+        return ActionResult(False, "Такое оружие нельзя экипировать.")
+    if not storage.remove_item(telegram_id, item_key, 1):
+        return ActionResult(False, "Этого оружия нет в инвентаре.")
+
+    weapon_name = str(WEAPON_CATALOG[item_key]["name"])
+    current_weapon = str(player.equipment.get("weapon", "Нож"))
+    if current_weapon == weapon_name:
+        storage.add_item(telegram_id, item_key, 1)
+        return ActionResult(False, f"Оружие «{weapon_name}» уже экипировано.")
+
+    old_key = _primary_keys_by_name(WEAPON_CATALOG).get(current_weapon)
+    if old_key is not None and current_weapon != "Нож":
+        storage.add_item(telegram_id, old_key, 1)
+    storage.set_equipment_item(telegram_id, "weapon", weapon_name)
+    return ActionResult(True, f"Экипировано оружие: {weapon_name}.")
+
+
+def equip_armor(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if item_key not in ARMOR_CATALOG:
+        return ActionResult(False, "Такую броню нельзя экипировать.")
+    if not storage.remove_item(telegram_id, item_key, 1):
+        return ActionResult(False, "Этой брони нет в инвентаре.")
+
+    armor_name = str(ARMOR_CATALOG[item_key]["name"])
+    current_armor = str(player.equipment.get("armor", "Куртка новичка"))
+    if current_armor == armor_name:
+        storage.add_item(telegram_id, item_key, 1)
+        return ActionResult(False, f"Броня «{armor_name}» уже экипирована.")
+
+    old_key = _primary_keys_by_name(ARMOR_CATALOG).get(current_armor)
+    if old_key is not None:
+        storage.add_item(telegram_id, old_key, 1)
+    storage.set_equipment_item(telegram_id, "armor", armor_name)
+    return ActionResult(True, f"Экипирована броня: {armor_name}.")
 
 
 def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult:
