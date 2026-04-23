@@ -285,35 +285,50 @@ def build_character_card(character: Character) -> bytes:
         font=body_font,
     )
     draw.text((right_x, 184), f"Баланс: {character.money} рублей", fill=(225, 225, 225), font=body_font)
-    draw.text((right_x, 210), f"Здоровье: {character.health} из 100", fill=(225, 225, 225), font=body_font)
-    draw.text((right_x, 236), f"Энергия: {character.energy} из {character.max_energy}", fill=(225, 225, 225), font=body_font)
     draw.text(
-        (right_x, 262),
+        (right_x, 210),
         f"Транспорт: {'Грузовик' if character.truck_owned else 'Отсутствует'}",
         fill=(225, 225, 225),
         font=body_font,
     )
-    draw.text((right_x, 288), f"Топливо: {character.fuel}", fill=(225, 225, 225), font=body_font)
+    draw.text((right_x, 236), f"Топливо: {character.fuel}", fill=(225, 225, 225), font=body_font)
     draw.text(
-        (right_x, 314),
+        (right_x, 262),
         _ellipsize_text(draw, f"Текущий скин: {skin.title}", body_font, right_max_width),
         fill=skin.accent_color,
         font=body_font,
     )
 
-    draw.text((right_x, 342), "Индикаторы состояния", fill=(210, 210, 210), font=body_font)
-    _draw_power_bar(draw, right_x, 372, character.health, 100, (190, 70, 70))
-    _draw_power_bar(draw, right_x, 398, character.energy, max(1, character.max_energy), (70, 150, 220))
-    _draw_power_bar(draw, right_x, 424, character.gear_power, 20, (170, 170, 95))
-    draw.text((730, 368), "Здоровье", fill=(220, 220, 220), font=small_font)
-    draw.text((730, 394), "Энергия", fill=(220, 220, 220), font=small_font)
-    draw.text((730, 420), "Снаряжение", fill=(220, 220, 220), font=small_font)
+    draw.text((right_x, 292), "Индикаторы состояния", fill=(210, 210, 210), font=body_font)
+    _draw_power_bar(draw, right_x, 322, character.health, 100, (190, 70, 70))
+    _draw_power_bar(draw, right_x, 348, character.energy, max(1, character.max_energy), (70, 150, 220))
+    _draw_power_bar(draw, right_x, 374, character.gear_power, 20, (170, 170, 95))
+    draw.text((730, 318), f"{character.health}/100", fill=(220, 220, 220), font=small_font)
+    draw.text((730, 344), f"{character.energy}/{character.max_energy}", fill=(220, 220, 220), font=small_font)
+    draw.text((730, 370), f"{character.gear_power}/20", fill=(220, 220, 220), font=small_font)
 
-    equipment_lines = [f"Сила снаряжения: {character.gear_power}", *_equipment_lines(character)]
+    equipment = character.equipment or {}
+    weapon_name = str(equipment.get("weapon", "—"))
+    armor_name = str(equipment.get("armor", "—"))
+    try:
+        weapon_durability = int(equipment.get("weapon_durability", 100))
+    except (TypeError, ValueError):
+        weapon_durability = 100
+    try:
+        armor_durability = int(equipment.get("armor_durability", 100))
+    except (TypeError, ValueError):
+        armor_durability = 100
+    artifact_name = str(equipment.get("artifact", "Нет"))
+    equipment_lines = [
+        f"Сила снаряжения: {character.gear_power}",
+        f"Оружие: {weapon_name} ({weapon_durability}%)",
+        f"Броня: {armor_name} ({armor_durability}%)",
+        f"Артефакт: {artifact_name}",
+    ]
     _draw_text_block(
         draw=draw,
         x=480,
-        y=460,
+        y=410,
         header="Снаряжение",
         lines=equipment_lines,
         header_font=small_font,
@@ -324,7 +339,7 @@ def build_character_card(character: Character) -> bytes:
     _draw_text_block(
         draw=draw,
         x=810,
-        y=460,
+        y=410,
         header="Инвентарь",
         lines=_inventory_lines(character),
         header_font=small_font,
