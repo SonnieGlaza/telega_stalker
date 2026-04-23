@@ -252,10 +252,10 @@ def build_character_card(character: Character) -> bytes:
     panel_left = 46
     panel_right = 408
     panel_bottom = 676
-    avatar_y = 347  # Поднимаем еще выше: сразу под блоком локации.
+    avatar_top = 347
 
     available_w = max(1, panel_right - panel_left)
-    available_h = max(1, panel_bottom - avatar_y - 2)
+    available_h = max(1, panel_bottom - avatar_top - 2)
     if avatar.width > available_w or avatar.height > available_h:
         scale = min(available_w / avatar.width, available_h / avatar.height)
         resized_w = max(1, int(avatar.width * scale))
@@ -263,16 +263,14 @@ def build_character_card(character: Character) -> bytes:
         avatar = avatar.resize((resized_w, resized_h), Image.Resampling.LANCZOS)
 
     avatar_x = panel_left + (available_w - avatar.width) // 2
+    avatar_y = avatar_top + max(0, (available_h - avatar.height) // 2)
     if avatar.mode in {"RGBA", "LA"}:
         # Сохраняем прозрачность, чтобы не появлялся темный фон вокруг спрайта.
         img.paste(avatar, (avatar_x, avatar_y), avatar)
     else:
         img.paste(avatar, (avatar_x, avatar_y))
 
-    # Если после сдвига остается пустая зона, заливаем ее цветом панели.
-    avatar_bottom = avatar_y + avatar.height
-    if avatar_bottom < panel_bottom:
-        draw.rectangle((46, avatar_bottom, 408, panel_bottom - 2), fill=(34, 36, 48))
+    # Если остаются пустые зоны сверху/снизу, подложка панели остается однотонной.
 
     draw.rounded_rectangle((454, 108, 1156, 676), radius=16, fill=(33, 35, 44), outline=(66, 68, 82), width=2)
     right_x = 480
