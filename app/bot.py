@@ -43,6 +43,7 @@ from app.game_logic import (
 )
 from app.keyboards import (
     economy_keyboard,
+    inventory_equipment_keyboard,
     faction_keyboard,
     gender_keyboard,
     locations_keyboard,
@@ -447,7 +448,23 @@ async def show_inventory(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
-    await message.answer(format_inventory(player))
+    await message.answer(
+        format_inventory(player),
+        reply_markup=inventory_equipment_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "inventory:open")
+async def open_inventory_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    await callback.message.answer(
+        format_inventory(player),
+        reply_markup=inventory_equipment_keyboard(),
+    )
+    await callback.answer()
 
 
 @router.message(F.text == "🧾 Профиль")
@@ -501,7 +518,7 @@ async def show_buy_gear(callback: CallbackQuery) -> None:
         "Снаряжение и обслуживание:\n"
         "• Оружие и броня покупаются отдельно в своих разделах.\n"
         "• После покупки предмет попадает в инвентарь.\n"
-        "• Экипировка выполняется вручную кнопками ниже.",
+        "• Экипировка выполняется во вкладке «🎒 Инвентарь».",
         reply_markup=trader_buy_gear_keyboard(),
     )
     await callback.answer()
