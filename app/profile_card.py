@@ -236,11 +236,17 @@ def build_character_card(character: Character) -> bytes:
     )
 
     draw.rounded_rectangle((24, 108, 430, 676), radius=16, fill=(34, 36, 48), outline=(66, 68, 82), width=2)
-    draw.text((46, 132), "Местоположение", fill=(220, 220, 220), font=subtitle_font)
-    draw.rounded_rectangle((46, 176, 408, 346), radius=12, fill=location_color, outline=(210, 210, 210), width=2)
-    draw.text((62, 228), f"Локация: {character.location}", fill=(248, 248, 248), font=small_font)
-    draw.text((62, 258), f"Группировка: {character.faction or 'не выбрана'}", fill=(248, 248, 248), font=small_font)
-    draw.text((62, 288), f"Скин персонажа: {skin.title}", fill=(248, 248, 248), font=small_font)
+    draw.text(
+        (46, 132),
+        _ellipsize_text(draw, f"Игрок: {character.nickname}", subtitle_font, 350),
+        fill=(240, 240, 240),
+        font=subtitle_font,
+    )
+    draw.text((46, 164), "Местоположение", fill=(220, 220, 220), font=subtitle_font)
+    draw.rounded_rectangle((46, 204, 408, 346), radius=12, fill=location_color, outline=(210, 210, 210), width=2)
+    draw.text((62, 236), f"Локация: {character.location}", fill=(248, 248, 248), font=small_font)
+    draw.text((62, 266), f"Группировка: {character.faction or 'не выбрана'}", fill=(248, 248, 248), font=small_font)
+    draw.text((62, 296), f"Скин персонажа: {skin.title}", fill=(248, 248, 248), font=small_font)
 
     avatar = render_avatar(character, width=248, height=320)
     panel_left = 46
@@ -271,49 +277,43 @@ def build_character_card(character: Character) -> bytes:
     draw.rounded_rectangle((454, 108, 1156, 676), radius=16, fill=(33, 35, 44), outline=(66, 68, 82), width=2)
     right_x = 480
     right_max_width = 650
+    draw.text((right_x, 132), f"Пол: {character.gender}", fill=(220, 220, 220), font=body_font)
     draw.text(
-        (right_x, 132),
-        _ellipsize_text(draw, f"Игрок: {character.nickname}", subtitle_font, right_max_width),
-        fill=(240, 240, 240),
-        font=subtitle_font,
-    )
-    draw.text((right_x, 164), f"Пол: {character.gender}", fill=(220, 220, 220), font=body_font)
-    draw.text(
-        (right_x, 190),
+        (right_x, 158),
         _ellipsize_text(draw, f"Группировка: {character.faction or 'не выбрана'}", body_font, right_max_width),
         fill=faction_color,
         font=body_font,
     )
-    draw.text((right_x, 216), f"Баланс: {character.money} рублей", fill=(225, 225, 225), font=body_font)
-    draw.text((right_x, 242), f"Здоровье: {character.health} из 100", fill=(225, 225, 225), font=body_font)
-    draw.text((right_x, 268), f"Энергия: {character.energy} из {character.max_energy}", fill=(225, 225, 225), font=body_font)
+    draw.text((right_x, 184), f"Баланс: {character.money} рублей", fill=(225, 225, 225), font=body_font)
+    draw.text((right_x, 210), f"Здоровье: {character.health} из 100", fill=(225, 225, 225), font=body_font)
+    draw.text((right_x, 236), f"Энергия: {character.energy} из {character.max_energy}", fill=(225, 225, 225), font=body_font)
     draw.text(
-        (right_x, 294),
+        (right_x, 262),
         f"Транспорт: {'Грузовик' if character.truck_owned else 'Отсутствует'}",
         fill=(225, 225, 225),
         font=body_font,
     )
-    draw.text((right_x, 320), f"Топливо: {character.fuel}", fill=(225, 225, 225), font=body_font)
+    draw.text((right_x, 288), f"Топливо: {character.fuel}", fill=(225, 225, 225), font=body_font)
     draw.text(
-        (right_x, 346),
+        (right_x, 314),
         _ellipsize_text(draw, f"Текущий скин: {skin.title}", body_font, right_max_width),
         fill=skin.accent_color,
         font=body_font,
     )
 
-    draw.text((right_x, 374), "Индикаторы состояния", fill=(210, 210, 210), font=body_font)
-    _draw_power_bar(draw, right_x, 404, character.health, 100, (190, 70, 70))
-    _draw_power_bar(draw, right_x, 430, character.energy, max(1, character.max_energy), (70, 150, 220))
-    _draw_power_bar(draw, right_x, 456, character.gear_power, 20, (170, 170, 95))
-    draw.text((730, 400), "Здоровье", fill=(220, 220, 220), font=small_font)
-    draw.text((730, 426), "Энергия", fill=(220, 220, 220), font=small_font)
-    draw.text((730, 452), "Снаряжение", fill=(220, 220, 220), font=small_font)
+    draw.text((right_x, 342), "Индикаторы состояния", fill=(210, 210, 210), font=body_font)
+    _draw_power_bar(draw, right_x, 372, character.health, 100, (190, 70, 70))
+    _draw_power_bar(draw, right_x, 398, character.energy, max(1, character.max_energy), (70, 150, 220))
+    _draw_power_bar(draw, right_x, 424, character.gear_power, 20, (170, 170, 95))
+    draw.text((730, 368), "Здоровье", fill=(220, 220, 220), font=small_font)
+    draw.text((730, 394), "Энергия", fill=(220, 220, 220), font=small_font)
+    draw.text((730, 420), "Снаряжение", fill=(220, 220, 220), font=small_font)
 
     equipment_lines = [f"Сила снаряжения: {character.gear_power}", *_equipment_lines(character)]
     _draw_text_block(
         draw=draw,
         x=480,
-        y=492,
+        y=460,
         header="Снаряжение",
         lines=equipment_lines,
         header_font=small_font,
@@ -324,7 +324,7 @@ def build_character_card(character: Character) -> bytes:
     _draw_text_block(
         draw=draw,
         x=810,
-        y=492,
+        y=460,
         header="Инвентарь",
         lines=_inventory_lines(character),
         header_font=small_font,
