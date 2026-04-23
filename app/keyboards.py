@@ -97,7 +97,7 @@ def trader_buy_gear_keyboard() -> InlineKeyboardMarkup:
 def trader_buy_armor_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Купить Кожаную куртку (900)", callback_data="buy:armor_leather_jacket")],
+            [InlineKeyboardButton(text="Купить Кожаную куртку (900)", callback_data="buy:armor_leather")],
             [InlineKeyboardButton(text="Купить Сталкерский бронежилет (1800)", callback_data="buy:armor_stalker_vest")],
             [InlineKeyboardButton(text="Купить ПСЗ-7 «Долг» (2900)", callback_data="buy:armor_psz7d")],
             [InlineKeyboardButton(text="Купить Комбинезон «Заря» (3800)", callback_data="buy:armor_sunrise")],
@@ -152,7 +152,7 @@ def trader_sell_consumables_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Продать энергетик (170)", callback_data="sell:energy_drink")],
             [InlineKeyboardButton(text="Продать аптечку (120)", callback_data="sell:medkit")],
             [InlineKeyboardButton(text="Продать патроны (55)", callback_data="sell:ammo_pack")],
-            [InlineKeyboardButton(text="Продать артефакт (650)", callback_data="sell:artifact")],
+            [InlineKeyboardButton(text="Продать артефакт (900)", callback_data="sell:artifact")],
             [InlineKeyboardButton(text="Продать топливо +5 (200)", callback_data="sell:fuel_can")],
             [InlineKeyboardButton(text="⬅️ Назад к категориям продажи", callback_data="trade:menu:sell")],
         ]
@@ -171,7 +171,7 @@ def trader_sell_gear_keyboard() -> InlineKeyboardMarkup:
 def trader_sell_armor_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Продать Кожаную куртку (420)", callback_data="sell:armor_leather_jacket")],
+            [InlineKeyboardButton(text="Продать Кожаную куртку (420)", callback_data="sell:armor_leather")],
             [InlineKeyboardButton(text="Продать Сталкерский бронежилет (850)", callback_data="sell:armor_stalker_vest")],
             [InlineKeyboardButton(text="Продать ПСЗ-7 «Долг» (1400)", callback_data="sell:armor_psz7d")],
             [InlineKeyboardButton(text="Продать «Заря» (1850)", callback_data="sell:armor_sunrise")],

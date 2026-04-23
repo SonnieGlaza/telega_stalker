@@ -22,7 +22,7 @@ class QuestType:
 
 
 QUESTS: dict[str, QuestType] = {
-    "easy": QuestType("easy", "Легко", 90, 12, 150, 300, 0, 0),
+    "easy": QuestType("easy", "Легко", 96, 10, 170, 310, 0, 0),
     "hard": QuestType("hard", "Сложно", 80, 16, 250, 450, 0, 0),
     "heavy": QuestType("heavy", "Тяжело", 70, 22, 400, 650, 2, 1),
     "impossible": QuestType("impossible", "Невозможно", 60, 28, 550, 900, 3, 1),
@@ -33,7 +33,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "energy_drink": {"name": "Энергетик", "buy_price": 250, "sell_price": 170},
     "medkit": {"name": "Аптечка", "buy_price": 260, "sell_price": 120},
     "ammo_pack": {"name": "Патроны", "buy_price": 120, "sell_price": 55},
-    "artifact": {"name": "Артефакт", "buy_price": 0, "sell_price": 900},
+    "artifact": {"name": "Артефакт", "buy_price": 0, "sell_price": 650},
     "gear_upgrade": {"name": "Улучшение снаряги", "buy_price": 1200, "sell_price": 0},
     "truck": {"name": "Грузовик", "buy_price": 7000, "sell_price": 0},
     "fuel_can": {"name": "Канистра топлива (+5)", "buy_price": 450, "sell_price": 200},
@@ -192,6 +192,13 @@ RATING_REWARD = {
     "smuggle_success": 10,
     "smuggle_fail": 3,
     "trade_action": 4,
+}
+
+QUEST_FAIL_PENALTY_RANGE: dict[str, tuple[int, int]] = {
+    "easy": (30, 80),
+    "hard": (60, 130),
+    "heavy": (90, 170),
+    "impossible": (120, 220),
 }
 
 RAID_ARTIFACT_REWARD_CAP = 2
@@ -606,7 +613,7 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
         storage.add_player_stat(telegram_id, "quests_completed", 1)
         storage.add_player_stat(telegram_id, "money_earned", reward)
 
-        if random.random() < 0.30:
+        if random.random() < 0.18:
             storage.add_item(telegram_id, "artifact", 1)
             extra = "\nТы нашел редкий артефакт!"
         else:
@@ -621,7 +628,8 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
             f"Награда: {reward} RU.{extra}{durability_text}{achievements_text}",
         )
 
-    penalty = random.randint(50, 120)
+    min_penalty, max_penalty = QUEST_FAIL_PENALTY_RANGE.get(quest.key, (50, 120))
+    penalty = random.randint(min_penalty, max_penalty)
     storage.change_money(telegram_id, -penalty)
     _add_rating(storage, telegram_id, -RATING_REWARD["quest_fail"])
     storage.add_player_stat(telegram_id, "quests_failed", 1)
