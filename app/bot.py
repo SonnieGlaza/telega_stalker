@@ -497,19 +497,33 @@ async def show_buy_consumables(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "trade:buy:gear")
 async def show_buy_gear(callback: CallbackQuery) -> None:
-    await callback.message.answer("Покупка снаряжения:", reply_markup=trader_buy_gear_keyboard())
+    await callback.message.answer(
+        "Снаряжение и обслуживание:\n"
+        "• Оружие и броня покупаются отдельно в своих разделах.\n"
+        "• После покупки предмет попадает в инвентарь.\n"
+        "• Экипировка выполняется вручную кнопками ниже.",
+        reply_markup=trader_buy_gear_keyboard(),
+    )
     await callback.answer()
 
 
 @router.callback_query(F.data == "trade:buy:armor")
 async def show_buy_armor(callback: CallbackQuery) -> None:
-    await callback.message.answer("Покупка брони и костюмов:", reply_markup=trader_buy_armor_keyboard())
+    await callback.message.answer(
+        "Покупка брони и костюмов.\n"
+        "После покупки предмет добавляется в инвентарь.",
+        reply_markup=trader_buy_armor_keyboard(),
+    )
     await callback.answer()
 
 
 @router.callback_query(F.data == "trade:buy:weapons")
 async def show_buy_weapons(callback: CallbackQuery) -> None:
-    await callback.message.answer("Покупка оружия:", reply_markup=trader_buy_weapons_keyboard())
+    await callback.message.answer(
+        "Покупка оружия.\n"
+        "После покупки предмет добавляется в инвентарь.",
+        reply_markup=trader_buy_weapons_keyboard(),
+    )
     await callback.answer()
 
 
