@@ -7,7 +7,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from app.avatar_render import render_avatar
-from app.game_logic import ITEM_LABELS
+from app.game_logic import ITEM_LABELS, equipment_power
 from app.skins import resolve_skin
 from app.storage import Character
 
@@ -318,7 +318,7 @@ def build_character_card(character: Character) -> bytes:
         armor_durability = 100
     artifact_name = str(equipment.get("artifact", "Нет"))
     equipment_lines = [
-        f"Сила снаряжения: {character.gear_power}",
+        f"Сила снаряжения: {equipment_power(character)}",
         f"Оружие: {weapon_name} ({weapon_durability}%)",
         f"Броня: {armor_name} ({armor_durability}%)",
         f"Артефакт: {artifact_name}",

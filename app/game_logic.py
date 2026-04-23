@@ -250,6 +250,24 @@ def _durability_penalty(percent: int, max_penalty: int) -> int:
     return int(round((missing / MIN_EFFECTIVE_DURABILITY) * max_penalty))
 
 
+def equipment_power(character: Character) -> int:
+    weapon_name = str(character.equipment.get("weapon", "Нож"))
+    armor_name = str(character.equipment.get("armor", "Куртка новичка"))
+    artifact_name = str(character.equipment.get("artifact", "Нет"))
+    weapon_durability = _durability_percent(character, "weapon")
+    armor_durability = _durability_percent(character, "armor")
+
+    weapon_level = _weapon_rating(weapon_name)
+    armor_level = _armor_rating(armor_name)
+    artifact_bonus = 2 if artifact_name and artifact_name != "Нет" else 0
+    durability_penalty = _durability_penalty(weapon_durability, 6) + _durability_penalty(armor_durability, 6)
+    return max(1, weapon_level + armor_level + artifact_bonus - durability_penalty)
+
+
+def compute_total_gear_power(character: Character) -> int:
+    return equipment_power(character)
+
+
 def _apply_durability_decay(storage: Storage, telegram_id: int, weapon_loss: int, armor_loss: int) -> str:
     character = storage.get_character(telegram_id, refresh_energy=False)
     if character is None:
@@ -343,7 +361,7 @@ def _achievement_rules() -> tuple[AchievementRule, ...]:
             description="Достигни силы снаряги 14+",
             reward_ru=1000,
             reward_rating=70,
-            check=lambda _stats, character: character.gear_power >= 14,
+            check=lambda _stats, character: compute_total_gear_power(character) >= 14,
         ),
     )
 
@@ -515,7 +533,7 @@ def calculate_quest_success_by_key(character: Character, quest_key: str) -> int:
     medkit_stock = int(character.inventory.get("medkit", 0))
     gear_bonus = calculate_equipment_bonus(character)
     breakdown = calculate_quest_success(
-        gear_power=character.gear_power,
+        gear_power=compute_total_gear_power(character),
         gear_bonus=gear_bonus,
         max_success=quest.max_success,
         ammo_stock=ammo_stock,
@@ -571,7 +589,7 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
     medkit_after = int(updated.inventory.get("medkit", 0))
     gear_bonus = calculate_equipment_bonus(updated)
     breakdown = calculate_quest_success(
-        gear_power=updated.gear_power,
+        gear_power=compute_total_gear_power(updated),
         gear_bonus=gear_bonus,
         max_success=quest.max_success,
         ammo_stock=ammo_after,
@@ -642,18 +660,7 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
         return ActionResult(False, f"Недостаточно денег для покупки: {title}.")
 
     if item_key == "gear_upgrade":
-        storage.change_gear_power(telegram_id, 1)
-        updated = storage.get_character(telegram_id, refresh_energy=False)
-        if updated is not None:
-            armor_name, weapon_name = resolve_equipment_by_power(updated.gear_power)
-            storage.set_equipment_item(telegram_id, "armor", armor_name)
-            storage.set_equipment_item(telegram_id, "weapon", weapon_name)
-            return ActionResult(
-                True,
-                f"Ты улучшил снарягу (+1 сила). Потрачено {price} RU.\n"
-                f"Новый комплект: {armor_name}, оружие: {weapon_name}.",
-            )
-        return ActionResult(True, f"Ты улучшил снарягу (+1 сила). Потрачено {price} RU.")
+        return ActionResult(False, "Улучшение снаряги отключено. Сила теперь зависит от оружия и брони.")
     if item_key == "truck":
         storage.set_truck_owned(telegram_id)
         return ActionResult(True, "Покупка оформлена: грузовик теперь в твоем распоряжении.")
@@ -901,6 +908,7 @@ def format_inventory(character: Character) -> str:
         f"• Прочность брони: {armor_durability}%"
     )
 
+    current_gear_power = equipment_power(character)
     return (
         f"👤 {character.nickname} ({character.gender})\n"
         f"ID-адрес: {character.player_uid}\n"
@@ -909,7 +917,7 @@ def format_inventory(character: Character) -> str:
         f"Локация: {character.location}\n"
         f"Здоровье: {character.health}\n"
         f"Энергия: {character.energy}/{character.max_energy}\n"
-        f"Сила снаряги: {character.gear_power}\n"
+        f"Сила снаряги: {current_gear_power}\n"
         f"Скин: {skin.title}\n"
         f"Баланс: {character.money} RU\n"
         f"Транспорт: {vehicle}\n"
@@ -1060,12 +1068,15 @@ def _simulate_raid_battle(
     squad_hp: dict[int, int] = {}
     squad_attack_bonus: dict[int, int] = {}
     squad_armor_bonus: dict[int, int] = {}
+    member_gear_power: dict[int, int] = {}
     for member in members:
         weapon_bonus = _weapon_rating(member.equipment.get("weapon", ""))
         armor_bonus = _armor_rating(member.equipment.get("armor", ""))
+        gear_power = equipment_power(member)
+        member_gear_power[member.telegram_id] = gear_power
         squad_attack_bonus[member.telegram_id] = weapon_bonus
         squad_armor_bonus[member.telegram_id] = armor_bonus
-        squad_hp[member.telegram_id] = 75 + member.gear_power * 4 + armor_bonus * 3
+        squad_hp[member.telegram_id] = 75 + gear_power * 4 + armor_bonus * 3
 
     enemy_hp = max(80, enemy_power * 7)
     enemy_damage_base = max(8, enemy_power // 2)
@@ -1081,9 +1092,10 @@ def _simulate_raid_battle(
             member_hp = squad_hp.get(member.telegram_id, 0)
             if member_hp <= 0 or enemy_hp <= 0:
                 continue
-            base_damage = 6 + member.gear_power * 2 + squad_attack_bonus[member.telegram_id]
+            gear_power = member_gear_power.get(member.telegram_id, 1)
+            base_damage = 6 + gear_power * 2 + squad_attack_bonus[member.telegram_id]
             damage = base_damage + random.randint(0, 8)
-            crit_chance = min(35, 8 + member.gear_power * 2)
+            crit_chance = min(35, 8 + gear_power * 2)
             if random.randint(1, 100) <= crit_chance:
                 damage = int(damage * 1.7)
                 total_crits += 1
@@ -1103,7 +1115,8 @@ def _simulate_raid_battle(
     success = enemy_hp <= 0 and bool(survivors)
     member_damage_taken: dict[int, int] = {}
     for member in members:
-        max_hp = 75 + member.gear_power * 4 + squad_armor_bonus[member.telegram_id] * 3
+        gear_power = member_gear_power.get(member.telegram_id, 1)
+        max_hp = 75 + gear_power * 4 + squad_armor_bonus[member.telegram_id] * 3
         member_damage_taken[member.telegram_id] = max(0, max_hp - squad_hp[member.telegram_id])
 
     return {
@@ -1295,10 +1308,7 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
     raid_id = int(open_raid["id"])
     member_ids = storage.get_raid_member_ids(raid_id)
     members = storage.get_characters_by_ids(member_ids)
-    members_text = "\n".join(
-        f"• {member.nickname} (сила {member.gear_power}, HP {member.health})"
-        for member in members
-    )
+    members_text = "\n".join(f"• {member.nickname} (сила {equipment_power(member)}, HP {member.health})" for member in members)
     location_name = str(open_raid["location"])
     location = storage.get_location(location_name)
     npc_power = int(location["npc_power"]) if location else 0
@@ -1487,7 +1497,7 @@ def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
     if truck_bonus > 0 and not storage.change_fuel(telegram_id, -1):
         truck_bonus = 0
     event_modifier = _active_location_event_modifier(storage, player.location)
-    chance = min(90, max(20, 42 + player.gear_power * 3 + truck_bonus - max(0, event_modifier)))
+    chance = min(90, max(20, 42 + equipment_power(player) * 3 + truck_bonus - max(0, event_modifier)))
     roll = random.randint(1, 100)
     success = roll <= chance
 
