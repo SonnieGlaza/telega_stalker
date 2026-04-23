@@ -722,14 +722,41 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
     if item_key in WEAPON_CATALOG:
         weapon_name = str(item["name"])
         equipped_weapon = str(character.equipment.get("weapon", "Нож"))
+        final_sell_price = sell_price
         if equipped_weapon == weapon_name:
             if weapon_name == "Нож":
                 return ActionResult(False, "Нож продать нельзя.")
+            weapon_durability = _durability_percent(character, "weapon")
+            final_sell_price = _price_with_durability(sell_price, weapon_durability)
             storage.set_equipment_item(telegram_id, "weapon", "Нож")
         elif not storage.remove_item(telegram_id, item_key, 1):
             return ActionResult(False, f"У тебя нет оружия: {weapon_name}.")
-        storage.change_money(telegram_id, sell_price)
-        return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
+        storage.change_money(telegram_id, final_sell_price)
+        if final_sell_price != sell_price:
+            return ActionResult(
+                True,
+                f"Продано: {title} за {final_sell_price} RU.\n"
+                f"(Базовая цена {sell_price} RU снижена из-за износа.)",
+            )
+        return ActionResult(True, f"Продано: {title} за {final_sell_price} RU.")
+    if item_key in ARMOR_CATALOG:
+        armor_name = str(item["name"])
+        equipped_armor = str(character.equipment.get("armor", "Куртка новичка"))
+        final_sell_price = sell_price
+        if equipped_armor == armor_name:
+            armor_durability = _durability_percent(character, "armor")
+            final_sell_price = _price_with_durability(sell_price, armor_durability)
+            storage.set_equipment_item(telegram_id, "armor", "Куртка новичка")
+        elif not storage.remove_item(telegram_id, item_key, 1):
+            return ActionResult(False, f"У тебя нет брони: {armor_name}.")
+        storage.change_money(telegram_id, final_sell_price)
+        if final_sell_price != sell_price:
+            return ActionResult(
+                True,
+                f"Продано: {title} за {final_sell_price} RU.\n"
+                f"(Базовая цена {sell_price} RU снижена из-за износа.)",
+            )
+        return ActionResult(True, f"Продано: {title} за {final_sell_price} RU.")
     if item_key == "artifact":
         removed_from_inventory = storage.remove_item(telegram_id, "artifact", 1)
         if not removed_from_inventory:
@@ -756,6 +783,12 @@ def _primary_keys_by_name(catalog: dict[str, dict[str, int | str]]) -> dict[str,
         name = str(entry["name"])
         by_name.setdefault(name, key)
     return by_name
+
+
+def _price_with_durability(base_price: int, durability: int) -> int:
+    # Даже сильно изношенный предмет имеет минимальную выкупную стоимость.
+    effective = max(20, min(100, durability))
+    return max(1, int(round(base_price * (effective / 100))))
 
 
 def list_equippable_weapons(character: Character) -> list[tuple[str, str, int]]:
