@@ -85,7 +85,6 @@ def trader_buy_consumables_keyboard() -> InlineKeyboardMarkup:
 def trader_buy_gear_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Улучшить снарягу (1200)", callback_data="buy:gear_upgrade")],
             [InlineKeyboardButton(text="Экипировать артефакт", callback_data="equip:artifact")],
             [InlineKeyboardButton(text="Ремонт оружия", callback_data="repair:weapon")],
             [InlineKeyboardButton(text="Ремонт брони", callback_data="repair:armor")],
