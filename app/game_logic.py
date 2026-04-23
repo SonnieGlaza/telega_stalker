@@ -194,6 +194,10 @@ RATING_REWARD = {
     "trade_action": 4,
 }
 
+RAID_ARTIFACT_REWARD_CAP = 2
+RAID_ARTIFACT_MIN_ENEMY_POWER = 25
+WAR_MIN_FACTION_MEMBERS = 5
+
 
 @dataclass(frozen=True)
 class AchievementRule:
@@ -863,6 +867,11 @@ def attack_location(storage: Storage, telegram_id: int, location_name: str) -> A
         return ActionResult(False, "Сначала создай персонажа.")
     if character.faction is None:
         return ActionResult(False, "Сначала выбери группировку.")
+    if storage.get_faction_active_members_count(character.faction) < WAR_MIN_FACTION_MEMBERS:
+        return ActionResult(
+            False,
+            f"Для войны нужно минимум {WAR_MIN_FACTION_MEMBERS} бойцов группировки с живым персонажем.",
+        )
 
     locations = {loc["name"]: loc for loc in storage.get_locations()}
     if location_name not in locations:
@@ -1036,14 +1045,14 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
         raid_id = storage.create_raid(player.faction, location_name, telegram_id)
         return ActionResult(
             True,
-            f"Создан рейд #{raid_id} на локацию «{location_name}».\n"
+            f"Создан рейд #{raid_id} на логово «{location_name}».\n"
             "Позови товарищей по группировке и нажми «Запустить».",
         )
 
     if str(open_raid["location"]) != location_name:
         return ActionResult(
             False,
-            f"У твоей группировки уже есть открытый рейд #{open_raid['id']} на «{open_raid['location']}».\n"
+            f"У твоей группировки уже есть открытый рейд #{open_raid['id']} на логово «{open_raid['location']}».\n"
             "Сначала запусти или закрой его.",
         )
 
@@ -1053,7 +1062,7 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
     member_ids = storage.get_raid_member_ids(raid_id)
     return ActionResult(
         True,
-        f"Ты в составе рейда #{raid_id} на «{location_name}».\n"
+        f"Ты в составе рейда #{raid_id} на логово «{location_name}».\n"
         f"Состав рейда: {len(member_ids)} бойцов.",
     )
 
@@ -1106,7 +1115,12 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
         storage.set_location_control(location_name, leader.faction)
         treasury_gain = 1400 + len(ready_members) * 180
         storage.change_faction_treasury(leader.faction, treasury_gain)
-        personal_reward = 240 + len(ready_members) * 35
+        artifacts_reward = 0
+        if enemy_power >= RAID_ARTIFACT_MIN_ENEMY_POWER:
+            artifacts_reward = min(
+                RAID_ARTIFACT_REWARD_CAP,
+                random.randint(1, RAID_ARTIFACT_REWARD_CAP),
+            )
         notes: list[str] = []
         for member in ready_members:
             durability_text = _apply_durability_decay(
@@ -1115,10 +1129,10 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
                 weapon_loss=6,
                 armor_loss=5,
             )
-            storage.change_money(member.telegram_id, personal_reward)
+            if artifacts_reward > 0:
+                storage.add_item(member.telegram_id, "artifact", artifacts_reward)
             _add_rating(storage, member.telegram_id, RATING_REWARD["raid_success"])
             storage.add_player_stat(member.telegram_id, "raids_completed", 1)
-            storage.add_player_stat(member.telegram_id, "money_earned", personal_reward)
             if member.telegram_id in battle["wounds"]:
                 storage.change_health(member.telegram_id, -14)
             achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
@@ -1133,9 +1147,10 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
         )
         return RaidLaunchResult(
             True,
-            f"Рейд #{raid_id} завершен успешно на «{location_name}».\n"
+            f"Рейд #{raid_id} завершен успешно на логове «{location_name}».\n"
             f"Бойцов: {len(ready_members)}, критические попадания: {battle['total_crits']}.\n"
-            f"Личная награда каждому: {personal_reward} RU.\n"
+            f"Награда каждому: артефакты x{artifacts_reward} (максимум {RAID_ARTIFACT_REWARD_CAP} за рейд).\n"
+            f"Порог сложности для награды артефактами: от {RAID_ARTIFACT_MIN_ENEMY_POWER} силы.\n"
             f"В казну группировки: {treasury_gain} RU.\n"
             f"Раненых: {len(battle['wounds'])}."
             f"{''.join(notes)}",
@@ -1168,7 +1183,7 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
     )
     return RaidLaunchResult(
         False,
-        f"Рейд #{raid_id} провален на «{location_name}».\n"
+        f"Рейд #{raid_id} провален на логове «{location_name}».\n"
         f"Сила врага осталась: {battle['enemy_hp_left']}.\n"
         f"Каждый участник потерял 110 RU и получил ранения.{''.join(notes)}",
         tuple(member_ids),
@@ -1184,9 +1199,10 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
     if open_raid is None:
         return (
             "Отрядные рейды:\n"
-            "• Создай рейд на нужную локацию.\n"
+            "• Создай рейд на нужное логово.\n"
             "• Другие бойцы твоей группировки могут присоединиться.\n"
-            "• Для запуска нужно минимум 2 участника."
+            "• Для запуска нужно минимум 2 участника.\n"
+            f"• Награды: до {RAID_ARTIFACT_REWARD_CAP} артефактов за успешный рейд (от {RAID_ARTIFACT_MIN_ENEMY_POWER} силы NPC)."
         )
 
     raid_id = int(open_raid["id"])
@@ -1202,7 +1218,7 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
     event_modifier = _active_location_event_modifier(storage, location_name)
     return (
         f"Открытый рейд #{raid_id}\n"
-        f"Локация: {location_name}\n"
+        f"Логово: {location_name}\n"
         f"Лидер: {open_raid['leader_id']}\n"
         f"Участников: {len(member_ids)}\n"
         f"Сила NPC: {npc_power} (модификатор событий {event_modifier:+d})\n\n"

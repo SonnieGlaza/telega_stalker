@@ -854,6 +854,18 @@ class Storage:
             ).fetchone()
         return int(row["total_power"]) if row else 0
 
+    def get_faction_active_members_count(self, faction: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS total_members
+                FROM characters
+                WHERE faction = ? AND health > 0
+                """,
+                (faction,),
+            ).fetchone()
+        return int(row["total_members"]) if row else 0
+
     def change_faction_treasury(self, faction: str, delta: int) -> None:
         with self._connect() as conn:
             conn.execute(

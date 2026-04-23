@@ -239,7 +239,7 @@ def raid_keyboard(locations: list[dict[str, str | int | None]]) -> InlineKeyboar
     ]
     for location in locations:
         name = str(location["name"])
-        rows.append([InlineKeyboardButton(text=f"Создать рейд: {name}", callback_data=f"raid:create:{name}")])
+        rows.append([InlineKeyboardButton(text=f"Создать рейд на логово: {name}", callback_data=f"raid:create:{name}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
