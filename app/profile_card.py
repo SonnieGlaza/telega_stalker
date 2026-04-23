@@ -188,7 +188,6 @@ def _draw_text_block(
     draw.text((x, y), header, fill=(218, 218, 218), font=header_font)
     draw.line((x, y + 30, x + max_width, y + 30), fill=(90, 92, 108), width=1)
     visible = lines[:max_lines]
-    hidden = len(lines) - len(visible)
     for i, line in enumerate(visible):
         draw.text(
             (x, y + 38 + i * 26),
@@ -196,8 +195,6 @@ def _draw_text_block(
             fill=(230, 230, 230),
             font=body_font,
         )
-    if hidden > 0:
-        draw.text((x, y + 38 + len(visible) * 26), f"Еще записей: {hidden}", fill=(180, 180, 180), font=body_font)
 
 
 def _ellipsize_text(
