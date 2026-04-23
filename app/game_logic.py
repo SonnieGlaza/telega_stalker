@@ -79,45 +79,27 @@ ARMOR_CATALOG["armor_exoskeleton"] = ARMOR_CATALOG["armor_exo"]
 SHOP_ITEMS.update(ARMOR_CATALOG)
 SHOP_ITEMS.update(WEAPON_CATALOG)
 
-WEAPON_RATING_BY_NAME: dict[str, int] = {
-    "Нож": 1,
-    "ПМ": 3,
-    "Фора-12": 4,
-    "Обрез": 4,
-    "Chaser-13": 6,
-    "СПАС-12": 8,
-    "Гадюка-5": 5,
-    "АКС-74У": 6,
-    "АК-74": 7,
-    "TRs 301": 8,
-    "ИЛ86": 8,
-    "ГП37": 10,
-    "СВДм-2": 11,
-    "Винтарь ВС": 11,
-    "РП-74": 12,
-    "АН-94": 10,
-    "Гаусс-пушка": 16,
-}
+def _build_level_map(catalog: dict[str, dict[str, int | str]]) -> dict[str, int]:
+    ranked: list[tuple[str, int]] = []
+    seen_names: set[str] = set()
+    for item in sorted(catalog.values(), key=lambda entry: int(entry["buy_price"])):
+        name = str(item["name"])
+        if name in seen_names:
+            continue
+        seen_names.add(name)
+        ranked.append((name, len(ranked) + 1))
+    return {name: level for name, level in ranked}
 
-ARMOR_BONUS_BY_NAME: dict[str, int] = {
-    "Куртка новичка": 0,
-    "Кожаная куртка": 1,
-    "Бронежилет сталкера": 3,
-    "Сталкерский бронежилет": 4,
-    "ПСЗ-7 «Долг»": 5,
-    "Комбинезон «Заря»": 6,
-    "Усиленный бронекостюм": 6,
-    "Берилл-5М": 7,
-    "Костюм СЕВА": 8,
-    "Штурмовой экзоскелет": 9,
-    "Экзоскелет": 10,
-    "Носорог": 12,
-}
 
-ARMOR_RATING_BY_NAME: dict[str, int] = {
-    armor_name: max(1, bonus + 1)
-    for armor_name, bonus in ARMOR_BONUS_BY_NAME.items()
-}
+WEAPON_RATING_BY_NAME: dict[str, int] = _build_level_map(WEAPON_CATALOG)
+WEAPON_RATING_BY_NAME.setdefault("Нож", 1)
+
+ARMOR_RATING_BY_NAME: dict[str, int] = _build_level_map(ARMOR_CATALOG)
+ARMOR_RATING_BY_NAME.setdefault("Куртка новичка", 1)
+# Совместимость с историческими названиями экипировки из старых сохранений.
+ARMOR_RATING_BY_NAME.setdefault("Бронежилет сталкера", ARMOR_RATING_BY_NAME.get("Сталкерский бронежилет", 2))
+ARMOR_RATING_BY_NAME.setdefault("Усиленный бронекостюм", ARMOR_RATING_BY_NAME.get("ПСЗ-7 «Долг»", 3))
+ARMOR_RATING_BY_NAME.setdefault("Штурмовой экзоскелет", ARMOR_RATING_BY_NAME.get("Экзоскелет", 7))
 
 
 ITEM_LABELS = {
@@ -467,17 +449,12 @@ def calculate_equipment_bonus(character: Character) -> int:
     weapon_durability = _durability_percent(character, "weapon")
     armor_durability = _durability_percent(character, "armor")
 
-    # Явный бонус от фактической экипировки (не только от числовой силы).
-    armor_bonus = {
-        "Куртка новичка": 0,
-        "Бронежилет сталкера": 3,
-        "Усиленный бронекостюм": 6,
-        "Штурмовой экзоскелет": 9,
-    }.get(armor_name, 0)
-    weapon_bonus = max(0, _weapon_rating(weapon_name) - 1)
+    # Каждый уровень оружия/брони дает +1 к силе снаряжения (начиная с 1-го уровня).
+    armor_bonus = _armor_rating(armor_name)
+    weapon_bonus = _weapon_rating(weapon_name)
     artifact_bonus = 2 if artifact_name and artifact_name != "Нет" else 0
-    armor_penalty = _durability_penalty(armor_durability, max_penalty=4)
-    weapon_penalty = _durability_penalty(weapon_durability, max_penalty=5)
+    armor_penalty = _durability_penalty(armor_durability, max_penalty=6)
+    weapon_penalty = _durability_penalty(weapon_durability, max_penalty=6)
     return max(0, armor_bonus + weapon_bonus + artifact_bonus - armor_penalty - weapon_penalty)
 
 
@@ -1050,16 +1027,11 @@ def attack_location(storage: Storage, telegram_id: int, location_name: str) -> A
 
 
 def _weapon_rating(weapon_name: str) -> int:
-    return WEAPON_RATING_BY_NAME.get(weapon_name, 2)
+    return WEAPON_RATING_BY_NAME.get(weapon_name, 1)
 
 
 def _armor_rating(armor_name: str) -> int:
-    return {
-        "Куртка новичка": 1,
-        "Бронежилет сталкера": 3,
-        "Усиленный бронекостюм": 5,
-        "Штурмовой экзоскелет": 8,
-    }.get(armor_name, 2)
+    return ARMOR_RATING_BY_NAME.get(armor_name, 1)
 
 
 def _safe_fromiso(value: str) -> datetime:
