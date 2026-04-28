@@ -36,6 +36,15 @@ from app.game_logic import (
     travel_to,
     use_energy_drink,
     use_medkit,
+    use_vodka,
+    use_antirad,
+    use_bread,
+    use_sausage,
+    use_stew,
+    use_water,
+    use_mineralka,
+    use_beard_tea,
+    transfer_money_with_fee,
     withdraw_from_faction_warehouse,
     build_dead_character_text,
     respawn_character,
@@ -826,6 +835,79 @@ async def use_medkit_callback(callback: CallbackQuery) -> None:
     result = use_medkit(get_storage(), callback.from_user.id)
     await callback.message.answer(result.text)
     await callback.answer()
+
+
+@router.callback_query(F.data == "use:vodka")
+async def use_vodka_callback(callback: CallbackQuery) -> None:
+    result = use_vodka(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "use:antirad")
+async def use_antirad_callback(callback: CallbackQuery) -> None:
+    result = use_antirad(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "use:bread")
+async def use_bread_callback(callback: CallbackQuery) -> None:
+    result = use_bread(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "use:sausage")
+async def use_sausage_callback(callback: CallbackQuery) -> None:
+    result = use_sausage(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "use:stew")
+async def use_stew_callback(callback: CallbackQuery) -> None:
+    result = use_stew(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "use:water_bottle")
+async def use_water_callback(callback: CallbackQuery) -> None:
+    result = use_water(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "use:mineral_water")
+async def use_mineralka_callback(callback: CallbackQuery) -> None:
+    result = use_mineralka(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "use:beard_tea")
+async def use_beard_tea_callback(callback: CallbackQuery) -> None:
+    result = use_beard_tea(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.message(Command("pay"))
+async def pay_command(message: Message) -> None:
+    sender_id = message.from_user.id
+    parts = (message.text or "").strip().split()
+    if len(parts) != 3:
+        await message.answer("Использование: /pay <telegram_id> <сумма>")
+        return
+    try:
+        target_telegram_id = int(parts[1])
+        amount = int(parts[2])
+    except ValueError:
+        await message.answer("Telegram ID и сумма должны быть целыми числами.")
+        return
+    result = transfer_money_with_fee(get_storage(), sender_id, target_telegram_id, amount)
+    await message.answer(result.text)
 
 
 @router.message(F.text == "🗺 Переход")

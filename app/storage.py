@@ -39,6 +39,16 @@ class Character:
     truck_owned: bool
     fuel: int
     energy_updated_at: datetime
+    radiation: int
+    hunger: int
+    thirst: int
+    needs_updated_at: datetime
+    survival_damage_at: datetime
+
+
+SURVIVAL_HOURLY_GAIN = 1
+SURVIVAL_DAMAGE_PER_TICK = 10
+SURVIVAL_DAMAGE_TICK_MINUTES = 30
 
 
 class Storage:
@@ -552,17 +562,18 @@ class Storage:
 
     def create_character(self, telegram_id: int, nickname: str, gender: str) -> None:
         player_uid = build_player_uid(telegram_id)
+        now_iso = utc_now().isoformat()
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO characters(
-                    telegram_id, player_uid, nickname, gender, energy_updated_at
-                ) VALUES(?, ?, ?, ?, ?)
+                    telegram_id, player_uid, nickname, gender, energy_updated_at, needs_updated_at, survival_damage_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(telegram_id) DO UPDATE SET
                     nickname = excluded.nickname,
                     gender = excluded.gender
                 """,
-                (telegram_id, player_uid, nickname, gender, utc_now().isoformat()),
+                (telegram_id, player_uid, nickname, gender, now_iso, now_iso, now_iso),
             )
             self._ensure_player_stats_row(conn, telegram_id)
         self.save_snapshot()
@@ -570,6 +581,7 @@ class Storage:
     def get_character(self, telegram_id: int, refresh_energy: bool = True) -> Character | None:
         if refresh_energy:
             self.recover_energy(telegram_id)
+            self.refresh_survival(telegram_id)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM characters WHERE telegram_id = ?",
@@ -631,6 +643,93 @@ class Storage:
                 (new_energy, utc_now().isoformat(), telegram_id),
             )
         self.save_snapshot()
+
+    def refresh_survival(self, telegram_id: int) -> None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT radiation, hunger, thirst, health, needs_updated_at, survival_damage_at
+                FROM characters
+                WHERE telegram_id = ?
+                """,
+                (telegram_id,),
+            ).fetchone()
+            if row is None:
+                return
+            now = utc_now()
+            needs_updated_at = datetime.fromisoformat(row["needs_updated_at"])
+            survival_damage_at = datetime.fromisoformat(row["survival_damage_at"])
+            radiation = int(row["radiation"])
+            hunger = int(row["hunger"])
+            thirst = int(row["thirst"])
+            health = int(row["health"])
+
+            hours_passed = int((now - needs_updated_at).total_seconds() // 3600)
+            if hours_passed > 0:
+                hunger = min(200, hunger + hours_passed * SURVIVAL_HOURLY_GAIN)
+                thirst = min(200, thirst + hours_passed * SURVIVAL_HOURLY_GAIN)
+                needs_updated_at = now
+
+            if hunger >= 100 or thirst >= 100:
+                ticks = int((now - survival_damage_at).total_seconds() // (SURVIVAL_DAMAGE_TICK_MINUTES * 60))
+                if ticks > 0:
+                    health = max(0, health - ticks * SURVIVAL_DAMAGE_PER_TICK)
+                    survival_damage_at = now
+            else:
+                survival_damage_at = now
+
+            conn.execute(
+                """
+                UPDATE characters
+                SET radiation = ?, hunger = ?, thirst = ?, health = ?, needs_updated_at = ?, survival_damage_at = ?
+                WHERE telegram_id = ?
+                """,
+                (
+                    max(0, min(200, radiation)),
+                    max(0, min(200, hunger)),
+                    max(0, min(200, thirst)),
+                    max(0, min(100, health)),
+                    needs_updated_at.isoformat(),
+                    survival_damage_at.isoformat(),
+                    telegram_id,
+                ),
+            )
+
+    def adjust_survival(
+        self,
+        telegram_id: int,
+        radiation_delta: int = 0,
+        hunger_delta: int = 0,
+        thirst_delta: int = 0,
+        health_delta: int = 0,
+    ) -> bool:
+        self.refresh_survival(telegram_id)
+        character = self.get_character(telegram_id, refresh_energy=False)
+        if character is None:
+            return False
+        new_radiation = max(0, min(200, character.radiation + radiation_delta))
+        new_hunger = max(0, min(200, character.hunger + hunger_delta))
+        new_thirst = max(0, min(200, character.thirst + thirst_delta))
+        new_health = max(0, min(100, character.health + health_delta))
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE characters
+                SET radiation = ?, hunger = ?, thirst = ?, health = ?, needs_updated_at = ?, survival_damage_at = ?
+                WHERE telegram_id = ?
+                """,
+                (
+                    new_radiation,
+                    new_hunger,
+                    new_thirst,
+                    new_health,
+                    utc_now().isoformat(),
+                    utc_now().isoformat(),
+                    telegram_id,
+                ),
+            )
+        self.save_snapshot()
+        return True
 
     def recover_energy(self, telegram_id: int) -> None:
         with self._connect() as conn:
@@ -1518,6 +1617,16 @@ class Storage:
             conn.execute("ALTER TABLE characters ADD COLUMN player_uid TEXT")
         if "avatar_style" not in column_names:
             conn.execute("ALTER TABLE characters ADD COLUMN avatar_style TEXT")
+        if "radiation" not in column_names:
+            conn.execute("ALTER TABLE characters ADD COLUMN radiation INTEGER NOT NULL DEFAULT 0")
+        if "hunger" not in column_names:
+            conn.execute("ALTER TABLE characters ADD COLUMN hunger INTEGER NOT NULL DEFAULT 0")
+        if "thirst" not in column_names:
+            conn.execute("ALTER TABLE characters ADD COLUMN thirst INTEGER NOT NULL DEFAULT 0")
+        if "needs_updated_at" not in column_names:
+            conn.execute("ALTER TABLE characters ADD COLUMN needs_updated_at TEXT")
+        if "survival_damage_at" not in column_names:
+            conn.execute("ALTER TABLE characters ADD COLUMN survival_damage_at TEXT")
 
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_player_uid ON characters(player_uid)"
@@ -1537,6 +1646,23 @@ class Storage:
             SET avatar_style = 'classic'
             WHERE avatar_style IS NULL OR TRIM(avatar_style) = ''
             """
+        )
+        now_iso = utc_now().isoformat()
+        conn.execute(
+            """
+            UPDATE characters
+            SET needs_updated_at = ?
+            WHERE needs_updated_at IS NULL OR TRIM(needs_updated_at) = ''
+            """,
+            (now_iso,),
+        )
+        conn.execute(
+            """
+            UPDATE characters
+            SET survival_damage_at = ?
+            WHERE survival_damage_at IS NULL OR TRIM(survival_damage_at) = ''
+            """,
+            (now_iso,),
         )
         rows = conn.execute(
             "SELECT telegram_id, equipment_json FROM characters"
@@ -1607,4 +1733,9 @@ class Storage:
             truck_owned=bool(row["truck_owned"]),
             fuel=row["fuel"],
             energy_updated_at=datetime.fromisoformat(row["energy_updated_at"]),
+            radiation=max(0, min(200, int(row["radiation"]))),
+            hunger=max(0, min(200, int(row["hunger"]))),
+            thirst=max(0, min(200, int(row["thirst"]))),
+            needs_updated_at=datetime.fromisoformat(row["needs_updated_at"]),
+            survival_damage_at=datetime.fromisoformat(row["survival_damage_at"]),
         )

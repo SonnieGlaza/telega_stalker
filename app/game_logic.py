@@ -22,10 +22,10 @@ class QuestType:
 
 
 QUESTS: dict[str, QuestType] = {
-    "easy": QuestType("easy", "Легко", 96, 10, 170, 310, 0, 0),
-    "hard": QuestType("hard", "Сложно", 80, 16, 250, 450, 0, 0),
-    "heavy": QuestType("heavy", "Тяжело", 70, 22, 400, 650, 2, 1),
-    "impossible": QuestType("impossible", "Невозможно", 60, 28, 550, 900, 3, 1),
+    "easy": QuestType("easy", "Легко", 96, 10, 270, 410, 0, 0),
+    "hard": QuestType("hard", "Сложно", 80, 16, 350, 550, 0, 0),
+    "heavy": QuestType("heavy", "Тяжело", 70, 22, 500, 750, 2, 1),
+    "impossible": QuestType("impossible", "Невозможно", 60, 28, 650, 1000, 3, 1),
 }
 
 
@@ -34,6 +34,14 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "medkit": {"name": "Аптечка", "buy_price": 260, "sell_price": 120},
     "ammo_pack": {"name": "Патроны", "buy_price": 120, "sell_price": 55},
     "artifact": {"name": "Артефакт", "buy_price": 0, "sell_price": 650},
+    "vodka": {"name": "Водка", "buy_price": 150, "sell_price": 50},
+    "antirad": {"name": "Антирад", "buy_price": 400, "sell_price": 130},
+    "bread": {"name": "Хлеб", "buy_price": 50, "sell_price": 16},
+    "sausage": {"name": "Колбаса", "buy_price": 100, "sell_price": 33},
+    "stew": {"name": "Тушенка", "buy_price": 250, "sell_price": 83},
+    "water_bottle": {"name": "Бутылка воды", "buy_price": 50, "sell_price": 16},
+    "mineral_water": {"name": "Минералка", "buy_price": 100, "sell_price": 33},
+    "beard_tea": {"name": "Чай Бороды", "buy_price": 250, "sell_price": 83},
     "gear_upgrade": {"name": "Улучшение снаряги", "buy_price": 1200, "sell_price": 0},
     "truck": {"name": "Грузовик", "buy_price": 7000, "sell_price": 0},
     "fuel_can": {"name": "Канистра топлива (+5)", "buy_price": 450, "sell_price": 200},
@@ -107,6 +115,14 @@ ITEM_LABELS = {
     "medkit": "Аптечка",
     "ammo_pack": "Патроны",
     "artifact": "Артефакт",
+    "vodka": "Водка",
+    "antirad": "Антирад",
+    "bread": "Хлеб",
+    "sausage": "Колбаса",
+    "stew": "Тушенка",
+    "water_bottle": "Бутылка воды",
+    "mineral_water": "Минералка",
+    "beard_tea": "Чай Бороды",
     "armor_leather": "Кожаная куртка",
     "armor_stalker_vest": "Сталкерский бронежилет",
     "armor_psz7d": "ПСЗ-7 «Долг»",
@@ -186,6 +202,20 @@ QUEST_FAIL_PENALTY_RANGE: dict[str, tuple[int, int]] = {
 RAID_ARTIFACT_REWARD_CAP = 2
 RAID_ARTIFACT_MIN_ENEMY_POWER = 25
 WAR_MIN_FACTION_MEMBERS = 5
+MAX_FACTION_ALLIANCES = 2
+
+SURVIVAL_ACTIVE_RADIATION_MIN = 1
+SURVIVAL_ACTIVE_RADIATION_MAX = 3
+SURVIVAL_ACTIVE_HUNGER_INC = 1
+SURVIVAL_ACTIVE_THIRST_INC = 1
+SURVIVAL_ACTIVE_HP_DRAIN_MIN = 1
+SURVIVAL_ACTIVE_HP_DRAIN_MAX = 3
+
+HUNGER_PASSIVE_PER_HOUR = 1
+THIRST_PASSIVE_PER_HOUR = 1
+SURVIVAL_TICK_MINUTES = 30
+SURVIVAL_OVERLIMIT_HP_DRAIN = 10
+TRANSFER_FEE_PERCENT = 30
 
 
 @dataclass(frozen=True)
@@ -710,6 +740,147 @@ def use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     return ActionResult(True, f"Ты использовал аптечку и восстановил {heal_amount} HP.")
 
 
+def _apply_active_survival(storage: Storage, telegram_id: int) -> str:
+    radiation_gain = random.randint(SURVIVAL_ACTIVE_RADIATION_MIN, SURVIVAL_ACTIVE_RADIATION_MAX)
+    hp_loss = random.randint(SURVIVAL_ACTIVE_HP_DRAIN_MIN, SURVIVAL_ACTIVE_HP_DRAIN_MAX)
+    storage.adjust_survival(
+        telegram_id,
+        radiation_delta=radiation_gain,
+        hunger_delta=SURVIVAL_ACTIVE_HUNGER_INC,
+        thirst_delta=SURVIVAL_ACTIVE_THIRST_INC,
+        health_delta=-hp_loss,
+    )
+    return f"\nВыживание: +{radiation_gain} рад., +1 голод, +1 жажда, -{hp_loss} HP."
+
+
+def _consume_survival_item(
+    storage: Storage,
+    telegram_id: int,
+    item_key: str,
+    *,
+    radiation_delta: int = 0,
+    hunger_delta: int = 0,
+    thirst_delta: int = 0,
+    text: str,
+) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if not storage.remove_item(telegram_id, item_key, 1):
+        return ActionResult(False, f"У тебя нет предмета: {ITEM_LABELS.get(item_key, item_key)}.")
+    storage.adjust_survival(
+        telegram_id,
+        radiation_delta=radiation_delta,
+        hunger_delta=hunger_delta,
+        thirst_delta=thirst_delta,
+    )
+    return ActionResult(True, text)
+
+
+def use_vodka(storage: Storage, telegram_id: int) -> ActionResult:
+    return _consume_survival_item(
+        storage,
+        telegram_id,
+        "vodka",
+        radiation_delta=-20,
+        text="Ты выпил водку. Радиация снижена на 20.",
+    )
+
+
+def use_antirad(storage: Storage, telegram_id: int) -> ActionResult:
+    return _consume_survival_item(
+        storage,
+        telegram_id,
+        "antirad",
+        radiation_delta=-50,
+        text="Ты использовал антирад. Радиация снижена на 50.",
+    )
+
+
+def use_bread(storage: Storage, telegram_id: int) -> ActionResult:
+    return _consume_survival_item(
+        storage,
+        telegram_id,
+        "bread",
+        hunger_delta=-10,
+        text="Ты съел хлеб. Голод снижен на 10.",
+    )
+
+
+def use_sausage(storage: Storage, telegram_id: int) -> ActionResult:
+    return _consume_survival_item(
+        storage,
+        telegram_id,
+        "sausage",
+        hunger_delta=-20,
+        text="Ты съел колбасу. Голод снижен на 20.",
+    )
+
+
+def use_stew(storage: Storage, telegram_id: int) -> ActionResult:
+    return _consume_survival_item(
+        storage,
+        telegram_id,
+        "stew",
+        hunger_delta=-50,
+        text="Ты съел тушенку. Голод снижен на 50.",
+    )
+
+
+def use_water(storage: Storage, telegram_id: int) -> ActionResult:
+    return _consume_survival_item(
+        storage,
+        telegram_id,
+        "water_bottle",
+        thirst_delta=-10,
+        text="Ты выпил воду. Жажда снижена на 10.",
+    )
+
+
+def use_mineralka(storage: Storage, telegram_id: int) -> ActionResult:
+    return _consume_survival_item(
+        storage,
+        telegram_id,
+        "mineral_water",
+        thirst_delta=-20,
+        text="Ты выпил минералку. Жажда снижена на 20.",
+    )
+
+
+def use_beard_tea(storage: Storage, telegram_id: int) -> ActionResult:
+    return _consume_survival_item(
+        storage,
+        telegram_id,
+        "beard_tea",
+        thirst_delta=-50,
+        text="Ты выпил чай Бороды. Жажда снижена на 50.",
+    )
+
+
+def transfer_money_with_fee(storage: Storage, sender_id: int, target_id: int, amount: int) -> ActionResult:
+    if amount <= 0:
+        return ActionResult(False, "Сумма перевода должна быть положительной.")
+    if sender_id == target_id:
+        return ActionResult(False, "Нельзя переводить деньги самому себе.")
+    sender = storage.get_character(sender_id, refresh_energy=False)
+    target = storage.get_character(target_id, refresh_energy=False)
+    if sender is None or target is None:
+        return ActionResult(False, "Один из игроков не найден.")
+    if _is_dead(sender):
+        return ActionResult(False, _dead_block_text())
+    fee = int(round(amount * 0.30))
+    total = amount + fee
+    if not storage.change_money(sender_id, -total):
+        return ActionResult(False, f"Недостаточно денег. Нужно {total} RU (включая комиссию {fee} RU).")
+    storage.change_money(target_id, amount)
+    return ActionResult(
+        True,
+        f"Перевод выполнен: {amount} RU игроку {target.nickname}.\nКомиссия: {fee} RU.\nСписано: {total} RU.",
+    )
+
+
 def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
     item = SHOP_ITEMS.get(item_key)
     if item is None:
@@ -1055,7 +1226,11 @@ def build_alliance_overview(storage: Storage, telegram_id: int) -> str:
     allies = storage.list_faction_alliances(player.faction)
     if not allies:
         return f"Союзы {player.faction}: нет активных союзов.\n{role_text}"
-    return f"Союзы {player.faction}: " + ", ".join(sorted(allies)) + f"\n{role_text}"
+    return (
+        f"Союзы {player.faction} ({len(allies)}/{MAX_FACTION_ALLIANCES}): "
+        + ", ".join(sorted(allies))
+        + f"\n{role_text}"
+    )
 
 
 def propose_alliance(storage: Storage, telegram_id: int, target_faction: str) -> ActionResult:
@@ -1075,6 +1250,8 @@ def propose_alliance(storage: Storage, telegram_id: int, target_faction: str) ->
         return ActionResult(False, f"У группировки {target_faction} не назначен лидер.")
     if storage.are_factions_allied(player.faction, target_faction):
         return ActionResult(False, f"Союз с {target_faction} уже активен.")
+    if len(storage.list_faction_alliances(player.faction)) >= MAX_FACTION_ALLIANCES:
+        return ActionResult(False, f"Можно иметь максимум {MAX_FACTION_ALLIANCES} союзов.")
     if not storage.create_alliance_request(player.faction, target_faction, telegram_id):
         return ActionResult(False, "Предложение уже отправлено или не удалось создать заявку.")
     return ActionResult(
@@ -1100,6 +1277,10 @@ def accept_alliance(storage: Storage, telegram_id: int, from_faction: str) -> Ac
         return ActionResult(False, "Некорректная группировка для подтверждения.")
     if storage.are_factions_allied(player.faction, from_faction):
         return ActionResult(False, f"Союз с {from_faction} уже активен.")
+    if len(storage.list_faction_alliances(player.faction)) >= MAX_FACTION_ALLIANCES:
+        return ActionResult(False, f"Можно иметь максимум {MAX_FACTION_ALLIANCES} союзов.")
+    if len(storage.list_faction_alliances(from_faction)) >= MAX_FACTION_ALLIANCES:
+        return ActionResult(False, f"У группировки {from_faction} уже максимум союзов.")
     incoming = storage.list_incoming_alliance_requests(player.faction)
     has_offer = any(str(row.get("requester_faction", "")) == from_faction for row in incoming)
     if not has_offer:
