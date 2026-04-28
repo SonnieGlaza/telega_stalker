@@ -39,6 +39,9 @@ from app.game_logic import (
     withdraw_from_faction_warehouse,
     build_dead_character_text,
     respawn_character,
+    build_alliance_overview,
+    propose_alliance,
+    break_alliance,
     equip_armor,
     equip_weapon,
     list_equippable_armor,
@@ -69,6 +72,7 @@ from app.keyboards import (
     trader_sell_weapons_keyboard,
     equip_armor_keyboard,
     equip_weapon_keyboard,
+    alliance_keyboard,
 )
 from app.profile_card import build_character_card
 from app.storage import Character, Storage
@@ -847,6 +851,7 @@ async def show_war(message: Message) -> None:
         if own_faction is not None
         else "• Данные по казне временно недоступны"
     )
+    alliance_overview = build_alliance_overview(db, player.telegram_id)
     explainer = (
         "Сценарий войны (базовая версия):\n"
         "• Точки ресурсов приносят деньги группировке.\n"
@@ -854,7 +859,10 @@ async def show_war(message: Message) -> None:
         "• Точки интереса уменьшают время прибытия.\n"
         "• Шанс боя: сила отряда / (сила отряда + сила NPC).\n"
     )
-    await message.answer(explainer + "\nЭкономика твоей группировки:\n" + own_treasury_text)
+    await message.answer(
+        explainer + "\nЭкономика твоей группировки:\n" + own_treasury_text + "\n\n" + alliance_overview,
+        reply_markup=alliance_keyboard(),
+    )
     await message.answer(
         "Выбери точку для штурма:",
         reply_markup=locations_keyboard(db.get_locations(), mode="war"),
@@ -865,6 +873,22 @@ async def show_war(message: Message) -> None:
 async def handle_war(callback: CallbackQuery) -> None:
     location = (callback.data or "").split(":", maxsplit=1)[1]
     result = attack_location(get_storage(), callback.from_user.id, location)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("alliance:propose:"))
+async def alliance_propose_callback(callback: CallbackQuery) -> None:
+    target_faction = (callback.data or "").split(":", maxsplit=2)[2]
+    result = propose_alliance(get_storage(), callback.from_user.id, target_faction)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("alliance:break:"))
+async def alliance_break_callback(callback: CallbackQuery) -> None:
+    target_faction = (callback.data or "").split(":", maxsplit=2)[2]
+    result = break_alliance(get_storage(), callback.from_user.id, target_faction)
     await callback.message.answer(result.text)
     await callback.answer()
 

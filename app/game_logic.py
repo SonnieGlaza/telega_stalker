@@ -1042,6 +1042,50 @@ def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionRes
     )
 
 
+def build_alliance_overview(storage: Storage, telegram_id: int) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return "Союзы доступны только после выбора группировки."
+    allies = storage.list_faction_alliances(player.faction)
+    if not allies:
+        return f"Союзы {player.faction}: нет активных союзов."
+    return f"Союзы {player.faction}: " + ", ".join(sorted(allies))
+
+
+def propose_alliance(storage: Storage, telegram_id: int, target_faction: str) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+    if not target_faction or target_faction == player.faction:
+        return ActionResult(False, "Нельзя заключить союз с собственной группировкой.")
+    if storage.are_factions_allied(player.faction, target_faction):
+        return ActionResult(False, f"Союз с {target_faction} уже активен.")
+    if not storage.set_faction_alliance(player.faction, target_faction, allied=True):
+        return ActionResult(False, "Не удалось заключить союз. Проверь название группировки.")
+    return ActionResult(True, f"Союз между {player.faction} и {target_faction} заключен.")
+
+
+def break_alliance(storage: Storage, telegram_id: int, target_faction: str) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+    if not target_faction or target_faction == player.faction:
+        return ActionResult(False, "Нельзя разорвать союз с собственной группировкой.")
+    if not storage.are_factions_allied(player.faction, target_faction):
+        return ActionResult(False, f"Союза с {target_faction} сейчас нет.")
+    if not storage.set_faction_alliance(player.faction, target_faction, allied=False):
+        return ActionResult(False, "Не удалось разорвать союз.")
+    return ActionResult(True, f"Союз между {player.faction} и {target_faction} разорван.")
+
+
 def attack_location(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
     character = storage.get_character(telegram_id)
     if character is None:
@@ -1063,6 +1107,15 @@ def attack_location(storage: Storage, telegram_id: int, location_name: str) -> A
     target = locations[location_name]
     if target["point_type"] == "база" and target["controlled_by"] == character.faction:
         return ActionResult(False, "Нельзя атаковать собственную базу своей группировки.")
+    target_owner = target["controlled_by"]
+    if (
+        isinstance(target_owner, str)
+        and target_owner
+        and target_owner != character.faction
+        and character.faction is not None
+        and storage.are_factions_allied(character.faction, target_owner)
+    ):
+        return ActionResult(False, f"Нельзя атаковать союзную точку: {target_owner} — ваш союзник.")
 
     faction_power = storage.get_faction_power(character.faction)
     squad_power = max(1, faction_power)

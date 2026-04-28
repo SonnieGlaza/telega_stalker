@@ -63,6 +63,7 @@ class Storage:
                 characters = [dict(row) for row in conn.execute("SELECT * FROM characters").fetchall()]
                 factions = [dict(row) for row in conn.execute("SELECT * FROM factions").fetchall()]
                 locations = [dict(row) for row in conn.execute("SELECT * FROM locations").fetchall()]
+                alliances = [dict(row) for row in conn.execute("SELECT * FROM alliances").fetchall()]
                 topup_payments = [dict(row) for row in conn.execute("SELECT * FROM topup_payments").fetchall()]
                 faction_warehouse = [dict(row) for row in conn.execute("SELECT * FROM faction_warehouse").fetchall()]
                 auctions = [dict(row) for row in conn.execute("SELECT * FROM auctions").fetchall()]
@@ -78,6 +79,7 @@ class Storage:
                 "characters": characters,
                 "factions": factions,
                 "locations": locations,
+                "alliances": alliances,
                 "topup_payments": topup_payments,
                 "faction_warehouse": faction_warehouse,
                 "auctions": auctions,
@@ -106,6 +108,7 @@ class Storage:
         characters = payload.get("characters") or []
         factions = payload.get("factions") or []
         locations = payload.get("locations") or []
+        alliances = payload.get("alliances") or []
         topup_payments = payload.get("topup_payments") or []
         faction_warehouse = payload.get("faction_warehouse") or []
         auctions = payload.get("auctions") or []
@@ -136,6 +139,18 @@ class Storage:
                     row.get("point_type"),
                     row.get("controlled_by"),
                     int(row.get("npc_power", REGULAR_LOCATION_NPC_POWER)),
+                ),
+            )
+        for row in alliances:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO alliances(faction_a, faction_b, created_at)
+                VALUES(?, ?, ?)
+                """,
+                (
+                    row.get("faction_a"),
+                    row.get("faction_b"),
+                    row.get("created_at") or utc_now().isoformat(),
                 ),
             )
         for row in characters:
@@ -350,6 +365,16 @@ class Storage:
                     point_type TEXT NOT NULL,
                     controlled_by TEXT,
                     npc_power INTEGER NOT NULL DEFAULT 60
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS alliances (
+                    faction_a TEXT NOT NULL,
+                    faction_b TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(faction_a, faction_b)
                 )
                 """
             )
@@ -895,6 +920,69 @@ class Storage:
         with self._connect() as conn:
             rows = conn.execute("SELECT name, treasury FROM factions ORDER BY name").fetchall()
         return [{"name": row["name"], "treasury": row["treasury"]} for row in rows]
+
+    def are_factions_allied(self, faction_a: str, faction_b: str) -> bool:
+        if faction_a == faction_b:
+            return True
+        left, right = sorted((faction_a, faction_b))
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM alliances
+                WHERE faction_a = ? AND faction_b = ?
+                """,
+                (left, right),
+            ).fetchone()
+        return row is not None
+
+    def set_faction_alliance(self, faction_a: str, faction_b: str, allied: bool) -> bool:
+        if faction_a == faction_b:
+            return False
+        left, right = sorted((faction_a, faction_b))
+        with self._connect() as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM factions WHERE name IN (?, ?)",
+                (left, right),
+            ).fetchall()
+            if len(exists) < 2:
+                return False
+            if allied:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO alliances(faction_a, faction_b, created_at)
+                    VALUES(?, ?, ?)
+                    """,
+                    (left, right, utc_now().isoformat()),
+                )
+            else:
+                conn.execute(
+                    """
+                    DELETE FROM alliances
+                    WHERE faction_a = ? AND faction_b = ?
+                    """,
+                    (left, right),
+                )
+        self.save_snapshot()
+        return True
+
+    def list_faction_alliances(self, faction: str) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT faction_a, faction_b
+                FROM alliances
+                WHERE faction_a = ? OR faction_b = ?
+                ORDER BY faction_a, faction_b
+                """,
+                (faction, faction),
+            ).fetchall()
+        allies: list[str] = []
+        for row in rows:
+            left = str(row["faction_a"])
+            right = str(row["faction_b"])
+            allies.append(right if left == faction else left)
+        return allies
 
     def get_locations(self) -> list[dict[str, Any]]:
         with self._connect() as conn:

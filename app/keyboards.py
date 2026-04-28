@@ -322,3 +322,18 @@ def ratings_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🏆 Топ сталкеров", callback_data="ratings:leaderboard")],
         ]
     )
+
+
+def alliance_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🤝 Союз с Долг", callback_data="alliance:propose:Долг")],
+            [InlineKeyboardButton(text="🤝 Союз со Свобода", callback_data="alliance:propose:Свобода")],
+            [InlineKeyboardButton(text="🤝 Союз с Нейтралы", callback_data="alliance:propose:Нейтралы")],
+            [InlineKeyboardButton(text="🤝 Союз с Бандиты", callback_data="alliance:propose:Бандиты")],
+            [InlineKeyboardButton(text="💔 Разорвать с Долг", callback_data="alliance:break:Долг")],
+            [InlineKeyboardButton(text="💔 Разорвать со Свобода", callback_data="alliance:break:Свобода")],
+            [InlineKeyboardButton(text="💔 Разорвать с Нейтралы", callback_data="alliance:break:Нейтралы")],
+            [InlineKeyboardButton(text="💔 Разорвать с Бандиты", callback_data="alliance:break:Бандиты")],
+        ]
+    )
