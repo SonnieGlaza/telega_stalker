@@ -44,10 +44,10 @@ LABEL_PREFERRED_OFFSETS: dict[str, tuple[int, int]] = {
     "Армейские склады": (20, -16),
     "Болото": (20, -16),
     "НИИ Агропром": (20, 8),
-    "Янтарь": (-300, -52),
+    "Янтарь": (-300, -86),
     "Темная долина": (-240, -88),
-    "Рыжий лес": (-300, 18),
-    "Радар": (-300, 18),
+    "Рыжий лес": (-300, 26),
+    "Радар": (-300, -6),
 }
 
 FACTION_COLORS = {
@@ -111,7 +111,11 @@ def build_zone_map_image(
     map_top_limit = 96
     map_bottom_limit = height - 44
 
-    for location in locations:
+    visible_locations = [loc for loc in locations if str(loc.get("name") or "") in MAP_POINTS]
+    # Stable top-to-bottom layout reduces label collisions in dense clusters.
+    visible_locations.sort(key=lambda loc: MAP_POINTS[str(loc["name"])][1])
+
+    for location in visible_locations:
         name = str(location.get("name") or "")
         if name not in MAP_POINTS:
             continue
@@ -198,7 +202,7 @@ def build_zone_map_image(
             anchor_y = box_y2
         else:
             anchor_y = y
-        connector_color = (96, 118, 108)
+        connector_color = (86, 108, 99)
         draw.line((x, y, anchor_x, anchor_y), fill=connector_color, width=2)
         draw.ellipse(
             (anchor_x - 2, anchor_y - 2, anchor_x + 2, anchor_y + 2),
