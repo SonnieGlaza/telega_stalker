@@ -97,6 +97,10 @@ def trader_buy_gear_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="Ремонт оружия", callback_data="repair:weapon")],
             [InlineKeyboardButton(text="Ремонт брони", callback_data="repair:armor")],
+            [InlineKeyboardButton(text="Купить детектор «Отклик» (1000)", callback_data="buy:detector_otklik")],
+            [InlineKeyboardButton(text="Купить детектор «Медведь» (4000)", callback_data="buy:detector_medved")],
+            [InlineKeyboardButton(text="Купить детектор «Велес» (10000)", callback_data="buy:detector_veles")],
+            [InlineKeyboardButton(text="Купить детектор «Сварог» (30000)", callback_data="buy:detector_svarog")],
             [InlineKeyboardButton(text="Купить грузовик (7000)", callback_data="buy:truck")],
             [InlineKeyboardButton(text="Купить спальник (30000)", callback_data="buy:sleeping_bag")],
             [InlineKeyboardButton(text="⬅️ Назад к категориям покупки", callback_data="trade:menu:buy")],
@@ -108,6 +112,7 @@ def inventory_equipment_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🩹 Использовать аптечку", callback_data="use:medkit")],
+            [InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")],
             [InlineKeyboardButton(text="🍸 Выпить водку (-20 рад.)", callback_data="use:vodka")],
             [InlineKeyboardButton(text="💉 Использовать антирад (-50 рад.)", callback_data="use:antirad")],
             [InlineKeyboardButton(text="🍞 Поесть хлеб (+10 сытости)", callback_data="use:bread")],

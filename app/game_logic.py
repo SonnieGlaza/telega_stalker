@@ -42,6 +42,10 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "water_bottle": {"name": "Бутылка воды", "buy_price": 50, "sell_price": 16},
     "mineral_water": {"name": "Минералка", "buy_price": 100, "sell_price": 33},
     "beard_tea": {"name": "Чай Бороды", "buy_price": 250, "sell_price": 83},
+    "detector_otklik": {"name": "Детектор «Отклик»", "buy_price": 1000, "sell_price": 330},
+    "detector_medved": {"name": "Детектор «Медведь»", "buy_price": 4000, "sell_price": 1330},
+    "detector_veles": {"name": "Детектор «Велес»", "buy_price": 10000, "sell_price": 3330},
+    "detector_svarog": {"name": "Детектор «Сварог»", "buy_price": 30000, "sell_price": 10000},
     "gear_upgrade": {"name": "Улучшение снаряги", "buy_price": 1200, "sell_price": 0},
     "truck": {"name": "Грузовик", "buy_price": 7000, "sell_price": 0},
     "sleeping_bag": {"name": "Спальник", "buy_price": 30000, "sell_price": 10000},
@@ -124,6 +128,10 @@ ITEM_LABELS = {
     "water_bottle": "Бутылка воды",
     "mineral_water": "Минералка",
     "beard_tea": "Чай Бороды",
+    "detector_otklik": "Детектор «Отклик»",
+    "detector_medved": "Детектор «Медведь»",
+    "detector_veles": "Детектор «Велес»",
+    "detector_svarog": "Детектор «Сварог»",
     "sleeping_bag": "Спальник",
     "armor_leather": "Кожаная куртка",
     "armor_stalker_vest": "Сталкерский бронежилет",
@@ -155,6 +163,13 @@ ITEM_LABELS = {
     "weapon_rp74": "РП-74",
     "weapon_gauss": "Гаусс-пушка",
 }
+
+ARTIFACT_DETECTORS: tuple[tuple[str, str, int], ...] = (
+    ("detector_otklik", "Отклик", 10),
+    ("detector_medved", "Медведь", 20),
+    ("detector_veles", "Велес", 35),
+    ("detector_svarog", "Сварог", 50),
+)
 
 WAREHOUSE_ITEM_KEYS = ("ammo_pack", "medkit", "energy_drink", "artifact")
 
@@ -861,6 +876,49 @@ def use_beard_tea(storage: Storage, telegram_id: int) -> ActionResult:
         "beard_tea",
         thirst_delta=-50,
         text="Ты выпил чай Бороды. Жажда снижена на 50.",
+    )
+
+
+def search_artifacts(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    chosen: tuple[str, str, int] | None = None
+    for detector in reversed(ARTIFACT_DETECTORS):
+        key, _, _ = detector
+        if int(player.inventory.get(key, 0)) > 0:
+            chosen = detector
+            break
+    if chosen is None:
+        return ActionResult(
+            False,
+            "У тебя нет детектора. Купи его у торговца в разделе снаряжения.",
+        )
+    detector_key, detector_name, base_chance = chosen
+    energy_cost = 12
+    if not storage.spend_energy(telegram_id, energy_cost):
+        return ActionResult(False, f"Не хватает энергии для поиска артов (нужно {energy_cost}).")
+    event_bonus = max(0, _active_location_event_modifier(storage, player.location) // 2)
+    gear_bonus = min(15, equipment_power(player) * 2)
+    chance = max(5, min(90, base_chance + gear_bonus + event_bonus))
+    roll = random.randint(1, 100)
+    survival_text = _apply_active_survival(storage, telegram_id)
+    if roll <= chance:
+        storage.add_item(telegram_id, "artifact", 1)
+        return ActionResult(
+            True,
+            f"Поиск артефакта ({detector_name}) успешен!\n"
+            f"Шанс: {chance}% (бросок {roll}).\n"
+            "Найдено: Артефакт x1."
+            f"{survival_text}",
+        )
+    return ActionResult(
+        False,
+        f"Поиск артефакта ({detector_name}) не дал результата.\n"
+        f"Шанс: {chance}% (бросок {roll})."
+        f"{survival_text}",
     )
 
 
