@@ -37,6 +37,7 @@ class Character:
     inventory: dict[str, int]
     equipment: dict[str, Any]
     truck_owned: bool
+    sleeping_bag_owned: bool
     fuel: int
     energy_updated_at: datetime
     radiation: int
@@ -414,6 +415,7 @@ class Storage:
                     inventory_json TEXT NOT NULL DEFAULT '{}',
                     equipment_json TEXT NOT NULL DEFAULT '{"weapon":"Нож","armor":"Куртка новичка","weapon_durability":100,"armor_durability":100}',
                     truck_owned INTEGER NOT NULL DEFAULT 0,
+                    sleeping_bag_owned INTEGER NOT NULL DEFAULT 0,
                     fuel INTEGER NOT NULL DEFAULT 0
                 )
                 """
@@ -799,7 +801,7 @@ class Storage:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT energy, max_energy, energy_updated_at
+                SELECT energy, max_energy, energy_updated_at, sleeping_bag_owned
                 FROM characters
                 WHERE telegram_id = ?
                 """,
@@ -815,7 +817,8 @@ class Storage:
             if minutes_passed <= 0:
                 return
 
-            gained = minutes_passed * ENERGY_REGEN_PER_MINUTE
+            regen_per_minute = ENERGY_REGEN_PER_MINUTE * (2 if int(row["sleeping_bag_owned"]) == 1 else 1)
+            gained = minutes_passed * regen_per_minute
             new_energy = min(max_energy, energy + gained)
             conn.execute(
                 """
@@ -1043,6 +1046,22 @@ class Storage:
         with self._connect() as conn:
             conn.execute(
                 "UPDATE characters SET truck_owned = 1 WHERE telegram_id = ?",
+                (telegram_id,),
+            )
+        self.save_snapshot()
+
+    def set_sleeping_bag_owned(self, telegram_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET sleeping_bag_owned = 1 WHERE telegram_id = ?",
+                (telegram_id,),
+            )
+        self.save_snapshot()
+
+    def clear_sleeping_bag_owned(self, telegram_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET sleeping_bag_owned = 0 WHERE telegram_id = ?",
                 (telegram_id,),
             )
         self.save_snapshot()
@@ -1780,6 +1799,8 @@ class Storage:
             conn.execute("ALTER TABLE characters ADD COLUMN needs_updated_at TEXT")
         if "survival_damage_at" not in column_names:
             conn.execute("ALTER TABLE characters ADD COLUMN survival_damage_at TEXT")
+        if "sleeping_bag_owned" not in column_names:
+            conn.execute("ALTER TABLE characters ADD COLUMN sleeping_bag_owned INTEGER NOT NULL DEFAULT 0")
 
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_player_uid ON characters(player_uid)"
@@ -1884,6 +1905,7 @@ class Storage:
             inventory=inventory,
             equipment=equipment,
             truck_owned=bool(row["truck_owned"]),
+            sleeping_bag_owned=bool(row["sleeping_bag_owned"]),
             fuel=row["fuel"],
             energy_updated_at=datetime.fromisoformat(row["energy_updated_at"]),
             radiation=max(0, min(200, int(row["radiation"]))),

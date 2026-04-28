@@ -44,6 +44,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "beard_tea": {"name": "Чай Бороды", "buy_price": 250, "sell_price": 83},
     "gear_upgrade": {"name": "Улучшение снаряги", "buy_price": 1200, "sell_price": 0},
     "truck": {"name": "Грузовик", "buy_price": 7000, "sell_price": 0},
+    "sleeping_bag": {"name": "Спальник", "buy_price": 30000, "sell_price": 10000},
     "fuel_can": {"name": "Канистра топлива (+5)", "buy_price": 450, "sell_price": 200},
 }
 
@@ -123,6 +124,7 @@ ITEM_LABELS = {
     "water_bottle": "Бутылка воды",
     "mineral_water": "Минералка",
     "beard_tea": "Чай Бороды",
+    "sleeping_bag": "Спальник",
     "armor_leather": "Кожаная куртка",
     "armor_stalker_vest": "Сталкерский бронежилет",
     "armor_psz7d": "ПСЗ-7 «Долг»",
@@ -899,6 +901,8 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
 
     if item_key == "truck" and character.truck_owned:
         return ActionResult(False, "У тебя уже есть грузовик.")
+    if item_key == "sleeping_bag" and character.sleeping_bag_owned:
+        return ActionResult(False, "У тебя уже есть спальник.")
     if not storage.change_money(telegram_id, -price):
         return ActionResult(False, f"Недостаточно денег для покупки: {title}.")
 
@@ -907,6 +911,9 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
     if item_key == "truck":
         storage.set_truck_owned(telegram_id)
         return ActionResult(True, "Покупка оформлена: грузовик теперь в твоем распоряжении.")
+    if item_key == "sleeping_bag":
+        storage.set_sleeping_bag_owned(telegram_id)
+        return ActionResult(True, "Спальник куплен. Энергия теперь восстанавливается в 2 раза быстрее.")
     if item_key == "fuel_can":
         storage.change_fuel(telegram_id, 5)
         return ActionResult(True, f"Куплена канистра топлива. Топливо +5 (стоимость {price} RU).")
@@ -946,6 +953,12 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
         if not character.truck_owned:
             return ActionResult(False, "У тебя нет грузовика для продажи.")
         storage.clear_truck_owned(telegram_id)
+        storage.change_money(telegram_id, sell_price)
+        return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
+    if item_key == "sleeping_bag":
+        if not character.sleeping_bag_owned:
+            return ActionResult(False, "У тебя нет спальника для продажи.")
+        storage.clear_sleeping_bag_owned(telegram_id)
         storage.change_money(telegram_id, sell_price)
         return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
     if item_key in WEAPON_CATALOG:
@@ -1140,6 +1153,7 @@ def format_inventory(character: Character) -> str:
         items = "• Пусто"
 
     vehicle = "Есть грузовик" if character.truck_owned else "Нет транспорта"
+    sleeping_bag = "Есть спальник (x2 реген энергии)" if character.sleeping_bag_owned else "Спальника нет"
     equipment_labels = {
         "weapon": "Оружие",
         "armor": "Броня",
@@ -1174,6 +1188,7 @@ def format_inventory(character: Character) -> str:
         f"Скин: {skin.title}\n"
         f"Баланс: {character.money} RU\n"
         f"Транспорт: {vehicle}\n"
+        f"Спальник: {sleeping_bag}\n"
         f"Топливо: {character.fuel}\n\n"
         f"Снаряга:\n{equipment}\n{durability_block}\n\n"
         f"Вещи:\n{items}"
