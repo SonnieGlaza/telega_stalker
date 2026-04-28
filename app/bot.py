@@ -657,6 +657,13 @@ async def show_sell_gear_armor(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "trade:sell:armor")
+async def show_sell_armor_alias_callback(callback: CallbackQuery) -> None:
+    # Backward-compatible alias used by current sell categories keyboard.
+    await callback.message.answer("Продажа брони и костюмов:", reply_markup=trader_sell_armor_keyboard())
+    await callback.answer()
+
+
 @router.callback_query(F.data == "trade:sell:weapons")
 async def show_sell_weapons(callback: CallbackQuery) -> None:
     await callback.message.answer("Продажа оружия:", reply_markup=trader_sell_weapons_keyboard())
