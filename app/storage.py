@@ -801,7 +801,7 @@ class Storage:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT energy, max_energy, energy_updated_at, sleeping_bag_owned
+                SELECT energy, max_energy, energy_updated_at, sleeping_bag_owned, equipment_json
                 FROM characters
                 WHERE telegram_id = ?
                 """,
@@ -817,8 +817,18 @@ class Storage:
             if minutes_passed <= 0:
                 return
 
-            regen_per_minute = ENERGY_REGEN_PER_MINUTE * (2 if int(row["sleeping_bag_owned"]) == 1 else 1)
-            gained = minutes_passed * regen_per_minute
+            regen_multiplier = 2.0 if int(row["sleeping_bag_owned"]) == 1 else 1.0
+            has_artifact_equipped = False
+            try:
+                equipment = json.loads(row["equipment_json"] or "{}")
+                if isinstance(equipment, dict):
+                    artifact_value = equipment.get("artifact")
+                    has_artifact_equipped = bool(str(artifact_value or "").strip())
+            except json.JSONDecodeError:
+                has_artifact_equipped = False
+            if has_artifact_equipped:
+                regen_multiplier *= 1.05
+            gained = int(minutes_passed * ENERGY_REGEN_PER_MINUTE * regen_multiplier)
             new_energy = min(max_energy, energy + gained)
             conn.execute(
                 """
