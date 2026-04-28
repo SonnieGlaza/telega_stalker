@@ -294,10 +294,10 @@ def locations_keyboard(locations: list[dict[str, str | int | None]], mode: str) 
 def topup_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="⭐ 1 звезда (10 RU)", callback_data="topup:1")],
-            [InlineKeyboardButton(text="⭐ 5 звезд (50 RU)", callback_data="topup:5")],
-            [InlineKeyboardButton(text="⭐ 10 звезд (100 RU)", callback_data="topup:10")],
-            [InlineKeyboardButton(text="⭐ 25 звезд (250 RU)", callback_data="topup:25")],
+            [InlineKeyboardButton(text="⭐ 1 звезда (150 RU)", callback_data="topup:1")],
+            [InlineKeyboardButton(text="⭐ 5 звезд (750 RU)", callback_data="topup:5")],
+            [InlineKeyboardButton(text="⭐ 10 звезд (1500 RU)", callback_data="topup:10")],
+            [InlineKeyboardButton(text="⭐ 25 звезд (3750 RU)", callback_data="topup:25")],
             [InlineKeyboardButton(text="⭐ Другое количество", callback_data="topup:custom")],
         ]
     )
