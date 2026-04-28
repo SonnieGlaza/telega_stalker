@@ -327,8 +327,9 @@ def ratings_keyboard() -> InlineKeyboardMarkup:
 def alliance_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🤝 Заключить договор о союзе", callback_data="alliance:menu:propose")],
+            [InlineKeyboardButton(text="🕊️ Запросить мир", callback_data="alliance:menu:propose")],
             [InlineKeyboardButton(text="✅ Подтвердить входящий договор", callback_data="alliance:menu:confirm")],
+            [InlineKeyboardButton(text="⚔️ Объявить войну", callback_data="alliance:menu:declare_war")],
             [InlineKeyboardButton(text="💔 Разорвать союз", callback_data="alliance:menu:break")],
         ]
     )
@@ -345,7 +346,11 @@ def alliance_target_keyboard(
         if not name or name == current_faction:
             continue
         if mode == "propose":
-            rows.append([InlineKeyboardButton(text=f"🤝 Предложить: {name}", callback_data=f"alliance:propose:{name}")])
+            rows.append(
+                [InlineKeyboardButton(text=f"🕊️ Запросить мир с {name}", callback_data=f"alliance:propose:{name}")]
+            )
+        elif mode == "declare_war":
+            rows.append([InlineKeyboardButton(text=f"⚔️ Объявить войну: {name}", callback_data=f"alliance:war:{name}")])
         else:
             rows.append([InlineKeyboardButton(text=f"💔 Разорвать с {name}", callback_data=f"alliance:break:{name}")])
     if not rows:

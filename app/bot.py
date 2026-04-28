@@ -43,6 +43,7 @@ from app.game_logic import (
     propose_alliance,
     break_alliance,
     accept_alliance,
+    declare_war,
     equip_armor,
     equip_weapon,
     list_equippable_armor,
@@ -931,6 +932,20 @@ async def alliance_propose_menu_callback(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "alliance:menu:declare_war")
+async def alliance_war_menu_callback(callback: CallbackQuery) -> None:
+    db = get_storage()
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or not player.faction:
+        await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
+        return
+    await callback.message.answer(
+        "Выбери группировку для объявления войны:",
+        reply_markup=alliance_target_keyboard(db.get_factions(), player.faction, mode="declare_war"),
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data == "alliance:menu:break")
 async def alliance_break_menu_callback(callback: CallbackQuery) -> None:
     db = get_storage()
@@ -984,6 +999,14 @@ async def alliance_confirm_callback(callback: CallbackQuery) -> None:
 async def alliance_break_callback(callback: CallbackQuery) -> None:
     target_faction = (callback.data or "").split(":", maxsplit=2)[2]
     result = break_alliance(get_storage(), callback.from_user.id, target_faction)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("alliance:war:"))
+async def alliance_war_callback(callback: CallbackQuery) -> None:
+    target_faction = (callback.data or "").split(":", maxsplit=2)[2]
+    result = declare_war(get_storage(), callback.from_user.id, target_faction)
     await callback.message.answer(result.text)
     await callback.answer()
 

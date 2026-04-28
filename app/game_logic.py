@@ -1129,6 +1129,36 @@ def break_alliance(storage: Storage, telegram_id: int, target_faction: str) -> A
     return ActionResult(True, f"Союз между {player.faction} и {target_faction} разорван.")
 
 
+def declare_war(storage: Storage, telegram_id: int, target_faction: str) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+    if not target_faction or target_faction == player.faction:
+        return ActionResult(False, "Нельзя объявить войну собственной группировке.")
+    if storage.get_faction_leader_id(player.faction) != telegram_id:
+        return ActionResult(False, "Объявлять войну может только лидер твоей группировки.")
+    if storage.get_faction_leader_id(target_faction) is None:
+        return ActionResult(False, f"У группировки {target_faction} не назначен лидер.")
+    had_alliance = storage.are_factions_allied(player.faction, target_faction)
+    storage.remove_alliance_request(player.faction, target_faction)
+    storage.remove_alliance_request(target_faction, player.faction)
+    if had_alliance:
+        if not storage.set_faction_alliance(player.faction, target_faction, allied=False):
+            return ActionResult(False, "Не удалось объявить войну: ошибка смены дипломатии.")
+        return ActionResult(
+            True,
+            f"{player.faction} объявила войну {target_faction}.\nСоюз разорван в одностороннем порядке.",
+        )
+    return ActionResult(
+        True,
+        f"{player.faction} объявила войну {target_faction}.\nПодтверждение второй стороны не требуется.",
+    )
+
+
 def attack_location(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
     character = storage.get_character(telegram_id)
     if character is None:
