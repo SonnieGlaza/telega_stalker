@@ -1391,7 +1391,7 @@ class Storage:
                 "SELECT faction FROM characters WHERE telegram_id = ?",
                 (telegram_id,),
             ).fetchone()
-            if member_row is None or member_row["faction"] != raid_row["faction"]:
+            if member_row is None or not str(member_row["faction"] or ""):
                 return False
             conn.execute(
                 """

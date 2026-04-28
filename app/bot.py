@@ -50,6 +50,7 @@ from app.game_logic import (
     build_war_lobby_overview,
     transfer_location_to_ally,
     create_market_lot,
+    buy_first_market_lot,
     buy_market_lot,
     build_market_lots_overview,
     cancel_own_first_market_lot,

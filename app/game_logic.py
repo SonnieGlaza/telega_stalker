@@ -1990,6 +1990,29 @@ def buy_market_lot(storage: Storage, telegram_id: int, lot_id: int) -> ActionRes
     )
 
 
+def build_market_lots_overview(
+    storage: Storage,
+    telegram_id: int,
+    limit: int = 12,
+) -> tuple[str, list[dict[str, int | str]]]:
+    lots = list_market_lots(storage, telegram_id)
+    shown = lots[: max(1, limit)]
+    if not shown:
+        return ("Открытых рыночных лотов снаряги сейчас нет.", [])
+    rows: list[dict[str, int | str]] = []
+    lines = ["Рынок снаряги (выбери лот по кнопке):"]
+    for lot in shown:
+        item_key = str(lot["item_key"])
+        title = ITEM_LABELS.get(item_key, item_key)
+        lot_id = int(lot["id"])
+        amount = int(lot["amount"])
+        price = int(lot["price"])
+        seller_id = int(lot["seller_id"])
+        rows.append({"id": lot_id, "title": title, "amount": amount, "price": price, "seller_id": seller_id})
+        lines.append(f"• #{lot_id} {title} x{amount} — {price} RU (seller {seller_id})")
+    return ("\n".join(lines), rows)
+
+
 def cancel_own_first_market_lot(storage: Storage, telegram_id: int) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
