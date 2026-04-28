@@ -42,6 +42,7 @@ from app.game_logic import (
     build_alliance_overview,
     propose_alliance,
     break_alliance,
+    accept_alliance,
     equip_armor,
     equip_weapon,
     list_equippable_armor,
@@ -73,6 +74,8 @@ from app.keyboards import (
     equip_armor_keyboard,
     equip_weapon_keyboard,
     alliance_keyboard,
+    alliance_target_keyboard,
+    alliance_pending_keyboard,
 )
 from app.profile_card import build_character_card
 from app.storage import Character, Storage
@@ -348,6 +351,35 @@ async def cmd_give(message: Message) -> None:
         f"Выдано {amount} RU игроку {target.nickname} ({target_telegram_id}).\n"
         f"Новый баланс: {updated_balance} RU."
     )
+
+
+@router.message(Command("leader"))
+async def cmd_set_leader(message: Message) -> None:
+    sender_id = message.from_user.id
+    if not is_admin_user(sender_id):
+        await message.answer("Команда доступна только администратору.")
+        return
+
+    parts = (message.text or "").strip().split(maxsplit=2)
+    if len(parts) != 3:
+        await message.answer("Использование: /leader <группировка> <telegram_id>")
+        return
+
+    faction_name = parts[1]
+    try:
+        leader_id = int(parts[2])
+    except ValueError:
+        await message.answer("Telegram ID лидера должен быть целым числом.")
+        return
+
+    db = get_storage()
+    if not db.set_faction_leader(faction_name, leader_id):
+        await message.answer(
+            "Не удалось назначить лидера. Проверь, что группировка существует, "
+            "а игрок состоит в этой группировке."
+        )
+        return
+    await message.answer(f"Лидер группировки {faction_name} назначен: {leader_id}.")
 
 
 @router.message(Registration.nickname)
@@ -881,6 +913,69 @@ async def handle_war(callback: CallbackQuery) -> None:
 async def alliance_propose_callback(callback: CallbackQuery) -> None:
     target_faction = (callback.data or "").split(":", maxsplit=2)[2]
     result = propose_alliance(get_storage(), callback.from_user.id, target_faction)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "alliance:menu:propose")
+async def alliance_propose_menu_callback(callback: CallbackQuery) -> None:
+    db = get_storage()
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or not player.faction:
+        await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
+        return
+    await callback.message.answer(
+        "Выбери группировку для предложения договора о союзе:",
+        reply_markup=alliance_target_keyboard(db.get_factions(), player.faction, mode="propose"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "alliance:menu:break")
+async def alliance_break_menu_callback(callback: CallbackQuery) -> None:
+    db = get_storage()
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or not player.faction:
+        await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
+        return
+    await callback.message.answer(
+        "Выбери группировку для разрыва союза:",
+        reply_markup=alliance_target_keyboard(db.get_factions(), player.faction, mode="break"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "alliance:menu:confirm")
+async def alliance_confirm_menu_callback(callback: CallbackQuery) -> None:
+    db = get_storage()
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or not player.faction:
+        await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
+        return
+    incoming = db.list_incoming_alliance_requests(player.faction)
+    pending_from = [str(row["requester_faction"]) for row in incoming]
+    await callback.message.answer(
+        "Входящие предложения на союз:",
+        reply_markup=alliance_pending_keyboard(pending_from),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "alliance:menu:back")
+async def alliance_menu_back_callback(callback: CallbackQuery) -> None:
+    await callback.message.answer("Раздел дипломатии:", reply_markup=alliance_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "alliance:none")
+async def alliance_none_callback(callback: CallbackQuery) -> None:
+    await callback.answer("Список пуст.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("alliance:confirm:"))
+async def alliance_confirm_callback(callback: CallbackQuery) -> None:
+    source_faction = (callback.data or "").split(":", maxsplit=2)[2]
+    result = accept_alliance(get_storage(), callback.from_user.id, source_faction)
     await callback.message.answer(result.text)
     await callback.answer()
 

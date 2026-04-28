@@ -64,6 +64,7 @@ class Storage:
                 factions = [dict(row) for row in conn.execute("SELECT * FROM factions").fetchall()]
                 locations = [dict(row) for row in conn.execute("SELECT * FROM locations").fetchall()]
                 alliances = [dict(row) for row in conn.execute("SELECT * FROM alliances").fetchall()]
+                alliance_requests = [dict(row) for row in conn.execute("SELECT * FROM alliance_requests").fetchall()]
                 topup_payments = [dict(row) for row in conn.execute("SELECT * FROM topup_payments").fetchall()]
                 faction_warehouse = [dict(row) for row in conn.execute("SELECT * FROM faction_warehouse").fetchall()]
                 auctions = [dict(row) for row in conn.execute("SELECT * FROM auctions").fetchall()]
@@ -80,6 +81,7 @@ class Storage:
                 "factions": factions,
                 "locations": locations,
                 "alliances": alliances,
+                "alliance_requests": alliance_requests,
                 "topup_payments": topup_payments,
                 "faction_warehouse": faction_warehouse,
                 "auctions": auctions,
@@ -109,6 +111,7 @@ class Storage:
         factions = payload.get("factions") or []
         locations = payload.get("locations") or []
         alliances = payload.get("alliances") or []
+        alliance_requests = payload.get("alliance_requests") or []
         topup_payments = payload.get("topup_payments") or []
         faction_warehouse = payload.get("faction_warehouse") or []
         auctions = payload.get("auctions") or []
@@ -123,10 +126,14 @@ class Storage:
         for row in factions:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO factions(name, treasury)
-                VALUES(?, ?)
+                INSERT OR REPLACE INTO factions(name, treasury, leader_id)
+                VALUES(?, ?, ?)
                 """,
-                (row.get("name"), int(row.get("treasury", 0))),
+                (
+                    row.get("name"),
+                    int(row.get("treasury", 0)),
+                    row.get("leader_id"),
+                ),
             )
         for row in locations:
             conn.execute(
@@ -150,6 +157,19 @@ class Storage:
                 (
                     row.get("faction_a"),
                     row.get("faction_b"),
+                    row.get("created_at") or utc_now().isoformat(),
+                ),
+            )
+        for row in alliance_requests:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO alliance_requests(requester_faction, target_faction, proposed_by, created_at)
+                VALUES(?, ?, ?, ?)
+                """,
+                (
+                    row.get("requester_faction"),
+                    row.get("target_faction"),
+                    row.get("proposed_by"),
                     row.get("created_at") or utc_now().isoformat(),
                 ),
             )
@@ -354,10 +374,15 @@ class Storage:
                 """
                 CREATE TABLE IF NOT EXISTS factions (
                     name TEXT PRIMARY KEY,
-                    treasury INTEGER NOT NULL DEFAULT 20000
+                    treasury INTEGER NOT NULL DEFAULT 20000,
+                    leader_id INTEGER
                 )
                 """
             )
+            columns = conn.execute("PRAGMA table_info(factions)").fetchall()
+            column_names = {str(row["name"]) for row in columns}
+            if "leader_id" not in column_names:
+                conn.execute("ALTER TABLE factions ADD COLUMN leader_id INTEGER")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS locations (
@@ -365,6 +390,17 @@ class Storage:
                     point_type TEXT NOT NULL,
                     controlled_by TEXT,
                     npc_power INTEGER NOT NULL DEFAULT 60
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS alliance_requests (
+                    requester_faction TEXT NOT NULL,
+                    target_faction TEXT NOT NULL,
+                    proposed_by INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(requester_faction, target_faction)
                 )
                 """
             )
@@ -480,7 +516,7 @@ class Storage:
                 """
             )
             conn.executemany(
-                "INSERT OR IGNORE INTO factions(name, treasury) VALUES(?, ?)",
+                "INSERT OR IGNORE INTO factions(name, treasury, leader_id) VALUES(?, ?, NULL)",
                 [
                     ("Долг", 20000),
                     ("Свобода", 20000),
@@ -918,8 +954,40 @@ class Storage:
 
     def get_factions(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT name, treasury FROM factions ORDER BY name").fetchall()
-        return [{"name": row["name"], "treasury": row["treasury"]} for row in rows]
+            rows = conn.execute("SELECT name, treasury, leader_id FROM factions ORDER BY name").fetchall()
+        return [
+            {
+                "name": row["name"],
+                "treasury": row["treasury"],
+                "leader_id": row["leader_id"],
+            }
+            for row in rows
+        ]
+
+    def set_faction_leader(self, faction: str, leader_id: int) -> bool:
+        with self._connect() as conn:
+            faction_row = conn.execute("SELECT 1 FROM factions WHERE name = ?", (faction,)).fetchone()
+            if faction_row is None:
+                return False
+            character_row = conn.execute(
+                "SELECT faction FROM characters WHERE telegram_id = ?",
+                (leader_id,),
+            ).fetchone()
+            if character_row is None or str(character_row["faction"] or "") != faction:
+                return False
+            conn.execute(
+                "UPDATE factions SET leader_id = ? WHERE name = ?",
+                (leader_id, faction),
+            )
+        self.save_snapshot()
+        return True
+
+    def get_faction_leader_id(self, faction: str) -> int | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT leader_id FROM factions WHERE name = ?", (faction,)).fetchone()
+        if row is None or row["leader_id"] is None:
+            return None
+        return int(row["leader_id"])
 
     def are_factions_allied(self, faction_a: str, faction_b: str) -> bool:
         if faction_a == faction_b:
@@ -955,6 +1023,14 @@ class Storage:
                     """,
                     (left, right, utc_now().isoformat()),
                 )
+                conn.execute(
+                    """
+                    DELETE FROM alliance_requests
+                    WHERE (requester_faction = ? AND target_faction = ?)
+                       OR (requester_faction = ? AND target_faction = ?)
+                    """,
+                    (left, right, right, left),
+                )
             else:
                 conn.execute(
                     """
@@ -965,6 +1041,52 @@ class Storage:
                 )
         self.save_snapshot()
         return True
+
+    def create_alliance_request(self, requester_faction: str, target_faction: str, proposed_by: int) -> bool:
+        if requester_faction == target_faction:
+            return False
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT 1 FROM factions WHERE name IN (?, ?)",
+                (requester_faction, target_faction),
+            ).fetchall()
+            if len(rows) < 2:
+                return False
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO alliance_requests(requester_faction, target_faction, proposed_by, created_at)
+                VALUES(?, ?, ?, ?)
+                """,
+                (requester_faction, target_faction, proposed_by, utc_now().isoformat()),
+            )
+            created = conn.total_changes > 0
+        if created:
+            self.save_snapshot()
+        return created
+
+    def list_incoming_alliance_requests(self, faction: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT requester_faction, target_faction, proposed_by, created_at
+                FROM alliance_requests
+                WHERE target_faction = ?
+                ORDER BY created_at DESC
+                """,
+                (faction,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def remove_alliance_request(self, requester_faction: str, target_faction: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM alliance_requests
+                WHERE requester_faction = ? AND target_faction = ?
+                """,
+                (requester_faction, target_faction),
+            )
+        self.save_snapshot()
 
     def list_faction_alliances(self, faction: str) -> list[str]:
         with self._connect() as conn:

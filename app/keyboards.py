@@ -327,13 +327,40 @@ def ratings_keyboard() -> InlineKeyboardMarkup:
 def alliance_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🤝 Союз с Долг", callback_data="alliance:propose:Долг")],
-            [InlineKeyboardButton(text="🤝 Союз со Свобода", callback_data="alliance:propose:Свобода")],
-            [InlineKeyboardButton(text="🤝 Союз с Нейтралы", callback_data="alliance:propose:Нейтралы")],
-            [InlineKeyboardButton(text="🤝 Союз с Бандиты", callback_data="alliance:propose:Бандиты")],
-            [InlineKeyboardButton(text="💔 Разорвать с Долг", callback_data="alliance:break:Долг")],
-            [InlineKeyboardButton(text="💔 Разорвать со Свобода", callback_data="alliance:break:Свобода")],
-            [InlineKeyboardButton(text="💔 Разорвать с Нейтралы", callback_data="alliance:break:Нейтралы")],
-            [InlineKeyboardButton(text="💔 Разорвать с Бандиты", callback_data="alliance:break:Бандиты")],
+            [InlineKeyboardButton(text="🤝 Заключить договор о союзе", callback_data="alliance:menu:propose")],
+            [InlineKeyboardButton(text="✅ Подтвердить входящий договор", callback_data="alliance:menu:confirm")],
+            [InlineKeyboardButton(text="💔 Разорвать союз", callback_data="alliance:menu:break")],
         ]
     )
+
+
+def alliance_target_keyboard(
+    factions: list[dict[str, int | str]],
+    current_faction: str,
+    mode: str,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for faction in factions:
+        name = str(faction.get("name", ""))
+        if not name or name == current_faction:
+            continue
+        if mode == "propose":
+            rows.append([InlineKeyboardButton(text=f"🤝 Предложить: {name}", callback_data=f"alliance:propose:{name}")])
+        else:
+            rows.append([InlineKeyboardButton(text=f"💔 Разорвать с {name}", callback_data=f"alliance:break:{name}")])
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Нет доступных фракций", callback_data="alliance:none")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="alliance:menu:back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def alliance_pending_keyboard(pending_from: list[str]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for faction_name in pending_from:
+        rows.append(
+            [InlineKeyboardButton(text=f"✅ Подтвердить союз с {faction_name}", callback_data=f"alliance:confirm:{faction_name}")]
+        )
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Входящих договоров нет", callback_data="alliance:none")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="alliance:menu:back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
