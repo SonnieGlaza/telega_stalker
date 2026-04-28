@@ -342,6 +342,16 @@ def war_transfer_keyboard(allies: list[str], location_name: str) -> InlineKeyboa
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def war_sections_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📘 Сценарий войны", callback_data="war:section:scenario")],
+            [InlineKeyboardButton(text="🪖 Военные лобби", callback_data="war:section:lobby")],
+            [InlineKeyboardButton(text="🎯 Точка для штурма", callback_data="war:section:assault")],
+        ]
+    )
+
+
 def economy_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

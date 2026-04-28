@@ -99,6 +99,7 @@ from app.keyboards import (
     war_lobby_keyboard,
     war_transfer_keyboard,
     market_lots_keyboard,
+    war_sections_keyboard,
 )
 from app.profile_card import build_character_card
 from app.storage import Character, Storage
@@ -977,7 +978,16 @@ async def show_war(message: Message) -> None:
         await message.answer("Сначала выбери группировку.")
         return
 
+    await message.answer("Раздел войны: выбери нужный блок.", reply_markup=war_sections_keyboard())
+
+
+@router.callback_query(F.data == "war:section:scenario")
+async def war_scenario_section_callback(callback: CallbackQuery) -> None:
     db = get_storage()
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or not player_ready(player):
+        await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
+        return
     factions = db.get_factions()
     current_faction = player.faction or ""
     own_faction = next((f for f in factions if f["name"] == current_faction), None)
@@ -994,18 +1004,39 @@ async def show_war(message: Message) -> None:
         "• Точки интереса уменьшают время прибытия.\n"
         "• Шанс боя: сила отряда / (сила отряда + сила NPC).\n"
     )
-    await message.answer(
+    await callback.message.answer(
         explainer + "\nЭкономика твоей группировки:\n" + own_treasury_text + "\n\n" + alliance_overview,
         reply_markup=alliance_keyboard(),
     )
-    await message.answer(
+    await callback.answer()
+
+
+@router.callback_query(F.data == "war:section:lobby")
+async def war_lobby_section_callback(callback: CallbackQuery) -> None:
+    db = get_storage()
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or not player_ready(player):
+        await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
+        return
+    await callback.message.answer(
         build_war_lobby_overview(db, player.telegram_id),
         reply_markup=war_lobby_keyboard(db.get_locations()),
     )
-    await message.answer(
+    await callback.answer()
+
+
+@router.callback_query(F.data == "war:section:assault")
+async def war_assault_section_callback(callback: CallbackQuery) -> None:
+    db = get_storage()
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or not player_ready(player):
+        await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
+        return
+    await callback.message.answer(
         "Выбери точку для штурма:",
         reply_markup=locations_keyboard(db.get_locations(), mode="war"),
     )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("war:"))
