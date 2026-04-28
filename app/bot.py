@@ -1517,6 +1517,12 @@ async def smuggle_callback(callback: CallbackQuery) -> None:
 @router.message()
 async def fallback(message: Message) -> None:
     player = ensure_character(message)
+    normalized_text = _normalize_info_trigger(message.text)
+    if player is not None and (
+        normalized_text.endswith("информация") or normalized_text.startswith("/info")
+    ):
+        await message.answer(_build_info_text(player))
+        return
     if player is not None:
         await message.answer(
             "Команда не распознана. Используй кнопки меню.",
