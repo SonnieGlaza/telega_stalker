@@ -302,7 +302,11 @@ def _build_info_text(player: Character) -> str:
     )
 
 
-@router.message(Command("ℹ️ Информация"))
+@router.message(Command("info"))
+@router.message(F.text == "ℹ️ Информация")
+@router.message(F.text == "ℹ Информация")
+@router.message(F.text == "Информация")
+@router.message(F.text.func(lambda value: _normalize_info_trigger(value).endswith("информация")))
 async def show_info(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
