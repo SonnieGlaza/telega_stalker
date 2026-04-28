@@ -118,6 +118,10 @@ def _faction_color(faction: str | None) -> tuple[int, int, int]:
         return (190, 70, 65)
     if faction == "Свобода":
         return (70, 165, 90)
+    if faction == "Нейтралы":
+        return (145, 145, 145)
+    if faction == "Бандиты":
+        return (165, 120, 55)
     return (110, 110, 130)
 
 

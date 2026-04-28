@@ -456,22 +456,34 @@ class Storage:
             )
             conn.executemany(
                 "INSERT OR IGNORE INTO factions(name, treasury) VALUES(?, ?)",
-                [("Долг", 20000), ("Свобода", 20000)],
+                [
+                    ("Долг", 20000),
+                    ("Свобода", 20000),
+                    ("Нейтралы", 20000),
+                    ("Бандиты", 20000),
+                ],
             )
             conn.executemany(
                 "INSERT OR IGNORE INTO locations(name, point_type, controlled_by, npc_power) VALUES(?, ?, ?, ?)",
                 [
                     ("Росток", "база", "Долг", BASE_LOCATION_NPC_POWER),
-                    ("Кордон", "база", None, BASE_LOCATION_NPC_POWER),
+                    ("Кордон", "база", "Нейтралы", BASE_LOCATION_NPC_POWER),
                     ("Армейские склады", "база", "Свобода", BASE_LOCATION_NPC_POWER),
                     ("Янтарь", "точка ресурсов", None, REGULAR_LOCATION_NPC_POWER),
-                    ("Свалка", "точка ресурсов", None, REGULAR_LOCATION_NPC_POWER),
+                    ("Свалка", "база", "Бандиты", BASE_LOCATION_NPC_POWER),
                     ("Болото", "точка ресурсов", None, REGULAR_LOCATION_NPC_POWER),
                     ("НИИ Агропром", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                     ("Темная долина", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                     ("Рыжий лес", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                     ("Радар", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                 ],
+            )
+            # Для существующих БД фиксируем базовые владельцы и типы ключевых точек.
+            conn.execute(
+                "UPDATE locations SET point_type = 'база', controlled_by = 'Нейтралы' WHERE name = 'Кордон'"
+            )
+            conn.execute(
+                "UPDATE locations SET point_type = 'база', controlled_by = 'Бандиты' WHERE name = 'Свалка'"
             )
             self._restore_from_snapshot_if_needed(conn)
             self._enforce_location_power_baseline(conn)

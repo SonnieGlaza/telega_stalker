@@ -19,6 +19,8 @@ def faction_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="Долг", callback_data="faction:Долг")],
             [InlineKeyboardButton(text="Свобода", callback_data="faction:Свобода")],
+            [InlineKeyboardButton(text="Нейтралы", callback_data="faction:Нейтралы")],
+            [InlineKeyboardButton(text="Бандиты", callback_data="faction:Бандиты")],
         ]
     )
 

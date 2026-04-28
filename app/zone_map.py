@@ -25,6 +25,8 @@ MAP_POINTS: dict[str, tuple[int, int]] = {
 FACTION_COLORS = {
     "Долг": (230, 70, 70),
     "Свобода": (70, 200, 110),
+    "Нейтралы": (210, 210, 210),
+    "Бандиты": (205, 130, 60),
 }
 
 POINT_TYPE_COLORS = {
@@ -112,6 +114,10 @@ def build_zone_map_image(
     draw.text((legend_x + 42, legend_y + 40), "Красный — контроль Долг", fill=(210, 220, 214), font=small_font)
     draw.ellipse((legend_x + 14, legend_y + 72, legend_x + 34, legend_y + 92), fill=FACTION_COLORS["Свобода"])
     draw.text((legend_x + 42, legend_y + 70), "Зеленый — контроль Свобода", fill=(210, 220, 214), font=small_font)
+    draw.ellipse((legend_x + 238, legend_y + 42, legend_x + 258, legend_y + 62), fill=FACTION_COLORS["Нейтралы"])
+    draw.text((legend_x + 266, legend_y + 40), "Серый — контроль Нейтралы", fill=(210, 220, 214), font=small_font)
+    draw.ellipse((legend_x + 238, legend_y + 72, legend_x + 258, legend_y + 92), fill=FACTION_COLORS["Бандиты"])
+    draw.text((legend_x + 266, legend_y + 70), "Оранжевый — контроль Бандиты", fill=(210, 220, 214), font=small_font)
 
     output = BytesIO()
     canvas.save(output, format="PNG")
