@@ -35,6 +35,7 @@ from app.game_logic import (
     sell_item,
     travel_to,
     use_energy_drink,
+    use_medkit,
     withdraw_from_faction_warehouse,
     build_dead_character_text,
     respawn_character,
@@ -781,6 +782,13 @@ async def drink_energy(message: Message) -> None:
         return
     result = use_energy_drink(get_storage(), message.from_user.id)
     await message.answer(result.text)
+
+
+@router.callback_query(F.data == "use:medkit")
+async def use_medkit_callback(callback: CallbackQuery) -> None:
+    result = use_medkit(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
 
 
 @router.message(F.text == "🗺 Переход")

@@ -695,6 +695,21 @@ def use_energy_drink(storage: Storage, telegram_id: int) -> ActionResult:
     return ActionResult(True, "Ты выпил энергетик и восстановил 35 энергии.")
 
 
+def use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if player.health >= 100:
+        return ActionResult(False, "Здоровье уже полное, аптечка не требуется.")
+    if not storage.remove_item(telegram_id, "medkit", 1):
+        return ActionResult(False, "У тебя нет аптечки в инвентаре.")
+    heal_amount = min(25, 100 - player.health)
+    storage.change_health(telegram_id, heal_amount)
+    return ActionResult(True, f"Ты использовал аптечку и восстановил {heal_amount} HP.")
+
+
 def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
     item = SHOP_ITEMS.get(item_key)
     if item is None:

@@ -96,6 +96,7 @@ def trader_buy_gear_keyboard() -> InlineKeyboardMarkup:
 def inventory_equipment_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="🩹 Использовать аптечку", callback_data="use:medkit")],
             [InlineKeyboardButton(text="Экипировать оружие", callback_data="equip:menu:weapon")],
             [InlineKeyboardButton(text="Экипировать броню", callback_data="equip:menu:armor")],
             [InlineKeyboardButton(text="Экипировать артефакт", callback_data="equip:artifact")],
