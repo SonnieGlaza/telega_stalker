@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from math import dist
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
@@ -91,6 +92,21 @@ ARMOR_CATALOG["armor_exoskeleton"] = ARMOR_CATALOG["armor_exo"]
 
 SHOP_ITEMS.update(ARMOR_CATALOG)
 SHOP_ITEMS.update(WEAPON_CATALOG)
+
+# Координаты должны совпадать с app/zone_map.py, чтобы время перехода
+# соответствовало визуальной дистанции на карте.
+MAP_TRAVEL_POINTS: dict[str, tuple[int, int]] = {
+    "Кордон": (110, 530),
+    "Свалка": (250, 470),
+    "Росток": (395, 410),
+    "Армейские склады": (195, 250),
+    "НИИ Агропром": (340, 320),
+    "Янтарь": (735, 180),
+    "Болото": (115, 365),
+    "Темная долина": (510, 520),
+    "Рыжий лес": (730, 235),
+    "Радар": (740, 125),
+}
 
 def _build_level_map(catalog: dict[str, dict[str, int | str]]) -> dict[str, int]:
     ranked: list[tuple[str, int]] = []
@@ -1276,6 +1292,14 @@ def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionRes
     will_use_truck = character.truck_owned and character.fuel > 0
     energy_cost = 8 if will_use_truck else 16
     travel_minutes = 10 if will_use_truck else 30
+    current_point = MAP_TRAVEL_POINTS.get(character.location)
+    destination_point = MAP_TRAVEL_POINTS.get(destination)
+    if current_point and destination_point:
+        distance_px = dist(current_point, destination_point)
+        if will_use_truck:
+            travel_minutes = max(5, round(distance_px / 24))
+        else:
+            travel_minutes = max(10, round(distance_px / 8))
 
     if target["point_type"] == "точка интереса" and target["controlled_by"] == character.faction:
         travel_minutes = max(5, int(travel_minutes * 0.7))
