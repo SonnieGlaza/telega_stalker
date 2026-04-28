@@ -1234,6 +1234,11 @@ def format_inventory(character: Character) -> str:
     )
 
     current_gear_power = equipment_power(character)
+    survival_line = (
+        f"☢ Радиация: {character.radiation} | "
+        f"🍗 Голод: {character.hunger} | "
+        f"💧 Жажда: {character.thirst}"
+    )
     return (
         f"👤 {character.nickname} ({character.gender})\n"
         f"ID-адрес: {character.player_uid}\n"
@@ -1247,7 +1252,8 @@ def format_inventory(character: Character) -> str:
         f"Баланс: {character.money} RU\n"
         f"Транспорт: {vehicle}\n"
         f"Спальник: {sleeping_bag}\n"
-        f"Топливо: {character.fuel}\n\n"
+        f"Топливо: {character.fuel}\n"
+        f"{survival_line}\n\n"
         f"Снаряга:\n{equipment}\n{durability_block}\n\n"
         f"Вещи:\n{items}"
     )
