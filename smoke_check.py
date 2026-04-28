@@ -25,14 +25,16 @@ from app.game_logic import (
 )
 from app.storage import Storage
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+
 
 def _all_callback_data() -> set[str]:
-    keyboards_source = Path("/workspace/app/keyboards.py").read_text(encoding="utf-8")
+    keyboards_source = (PROJECT_ROOT / "app" / "keyboards.py").read_text(encoding="utf-8")
     return set(re.findall(r'callback_data="([^"]+)"', keyboards_source))
 
 
 def _callback_handler_coverage() -> tuple[set[str], set[str], list[str]]:
-    bot_source = Path("/workspace/app/bot.py").read_text(encoding="utf-8")
+    bot_source = (PROJECT_ROOT / "app" / "bot.py").read_text(encoding="utf-8")
     exact_handlers = set(re.findall(r'@router\.callback_query\(F\.data == "([^"]+)"\)', bot_source))
     prefix_handlers = set(re.findall(r'@router\.callback_query\(F\.data\.startswith\("([^"]+)"\)\)', bot_source))
 
