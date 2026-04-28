@@ -2001,6 +2001,18 @@ def create_market_lot(storage: Storage, telegram_id: int, item_key: str, amount:
         return ActionResult(False, _dead_block_text())
     if amount <= 0:
         return ActionResult(False, "Количество для лота должно быть больше нуля.")
+    if item_key in {"first_gear", "auto"}:
+        available_equipment_keys = [
+            key
+            for key, owned in sorted(player.inventory.items())
+            if int(owned) > 0 and _is_equipment_item(key)
+        ]
+        if not available_equipment_keys:
+            return ActionResult(
+                False,
+                "В инвентаре нет оружия или брони для выставления на рынок.",
+            )
+        item_key = available_equipment_keys[0]
     if not _is_equipment_item(item_key):
         return ActionResult(False, "На рынок можно выставить только оружие или броню.")
     if item_key in WEAPON_CATALOG:
