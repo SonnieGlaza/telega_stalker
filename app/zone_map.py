@@ -44,7 +44,7 @@ LABEL_PREFERRED_OFFSETS: dict[str, tuple[int, int]] = {
     "Армейские склады": (20, -16),
     "Болото": (20, -16),
     "НИИ Агропром": (20, 8),
-    "Янтарь": (20, -16),
+    "Янтарь": (-300, -52),
     "Темная долина": (-240, -88),
     "Рыжий лес": (-300, 18),
     "Радар": (-300, 18),
@@ -106,13 +106,8 @@ def build_zone_map_image(
         font=small_font,
     )
 
-    legend_x, legend_y = 682, 108
-    legend_w, legend_h = 252, 408
-    reserved_rects: list[tuple[int, int, int, int]] = [
-        (legend_x - 6, legend_y - 6, legend_x + legend_w + 6, legend_y + legend_h + 6)
-    ]
-
-    map_right_limit = legend_x - 28
+    reserved_rects: list[tuple[int, int, int, int]] = []
+    map_right_limit = width - 32
     map_top_limit = 96
     map_bottom_limit = height - 44
 
@@ -222,45 +217,6 @@ def build_zone_map_image(
         draw.text((label_x, label_y), name, fill=label_color, font=body_font)
         draw.text((label_x, label_y + 20), details_text, fill=(185, 196, 190), font=tiny_font)
         reserved_rects.append((box_x1 - 4, box_y1 - 4, box_x2 + 4, box_y2 + 4))
-
-    draw.rounded_rectangle(
-        (legend_x, legend_y, legend_x + legend_w, legend_y + legend_h),
-        radius=10,
-        fill=(16, 21, 20),
-        outline=(76, 97, 88),
-        width=2,
-    )
-    draw.text((legend_x + 14, legend_y + 10), "Легенда", fill=(230, 238, 232), font=body_font)
-
-    chips = [
-        ("Долг", "Контроль: Долг"),
-        ("Свобода", "Контроль: Свобода"),
-        ("Нейтралы", "Контроль: Нейтралы"),
-        ("Бандиты", "Контроль: Бандиты"),
-        ("base", "Кольцо: База"),
-        ("resource", "Кольцо: Ресурсы"),
-        ("interest", "Кольцо: Точка интереса"),
-        ("current", "Желтая рамка: твоя локация"),
-    ]
-    chip_x = legend_x + 12
-    chip_y = legend_y + 38
-    for idx, (faction, text) in enumerate(chips):
-        row = idx
-        x = chip_x
-        y = chip_y + row * 34
-        draw.rounded_rectangle((x, y, x + 226, y + 26), radius=8, fill=(24, 30, 29), outline=(60, 74, 68), width=1)
-        if faction in FACTION_COLORS:
-            marker_color = FACTION_COLORS[faction]
-            draw.ellipse((x + 8, y + 5, x + 24, y + 21), fill=marker_color, outline=(14, 14, 14), width=1)
-        elif faction == "base":
-            draw.ellipse((x + 8, y + 5, x + 24, y + 21), fill=(26, 31, 30), outline=POINT_TYPE_COLORS["база"], width=3)
-        elif faction == "resource":
-            draw.ellipse((x + 8, y + 5, x + 24, y + 21), fill=(26, 31, 30), outline=POINT_TYPE_COLORS["точка ресурсов"], width=3)
-        elif faction == "interest":
-            draw.ellipse((x + 8, y + 5, x + 24, y + 21), fill=(26, 31, 30), outline=POINT_TYPE_COLORS["точка интереса"], width=3)
-        else:
-            draw.ellipse((x + 8, y + 5, x + 24, y + 21), fill=(26, 31, 30), outline=(255, 240, 120), width=2)
-        draw.text((x + 30, y + 5), text, fill=(208, 220, 213), font=tiny_font)
 
     output = BytesIO()
     canvas.save(output, format="PNG")
