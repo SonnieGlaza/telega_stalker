@@ -293,7 +293,7 @@ def _build_info_text(player: Character) -> str:
         "• /start — создать персонажа или войти в существующего.\n"
         "• /menu — открыть главное меню.\n"
         "• /info — открыть эту справку.\n"
-        "• /pay <telegram_id> <сумма> — перевод игроку (комиссия 30%).\n\n"
+        "• /pay [telegram_id] [сумма] — перевод игроку (комиссия 30%).\n\n"
         "Механики:\n"
         "• 🚚 Грузовик ускоряет переходы и снижает расход энергии на поездку,\n"
         "  но тратит 1 топливо за каждый переход.\n"
@@ -436,7 +436,7 @@ async def cmd_give(message: Message) -> None:
 
     parts = (message.text or "").strip().split()
     if len(parts) != 3:
-        await message.answer("Использование: /give <telegram_id> <amount>")
+        await message.answer("Использование: /give [telegram_id] [amount]")
         return
 
     try:
@@ -477,7 +477,7 @@ async def cmd_set_leader(message: Message) -> None:
 
     parts = (message.text or "").strip().split(maxsplit=2)
     if len(parts) != 3:
-        await message.answer("Использование: /leader <группировка> <telegram_id>")
+        await message.answer("Использование: /leader [группировка] [telegram_id]")
         return
 
     faction_name = parts[1]
@@ -1017,7 +1017,7 @@ async def pay_command(message: Message) -> None:
     sender_id = message.from_user.id
     parts = (message.text or "").strip().split()
     if len(parts) != 3:
-        await message.answer("Использование: /pay <telegram_id> <сумма>")
+        await message.answer("Использование: /pay [telegram_id] [сумма]")
         return
     try:
         target_telegram_id = int(parts[1])
