@@ -308,21 +308,24 @@ def build_character_card(character: Character) -> bytes:
 
     draw.text((right_x, 292), "Индикаторы состояния", fill=(210, 210, 210), font=body_font)
     current_gear_power = equipment_power(character)
+    bar_x = right_x + 184
+    value_x = bar_x + 252
+
     draw.text((right_x, 318), "Здоровье", fill=(220, 220, 220), font=small_font)
-    _draw_power_bar(draw, right_x + 118, 322, character.health, 100, (190, 70, 70))
-    draw.text((right_x + 370, 318), f"{character.health}/100", fill=(220, 220, 220), font=small_font)
+    _draw_power_bar(draw, bar_x, 322, character.health, 100, (190, 70, 70))
+    draw.text((value_x, 318), f"{character.health}/100", fill=(220, 220, 220), font=small_font)
 
     draw.text((right_x, 344), "Энергия", fill=(220, 220, 220), font=small_font)
-    _draw_power_bar(draw, right_x + 118, 348, character.energy, max(1, character.max_energy), (70, 150, 220))
-    draw.text((right_x + 370, 344), f"{character.energy}/{character.max_energy}", fill=(220, 220, 220), font=small_font)
+    _draw_power_bar(draw, bar_x, 348, character.energy, max(1, character.max_energy), (70, 150, 220))
+    draw.text((value_x, 344), f"{character.energy}/{character.max_energy}", fill=(220, 220, 220), font=small_font)
 
     draw.text((right_x, 370), "Сила снаряжения", fill=(220, 220, 220), font=small_font)
-    _draw_power_bar(draw, right_x + 118, 374, current_gear_power, 20, (170, 170, 95))
-    draw.text((right_x + 370, 370), f"{current_gear_power}/20", fill=(220, 220, 220), font=small_font)
+    _draw_power_bar(draw, bar_x, 374, current_gear_power, 20, (170, 170, 95))
+    draw.text((value_x, 370), f"{current_gear_power}/20", fill=(220, 220, 220), font=small_font)
 
     draw.text(
         (right_x, 398),
-        f"☢ Радиация: {character.radiation}   🍗 Голод: {character.hunger}   💧 Жажда: {character.thirst}",
+        f"Радиация: {character.radiation}   Голод: {character.hunger}   Жажда: {character.thirst}",
         fill=(208, 208, 208),
         font=small_font,
     )
