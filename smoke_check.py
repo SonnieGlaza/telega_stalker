@@ -31,6 +31,24 @@ def _all_callback_data() -> set[str]:
     return set(re.findall(r'callback_data="([^"]+)"', keyboards_source))
 
 
+def _callback_handler_coverage() -> tuple[set[str], set[str], list[str]]:
+    bot_source = Path("/workspace/app/bot.py").read_text(encoding="utf-8")
+    exact_handlers = set(re.findall(r'@router\.callback_query\(F\.data == "([^"]+)"\)', bot_source))
+    prefix_handlers = set(re.findall(r'@router\.callback_query\(F\.data\.startswith\("([^"]+)"\)\)', bot_source))
+
+    missing: list[str] = []
+    for callback_data in sorted(_all_callback_data()):
+        if callback_data in exact_handlers:
+            continue
+        if any(callback_data.startswith(prefix) for prefix in prefix_handlers):
+            continue
+        # Registration-only callbacks are handled under FSM state filters.
+        if callback_data.startswith("gender:"):
+            continue
+        missing.append(callback_data)
+    return exact_handlers, prefix_handlers, missing
+
+
 def run_smoke_check() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "smoke.sqlite3"
@@ -98,6 +116,8 @@ def run_smoke_check() -> None:
         assert "war:section:scenario" in callbacks
         assert "war:section:lobby" in callbacks
         assert "war:section:assault" in callbacks
+        _, _, missing_callbacks = _callback_handler_coverage()
+        assert not missing_callbacks, f"Missing callback handlers: {', '.join(missing_callbacks)}"
 
         # Label map sanity (no missing key for new items).
         assert "detector_otklik" in ITEM_LABELS
