@@ -80,7 +80,7 @@ router = Router()
 storage: Storage | None = None
 admin_ids: tuple[int, ...] = ()
 SNAPSHOT_SYNC_SECONDS = 300
-TOPUP_RATE_RU_PER_STAR = 10
+TOPUP_RATE_RU_PER_STAR = 150
 TOPUP_PAYLOAD_PREFIX = "topup_stars:"
 TOPUP_ALLOWED_AMOUNTS = {1, 5, 10, 25}
 TOPUP_MIN_STARS = 1
@@ -187,7 +187,7 @@ async def show_topup(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     await message.answer(
-        "Выбери пакет пополнения.\nКурс: 1 звезда = 10 RU.",
+        "Выбери пакет пополнения.\nКурс: 1 звезда = 150 RU.",
         reply_markup=topup_keyboard(),
     )
 
