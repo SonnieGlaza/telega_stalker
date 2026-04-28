@@ -1213,7 +1213,10 @@ def equip_artifact(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "У тебя нет артефакта в инвентаре.")
     storage.set_equipment_item(telegram_id, "artifact", "Артефакт Зоны")
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
-    return ActionResult(True, f"Артефакт экипирован. Бонус к выживаемости активирован.{achievements_text}")
+    return ActionResult(
+        True,
+        f"Артефакт экипирован. Бонус к восстановлению выносливости (+5%) активирован.{achievements_text}",
+    )
 
 
 def format_inventory(character: Character) -> str:
