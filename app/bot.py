@@ -271,6 +271,24 @@ async def show_info(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
+    faction_chats = {
+        "Свобода": "https://t.me/+kAvQ4NyrKndlNmI6",
+        "Долг": "https://t.me/+IbIz9zSoruY0OTMy",
+        "Нейтралы": "https://t.me/+IHxjjCKSFJQwOTky",
+        "Бандиты": "https://t.me/+cP-Eihx_QFo0MTAy",
+    }
+    common_chat = "https://t.me/+R0mfqDJ_HCUyOTI6"
+    faction_chat = faction_chats.get(player.faction or "")
+    chats_block = (
+        f"Чаты:\n"
+        f"• 🌐 Общий: {common_chat}\n"
+        f"• 🛡️ {player.faction}: {faction_chat}"
+        if faction_chat
+        else f"Чаты:\n"
+        f"• 🌐 Общий: {common_chat}\n"
+        f"• Выбери группировку, чтобы увидеть чат своей фракции."
+    )
+
     await message.answer(
         "ℹ️ Информация по игре\n\n"
         "Команды:\n"
@@ -281,7 +299,8 @@ async def show_info(message: Message) -> None:
         "• 🚚 Грузовик ускоряет переходы и снижает расход энергии на поездку,\n"
         "  но тратит 1 топливо за каждый переход.\n"
         "• 🛏️ Спальник пассивно ускоряет восстановление энергии в 2 раза.\n"
-        "• 💎 Экипированный артефакт даёт +5% к пассивному восстановлению энергии."
+        "• 💎 Экипированный артефакт даёт +5% к пассивному восстановлению энергии.\n\n"
+        f"{chats_block}"
     )
 
 
