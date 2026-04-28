@@ -36,6 +36,8 @@ from app.game_logic import (
     travel_to,
     use_energy_drink,
     withdraw_from_faction_warehouse,
+    build_dead_character_text,
+    respawn_character,
     equip_armor,
     equip_weapon,
     list_equippable_armor,
@@ -44,6 +46,7 @@ from app.game_logic import (
 from app.keyboards import (
     economy_keyboard,
     inventory_equipment_keyboard,
+    dead_character_keyboard,
     faction_keyboard,
     gender_keyboard,
     locations_keyboard,
@@ -448,6 +451,9 @@ async def show_inventory(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
+    if player.health <= 0:
+        await message.answer(build_dead_character_text(player), reply_markup=dead_character_keyboard())
+        return
     await message.answer(
         format_inventory(player),
         reply_markup=inventory_equipment_keyboard(),
@@ -460,10 +466,38 @@ async def open_inventory_callback(callback: CallbackQuery) -> None:
     if player is None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
+    if player.health <= 0:
+        await callback.message.answer(build_dead_character_text(player), reply_markup=dead_character_keyboard())
+        await callback.answer()
+        return
     await callback.message.answer(
         format_inventory(player),
         reply_markup=inventory_equipment_keyboard(),
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "respawn:base")
+async def respawn_base_callback(callback: CallbackQuery) -> None:
+    result = respawn_character(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    if result.ok:
+        player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+        if player is not None:
+            await send_profile_snapshot(callback.message, player)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "player:respawn")
+async def show_respawn_menu_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    if player.health > 0:
+        await callback.answer("Респавн доступен только при HP=0.", show_alert=True)
+        return
+    await callback.message.answer(build_dead_character_text(player), reply_markup=dead_character_keyboard())
     await callback.answer()
 
 

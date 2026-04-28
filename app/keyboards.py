@@ -99,12 +99,21 @@ def inventory_equipment_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Экипировать оружие", callback_data="equip:menu:weapon")],
             [InlineKeyboardButton(text="Экипировать броню", callback_data="equip:menu:armor")],
             [InlineKeyboardButton(text="Экипировать артефакт", callback_data="equip:artifact")],
+            [InlineKeyboardButton(text="☠️ Респавн (если HP=0)", callback_data="player:respawn")],
         ]
     )
 
 
 def inventory_actions_keyboard() -> InlineKeyboardMarkup:
     return inventory_equipment_keyboard()
+
+
+def dead_character_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="♻️ Респавн на базе (500 RU)", callback_data="respawn:base")],
+        ]
+    )
 
 
 def equip_weapon_keyboard(available_weapons: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:

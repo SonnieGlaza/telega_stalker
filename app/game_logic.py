@@ -291,6 +291,51 @@ def _apply_durability_decay(storage: Storage, telegram_id: int, weapon_loss: int
     )
 
 
+RESPAWN_HEALTH = 60
+RESPAWN_ENERGY = 60
+RESPAWN_COST_RU = 500
+RESPAWN_BASE_LOCATION = "Росток"
+
+
+def _is_dead(character: Character) -> bool:
+    return character.health <= 0
+
+
+def _dead_block_text() -> str:
+    return "Персонаж мертв (HP=0). Используй респавн из инвентаря."
+
+
+def build_dead_character_text(character: Character) -> str:
+    return (
+        f"☠️ {character.nickname}, ты погиб в Зоне.\n"
+        f"HP: {character.health}/100\n"
+        f"Локация: {character.location}\n"
+        f"Для продолжения нужен респавн.\n"
+        f"Стоимость: {RESPAWN_COST_RU} RU."
+    )
+
+
+def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if not _is_dead(player):
+        return ActionResult(False, "Респавн доступен только при HP=0.")
+    if not storage.change_money(telegram_id, -RESPAWN_COST_RU):
+        return ActionResult(False, f"Недостаточно денег для респавна ({RESPAWN_COST_RU} RU).")
+    current_health = player.health
+    current_energy = player.energy
+    storage.change_health(telegram_id, RESPAWN_HEALTH - current_health)
+    storage.restore_energy(telegram_id, RESPAWN_ENERGY - current_energy)
+    storage.set_location(telegram_id, RESPAWN_BASE_LOCATION)
+    return ActionResult(
+        True,
+        f"Ты был эвакуирован в «{RESPAWN_BASE_LOCATION}».\n"
+        f"HP восстановлено до {RESPAWN_HEALTH}, энергия до {RESPAWN_ENERGY}.\n"
+        f"Списано за респавн: {RESPAWN_COST_RU} RU.",
+    )
+
+
 def _add_rating(storage: Storage, telegram_id: int, amount: int) -> None:
     if amount == 0:
         return
@@ -548,6 +593,8 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
     character = storage.get_character(telegram_id)
     if character is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(character):
+        return ActionResult(False, _dead_block_text())
     if character.faction is None:
         return ActionResult(False, "Сначала выбери группировку.")
 
@@ -637,6 +684,11 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
 
 
 def use_energy_drink(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
     if not storage.remove_item(telegram_id, "energy_drink", 1):
         return ActionResult(False, "У тебя нет энергетика в инвентаре.")
     storage.restore_energy(telegram_id, 35)
@@ -653,6 +705,8 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
     character = storage.get_character(telegram_id)
     if character is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(character):
+        return ActionResult(False, _dead_block_text())
 
     if item_key == "truck" and character.truck_owned:
         return ActionResult(False, "У тебя уже есть грузовик.")
@@ -697,6 +751,8 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
     character = storage.get_character(telegram_id, refresh_energy=False)
     if character is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(character):
+        return ActionResult(False, _dead_block_text())
     if item_key == "truck":
         if not character.truck_owned:
             return ActionResult(False, "У тебя нет грузовика для продажи.")
@@ -797,6 +853,8 @@ def equip_weapon(storage: Storage, telegram_id: int, item_key: str) -> ActionRes
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
     if item_key not in WEAPON_CATALOG:
         return ActionResult(False, "Такое оружие нельзя экипировать.")
     if not storage.remove_item(telegram_id, item_key, 1):
@@ -819,6 +877,8 @@ def equip_armor(storage: Storage, telegram_id: int, item_key: str) -> ActionResu
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
     if item_key not in ARMOR_CATALOG:
         return ActionResult(False, "Такую броню нельзя экипировать.")
     if not storage.remove_item(telegram_id, item_key, 1):
@@ -841,6 +901,8 @@ def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
     if target not in {"weapon", "armor"}:
         return ActionResult(False, "Неизвестный тип ремонта.")
     item_name = str(player.equipment.get(target, "—"))
@@ -866,6 +928,8 @@ def equip_artifact(storage: Storage, telegram_id: int) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
     equipped_artifact = str(player.equipment.get("artifact", "Нет"))
     if equipped_artifact != "Нет":
         return ActionResult(False, "Артефакт уже экипирован.")
@@ -931,6 +995,8 @@ def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionRes
     character = storage.get_character(telegram_id)
     if character is None:
         return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(character):
+        return ActionResult(False, _dead_block_text())
     if character.location == destination:
         return ActionResult(False, f"Ты уже находишься в локации «{destination}».")
 
@@ -965,6 +1031,8 @@ def attack_location(storage: Storage, telegram_id: int, location_name: str) -> A
     character = storage.get_character(telegram_id)
     if character is None:
         return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(character):
+        return ActionResult(False, _dead_block_text())
     if character.faction is None:
         return ActionResult(False, "Сначала выбери группировку.")
     if storage.get_faction_active_members_count(character.faction) < WAR_MIN_FACTION_MEMBERS:
@@ -1133,6 +1201,8 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
     if player.faction is None:
         return ActionResult(False, "Сначала выбери группировку.")
 
@@ -1171,6 +1241,8 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
     leader = storage.get_character(telegram_id, refresh_energy=False)
     if leader is None:
         return RaidLaunchResult(False, "Сначала создай персонажа.", ())
+    if _is_dead(leader):
+        return RaidLaunchResult(False, _dead_block_text(), ())
     if leader.faction is None:
         return RaidLaunchResult(False, "Сначала выбери группировку.", ())
 
@@ -1338,6 +1410,8 @@ def deposit_to_faction_warehouse(
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction is None:
         return ActionResult(False, "Склад доступен только бойцам группировки.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
     key = _normalize_item_key(item_key)
     if not storage.remove_item(telegram_id, key, amount):
         return ActionResult(False, "В инвентаре недостаточно предметов для сдачи.")
@@ -1358,6 +1432,8 @@ def withdraw_from_faction_warehouse(
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction is None:
         return ActionResult(False, "Склад доступен только бойцам группировки.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
     key = _normalize_item_key(item_key)
     if not storage.change_faction_warehouse_item(player.faction, key, -amount):
         return ActionResult(False, "На складе недостаточно ресурсов.")
@@ -1369,6 +1445,8 @@ def create_faction_auction(storage: Storage, telegram_id: int, lot_key: str) -> 
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction is None:
         return ActionResult(False, "Аукцион доступен только бойцам группировки.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
     lot = AUCTION_DEFAULT_LOTS.get(lot_key)
     if lot is None:
         return ActionResult(False, "Неизвестный тип лота.")
@@ -1395,6 +1473,8 @@ def buy_first_faction_auction(storage: Storage, telegram_id: int) -> ActionResul
     buyer = storage.get_character(telegram_id, refresh_energy=False)
     if buyer is None or buyer.faction is None:
         return ActionResult(False, "Покупка на аукционе доступна только бойцам группировки.")
+    if _is_dead(buyer):
+        return ActionResult(False, _dead_block_text())
     auctions = storage.list_open_auctions(buyer.faction)
     target = next((a for a in auctions if int(a["seller_id"]) != telegram_id), None)
     if target is None:
@@ -1431,6 +1511,8 @@ def cancel_own_first_auction(storage: Storage, telegram_id: int) -> ActionResult
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction is None:
         return ActionResult(False, "Сначала создай персонажа и выбери группировку.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
     auctions = storage.list_open_auctions(player.faction)
     target = next((a for a in auctions if int(a["seller_id"]) == telegram_id), None)
     if target is None:
@@ -1486,6 +1568,8 @@ def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
     if player.faction is None:
         return ActionResult(False, "Сначала выбери группировку.")
 
