@@ -1579,6 +1579,18 @@ class Storage:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_open_equipment_market_lots(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, seller_id, faction, item_key, amount, price, status, buyer_id, created_at, closed_at
+                FROM auctions
+                WHERE status = 'open'
+                ORDER BY id DESC
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def get_open_auction(self, auction_id: int) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(

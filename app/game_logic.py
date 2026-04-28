@@ -1879,6 +1879,17 @@ def _equipment_sell_price(base_sell_price: int, durability: int | None = None) -
     return _price_with_durability(base, durability)
 
 
+def list_market_lots(storage: Storage, telegram_id: int) -> list[dict[str, Any]]:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return []
+    return [
+        lot
+        for lot in storage.list_open_equipment_market_lots()
+        if int(lot.get("seller_id", 0)) != telegram_id and _is_equipment_item(str(lot.get("item_key", "")))
+    ]
+
+
 def create_market_lot(storage: Storage, telegram_id: int, item_key: str, amount: int) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
@@ -1941,6 +1952,40 @@ def buy_first_market_lot(storage: Storage, telegram_id: int) -> ActionResult:
     return ActionResult(
         True,
         f"Куплен рыночный лот #{auction_id}: {item_name} x{amount} за {price} RU.\n"
+        f"Продавец получил {seller_income} RU (комиссия {fee} RU).",
+    )
+
+
+def buy_market_lot(storage: Storage, telegram_id: int, lot_id: int) -> ActionResult:
+    buyer = storage.get_character(telegram_id, refresh_energy=False)
+    if buyer is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(buyer):
+        return ActionResult(False, _dead_block_text())
+    lot = storage.get_open_auction(lot_id)
+    if lot is None:
+        return ActionResult(False, "Лот не найден или уже закрыт.")
+    if not _is_equipment_item(str(lot["item_key"])):
+        return ActionResult(False, "Этот лот не относится к снаряге.")
+    seller_id = int(lot["seller_id"])
+    if seller_id == telegram_id:
+        return ActionResult(False, "Нельзя выкупить собственный лот.")
+    price = int(lot["price"])
+    item_key = str(lot["item_key"])
+    amount = int(lot["amount"])
+    if not storage.change_money(telegram_id, -price):
+        return ActionResult(False, "Недостаточно денег для покупки лота.")
+    if not storage.close_auction(lot_id, buyer_id=telegram_id, status="sold"):
+        storage.change_money(telegram_id, price)
+        return ActionResult(False, "Лот уже недоступен.")
+    fee = max(1, int(round(price * (MARKET_SELL_FEE_PERCENT / 100))))
+    seller_income = max(0, price - fee)
+    storage.change_money(seller_id, seller_income)
+    storage.add_item(telegram_id, item_key, amount)
+    item_name = ITEM_LABELS.get(item_key, item_key)
+    return ActionResult(
+        True,
+        f"Куплен рыночный лот #{lot_id}: {item_name} x{amount} за {price} RU.\n"
         f"Продавец получил {seller_income} RU (комиссия {fee} RU).",
     )
 
@@ -2019,13 +2064,18 @@ def build_war_lobby_overview(storage: Storage, telegram_id: int) -> str:
         if member.faction is None:
             continue
         by_faction[member.faction] = by_faction.get(member.faction, 0) + 1
-    shares = ", ".join(f"{f}: {c}" for f, c in sorted(by_faction.items())) or "нет"
+    total = sum(by_faction.values())
+    share_lines = []
+    for faction_name, count in sorted(by_faction.items()):
+        percent = int(round((count / total) * 100)) if total > 0 else 0
+        share_lines.append(f"• {faction_name}: {count} бойцов ({percent}%)")
+    shares_block = "\n".join(share_lines) if share_lines else "• Нет данных"
     return (
         f"Военное лобби #{war_id}\n"
         f"Локация: {lobby['location']}\n"
         f"Хост: {lobby['host_faction']}\n"
         f"Участников: {len(member_ids)}\n"
-        f"Распределение сил: {shares}"
+        f"Распределение сил:\n{shares_block}"
     )
 
 

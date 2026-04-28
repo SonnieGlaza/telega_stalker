@@ -50,7 +50,8 @@ from app.game_logic import (
     build_war_lobby_overview,
     transfer_location_to_ally,
     create_market_lot,
-    buy_first_market_lot,
+    buy_market_lot,
+    build_market_lots_overview,
     cancel_own_first_market_lot,
     withdraw_from_faction_warehouse,
     build_dead_character_text,
@@ -95,6 +96,7 @@ from app.keyboards import (
     alliance_pending_keyboard,
     war_lobby_keyboard,
     war_transfer_keyboard,
+    market_lots_keyboard,
 )
 from app.profile_card import build_character_card
 from app.storage import Character, Storage
@@ -1295,6 +1297,33 @@ async def market_create_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "eco:market:buy:first")
 async def market_buy_first_callback(callback: CallbackQuery) -> None:
     result = buy_first_market_lot(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "eco:market:list")
+async def market_list_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    text, lots = build_market_lots_overview(storage, callback.from_user.id, limit=12)
+    await callback.message.answer(text)
+    if lots:
+        await callback.message.answer("Выбери лот для покупки:", reply_markup=market_lots_keyboard(lots))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("eco:market:buy:"))
+async def market_buy_by_id_callback(callback: CallbackQuery) -> None:
+    lot_id = (callback.data or "").split(":", maxsplit=3)[3]
+    try:
+        auction_id = int(lot_id)
+    except ValueError:
+        await callback.answer("Некорректный ID лота.", show_alert=True)
+        return
+    result = buy_market_lot(get_storage(), callback.from_user.id, auction_id)
     await callback.message.answer(result.text)
     await callback.answer()
 

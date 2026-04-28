@@ -348,13 +348,38 @@ def economy_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот патроны", callback_data="eco:auction:create:ammo_pack")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот аптечки", callback_data="eco:auction:create:medkit")],
             [InlineKeyboardButton(text="🛒 Рынок: выставить экипировку", callback_data="eco:market:create:first_gear")],
-            [InlineKeyboardButton(text="🛒 Рынок: купить первый лот", callback_data="eco:market:buy:first")],
+            [InlineKeyboardButton(text="🛒 Рынок: список лотов экипировки", callback_data="eco:market:list")],
             [InlineKeyboardButton(text="🛑 Рынок: отменить мой лот", callback_data="eco:market:cancel:mine")],
             [InlineKeyboardButton(text="⚖️ Биржа: купить первый лот", callback_data="eco:auction:buy:first")],
             [InlineKeyboardButton(text="🛑 Биржа: отменить мой первый лот", callback_data="eco:auction:cancel:mine")],
             [InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:run")],
         ]
     )
+
+
+def market_lots_keyboard(lots: list[dict[str, str | int]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for lot in lots[:20]:
+        lot_id = int(lot["id"])
+        title = str(lot["title"])
+        price = int(lot["price"])
+        amount = int(lot["amount"])
+        seller_id = int(lot["seller_id"])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"#{lot_id} {title} x{amount} • {price} RU • seller {seller_id}",
+                    callback_data=f"eco:market:buy:{lot_id}",
+                )
+            ]
+        )
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Открытых лотов нет", callback_data="alliance:none")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def market_lot_keyboard(lots: list[dict[str, str | int]]) -> InlineKeyboardMarkup:
+    return market_lots_keyboard(lots)
 
 
 def ratings_keyboard() -> InlineKeyboardMarkup:
