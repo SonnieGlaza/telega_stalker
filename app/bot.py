@@ -66,6 +66,7 @@ from app.game_logic import (
     break_alliance,
     accept_alliance,
     declare_war,
+    equip_artifact,
     equip_armor,
     equip_weapon,
     list_equippable_armor,
@@ -303,6 +304,7 @@ def _build_info_text(player: Character) -> str:
 
 
 @router.message(Command("info"))
+@router.message(F.text.func(lambda value: (value or "").strip().lower().startswith("/info")))
 @router.message(F.text == "ℹ️ Информация")
 @router.message(F.text == "ℹ Информация")
 @router.message(F.text == "Информация")
