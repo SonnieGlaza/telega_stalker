@@ -54,7 +54,7 @@ from app.game_logic import (
     buy_first_market_lot,
     buy_market_lot,
     build_market_lots_overview,
-    build_market_sellable_equipment,
+    list_sellable_market_equipment,
     cancel_own_first_market_lot,
     withdraw_from_faction_warehouse,
     build_dead_character_text,
@@ -1375,7 +1375,7 @@ async def market_create_callback(callback: CallbackQuery) -> None:
         if player is None:
             await callback.answer("Сначала создай персонажа.", show_alert=True)
             return
-        options = build_market_sellable_equipment(storage, callback.from_user.id)
+        options = list_sellable_market_equipment(storage, callback.from_user.id)
         if not options:
             await callback.message.answer("В инвентаре нет оружия или брони для выставления на рынок.")
             await callback.answer()
