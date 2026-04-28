@@ -54,6 +54,7 @@ from app.game_logic import (
     buy_first_market_lot,
     buy_market_lot,
     build_market_lots_overview,
+    build_market_sellable_equipment,
     cancel_own_first_market_lot,
     withdraw_from_faction_warehouse,
     build_dead_character_text,
@@ -99,6 +100,7 @@ from app.keyboards import (
     war_lobby_keyboard,
     war_transfer_keyboard,
     market_lots_keyboard,
+    market_sellable_items_keyboard,
     war_sections_keyboard,
 )
 from app.profile_card import build_character_card
@@ -1348,6 +1350,23 @@ async def auction_create_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("eco:market:create:"))
 async def market_create_callback(callback: CallbackQuery) -> None:
     item_key = (callback.data or "").split(":", maxsplit=3)[3]
+    if item_key == "first_gear":
+        storage = get_storage()
+        player = storage.get_character(callback.from_user.id, refresh_energy=False)
+        if player is None:
+            await callback.answer("Сначала создай персонажа.", show_alert=True)
+            return
+        options = build_market_sellable_equipment(storage, callback.from_user.id)
+        if not options:
+            await callback.message.answer("В инвентаре нет оружия или брони для выставления на рынок.")
+            await callback.answer()
+            return
+        await callback.message.answer(
+            "Выбери предмет из инвентаря для выставления на рынок:",
+            reply_markup=market_sellable_items_keyboard(options),
+        )
+        await callback.answer()
+        return
     result = create_market_lot(get_storage(), callback.from_user.id, item_key, 1)
     await callback.message.answer(result.text)
     await callback.answer()

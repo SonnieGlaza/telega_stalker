@@ -1993,6 +1993,25 @@ def list_market_lots(storage: Storage, telegram_id: int) -> list[dict[str, Any]]
     ]
 
 
+def list_sellable_market_equipment(storage: Storage, telegram_id: int) -> list[dict[str, int | str]]:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return []
+    rows: list[dict[str, int | str]] = []
+    for item_key, owned in sorted(player.inventory.items()):
+        amount = int(owned)
+        if amount <= 0 or not _is_equipment_item(item_key):
+            continue
+        rows.append(
+            {
+                "item_key": item_key,
+                "title": ITEM_LABELS.get(item_key, item_key),
+                "amount": amount,
+            }
+        )
+    return rows
+
+
 def create_market_lot(storage: Storage, telegram_id: int, item_key: str, amount: int) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:

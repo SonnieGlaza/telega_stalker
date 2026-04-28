@@ -363,7 +363,7 @@ def economy_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот артефакт", callback_data="eco:auction:create:artifact")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот патроны", callback_data="eco:auction:create:ammo_pack")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот аптечки", callback_data="eco:auction:create:medkit")],
-            [InlineKeyboardButton(text="🛒 Рынок: выставить экипировку", callback_data="eco:market:create:first_gear")],
+            [InlineKeyboardButton(text="🛒 Рынок: выставить экипировку", callback_data="eco:market:create:choose")],
             [InlineKeyboardButton(text="🛒 Рынок: список лотов экипировки", callback_data="eco:market:list")],
             [InlineKeyboardButton(text="🛑 Рынок: отменить мой лот", callback_data="eco:market:cancel:mine")],
             [InlineKeyboardButton(text="⚖️ Биржа: купить первый лот", callback_data="eco:auction:buy:first")],
@@ -396,6 +396,25 @@ def market_lots_keyboard(lots: list[dict[str, str | int]]) -> InlineKeyboardMark
 
 def market_lot_keyboard(lots: list[dict[str, str | int]]) -> InlineKeyboardMarkup:
     return market_lots_keyboard(lots)
+
+
+def market_create_select_keyboard(items: list[dict[str, str | int]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in items[:20]:
+        item_key = str(item["item_key"])
+        title = str(item["title"])
+        amount = int(item["amount"])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{title} (x{amount})",
+                    callback_data=f"eco:market:create:{item_key}",
+                )
+            ]
+        )
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Нет подходящих вещей", callback_data="alliance:none")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def ratings_keyboard() -> InlineKeyboardMarkup:
