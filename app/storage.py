@@ -462,9 +462,14 @@ class Storage:
                 "INSERT OR IGNORE INTO locations(name, point_type, controlled_by, npc_power) VALUES(?, ?, ?, ?)",
                 [
                     ("Росток", "база", "Долг", BASE_LOCATION_NPC_POWER),
+                    ("Кордон", "база", None, BASE_LOCATION_NPC_POWER),
                     ("Армейские склады", "база", "Свобода", BASE_LOCATION_NPC_POWER),
                     ("Янтарь", "точка ресурсов", None, REGULAR_LOCATION_NPC_POWER),
+                    ("Свалка", "точка ресурсов", None, REGULAR_LOCATION_NPC_POWER),
+                    ("Болото", "точка ресурсов", None, REGULAR_LOCATION_NPC_POWER),
+                    ("НИИ Агропром", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                     ("Темная долина", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
+                    ("Рыжий лес", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                     ("Радар", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                 ],
             )
