@@ -263,14 +263,13 @@ async def show_topup(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(F.text == "ℹ️ Информация")
-@router.message(F.text == "ℹ Информация")
-@router.message(F.text == "Информация")
-async def show_info(message: Message) -> None:
+def _normalize_info_trigger(value: str | None) -> str:
+    normalized = (value or "").replace("\ufe0f", "").strip().lower()
+    return " ".join(normalized.split())
+
+
+def _build_info_text(player: Character) -> str:
     player = ensure_character(message)
-    if player is None:
-        await message.answer("Сначала создай персонажа через /start.")
-        return
     faction_chats = {
         "Свобода": "https://t.me/+kAvQ4NyrKndlNmI6",
         "Долг": "https://t.me/+IbIz9zSoruY0OTMy",
@@ -288,12 +287,12 @@ async def show_info(message: Message) -> None:
         f"• 🌐 Общий: {common_chat}\n"
         f"• Выбери группировку, чтобы увидеть чат своей фракции."
     )
-
-    await message.answer(
+    return (
         "ℹ️ Информация по игре\n\n"
         "Команды:\n"
         "• /start — создать персонажа или войти в существующего.\n"
         "• /menu — открыть главное меню.\n"
+        "• /info — открыть эту справку.\n"
         "• /pay <telegram_id> <сумма> — перевод игроку (комиссия 30%).\n\n"
         "Механики:\n"
         "• 🚚 Грузовик ускоряет переходы и снижает расход энергии на поездку,\n"
@@ -302,6 +301,16 @@ async def show_info(message: Message) -> None:
         "• 💎 Экипированный артефакт даёт +5% к пассивному восстановлению энергии.\n\n"
         f"{chats_block}"
     )
+
+
+@router.message(Command("info"))
+@router.message(F.text.func(lambda value: _normalize_info_trigger(value).endswith("информация")))
+async def show_info(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    await message.answer(_build_info_text(player))
 
 
 @router.callback_query(F.data.startswith("topup:"))
