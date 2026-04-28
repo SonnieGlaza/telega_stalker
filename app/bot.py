@@ -303,18 +303,15 @@ def _build_info_text(player: Character) -> str:
     )
 
 
-@router.message(Command("info"))
-@router.message(F.text.func(lambda value: (value or "").strip().lower().startswith("/info")))
 @router.message(F.text == "ℹ️ Информация")
-@router.message(F.text == "ℹ Информация")
-@router.message(F.text == "Информация")
-@router.message(F.text.func(lambda value: _normalize_info_trigger(value).endswith("информация")))
-async def show_info(message: Message) -> None:
+async def show_info(message: Message, state: FSMContext) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
-    await message.answer(_build_info_text(player))
+    await state.clear()
+    info_text = _build_info_text(player)
+    await message.answer(info_text)
 
 
 @router.callback_query(F.data.startswith("topup:"))
