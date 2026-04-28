@@ -190,6 +190,28 @@ def build_zone_map_image(
         else:
             label_x, label_y, box_x1, box_y1, box_x2, box_y2 = selected
 
+        # Tactical callout connector: from point to nearest label edge.
+        if x < box_x1:
+            anchor_x = box_x1
+        elif x > box_x2:
+            anchor_x = box_x2
+        else:
+            anchor_x = x
+        if y < box_y1:
+            anchor_y = box_y1
+        elif y > box_y2:
+            anchor_y = box_y2
+        else:
+            anchor_y = y
+        connector_color = (96, 118, 108)
+        draw.line((x, y, anchor_x, anchor_y), fill=connector_color, width=2)
+        draw.ellipse(
+            (anchor_x - 2, anchor_y - 2, anchor_x + 2, anchor_y + 2),
+            fill=connector_color,
+            outline=(16, 20, 19),
+            width=1,
+        )
+
         draw.rounded_rectangle(
             (box_x1, box_y1, box_x2, box_y2),
             radius=6,
