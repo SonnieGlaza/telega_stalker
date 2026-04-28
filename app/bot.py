@@ -237,6 +237,25 @@ async def show_topup(message: Message, state: FSMContext) -> None:
     )
 
 
+@router.message(F.text == "ℹ️ Информация")
+async def show_info(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    await message.answer(
+        "ℹ️ Справка по игре\n\n"
+        "Slash-команды:\n"
+        "• /start — регистрация или вход в существующего персонажа.\n"
+        "• /menu — открыть главное меню.\n"
+        "• /pay <telegram_id> <сумма> — перевести деньги игроку (комиссия 30%).\n\n"
+        "Полезно знать:\n"
+        "• 🚚 Грузовик сокращает время переходов между локациями и тратит топливо (1 за поездку).\n"
+        "• 🛏️ Спальник даёт x2 к пассивному восстановлению энергии.\n"
+        "• 💎 Экипированный артефакт даёт +5% к пассивному восстановлению энергии."
+    )
+
+
 @router.callback_query(F.data.startswith("topup:"))
 async def handle_topup(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
