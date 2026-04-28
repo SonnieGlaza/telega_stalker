@@ -25,21 +25,27 @@ MAP_POINTS: dict[str, tuple[int, int]] = {
 LABEL_CANDIDATE_OFFSETS: tuple[tuple[int, int], ...] = (
     (20, -16),
     (20, 8),
+    (20, -52),
+    (20, -88),
+    (20, -124),
     (-240, -16),
     (-240, 8),
+    (-240, -52),
+    (-240, -88),
+    (-240, -124),
     (10, -62),
     (-150, -62),
 )
 
 LABEL_PREFERRED_OFFSETS: dict[str, tuple[int, int]] = {
-    "Кордон": (20, -58),
-    "Свалка": (20, -16),
-    "Росток": (20, -58),
+    "Кордон": (20, -124),
+    "Свалка": (20, -88),
+    "Росток": (20, -52),
     "Армейские склады": (20, -16),
     "Болото": (20, -16),
     "НИИ Агропром": (20, 8),
     "Янтарь": (20, -16),
-    "Темная долина": (-240, -16),
+    "Темная долина": (-240, -88),
     "Рыжий лес": (-240, -16),
     "Радар": (-240, -16),
 }
@@ -100,15 +106,15 @@ def build_zone_map_image(
         font=small_font,
     )
 
-    legend_x, legend_y = 28, height - 178
-    legend_w, legend_h = 620, 132
+    legend_x, legend_y = 682, 108
+    legend_w, legend_h = 252, 408
     reserved_rects: list[tuple[int, int, int, int]] = [
         (legend_x - 6, legend_y - 6, legend_x + legend_w + 6, legend_y + legend_h + 6)
     ]
 
-    map_right_limit = width - 32
+    map_right_limit = legend_x - 16
     map_top_limit = 96
-    map_bottom_limit = legend_y - 12
+    map_bottom_limit = height - 44
 
     for location in locations:
         name = str(location.get("name") or "")
@@ -174,7 +180,7 @@ def build_zone_map_image(
         if selected is None:
             # Fallback if all candidates intersect: clamp near point.
             label_x = max(30, min(map_right_limit - 240, x + 20))
-            label_y = max(map_top_limit, min(map_bottom_limit - 46, y - 16))
+            label_y = max(map_top_limit, min(map_bottom_limit - 46, y - 88))
             name_bbox = draw.textbbox((label_x, label_y), name, font=body_font)
             details_bbox = draw.textbbox((label_x, label_y + 20), details_text, font=tiny_font)
             box_x1 = min(name_bbox[0], details_bbox[0]) - 6
@@ -214,14 +220,13 @@ def build_zone_map_image(
         ("interest", "Кольцо: Точка интереса"),
         ("current", "Желтая рамка: твоя локация"),
     ]
-    chip_x = legend_x + 14
-    chip_y = legend_y + 42
+    chip_x = legend_x + 12
+    chip_y = legend_y + 38
     for idx, (faction, text) in enumerate(chips):
-        row = idx // 4
-        col = idx % 4
-        x = chip_x + col * 150
+        row = idx
+        x = chip_x
         y = chip_y + row * 34
-        draw.rounded_rectangle((x, y, x + 140, y + 26), radius=8, fill=(24, 30, 29), outline=(60, 74, 68), width=1)
+        draw.rounded_rectangle((x, y, x + 226, y + 26), radius=8, fill=(24, 30, 29), outline=(60, 74, 68), width=1)
         if faction in FACTION_COLORS:
             marker_color = FACTION_COLORS[faction]
             draw.ellipse((x + 8, y + 5, x + 24, y + 21), fill=marker_color, outline=(14, 14, 14), width=1)
