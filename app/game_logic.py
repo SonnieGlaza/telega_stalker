@@ -57,12 +57,12 @@ ARMOR_CATALOG: dict[str, dict[str, int | str]] = {
     "armor_leather": {"name": "Кожаная куртка", "buy_price": 900, "sell_price": 420},
     "armor_stalker_vest": {"name": "Сталкерский бронежилет", "buy_price": 1800, "sell_price": 850},
     "armor_psz7d": {"name": "ПСЗ-7 «Долг»", "buy_price": 2900, "sell_price": 1400},
-    "armor_zarya": {"name": "Комбинезон «Заря»", "buy_price": 3800, "sell_price": 1850},
-    "armor_bulat": {"name": "ПСЗ-9д «Булат»", "buy_price": 5200, "sell_price": 2550},
-    "armor_seva": {"name": "Костюм СЕВА", "buy_price": 7600, "sell_price": 3700},
+    "armor_zarya": {"name": "Комбинезон «Заря»", "buy_price": 3000, "sell_price": 1450},
+    "armor_bulat": {"name": "Берилл-5М «Булат»", "buy_price": 5300, "sell_price": 2550},
+    "armor_seva": {"name": "Костюм СЕВА", "buy_price": 5400, "sell_price": 2600},
     "armor_scientific": {"name": "Научный костюм", "buy_price": 9800, "sell_price": 4800},
-    "armor_exo": {"name": "Экзоскелет", "buy_price": 12000, "sell_price": 5800},
-    "armor_nosorog": {"name": "Носорог", "buy_price": 18000, "sell_price": 8800},
+    "armor_exo": {"name": "Экзоскелет", "buy_price": 18000, "sell_price": 8700},
+    "armor_nosorog": {"name": "Носорог", "buy_price": 24000, "sell_price": 11600},
 }
 
 WEAPON_CATALOG: dict[str, dict[str, int | str]] = {
@@ -77,11 +77,11 @@ WEAPON_CATALOG: dict[str, dict[str, int | str]] = {
     "weapon_lr300": {"name": "TRs 301", "buy_price": 5000, "sell_price": 2400},
     "weapon_il86": {"name": "ИЛ86", "buy_price": 5200, "sell_price": 2500},
     "weapon_gp37": {"name": "ГП37", "buy_price": 7900, "sell_price": 3900},
-    "weapon_an94": {"name": "АН-94", "buy_price": 6200, "sell_price": 3000},
+    "weapon_an94": {"name": "АН-94", "buy_price": 5200, "sell_price": 2500},
     "weapon_vintar": {"name": "Винтарь ВС", "buy_price": 8700, "sell_price": 4300},
-    "weapon_svd": {"name": "СВДм-2", "buy_price": 9800, "sell_price": 4800},
-    "weapon_rp74": {"name": "РП-74", "buy_price": 10500, "sell_price": 5200},
-    "weapon_gauss": {"name": "Гаусс-пушка", "buy_price": 22000, "sell_price": 11000},
+    "weapon_svd": {"name": "СВДм-2", "buy_price": 8800, "sell_price": 4300},
+    "weapon_rp74": {"name": "РП-74", "buy_price": 9500, "sell_price": 4600},
+    "weapon_gauss": {"name": "Гаусс-пушка", "buy_price": 25000, "sell_price": 12500},
 }
 
 # Legacy callback alias used in keyboards.
@@ -108,27 +108,42 @@ MAP_TRAVEL_POINTS: dict[str, tuple[int, int]] = {
     "Радар": (740, 125),
 }
 
-def _build_level_map(catalog: dict[str, dict[str, int | str]]) -> dict[str, int]:
-    ranked: list[tuple[str, int]] = []
-    seen_names: set[str] = set()
-    for item in sorted(catalog.values(), key=lambda entry: int(entry["buy_price"])):
-        name = str(item["name"])
-        if name in seen_names:
-            continue
-        seen_names.add(name)
-        ranked.append((name, len(ranked) + 1))
-    return {name: level for name, level in ranked}
+WEAPON_RATING_BY_NAME: dict[str, int] = {
+    "Нож": 1,
+    "ПМ": 1,
+    "Фора-12": 1,
+    "Обрез": 1,
+    "Гадюка-5": 2,
+    "Chaser-13": 2,
+    "АКС-74У": 2,
+    "АК-74": 3,
+    "СПАС-12": 3,
+    "TRs 301": 4,
+    "ИЛ86": 4,
+    "АН-94": 4,
+    "ГП37": 5,
+    "Винтарь ВС": 5,
+    "СВДм-2": 5,
+    "РП-74": 5,
+    "Гаусс-пушка": 6,
+}
 
-
-WEAPON_RATING_BY_NAME: dict[str, int] = _build_level_map(WEAPON_CATALOG)
-WEAPON_RATING_BY_NAME.setdefault("Нож", 1)
-
-ARMOR_RATING_BY_NAME: dict[str, int] = _build_level_map(ARMOR_CATALOG)
-ARMOR_RATING_BY_NAME.setdefault("Куртка новичка", 1)
+ARMOR_RATING_BY_NAME: dict[str, int] = {
+    "Куртка новичка": 1,
+    "Кожаная куртка": 1,
+    "Сталкерский бронежилет": 2,
+    "Комбинезон «Заря»": 2,
+    "ПСЗ-7 «Долг»": 2,  # legacy item in old inventories
+    "Берилл-5М «Булат»": 3,
+    "Костюм СЕВА": 3,
+    "Научный костюм": 3,
+    "Экзоскелет": 4,
+    "Носорог": 5,
+}
 # Совместимость с историческими названиями экипировки из старых сохранений.
-ARMOR_RATING_BY_NAME.setdefault("Бронежилет сталкера", ARMOR_RATING_BY_NAME.get("Сталкерский бронежилет", 2))
-ARMOR_RATING_BY_NAME.setdefault("Усиленный бронекостюм", ARMOR_RATING_BY_NAME.get("ПСЗ-7 «Долг»", 3))
-ARMOR_RATING_BY_NAME.setdefault("Штурмовой экзоскелет", ARMOR_RATING_BY_NAME.get("Экзоскелет", 7))
+ARMOR_RATING_BY_NAME.setdefault("Бронежилет сталкера", ARMOR_RATING_BY_NAME["Сталкерский бронежилет"])
+ARMOR_RATING_BY_NAME.setdefault("Усиленный бронекостюм", ARMOR_RATING_BY_NAME["ПСЗ-7 «Долг»"])
+ARMOR_RATING_BY_NAME.setdefault("Штурмовой экзоскелет", ARMOR_RATING_BY_NAME["Экзоскелет"])
 
 
 ITEM_LABELS = {
@@ -153,13 +168,13 @@ ITEM_LABELS = {
     "armor_stalker_vest": "Сталкерский бронежилет",
     "armor_psz7d": "ПСЗ-7 «Долг»",
     "armor_zarya": "Комбинезон «Заря»",
-    "armor_bulat": "ПСЗ-9д «Булат»",
+    "armor_bulat": "Берилл-5М «Булат»",
     "armor_seva": "Костюм СЕВА",
     "armor_scientific": "Научный костюм",
     "armor_exo": "Экзоскелет",
     "armor_nosorog": "Носорог",
     "armor_sunrise": "Комбинезон «Заря»",
-    "armor_berill5m": "ПСЗ-9д «Булат»",
+    "armor_berill5m": "Берилл-5М «Булат»",
     "armor_exoskeleton": "Экзоскелет",
     "weapon_pm": "ПМ",
     "weapon_fort12": "Фора-12",
