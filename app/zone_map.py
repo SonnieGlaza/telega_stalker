@@ -46,8 +46,8 @@ LABEL_PREFERRED_OFFSETS: dict[str, tuple[int, int]] = {
     "НИИ Агропром": (20, 8),
     "Янтарь": (20, -16),
     "Темная долина": (-240, -88),
-    "Рыжий лес": (-240, -16),
-    "Радар": (-240, -16),
+    "Рыжий лес": (-300, 18),
+    "Радар": (-300, 18),
 }
 
 FACTION_COLORS = {
@@ -112,7 +112,7 @@ def build_zone_map_image(
         (legend_x - 6, legend_y - 6, legend_x + legend_w + 6, legend_y + legend_h + 6)
     ]
 
-    map_right_limit = legend_x - 16
+    map_right_limit = legend_x - 28
     map_top_limit = 96
     map_bottom_limit = height - 44
 
