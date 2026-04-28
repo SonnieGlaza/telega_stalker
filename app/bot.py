@@ -269,7 +269,6 @@ def _normalize_info_trigger(value: str | None) -> str:
 
 
 def _build_info_text(player: Character) -> str:
-    player = ensure_character(message)
     faction_chats = {
         "Свобода": "https://t.me/+kAvQ4NyrKndlNmI6",
         "Долг": "https://t.me/+IbIz9zSoruY0OTMy",
@@ -303,8 +302,7 @@ def _build_info_text(player: Character) -> str:
     )
 
 
-@router.message(Command("info"))
-@router.message(F.text.func(lambda value: _normalize_info_trigger(value).endswith("информация")))
+@router.message(Command("ℹ️ Информация"))
 async def show_info(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
