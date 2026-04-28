@@ -57,7 +57,7 @@ ARMOR_CATALOG: dict[str, dict[str, int | str]] = {
     "armor_leather": {"name": "Кожаная куртка", "buy_price": 900, "sell_price": 420},
     "armor_stalker_vest": {"name": "Сталкерский бронежилет", "buy_price": 1800, "sell_price": 850},
     "armor_psz7d": {"name": "ПСЗ-7 «Долг»", "buy_price": 2900, "sell_price": 1400},
-    "armor_zarya": {"name": "Комбинезон «Заря»", "buy_price": 3000, "sell_price": 1450},
+    "armor_zarya": {"name": "Комбинезон «Заря»", "buy_price": 2000, "sell_price": 950},
     "armor_bulat": {"name": "Берилл-5М «Булат»", "buy_price": 5300, "sell_price": 2550},
     "armor_seva": {"name": "Костюм СЕВА", "buy_price": 5400, "sell_price": 2600},
     "armor_scientific": {"name": "Научный костюм", "buy_price": 9800, "sell_price": 4800},
