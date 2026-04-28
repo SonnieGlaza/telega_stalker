@@ -177,7 +177,7 @@ def trader_buy_armor_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="Купить Кожаную куртку (900)", callback_data="buy:armor_leather")],
             [InlineKeyboardButton(text="Купить Сталкерский бронежилет (1800)", callback_data="buy:armor_stalker_vest")],
-            [InlineKeyboardButton(text="Купить Комбинезон «Заря» (3000)", callback_data="buy:armor_sunrise")],
+            [InlineKeyboardButton(text="Купить Комбинезон «Заря» (2000)", callback_data="buy:armor_sunrise")],
             [InlineKeyboardButton(text="Купить Берилл-5М (5300)", callback_data="buy:armor_berill5m")],
             [InlineKeyboardButton(text="Купить Костюм СЕВА (5400)", callback_data="buy:armor_seva")],
             [InlineKeyboardButton(text="Купить Экзоскелет (18000)", callback_data="buy:armor_exoskeleton")],
@@ -250,7 +250,7 @@ def trader_sell_armor_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="Продать Кожаную куртку (420)", callback_data="sell:armor_leather")],
             [InlineKeyboardButton(text="Продать Сталкерский бронежилет (850)", callback_data="sell:armor_stalker_vest")],
-            [InlineKeyboardButton(text="Продать «Заря» (1500)", callback_data="sell:armor_sunrise")],
+            [InlineKeyboardButton(text="Продать «Заря» (1000)", callback_data="sell:armor_sunrise")],
             [InlineKeyboardButton(text="Продать Берилл-5М (2650)", callback_data="sell:armor_berill5m")],
             [InlineKeyboardButton(text="Продать СЕВА (2700)", callback_data="sell:armor_seva")],
             [InlineKeyboardButton(text="Продать Экзоскелет (9000)", callback_data="sell:armor_exoskeleton")],
