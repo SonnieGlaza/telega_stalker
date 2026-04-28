@@ -33,7 +33,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "energy_drink": {"name": "Энергетик", "buy_price": 250, "sell_price": 170},
     "medkit": {"name": "Аптечка", "buy_price": 260, "sell_price": 120},
     "ammo_pack": {"name": "Патроны", "buy_price": 120, "sell_price": 55},
-    "artifact": {"name": "Артефакт", "buy_price": 0, "sell_price": 650},
+    "artifact": {"name": "Артефакт", "buy_price": 0, "sell_price": 900},
     "vodka": {"name": "Водка", "buy_price": 150, "sell_price": 50},
     "antirad": {"name": "Антирад", "buy_price": 400, "sell_price": 130},
     "bread": {"name": "Хлеб", "buy_price": 50, "sell_price": 16},
