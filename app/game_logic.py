@@ -1011,14 +1011,14 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
         return ActionResult(
             True,
             f"Куплено оружие: {title} (стоимость {price} RU).\n"
-            "Предмет добавлен в инвентарь, экипируй его вручную в разделе снаряжения.",
+            "Предмет добавлен в инвентарь, экипируй его вручную в разделе Инвентарь.",
         )
     if item_key in ARMOR_CATALOG:
         storage.add_item(telegram_id, item_key, 1)
         return ActionResult(
             True,
             f"Куплена броня: {title}.\n"
-            "Предмет добавлен в инвентарь, экипируй его вручную в разделе снаряжения.",
+            "Предмет добавлен в инвентарь, экипируй его вручную в разделе Инвентарь.",
         )
 
     storage.add_item(telegram_id, item_key, 1)
