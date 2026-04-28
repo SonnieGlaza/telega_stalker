@@ -307,12 +307,25 @@ def build_character_card(character: Character) -> bytes:
     )
 
     draw.text((right_x, 292), "Индикаторы состояния", fill=(210, 210, 210), font=body_font)
-    _draw_power_bar(draw, right_x, 322, character.health, 100, (190, 70, 70))
-    _draw_power_bar(draw, right_x, 348, character.energy, max(1, character.max_energy), (70, 150, 220))
-    _draw_power_bar(draw, right_x, 374, character.gear_power, 20, (170, 170, 95))
-    draw.text((730, 318), f"{character.health}/100", fill=(220, 220, 220), font=small_font)
-    draw.text((730, 344), f"{character.energy}/{character.max_energy}", fill=(220, 220, 220), font=small_font)
-    draw.text((730, 370), f"{character.gear_power}/20", fill=(220, 220, 220), font=small_font)
+    current_gear_power = equipment_power(character)
+    draw.text((right_x, 318), "Здоровье", fill=(220, 220, 220), font=small_font)
+    _draw_power_bar(draw, right_x + 118, 322, character.health, 100, (190, 70, 70))
+    draw.text((right_x + 370, 318), f"{character.health}/100", fill=(220, 220, 220), font=small_font)
+
+    draw.text((right_x, 344), "Энергия", fill=(220, 220, 220), font=small_font)
+    _draw_power_bar(draw, right_x + 118, 348, character.energy, max(1, character.max_energy), (70, 150, 220))
+    draw.text((right_x + 370, 344), f"{character.energy}/{character.max_energy}", fill=(220, 220, 220), font=small_font)
+
+    draw.text((right_x, 370), "Сила снаряжения", fill=(220, 220, 220), font=small_font)
+    _draw_power_bar(draw, right_x + 118, 374, current_gear_power, 20, (170, 170, 95))
+    draw.text((right_x + 370, 370), f"{current_gear_power}/20", fill=(220, 220, 220), font=small_font)
+
+    draw.text(
+        (right_x, 398),
+        f"☢ Радиация: {character.radiation}   🍗 Голод: {character.hunger}   💧 Жажда: {character.thirst}",
+        fill=(208, 208, 208),
+        font=small_font,
+    )
 
     equipment = character.equipment or {}
     weapon_name = str(equipment.get("weapon", "—"))
@@ -335,7 +348,7 @@ def build_character_card(character: Character) -> bytes:
     _draw_text_block(
         draw=draw,
         x=480,
-        y=410,
+        y=436,
         header="Снаряжение",
         lines=equipment_lines,
         header_font=small_font,
@@ -346,7 +359,7 @@ def build_character_card(character: Character) -> bytes:
     _draw_text_block(
         draw=draw,
         x=810,
-        y=410,
+        y=436,
         header="Инвентарь",
         lines=_inventory_lines(character),
         header_font=small_font,
