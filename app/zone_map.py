@@ -22,6 +22,19 @@ MAP_POINTS: dict[str, tuple[int, int]] = {
     "Радар": (700, 140),
 }
 
+LABEL_OFFSETS: dict[str, tuple[int, int]] = {
+    "Кордон": (22, -12),
+    "Свалка": (22, -18),
+    "Росток": (22, -18),
+    "Армейские склады": (22, -16),
+    "Болото": (22, -14),
+    "НИИ Агропром": (22, -16),
+    "Янтарь": (22, -16),
+    "Темная долина": (22, -14),
+    "Рыжий лес": (22, -16),
+    "Радар": (22, -16),
+}
+
 FACTION_COLORS = {
     "Долг": (230, 70, 70),
     "Свобода": (70, 200, 110),
@@ -54,9 +67,10 @@ def build_zone_map_image(
     canvas = Image.new("RGB", (width, height), (22, 28, 26))
     draw = ImageDraw.Draw(canvas)
 
-    title_font = _load_font(36)
-    body_font = _load_font(22)
-    small_font = _load_font(18)
+    title_font = _load_font(34)
+    body_font = _load_font(16)
+    small_font = _load_font(14)
+    tiny_font = _load_font(13)
 
     # Stylized "Zone" background mesh.
     draw.rectangle((24, 24, width - 24, height - 24), outline=(70, 90, 82), width=2)
@@ -67,7 +81,7 @@ def build_zone_map_image(
 
     draw.text((40, 30), "Карта Зоны", fill=(230, 240, 230), font=title_font)
     draw.text(
-        (40, 72),
+        (40, 70),
         "Текущие точки войны и контроля",
         fill=(168, 186, 173),
         font=small_font,
@@ -94,30 +108,57 @@ def build_zone_map_image(
         if current_location and name == current_location:
             label_color = (255, 245, 170)
             draw.ellipse((x - 22, y - 22, x + 22, y + 22), outline=(255, 240, 120), width=2)
-        draw.text((x + 20, y - 16), name, fill=label_color, font=body_font)
         owner_text = str(controlled_by) if controlled_by else "нейтрал"
         owner_marker = ""
         if player_faction and controlled_by == player_faction:
             owner_marker = " (союз)"
-        draw.text(
-            (x + 20, y + 12),
-            f"{point_type}; {owner_text}{owner_marker}; NPC {npc_power}",
-            fill=(185, 196, 190),
-            font=small_font,
+        offset_x, offset_y = LABEL_OFFSETS.get(name, (22, -14))
+        label_x = x + offset_x
+        label_y = y + offset_y
+        details_text = f"{point_type}; {owner_text}{owner_marker}; NPC {npc_power}"
+        name_bbox = draw.textbbox((label_x, label_y), name, font=body_font)
+        details_bbox = draw.textbbox((label_x, label_y + 20), details_text, font=tiny_font)
+        box_x1 = min(name_bbox[0], details_bbox[0]) - 6
+        box_y1 = min(name_bbox[1], details_bbox[1]) - 4
+        box_x2 = max(name_bbox[2], details_bbox[2]) + 6
+        box_y2 = max(name_bbox[3], details_bbox[3]) + 4
+        draw.rounded_rectangle(
+            (box_x1, box_y1, box_x2, box_y2),
+            radius=6,
+            fill=(18, 23, 22),
+            outline=(58, 74, 67),
+            width=1,
         )
+        draw.text((label_x, label_y), name, fill=label_color, font=body_font)
+        draw.text((label_x, label_y + 20), details_text, fill=(185, 196, 190), font=tiny_font)
 
-    legend_x, legend_y = 40, height - 155
-    draw.rectangle((legend_x, legend_y, legend_x + 420, legend_y + 105), fill=(18, 23, 22), outline=(70, 90, 82), width=1)
-    draw.text((legend_x + 12, legend_y + 8), "Легенда", fill=(225, 236, 228), font=body_font)
+    legend_x, legend_y = 40, height - 162
+    legend_w, legend_h = 530, 116
+    draw.rounded_rectangle(
+        (legend_x, legend_y, legend_x + legend_w, legend_y + legend_h),
+        radius=10,
+        fill=(16, 21, 20),
+        outline=(76, 97, 88),
+        width=2,
+    )
+    draw.text((legend_x + 14, legend_y + 10), "Легенда", fill=(230, 238, 232), font=body_font)
 
-    draw.ellipse((legend_x + 14, legend_y + 42, legend_x + 34, legend_y + 62), fill=FACTION_COLORS["Долг"])
-    draw.text((legend_x + 42, legend_y + 40), "Красный — контроль Долг", fill=(210, 220, 214), font=small_font)
-    draw.ellipse((legend_x + 14, legend_y + 72, legend_x + 34, legend_y + 92), fill=FACTION_COLORS["Свобода"])
-    draw.text((legend_x + 42, legend_y + 70), "Зеленый — контроль Свобода", fill=(210, 220, 214), font=small_font)
-    draw.ellipse((legend_x + 238, legend_y + 42, legend_x + 258, legend_y + 62), fill=FACTION_COLORS["Нейтралы"])
-    draw.text((legend_x + 266, legend_y + 40), "Серый — контроль Нейтралы", fill=(210, 220, 214), font=small_font)
-    draw.ellipse((legend_x + 238, legend_y + 72, legend_x + 258, legend_y + 92), fill=FACTION_COLORS["Бандиты"])
-    draw.text((legend_x + 266, legend_y + 70), "Оранжевый — контроль Бандиты", fill=(210, 220, 214), font=small_font)
+    chips = [
+        ("Долг", "Контроль Долг"),
+        ("Свобода", "Контроль Свобода"),
+        ("Нейтралы", "Контроль Нейтралы"),
+        ("Бандиты", "Контроль Бандиты"),
+    ]
+    chip_x = legend_x + 14
+    chip_y = legend_y + 42
+    for idx, (faction, text) in enumerate(chips):
+        row = idx // 2
+        col = idx % 2
+        x = chip_x + col * 255
+        y = chip_y + row * 34
+        draw.rounded_rectangle((x, y, x + 236, y + 26), radius=8, fill=(24, 30, 29), outline=(60, 74, 68), width=1)
+        draw.ellipse((x + 8, y + 5, x + 24, y + 21), fill=FACTION_COLORS[faction], outline=(14, 14, 14), width=1)
+        draw.text((x + 30, y + 5), text, fill=(208, 220, 213), font=small_font)
 
     output = BytesIO()
     canvas.save(output, format="PNG")
