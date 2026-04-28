@@ -263,7 +263,9 @@ async def show_topup(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(F.text.in_(("ℹ️ Информация", "ℹ Информация", "Информация")))
+@router.message(F.text == "ℹ️ Информация")
+@router.message(F.text == "ℹ Информация")
+@router.message(F.text == "Информация")
 async def show_info(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
