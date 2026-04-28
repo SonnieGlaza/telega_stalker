@@ -473,7 +473,7 @@ async def process_faction(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Сначала введи /start", show_alert=True)
         return
 
-    if faction not in {"Долг", "Свобода"}:
+    if faction not in {"Долг", "Свобода", "Нейтралы", "Бандиты"}:
         await callback.answer("Неизвестная группировка", show_alert=True)
         return
 
