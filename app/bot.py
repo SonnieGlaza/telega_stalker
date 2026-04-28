@@ -100,7 +100,7 @@ from app.keyboards import (
     war_lobby_keyboard,
     war_transfer_keyboard,
     market_lots_keyboard,
-    market_sellable_items_keyboard,
+    market_create_select_keyboard,
     war_sections_keyboard,
 )
 from app.profile_card import build_character_card
@@ -1369,7 +1369,7 @@ async def auction_create_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("eco:market:create:"))
 async def market_create_callback(callback: CallbackQuery) -> None:
     item_key = (callback.data or "").split(":", maxsplit=3)[3]
-    if item_key == "first_gear":
+    if item_key == "choose":
         storage = get_storage()
         player = storage.get_character(callback.from_user.id, refresh_energy=False)
         if player is None:
@@ -1382,7 +1382,7 @@ async def market_create_callback(callback: CallbackQuery) -> None:
             return
         await callback.message.answer(
             "Выбери предмет из инвентаря для выставления на рынок:",
-            reply_markup=market_sellable_items_keyboard(options),
+            reply_markup=market_create_select_keyboard(options),
         )
         await callback.answer()
         return
