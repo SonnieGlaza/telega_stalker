@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -118,6 +120,30 @@ TOPUP_PAYLOAD_PREFIX = "topup_stars:"
 TOPUP_ALLOWED_AMOUNTS = {1, 5, 10, 25}
 TOPUP_MIN_STARS = 1
 TOPUP_MAX_STARS = 10000
+
+
+def _is_stale_callback_error(exc: TelegramBadRequest) -> bool:
+    message = str(exc).lower()
+    return "query is too old" in message or "query id is invalid" in message
+
+
+async def safe_callback_answer(callback: CallbackQuery, *args: Any, **kwargs: Any) -> None:
+    try:
+        await callback.answer(*args, **kwargs)
+    except TelegramBadRequest as exc:
+        if _is_stale_callback_error(exc):
+            logger.debug("Ignored stale callback answer for user %s", callback.from_user.id)
+            return
+        raise
+
+
+@router.error()
+async def ignore_stale_callback_query_error(event: Any) -> bool:
+    exc = getattr(event, "exception", None)
+    if isinstance(exc, TelegramBadRequest) and _is_stale_callback_error(exc):
+        logger.debug("Ignored stale callback query error: %s", exc)
+        return True
+    return False
 
 
 class Registration(StatesGroup):
