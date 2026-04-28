@@ -305,11 +305,34 @@ def topup_keyboard() -> InlineKeyboardMarkup:
 def raid_keyboard(locations: list[dict[str, str | int | None]]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="➕ Присоединиться к открытому рейду", callback_data="raid:join")],
+        [InlineKeyboardButton(text="🤝 Союзник: присоединиться к рейду", callback_data="raid:ally:join")],
         [InlineKeyboardButton(text="🚀 Запустить мой открытый рейд", callback_data="raid:launch")],
     ]
     for location in locations:
         name = str(location["name"])
         rows.append([InlineKeyboardButton(text=f"Создать рейд на логово: {name}", callback_data=f"raid:create:{name}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def war_lobby_keyboard(locations: list[dict[str, str | int | None]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="➕ Вступить в военное лобби", callback_data="war_lobby:join")],
+        [InlineKeyboardButton(text="🚀 Запустить военное лобби", callback_data="war_lobby:launch")],
+    ]
+    for location in locations:
+        name = str(location["name"])
+        rows.append([InlineKeyboardButton(text=f"Создать штурм-лобби: {name}", callback_data=f"war_lobby:create:{name}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def war_transfer_keyboard(allies: list[str], location_name: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for ally in allies:
+        rows.append(
+            [InlineKeyboardButton(text=f"🎁 Отдать {location_name} -> {ally}", callback_data=f"war:transfer:{ally}")]
+        )
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Нет союзников для передачи", callback_data="alliance:none")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -324,6 +347,9 @@ def economy_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот артефакт", callback_data="eco:auction:create:artifact")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот патроны", callback_data="eco:auction:create:ammo_pack")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот аптечки", callback_data="eco:auction:create:medkit")],
+            [InlineKeyboardButton(text="🛒 Рынок: выставить экипировку", callback_data="eco:market:create:first_gear")],
+            [InlineKeyboardButton(text="🛒 Рынок: купить первый лот", callback_data="eco:market:buy:first")],
+            [InlineKeyboardButton(text="🛑 Рынок: отменить мой лот", callback_data="eco:market:cancel:mine")],
             [InlineKeyboardButton(text="⚖️ Биржа: купить первый лот", callback_data="eco:auction:buy:first")],
             [InlineKeyboardButton(text="🛑 Биржа: отменить мой первый лот", callback_data="eco:auction:cancel:mine")],
             [InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:run")],

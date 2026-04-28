@@ -80,6 +80,10 @@ class Storage:
                 auctions = [dict(row) for row in conn.execute("SELECT * FROM auctions").fetchall()]
                 raids = [dict(row) for row in conn.execute("SELECT * FROM raids").fetchall()]
                 raid_members = [dict(row) for row in conn.execute("SELECT * FROM raid_members").fetchall()]
+                war_lobbies = [dict(row) for row in conn.execute("SELECT * FROM war_lobbies").fetchall()]
+                war_lobby_members = [
+                    dict(row) for row in conn.execute("SELECT * FROM war_lobby_members").fetchall()
+                ]
                 map_events = [dict(row) for row in conn.execute("SELECT * FROM map_events").fetchall()]
                 player_stats = [dict(row) for row in conn.execute("SELECT * FROM player_stats").fetchall()]
                 player_achievements = [
@@ -97,6 +101,8 @@ class Storage:
                 "auctions": auctions,
                 "raids": raids,
                 "raid_members": raid_members,
+                "war_lobbies": war_lobbies,
+                "war_lobby_members": war_lobby_members,
                 "map_events": map_events,
                 "player_stats": player_stats,
                 "player_achievements": player_achievements,
@@ -127,6 +133,8 @@ class Storage:
         auctions = payload.get("auctions") or []
         raids = payload.get("raids") or []
         raid_members = payload.get("raid_members") or []
+        war_lobbies = payload.get("war_lobbies") or []
+        war_lobby_members = payload.get("war_lobby_members") or []
         map_events = payload.get("map_events") or []
         player_stats = payload.get("player_stats") or []
         player_achievements = payload.get("player_achievements") or []
@@ -286,6 +294,37 @@ class Storage:
                 """,
                 (
                     int(row.get("raid_id")),
+                    int(row.get("telegram_id")),
+                    row.get("joined_at") or utc_now().isoformat(),
+                ),
+            )
+        for row in war_lobbies:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO war_lobbies(
+                    id, host_faction, location, leader_id, status, created_at, started_at, finished_at, result_text
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(row.get("id")),
+                    row.get("host_faction"),
+                    row.get("location"),
+                    int(row.get("leader_id")),
+                    row.get("status") or "open",
+                    row.get("created_at") or utc_now().isoformat(),
+                    row.get("started_at"),
+                    row.get("finished_at"),
+                    row.get("result_text"),
+                ),
+            )
+        for row in war_lobby_members:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO war_lobby_members(war_id, telegram_id, joined_at)
+                VALUES(?, ?, ?)
+                """,
+                (
+                    int(row.get("war_id")),
                     int(row.get("telegram_id")),
                     row.get("joined_at") or utc_now().isoformat(),
                 ),
@@ -483,6 +522,31 @@ class Storage:
                     telegram_id INTEGER NOT NULL,
                     joined_at TEXT NOT NULL,
                     PRIMARY KEY(raid_id, telegram_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS war_lobbies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    host_faction TEXT NOT NULL,
+                    location TEXT NOT NULL,
+                    leader_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    result_text TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS war_lobby_members (
+                    war_id INTEGER NOT NULL,
+                    telegram_id INTEGER NOT NULL,
+                    joined_at TEXT NOT NULL,
+                    PRIMARY KEY(war_id, telegram_id)
                 )
                 """
             )
@@ -1352,6 +1416,83 @@ class Storage:
         if row is None:
             return None
         return dict(row)
+
+    def get_open_war_lobby_for_faction(self, faction: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, host_faction, location, leader_id, status, created_at, started_at, finished_at, result_text
+                FROM war_lobbies
+                WHERE host_faction = ? AND status = 'open'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (faction,),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def create_war_lobby(self, host_faction: str, location: str, leader_id: int) -> int:
+        now_iso = utc_now().isoformat()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO war_lobbies(host_faction, location, leader_id, status, created_at)
+                VALUES (?, ?, ?, 'open', ?)
+                """,
+                (host_faction, location, leader_id, now_iso),
+            )
+            war_id = int(cursor.lastrowid)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO war_lobby_members(war_id, telegram_id, joined_at)
+                VALUES (?, ?, ?)
+                """,
+                (war_id, leader_id, now_iso),
+            )
+        self.save_snapshot()
+        return war_id
+
+    def add_war_lobby_member(self, war_id: int, telegram_id: int) -> bool:
+        with self._connect() as conn:
+            lobby = conn.execute(
+                "SELECT status FROM war_lobbies WHERE id = ?",
+                (war_id,),
+            ).fetchone()
+            if lobby is None or str(lobby["status"]) != "open":
+                return False
+            if conn.execute("SELECT 1 FROM characters WHERE telegram_id = ?", (telegram_id,)).fetchone() is None:
+                return False
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO war_lobby_members(war_id, telegram_id, joined_at)
+                VALUES (?, ?, ?)
+                """,
+                (war_id, telegram_id, utc_now().isoformat()),
+            )
+        self.save_snapshot()
+        return True
+
+    def get_war_lobby_member_ids(self, war_id: int) -> list[int]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT telegram_id FROM war_lobby_members WHERE war_id = ? ORDER BY joined_at",
+                (war_id,),
+            ).fetchall()
+        return [int(row["telegram_id"]) for row in rows]
+
+    def finish_war_lobby(self, war_id: int, status: str, result_text: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE war_lobbies
+                SET status = ?, started_at = COALESCE(started_at, ?), finished_at = ?, result_text = ?
+                WHERE id = ?
+                """,
+                (status, utc_now().isoformat(), utc_now().isoformat(), result_text, war_id),
+            )
+        self.save_snapshot()
 
     def get_raid_member_ids(self, raid_id: int) -> list[int]:
         with self._connect() as conn:

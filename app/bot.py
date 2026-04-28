@@ -45,6 +45,13 @@ from app.game_logic import (
     use_mineralka,
     use_beard_tea,
     transfer_money_with_fee,
+    create_or_join_war_lobby,
+    launch_war_lobby,
+    build_war_lobby_overview,
+    transfer_location_to_ally,
+    create_market_lot,
+    buy_first_market_lot,
+    cancel_own_first_market_lot,
     withdraw_from_faction_warehouse,
     build_dead_character_text,
     respawn_character,
@@ -86,6 +93,8 @@ from app.keyboards import (
     alliance_keyboard,
     alliance_target_keyboard,
     alliance_pending_keyboard,
+    war_lobby_keyboard,
+    war_transfer_keyboard,
 )
 from app.profile_card import build_character_card
 from app.storage import Character, Storage
@@ -979,6 +988,10 @@ async def show_war(message: Message) -> None:
         reply_markup=alliance_keyboard(),
     )
     await message.answer(
+        build_war_lobby_overview(db, player.telegram_id),
+        reply_markup=war_lobby_keyboard(db.get_locations()),
+    )
+    await message.answer(
         "Выбери точку для штурма:",
         reply_markup=locations_keyboard(db.get_locations(), mode="war"),
     )
@@ -988,6 +1001,48 @@ async def show_war(message: Message) -> None:
 async def handle_war(callback: CallbackQuery) -> None:
     location = (callback.data or "").split(":", maxsplit=1)[1]
     result = attack_location(get_storage(), callback.from_user.id, location)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("war_lobby:create:"))
+async def war_lobby_create_callback(callback: CallbackQuery) -> None:
+    location = (callback.data or "").split(":", maxsplit=2)[2]
+    result = create_or_join_war_lobby(get_storage(), callback.from_user.id, location)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "war_lobby:join")
+async def war_lobby_join_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Нужен персонаж с группировкой.", show_alert=True)
+        return
+    lobby = get_storage().get_open_war_lobby_for_faction(player.faction)
+    if lobby is None:
+        await callback.answer("Открытых лобби войны нет.", show_alert=True)
+        return
+    result = create_or_join_war_lobby(get_storage(), callback.from_user.id, str(lobby["location"]))
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "war_lobby:launch")
+async def war_lobby_launch_callback(callback: CallbackQuery) -> None:
+    result = launch_war_lobby(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("war:transfer:"))
+async def war_transfer_location_callback(callback: CallbackQuery) -> None:
+    ally_faction = (callback.data or "").split(":", maxsplit=2)[2]
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Персонаж не найден.", show_alert=True)
+        return
+    result = transfer_location_to_ally(get_storage(), callback.from_user.id, player.location, ally_faction)
     await callback.message.answer(result.text)
     await callback.answer()
 
@@ -1130,6 +1185,28 @@ async def join_raid_callback(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "raid:ally:join")
+async def join_raid_as_ally_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Нужен персонаж с группировкой.", show_alert=True)
+        return
+    storage = get_storage()
+    open_raid = storage.get_open_raid_for_faction(player.faction)
+    if open_raid is None:
+        for ally in storage.list_faction_alliances(player.faction):
+            ally_open = storage.get_open_raid_for_faction(ally)
+            if ally_open is not None:
+                open_raid = ally_open
+                break
+    if open_raid is None:
+        await callback.answer("Открытых рейдов союзников нет.", show_alert=True)
+        return
+    result = create_or_join_faction_raid(storage, callback.from_user.id, str(open_raid["location"]))
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
 @router.callback_query(F.data == "raid:launch")
 async def launch_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
     result = launch_open_raid(get_storage(), callback.from_user.id)
@@ -1203,6 +1280,28 @@ async def warehouse_view_callback(callback: CallbackQuery) -> None:
 async def auction_create_callback(callback: CallbackQuery) -> None:
     lot_key = (callback.data or "").split(":", maxsplit=3)[3]
     result = create_faction_auction(get_storage(), callback.from_user.id, lot_key)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("eco:market:create:"))
+async def market_create_callback(callback: CallbackQuery) -> None:
+    item_key = (callback.data or "").split(":", maxsplit=3)[3]
+    result = create_market_lot(get_storage(), callback.from_user.id, item_key, 1)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "eco:market:buy:first")
+async def market_buy_first_callback(callback: CallbackQuery) -> None:
+    result = buy_first_market_lot(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "eco:market:cancel:mine")
+async def market_cancel_mine_callback(callback: CallbackQuery) -> None:
+    result = cancel_own_first_market_lot(get_storage(), callback.from_user.id)
     await callback.message.answer(result.text)
     await callback.answer()
 

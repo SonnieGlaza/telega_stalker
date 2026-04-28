@@ -162,6 +162,9 @@ AUCTION_DEFAULT_LOTS: dict[str, tuple[str, int, int]] = {
     "medkit": ("medkit", 2, 420),
 }
 
+MARKET_SELL_FEE_PERCENT = 30
+TRADER_EQUIPMENT_SELL_RATE = 1 / 3
+
 ZONE_EVENT_POOL: tuple[tuple[str, int, str], ...] = (
     ("mutant_swarm", 10, "Миграция мутантов: сопротивление на локации выросло."),
     ("bandit_ambush", 7, "Бандитские засады усилили гарнизон противника."),
@@ -1534,6 +1537,12 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
 
     open_raid = storage.get_open_raid_for_faction(player.faction)
     if open_raid is None:
+        for ally in storage.list_faction_alliances(player.faction):
+            ally_open = storage.get_open_raid_for_faction(ally)
+            if ally_open is not None and str(ally_open["location"]) == location_name:
+                open_raid = ally_open
+                break
+    if open_raid is None:
         raid_id = storage.create_raid(player.faction, location_name, telegram_id)
         return ActionResult(
             True,
@@ -1549,8 +1558,12 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
         )
 
     raid_id = int(open_raid["id"])
+    host_faction = str(open_raid["faction"])
+    member_faction = player.faction
+    if not storage.are_factions_allied(host_faction, member_faction) and host_faction != member_faction:
+        return ActionResult(False, "К рейду можно присоединяться только своей фракцией или союзниками.")
     if not storage.add_raid_member(raid_id, telegram_id):
-        return ActionResult(False, "Не удалось присоединиться к рейду. Вступать могут только бойцы той же группировки.")
+        return ActionResult(False, "Не удалось присоединиться к рейду.")
     member_ids = storage.get_raid_member_ids(raid_id)
     return ActionResult(
         True,
@@ -1580,7 +1593,8 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
         return RaidLaunchResult(False, "Для отрядного рейда нужно минимум 2 игрока.", ())
 
     members = storage.get_characters_by_ids(member_ids)
-    members = [member for member in members if member.faction == leader.faction and member.health > 0]
+    allowed_factions = {leader.faction, *storage.list_faction_alliances(leader.faction)}
+    members = [member for member in members if member.faction in allowed_factions and member.health > 0]
     if len(members) < 2:
         return RaidLaunchResult(False, "Недостаточно бойцов с нормальным здоровьем для запуска рейда.", ())
 
@@ -1769,6 +1783,8 @@ def create_faction_auction(storage: Storage, telegram_id: int, lot_key: str) -> 
         return ActionResult(False, "Аукцион доступен только бойцам группировки.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    if lot_key == "gear":
+        return create_market_lot(storage, telegram_id, "auto", 1)
     lot = AUCTION_DEFAULT_LOTS.get(lot_key)
     if lot is None:
         return ActionResult(False, "Неизвестный тип лота.")
@@ -1850,6 +1866,237 @@ def cancel_own_first_auction(storage: Storage, telegram_id: int) -> ActionResult
         True,
         f"Лот #{auction_id} отменен, предметы возвращены: {ITEM_LABELS.get(item_key, item_key)} x{amount}.",
     )
+
+
+def _is_equipment_item(item_key: str) -> bool:
+    return item_key in WEAPON_CATALOG or item_key in ARMOR_CATALOG
+
+
+def _equipment_sell_price(base_sell_price: int, durability: int | None = None) -> int:
+    base = max(1, int(round(base_sell_price * TRADER_EQUIPMENT_SELL_RATE)))
+    if durability is None:
+        return base
+    return _price_with_durability(base, durability)
+
+
+def create_market_lot(storage: Storage, telegram_id: int, item_key: str, amount: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if amount <= 0:
+        return ActionResult(False, "Количество для лота должно быть больше нуля.")
+    if not _is_equipment_item(item_key):
+        return ActionResult(False, "На рынок можно выставить только оружие или броню.")
+    if item_key in WEAPON_CATALOG:
+        item_name = str(WEAPON_CATALOG[item_key]["name"])
+    else:
+        item_name = str(ARMOR_CATALOG[item_key]["name"])
+    if not storage.remove_item(telegram_id, item_key, amount):
+        return ActionResult(False, f"У тебя нет нужного количества: {item_name}.")
+    base_sell = int(SHOP_ITEMS.get(item_key, {}).get("sell_price", 0))
+    if base_sell <= 0:
+        base_sell = max(1, int(float(SHOP_ITEMS[item_key]["buy_price"]) / 3))
+    suggested_price = max(1, _equipment_sell_price(base_sell) * amount)
+    auction_id = storage.create_auction(
+        seller_id=telegram_id,
+        faction=player.faction or "market",
+        item_key=item_key,
+        amount=amount,
+        price=suggested_price,
+    )
+    return ActionResult(
+        True,
+        f"Рыночный лот #{auction_id} выставлен: {item_name} x{amount} за {suggested_price} RU.\n"
+        f"Комиссия при продаже: {MARKET_SELL_FEE_PERCENT}%.",
+    )
+
+
+def buy_first_market_lot(storage: Storage, telegram_id: int) -> ActionResult:
+    buyer = storage.get_character(telegram_id, refresh_energy=False)
+    if buyer is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(buyer):
+        return ActionResult(False, _dead_block_text())
+    auctions = storage.list_open_auctions(buyer.faction or "market")
+    target = next((a for a in auctions if int(a["seller_id"]) != telegram_id and _is_equipment_item(str(a["item_key"]))), None)
+    if target is None:
+        return ActionResult(False, "Открытых рыночных лотов экипировки нет.")
+    auction_id = int(target["id"])
+    price = int(target["price"])
+    item_key = str(target["item_key"])
+    amount = int(target["amount"])
+    seller_id = int(target["seller_id"])
+    if not storage.change_money(telegram_id, -price):
+        return ActionResult(False, "Недостаточно денег для покупки лота.")
+    if not storage.close_auction(auction_id, buyer_id=telegram_id, status="sold"):
+        storage.change_money(telegram_id, price)
+        return ActionResult(False, "Лот уже недоступен.")
+    fee = max(1, int(round(price * (MARKET_SELL_FEE_PERCENT / 100))))
+    seller_income = max(0, price - fee)
+    storage.change_money(seller_id, seller_income)
+    storage.add_item(telegram_id, item_key, amount)
+    item_name = ITEM_LABELS.get(item_key, item_key)
+    return ActionResult(
+        True,
+        f"Куплен рыночный лот #{auction_id}: {item_name} x{amount} за {price} RU.\n"
+        f"Продавец получил {seller_income} RU (комиссия {fee} RU).",
+    )
+
+
+def cancel_own_first_market_lot(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    auctions = storage.list_open_auctions(player.faction or "market")
+    target = next(
+        (a for a in auctions if int(a["seller_id"]) == telegram_id and _is_equipment_item(str(a["item_key"]))),
+        None,
+    )
+    if target is None:
+        return ActionResult(False, "У тебя нет открытых рыночных лотов экипировки.")
+    auction_id = int(target["id"])
+    item_key = str(target["item_key"])
+    amount = int(target["amount"])
+    if not storage.close_auction(auction_id, buyer_id=None, status="cancelled"):
+        return ActionResult(False, "Не удалось отменить рыночный лот.")
+    storage.add_item(telegram_id, item_key, amount)
+    return ActionResult(True, f"Рыночный лот #{auction_id} отменен, предметы возвращены.")
+
+
+def create_or_join_war_lobby(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+    location = storage.get_location(location_name)
+    if location is None:
+        return ActionResult(False, "Локация не найдена.")
+    open_lobby = storage.get_open_war_lobby_for_faction(player.faction)
+    if open_lobby is None:
+        for ally in storage.list_faction_alliances(player.faction):
+            ally_lobby = storage.get_open_war_lobby_for_faction(ally)
+            if ally_lobby is not None and str(ally_lobby["location"]) == location_name:
+                open_lobby = ally_lobby
+                break
+    if open_lobby is None:
+        war_id = storage.create_war_lobby(player.faction, location_name, telegram_id)
+        return ActionResult(True, f"Создано военное лобби #{war_id} на «{location_name}».")
+    war_id = int(open_lobby["id"])
+    host_faction = str(open_lobby["host_faction"])
+    if host_faction != player.faction and not storage.are_factions_allied(host_faction, player.faction):
+        return ActionResult(False, "В это лобби могут вступать только союзники хоста.")
+    if not storage.add_war_lobby_member(war_id, telegram_id):
+        return ActionResult(False, "Не удалось вступить в военное лобби.")
+    members = storage.get_war_lobby_member_ids(war_id)
+    return ActionResult(True, f"Ты вступил в военное лобби #{war_id}. Участников: {len(members)}.")
+
+
+def build_war_lobby_overview(storage: Storage, telegram_id: int) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return "Военное лобби доступно после выбора группировки."
+    lobby = storage.get_open_war_lobby_for_faction(player.faction)
+    if lobby is None:
+        for ally in storage.list_faction_alliances(player.faction):
+            ally_lobby = storage.get_open_war_lobby_for_faction(ally)
+            if ally_lobby is not None:
+                lobby = ally_lobby
+                break
+    if lobby is None:
+        return "Открытых военных лобби нет. Создай лобби на нужную локацию."
+    war_id = int(lobby["id"])
+    member_ids = storage.get_war_lobby_member_ids(war_id)
+    members = storage.get_characters_by_ids(member_ids)
+    by_faction: dict[str, int] = {}
+    for member in members:
+        if member.faction is None:
+            continue
+        by_faction[member.faction] = by_faction.get(member.faction, 0) + 1
+    shares = ", ".join(f"{f}: {c}" for f, c in sorted(by_faction.items())) or "нет"
+    return (
+        f"Военное лобби #{war_id}\n"
+        f"Локация: {lobby['location']}\n"
+        f"Хост: {lobby['host_faction']}\n"
+        f"Участников: {len(member_ids)}\n"
+        f"Распределение сил: {shares}"
+    )
+
+
+def launch_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
+    leader = storage.get_character(telegram_id, refresh_energy=False)
+    if leader is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(leader):
+        return ActionResult(False, _dead_block_text())
+    if leader.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+    lobby = storage.get_open_war_lobby_for_faction(leader.faction)
+    if lobby is None:
+        return ActionResult(False, "У твоей фракции нет открытого военного лобби.")
+    if int(lobby["leader_id"]) != telegram_id:
+        return ActionResult(False, "Запускать лобби может только лидер, который его создал.")
+    war_id = int(lobby["id"])
+    location_name = str(lobby["location"])
+    member_ids = storage.get_war_lobby_member_ids(war_id)
+    members = [m for m in storage.get_characters_by_ids(member_ids) if m.health > 0 and m.faction]
+    if len(members) < WAR_MIN_FACTION_MEMBERS:
+        return ActionResult(False, f"Для запуска нужно минимум {WAR_MIN_FACTION_MEMBERS} живых бойцов.")
+    active: list[Character] = []
+    for member in members:
+        if storage.spend_energy(member.telegram_id, 24):
+            active.append(member)
+    if len(active) < WAR_MIN_FACTION_MEMBERS:
+        return ActionResult(False, "Недостаточно энергии у бойцов лобби.")
+    faction_counts: dict[str, int] = {}
+    for member in active:
+        faction_counts[str(member.faction)] = faction_counts.get(str(member.faction), 0) + 1
+    factions = list(faction_counts.keys())
+    weights = [faction_counts[f] for f in factions]
+    winner = random.choices(factions, weights=weights, k=1)[0]
+    target = storage.get_location(location_name)
+    if target is None:
+        return ActionResult(False, "Локация лобби не найдена.")
+    enemy_power = int(target["npc_power"])
+    total_power = sum(equipment_power(member) for member in active)
+    chance = int(round((total_power / (total_power + enemy_power + 10)) * 100))
+    chance = max(10, min(90, chance))
+    success = random.randint(1, 100) <= chance
+    if success:
+        storage.set_location_control(location_name, winner)
+        storage.finish_war_lobby(war_id, "success", f"Победа: {winner}")
+        breakdown = ", ".join(f"{f}:{faction_counts[f]}" for f in sorted(faction_counts))
+        return ActionResult(
+            True,
+            f"Штурм лобби #{war_id} успешен (шанс {chance}%).\n"
+            f"Локация «{location_name}» перешла под контроль: {winner}.\n"
+            f"Распределение бойцов: {breakdown}.",
+        )
+    storage.finish_war_lobby(war_id, "failed", "Поражение штурма")
+    return ActionResult(False, f"Штурм лобби #{war_id} провален (шанс {chance}%).")
+
+
+def transfer_location_to_ally(storage: Storage, telegram_id: int, location_name: str, ally_faction: str) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Сначала создай персонажа и выбери группировку.")
+    if storage.get_faction_leader_id(player.faction) != telegram_id:
+        return ActionResult(False, "Передавать локацию может только лидер фракции.")
+    if not storage.are_factions_allied(player.faction, ally_faction):
+        return ActionResult(False, "Локацию можно передать только союзнику.")
+    location = storage.get_location(location_name)
+    if location is None:
+        return ActionResult(False, "Локация не найдена.")
+    if str(location.get("controlled_by") or "") != player.faction:
+        return ActionResult(False, "Передавать можно только локацию своей фракции.")
+    storage.set_location_control(location_name, ally_faction)
+    return ActionResult(True, f"Локация «{location_name}» передана союзнику: {ally_faction}.")
 
 
 def build_economy_overview(storage: Storage, telegram_id: int) -> str:
