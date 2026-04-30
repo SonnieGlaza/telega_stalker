@@ -24,9 +24,9 @@ class QuestType:
 
 QUESTS: dict[str, QuestType] = {
     "easy": QuestType("easy", "Легко", 96, 10, 270, 410, 0, 0),
-    "hard": QuestType("hard", "Сложно", 80, 16, 350, 550, 0, 0),
+    "hard": QuestType("hard", "Сложно", 80, 16, 1050, 1200, 0, 0),
     "heavy": QuestType("heavy", "Тяжело", 70, 22, 500, 750, 2, 1),
-    "impossible": QuestType("impossible", "Невозможно", 60, 28, 650, 1000, 3, 1),
+    "impossible": QuestType("impossible", "Невозможно", 60, 28, 1500, 2200, 3, 1),
 }
 
 
