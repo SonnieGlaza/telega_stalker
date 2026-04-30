@@ -151,6 +151,7 @@ class Registration(StatesGroup):
     nickname = State()
     gender = State()
     topup_custom_stars = State()
+    market_lot_price = State()
 
 
 def get_storage() -> Storage:
@@ -1425,9 +1426,10 @@ async def auction_create_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("eco:market:create:"))
-async def market_create_callback(callback: CallbackQuery) -> None:
+async def market_create_callback(callback: CallbackQuery, state: FSMContext) -> None:
     item_key = (callback.data or "").split(":", maxsplit=3)[3]
     if item_key == "choose":
+        await state.clear()
         storage = get_storage()
         player = storage.get_character(callback.from_user.id, refresh_energy=False)
         if player is None:
@@ -1444,9 +1446,44 @@ async def market_create_callback(callback: CallbackQuery) -> None:
         )
         await callback.answer()
         return
-    result = create_market_lot(get_storage(), callback.from_user.id, item_key, 1)
-    await callback.message.answer(result.text)
+    await state.set_state(Registration.market_lot_price)
+    await state.update_data(market_item_key=item_key)
+    await callback.message.answer(
+        "Введи цену лота в RU (целое число больше 0).\n"
+        "Пример: 800\n"
+        "Комиссия рынка 30%: покупатель платит цену лота, продавец получает 70%."
+    )
     await callback.answer()
+
+
+@router.message(Registration.market_lot_price)
+async def process_market_lot_price(message: Message, state: FSMContext) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await state.clear()
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+
+    raw_price = (message.text or "").strip().replace(" ", "")
+    try:
+        lot_price = int(raw_price)
+    except ValueError:
+        await message.answer("Цена должна быть целым числом, например: 800")
+        return
+    if lot_price <= 0:
+        await message.answer("Цена должна быть больше нуля.")
+        return
+
+    data = await state.get_data()
+    item_key = str(data.get("market_item_key", "")).strip()
+    if not item_key:
+        await state.clear()
+        await message.answer("Не удалось определить предмет для лота. Попробуй снова через Экономику.")
+        return
+
+    result = create_market_lot(get_storage(), message.from_user.id, item_key, 1, price=lot_price)
+    await state.clear()
+    await message.answer(result.text)
 
 
 @router.callback_query(F.data == "eco:market:buy:first")
