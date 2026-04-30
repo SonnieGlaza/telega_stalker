@@ -2030,7 +2030,13 @@ def list_sellable_market_equipment(storage: Storage, telegram_id: int) -> list[d
     return rows
 
 
-def create_market_lot(storage: Storage, telegram_id: int, item_key: str, amount: int) -> ActionResult:
+def create_market_lot(
+    storage: Storage,
+    telegram_id: int,
+    item_key: str,
+    amount: int,
+    price: int | None = None,
+) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа.")
@@ -2062,16 +2068,20 @@ def create_market_lot(storage: Storage, telegram_id: int, item_key: str, amount:
     if base_sell <= 0:
         base_sell = max(1, int(float(SHOP_ITEMS[item_key]["buy_price"]) / 3))
     suggested_price = max(1, _equipment_sell_price(base_sell) * amount)
+    lot_price = suggested_price if price is None else int(price)
+    if lot_price <= 0:
+        storage.add_item(telegram_id, item_key, amount)
+        return ActionResult(False, "Цена лота должна быть больше нуля.")
     auction_id = storage.create_auction(
         seller_id=telegram_id,
         faction=player.faction or "market",
         item_key=item_key,
         amount=amount,
-        price=suggested_price,
+        price=lot_price,
     )
     return ActionResult(
         True,
-        f"Рыночный лот #{auction_id} выставлен: {item_name} x{amount} за {suggested_price} RU.\n"
+        f"Рыночный лот #{auction_id} выставлен: {item_name} x{amount} за {lot_price} RU.\n"
         f"Комиссия при продаже: {MARKET_SELL_FEE_PERCENT}%.",
     )
 
