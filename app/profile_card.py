@@ -233,7 +233,7 @@ def build_character_card(character: Character) -> bytes:
 
     faction_color = _faction_color(character.faction)
     location_color = _location_color(character.location)
-    skin = resolve_skin(character)
+    skin = resolve_skin(character, gear_power=equipment_power(character))
 
     draw.rectangle((0, 0, width, 90), fill=(28, 31, 40))
     draw.text((24, 16), "Карточка персонажа", fill=(235, 235, 235), font=title_font)

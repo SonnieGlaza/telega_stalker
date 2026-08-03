@@ -117,13 +117,17 @@ def run_smoke_check() -> None:
         assert "artifact:search" in callbacks
         assert "war:section:scenario" in callbacks
         assert "war:section:lobby" in callbacks
-        assert "war:section:assault" in callbacks
+        assert "raid:cancel:all" in callbacks
+        assert "war_lobby:dissolve" in callbacks
+        assert "stash:open" in callbacks
         _, _, missing_callbacks = _callback_handler_coverage()
         assert not missing_callbacks, f"Missing callback handlers: {', '.join(missing_callbacks)}"
 
         # Label map sanity (no missing key for new items).
         assert "detector_otklik" in ITEM_LABELS
         assert "sleeping_bag" in ITEM_LABELS
+        assert "stash_case" in ITEM_LABELS
+        assert "artifact_power" in ITEM_LABELS
 
 
 if __name__ == "__main__":

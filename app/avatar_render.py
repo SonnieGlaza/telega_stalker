@@ -12,11 +12,18 @@ AVATAR_DIR = PROJECT_ROOT / "assets" / "avatars"
 
 
 def _tier(character: Character) -> int:
-    if character.gear_power >= 13:
+    # Используем актуальную силу снаряги (оружие/броня/арт), а не устаревший gear_power.
+    try:
+        from app.game_logic import equipment_power
+
+        power = equipment_power(character)
+    except Exception:
+        power = character.gear_power
+    if power >= 9:
         return 4
-    if character.gear_power >= 8:
+    if power >= 5:
         return 3
-    if character.gear_power >= 4:
+    if power >= 2:
         return 2
     return 1
 

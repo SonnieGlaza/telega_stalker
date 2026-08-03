@@ -591,6 +591,15 @@ class Storage:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS meta_kv (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+            self._ensure_player_stats_schema(conn)
             conn.executemany(
                 "INSERT OR IGNORE INTO factions(name, treasury, leader_id) VALUES(?, ?, NULL)",
                 [
@@ -664,6 +673,123 @@ class Storage:
                 (telegram_id,),
             ).fetchone()
         return row is not None
+
+    def is_nickname_taken(self, nickname: str, exclude_telegram_id: int | None = None) -> bool:
+        normalized = nickname.strip().casefold()
+        if not normalized:
+            return False
+        with self._connect() as conn:
+            if exclude_telegram_id is None:
+                row = conn.execute(
+                    "SELECT 1 FROM characters WHERE lower(nickname) = ? LIMIT 1",
+                    (normalized,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT 1 FROM characters
+                    WHERE lower(nickname) = ? AND telegram_id <> ?
+                    LIMIT 1
+                    """,
+                    (normalized, exclude_telegram_id),
+                ).fetchone()
+        return row is not None
+
+    def list_players(self, limit: int = 100) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(200, limit))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT telegram_id, nickname, faction, location, health
+                FROM characters
+                ORDER BY nickname COLLATE NOCASE
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_faction_member_ids(self, faction: str) -> list[int]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT telegram_id FROM characters WHERE faction = ? ORDER BY nickname",
+                (faction,),
+            ).fetchall()
+        return [int(row["telegram_id"]) for row in rows]
+
+    def get_meta(self, key: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT value FROM meta_kv WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            return None
+        return str(row["value"])
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO meta_kv(key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value),
+            )
+        self.save_snapshot()
+
+    def list_open_raids(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, faction, location, leader_id, status, created_at
+                FROM raids
+                WHERE status = 'open'
+                ORDER BY id DESC
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def cancel_open_raid(self, raid_id: int, result_text: str = "Рейд отменен.") -> bool:
+        with self._connect() as conn:
+            row = conn.execute("SELECT status FROM raids WHERE id = ?", (raid_id,)).fetchone()
+            if row is None or str(row["status"]) != "open":
+                return False
+            conn.execute(
+                """
+                UPDATE raids
+                SET status = 'cancelled', finished_at = ?, result_text = ?
+                WHERE id = ?
+                """,
+                (utc_now().isoformat(), result_text, raid_id),
+            )
+        self.save_snapshot()
+        return True
+
+    def cancel_open_raids_for_faction(self, faction: str, result_text: str = "Рейды отменены.") -> int:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id FROM raids WHERE faction = ? AND status = 'open'",
+                (faction,),
+            ).fetchall()
+            for row in rows:
+                conn.execute(
+                    """
+                    UPDATE raids
+                    SET status = 'cancelled', finished_at = ?, result_text = ?
+                    WHERE id = ?
+                    """,
+                    (utc_now().isoformat(), result_text, int(row["id"])),
+                )
+            cancelled = len(rows)
+        if cancelled:
+            self.save_snapshot()
+        return cancelled
+
+    def set_gear_power_value(self, telegram_id: int, value: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET gear_power = ? WHERE telegram_id = ?",
+                (max(1, int(value)), telegram_id),
+            )
+        self.save_snapshot()
 
     def set_faction(self, telegram_id: int, faction: str) -> None:
         with self._connect() as conn:
@@ -923,11 +1049,14 @@ class Storage:
             "money_earned": "money_earned",
             "rating_points": "rating_points",
             "achievements_unlocked": "achievements_unlocked",
+            "deaths": "deaths",
+            "artifacts_found": "artifacts_found",
         }
         column = allowed_columns.get(stat_key)
         if column is None or delta == 0:
             return False
         with self._connect() as conn:
+            self._ensure_player_stats_schema(conn)
             self._ensure_player_stats_row(conn, telegram_id)
             conn.execute(
                 f"UPDATE player_stats SET {column} = MAX(0, {column} + ?) WHERE telegram_id = ?",  # noqa: S608
@@ -938,11 +1067,13 @@ class Storage:
 
     def get_player_stats(self, telegram_id: int) -> dict[str, int]:
         with self._connect() as conn:
+            self._ensure_player_stats_schema(conn)
             self._ensure_player_stats_row(conn, telegram_id)
             row = conn.execute(
                 """
                 SELECT quests_completed, quests_failed, raids_completed, raids_failed, wars_won,
-                       smuggling_success, trades_done, money_earned, rating_points, achievements_unlocked
+                       smuggling_success, trades_done, money_earned, rating_points, achievements_unlocked,
+                       deaths, artifacts_found
                 FROM player_stats
                 WHERE telegram_id = ?
                 """,
@@ -960,6 +1091,8 @@ class Storage:
                 "money_earned": 0,
                 "rating_points": 0,
                 "achievements_unlocked": 0,
+                "deaths": 0,
+                "artifacts_found": 0,
             }
         return {
             "quests_completed": int(row["quests_completed"]),
@@ -972,6 +1105,8 @@ class Storage:
             "money_earned": int(row["money_earned"]),
             "rating_points": int(row["rating_points"]),
             "achievements_unlocked": int(row["achievements_unlocked"]),
+            "deaths": int(row["deaths"]),
+            "artifacts_found": int(row["artifacts_found"]),
         }
 
     def unlock_player_achievement(self, telegram_id: int, achievement_key: str) -> bool:
@@ -1760,7 +1895,15 @@ class Storage:
                 (json.dumps(equipment, ensure_ascii=False), telegram_id),
             )
 
+    def _ensure_player_stats_schema(self, conn: sqlite3.Connection) -> None:
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(player_stats)").fetchall()}
+        if "deaths" not in columns:
+            conn.execute("ALTER TABLE player_stats ADD COLUMN deaths INTEGER NOT NULL DEFAULT 0")
+        if "artifacts_found" not in columns:
+            conn.execute("ALTER TABLE player_stats ADD COLUMN artifacts_found INTEGER NOT NULL DEFAULT 0")
+
     def _ensure_player_stats_rows(self, conn: sqlite3.Connection) -> None:
+        self._ensure_player_stats_schema(conn)
         conn.execute(
             """
             INSERT OR IGNORE INTO player_stats(telegram_id)
@@ -1769,6 +1912,7 @@ class Storage:
         )
 
     def _ensure_player_stats_row(self, conn: sqlite3.Connection, telegram_id: int) -> None:
+        self._ensure_player_stats_schema(conn)
         conn.execute(
             "INSERT OR IGNORE INTO player_stats(telegram_id) VALUES (?)",
             (telegram_id,),

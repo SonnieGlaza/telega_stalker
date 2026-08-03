@@ -8,6 +8,13 @@ from typing import Any, Callable
 
 from app.skins import resolve_skin
 from app.storage import Character, Storage
+from app.loot import (
+    STASH_BUY_PRICE,
+    STASH_ITEM_KEY,
+    maybe_stash_drop,
+    open_stash_loot,
+    roll_smuggling_personal_loot,
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +58,9 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "truck": {"name": "Грузовик", "buy_price": 7000, "sell_price": 0},
     "sleeping_bag": {"name": "Спальник", "buy_price": 30000, "sell_price": 10000},
     "fuel_can": {"name": "Канистра топлива (+5)", "buy_price": 450, "sell_price": 200},
+    "stash_case": {"name": "Тайник", "buy_price": 1000, "sell_price": 300},
+    "artifact_power": {"name": "Арт «Сила»", "buy_price": 0, "sell_price": 1200},
+    "artifact_vitality": {"name": "Арт «Живучесть»", "buy_price": 0, "sell_price": 1200},
 }
 
 ARMOR_CATALOG: dict[str, dict[str, int | str]] = {
@@ -151,6 +161,9 @@ ITEM_LABELS = {
     "medkit": "Аптечка",
     "ammo_pack": "Патроны",
     "artifact": "Артефакт",
+    "artifact_power": "Арт «Сила»",
+    "artifact_vitality": "Арт «Живучесть»",
+    "stash_case": "Тайник",
     "vodka": "Водка",
     "antirad": "Антирад",
     "bread": "Хлеб",
@@ -267,6 +280,23 @@ THIRST_PASSIVE_PER_HOUR = 1
 SURVIVAL_TICK_MINUTES = 30
 SURVIVAL_OVERLIMIT_HP_DRAIN = 10
 TRANSFER_FEE_PERCENT = 30
+RESOURCE_POINT_INCOME_PER_HOUR = 100
+BASE_POINT_INCOME_PER_HOUR = 50
+EMISSION_INTERVAL_HOURS = 6
+EMISSION_WARN_60_MINUTES = 60
+EMISSION_WARN_30_MINUTES = 30
+BASE_SAFE_LOCATIONS = {"Росток", "Кордон", "Армейские склады", "Свалка"}
+
+ARTIFACT_EQUIP_BONUSES: dict[str, dict[str, int]] = {
+    "Артефакт Зоны": {"power": 2, "hp": 0},
+    "Арт «Сила»": {"power": 1, "hp": 0},
+    "Арт «Живучесть»": {"power": 0, "hp": 10},
+}
+ARTIFACT_INVENTORY_TO_NAME: dict[str, str] = {
+    "artifact": "Артефакт Зоны",
+    "artifact_power": "Арт «Сила»",
+    "artifact_vitality": "Арт «Живучесть»",
+}
 
 
 @dataclass(frozen=True)
@@ -340,9 +370,37 @@ def equipment_power(character: Character) -> int:
 
     weapon_level = _weapon_rating(weapon_name)
     armor_level = _armor_rating(armor_name)
-    artifact_bonus = 2 if artifact_name and artifact_name != "Нет" else 0
+    artifact_bonus = ARTIFACT_EQUIP_BONUSES.get(artifact_name, {}).get("power", 0)
+    if artifact_bonus == 0 and artifact_name and artifact_name != "Нет":
+        artifact_bonus = 2
     durability_penalty = _durability_penalty(weapon_durability, 6) + _durability_penalty(armor_durability, 6)
     return max(1, weapon_level + armor_level + artifact_bonus - durability_penalty)
+
+
+def _artifact_hp_bonus(character: Character) -> int:
+    artifact_name = str(character.equipment.get("artifact", "Нет"))
+    return int(ARTIFACT_EQUIP_BONUSES.get(artifact_name, {}).get("hp", 0))
+
+
+def _sync_character_gear_power(storage: Storage, telegram_id: int) -> None:
+    character = storage.get_character(telegram_id, refresh_energy=False)
+    if character is None:
+        return
+    storage.set_gear_power_value(telegram_id, equipment_power(character))
+
+
+def _maybe_grant_stash(storage: Storage, telegram_id: int) -> str:
+    if not maybe_stash_drop():
+        return ""
+    storage.add_item(telegram_id, STASH_ITEM_KEY, 1)
+    return "\n📦 Найден тайник!"
+
+
+def _format_loot_lines(drops: list[tuple[str, int]]) -> str:
+    if not drops:
+        return ""
+    lines = [f"• {ITEM_LABELS.get(key, key)} x{amount}" for key, amount in drops]
+    return "\n".join(lines)
 
 
 def compute_total_gear_power(character: Character) -> int:
@@ -404,16 +462,18 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Респавн доступен только при HP=0.")
     if not storage.change_money(telegram_id, -RESPAWN_COST_RU):
         return ActionResult(False, f"Недостаточно денег для респавна ({RESPAWN_COST_RU} RU).")
+    storage.add_player_stat(telegram_id, "deaths", 1)
     current_health = player.health
     current_energy = player.energy
     storage.change_health(telegram_id, RESPAWN_HEALTH - current_health)
     storage.restore_energy(telegram_id, RESPAWN_ENERGY - current_energy)
     storage.set_location(telegram_id, RESPAWN_BASE_LOCATION)
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     return ActionResult(
         True,
         f"Ты был эвакуирован в «{RESPAWN_BASE_LOCATION}».\n"
         f"HP восстановлено до {RESPAWN_HEALTH}, энергия до {RESPAWN_ENERGY}.\n"
-        f"Списано за респавн: {RESPAWN_COST_RU} RU.",
+        f"Списано за респавн: {RESPAWN_COST_RU} RU.{achievements_text}",
     )
 
 
@@ -474,6 +534,38 @@ def _achievement_rules() -> tuple[AchievementRule, ...]:
             check=lambda stats, _: stats["trades_done"] >= 30,
         ),
         AchievementRule(
+            key="quest_50",
+            title="Работяга Зоны",
+            description="Выполни 50 заданий",
+            reward_ru=1500,
+            reward_rating=90,
+            check=lambda stats, _: stats["quests_completed"] >= 50,
+        ),
+        AchievementRule(
+            key="raid_15",
+            title="Штурмовик логов",
+            description="Заверши 15 успешных рейдов",
+            reward_ru=1400,
+            reward_rating=85,
+            check=lambda stats, _: stats["raids_completed"] >= 15,
+        ),
+        AchievementRule(
+            key="money_50000",
+            title="Олигарх Зоны",
+            description="Заработай суммарно 50 000 RU",
+            reward_ru=2500,
+            reward_rating=120,
+            check=lambda stats, _: stats["money_earned"] >= 50_000,
+        ),
+        AchievementRule(
+            key="deaths_3",
+            title="Феникс",
+            description="Умри 3 раза и продолжай путь",
+            reward_ru=600,
+            reward_rating=40,
+            check=lambda stats, _: stats["deaths"] >= 3,
+        ),
+        AchievementRule(
             key="money_20000",
             title="Толстый кошелек",
             description="Заработай суммарно 20 000 RU",
@@ -488,6 +580,14 @@ def _achievement_rules() -> tuple[AchievementRule, ...]:
             reward_ru=1000,
             reward_rating=70,
             check=lambda _stats, character: compute_total_gear_power(character) >= 14,
+        ),
+        AchievementRule(
+            key="artifact_5",
+            title="Охотник за артефактами",
+            description="Найди 5 артефактов",
+            reward_ru=800,
+            reward_rating=55,
+            check=lambda stats, _: stats["artifacts_found"] >= 5,
         ),
     )
 
@@ -596,7 +696,9 @@ def calculate_equipment_bonus(character: Character) -> int:
     # Каждый уровень оружия/брони дает +1 к силе снаряжения (начиная с 1-го уровня).
     armor_bonus = _armor_rating(armor_name)
     weapon_bonus = _weapon_rating(weapon_name)
-    artifact_bonus = 2 if artifact_name and artifact_name != "Нет" else 0
+    artifact_bonus = ARTIFACT_EQUIP_BONUSES.get(artifact_name, {}).get("power", 0)
+    if artifact_bonus == 0 and artifact_name and artifact_name != "Нет":
+        artifact_bonus = 2
     armor_penalty = _durability_penalty(armor_durability, max_penalty=6)
     weapon_penalty = _durability_penalty(weapon_durability, max_penalty=6)
     return max(0, armor_bonus + weapon_bonus + artifact_bonus - armor_penalty - weapon_penalty)
@@ -737,10 +839,13 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
         storage.add_player_stat(telegram_id, "money_earned", reward)
 
         if random.random() < 0.18:
-            storage.add_item(telegram_id, "artifact", 1)
-            extra = "\nТы нашел редкий артефакт!"
+            art_key = random.choice(("artifact", "artifact_power", "artifact_vitality"))
+            storage.add_item(telegram_id, art_key, 1)
+            storage.add_player_stat(telegram_id, "artifacts_found", 1)
+            extra = f"\nТы нашел: {ITEM_LABELS.get(art_key, art_key)}!"
         else:
             extra = ""
+        extra += _maybe_grant_stash(storage, telegram_id)
         achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
         return ActionResult(
             True,
@@ -937,12 +1042,14 @@ def search_artifacts(storage: Storage, telegram_id: int) -> ActionResult:
     roll = random.randint(1, 100)
     survival_text = _apply_active_survival(storage, telegram_id)
     if roll <= chance:
-        storage.add_item(telegram_id, "artifact", 1)
+        art_key = random.choice(("artifact", "artifact_power", "artifact_vitality"))
+        storage.add_item(telegram_id, art_key, 1)
+        storage.add_player_stat(telegram_id, "artifacts_found", 1)
         return ActionResult(
             True,
             f"Поиск артефакта ({detector_name}) успешен!\n"
             f"Шанс: {chance}% (бросок {roll}).\n"
-            "Найдено: Артефакт x1."
+            f"Найдено: {ITEM_LABELS.get(art_key, art_key)} x1."
             f"{survival_text}",
         )
     return ActionResult(
@@ -1008,21 +1115,28 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
         return ActionResult(True, f"Куплена канистра топлива. Топливо +5 (стоимость {price} RU).")
     if item_key in WEAPON_CATALOG:
         storage.add_item(telegram_id, item_key, 1)
+        storage.add_player_stat(telegram_id, "trades_done", 1)
+        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
         return ActionResult(
             True,
             f"Куплено оружие: {title} (стоимость {price} RU).\n"
-            "Предмет добавлен в инвентарь, экипируй его вручную в разделе Инвентарь.",
+            f"Предмет добавлен в инвентарь, экипируй его вручную в разделе Инвентарь.{achievements_text}",
         )
     if item_key in ARMOR_CATALOG:
         storage.add_item(telegram_id, item_key, 1)
+        storage.add_player_stat(telegram_id, "trades_done", 1)
+        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
         return ActionResult(
             True,
             f"Куплена броня: {title}.\n"
-            "Предмет добавлен в инвентарь, экипируй его вручную в разделе Инвентарь.",
+            f"Предмет добавлен в инвентарь, экипируй его вручную в разделе Инвентарь.{achievements_text}",
         )
 
     storage.add_item(telegram_id, item_key, 1)
-    return ActionResult(True, f"Куплено: {title}.")
+    storage.add_player_stat(telegram_id, "trades_done", 1)
+    _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    return ActionResult(True, f"Куплено: {title}.{achievements_text}")
 
 
 def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
@@ -1043,12 +1157,14 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
             return ActionResult(False, "У тебя нет грузовика для продажи.")
         storage.clear_truck_owned(telegram_id)
         storage.change_money(telegram_id, sell_price)
+        storage.add_player_stat(telegram_id, "trades_done", 1)
         return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
     if item_key == "sleeping_bag":
         if not character.sleeping_bag_owned:
             return ActionResult(False, "У тебя нет спальника для продажи.")
         storage.clear_sleeping_bag_owned(telegram_id)
         storage.change_money(telegram_id, sell_price)
+        storage.add_player_stat(telegram_id, "trades_done", 1)
         return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
     if item_key in WEAPON_CATALOG:
         weapon_name = str(item["name"])
@@ -1063,13 +1179,15 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
         elif not storage.remove_item(telegram_id, item_key, 1):
             return ActionResult(False, f"У тебя нет оружия: {weapon_name}.")
         storage.change_money(telegram_id, final_sell_price)
+        storage.add_player_stat(telegram_id, "trades_done", 1)
+        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
         if final_sell_price != sell_price:
             return ActionResult(
                 True,
                 f"Продано: {title} за {final_sell_price} RU.\n"
-                f"(Базовая цена {sell_price} RU снижена из-за износа.)",
+                f"(Базовая цена {sell_price} RU снижена из-за износа.){achievements_text}",
             )
-        return ActionResult(True, f"Продано: {title} за {final_sell_price} RU.")
+        return ActionResult(True, f"Продано: {title} за {final_sell_price} RU.{achievements_text}")
     if item_key in ARMOR_CATALOG:
         armor_name = str(item["name"])
         equipped_armor = str(character.equipment.get("armor", "Куртка новичка"))
@@ -1081,22 +1199,28 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
         elif not storage.remove_item(telegram_id, item_key, 1):
             return ActionResult(False, f"У тебя нет брони: {armor_name}.")
         storage.change_money(telegram_id, final_sell_price)
+        storage.add_player_stat(telegram_id, "trades_done", 1)
+        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
         if final_sell_price != sell_price:
             return ActionResult(
                 True,
                 f"Продано: {title} за {final_sell_price} RU.\n"
-                f"(Базовая цена {sell_price} RU снижена из-за износа.)",
+                f"(Базовая цена {sell_price} RU снижена из-за износа.){achievements_text}",
             )
-        return ActionResult(True, f"Продано: {title} за {final_sell_price} RU.")
-    if item_key == "artifact":
-        removed_from_inventory = storage.remove_item(telegram_id, "artifact", 1)
+        return ActionResult(True, f"Продано: {title} за {final_sell_price} RU.{achievements_text}")
+    if item_key in {"artifact", "artifact_power", "artifact_vitality"}:
+        removed_from_inventory = storage.remove_item(telegram_id, item_key, 1)
         if not removed_from_inventory:
             equipped_artifact = str(character.equipment.get("artifact", "Нет"))
-            if equipped_artifact and equipped_artifact != "Нет":
+            expected_name = ARTIFACT_INVENTORY_TO_NAME.get(item_key, "Артефакт Зоны")
+            if equipped_artifact == expected_name or (
+                item_key == "artifact" and equipped_artifact and equipped_artifact != "Нет"
+            ):
                 storage.set_equipment_item(telegram_id, "artifact", "Нет")
             else:
                 return ActionResult(False, "У тебя нет артефакта для продажи.")
         storage.change_money(telegram_id, sell_price)
+        storage.add_player_stat(telegram_id, "trades_done", 1)
         return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
     if item_key == "fuel_can":
         if not storage.change_fuel(telegram_id, -5):
@@ -1105,7 +1229,9 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
         if item_key not in WEAPON_CATALOG and not storage.remove_item(telegram_id, item_key, 1):
             return ActionResult(False, f"У тебя нет предмета: {title}.")
     storage.change_money(telegram_id, sell_price)
-    return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
+    storage.add_player_stat(telegram_id, "trades_done", 1)
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    return ActionResult(True, f"Продано: {title} за {sell_price} RU.{achievements_text}")
 
 
 def _primary_keys_by_name(catalog: dict[str, dict[str, int | str]]) -> dict[str, str]:
@@ -1161,6 +1287,7 @@ def equip_weapon(storage: Storage, telegram_id: int, item_key: str) -> ActionRes
     if old_key is not None and current_weapon != "Нож":
         storage.add_item(telegram_id, old_key, 1)
     storage.set_equipment_item(telegram_id, "weapon", weapon_name)
+    _sync_character_gear_power(storage, telegram_id)
     return ActionResult(True, f"Экипировано оружие: {weapon_name}.")
 
 
@@ -1185,6 +1312,7 @@ def equip_armor(storage: Storage, telegram_id: int, item_key: str) -> ActionResu
     if old_key is not None:
         storage.add_item(telegram_id, old_key, 1)
     storage.set_equipment_item(telegram_id, "armor", armor_name)
+    _sync_character_gear_power(storage, telegram_id)
     return ActionResult(True, f"Экипирована броня: {armor_name}.")
 
 
@@ -1215,27 +1343,47 @@ def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult
     )
 
 
-def equip_artifact(storage: Storage, telegram_id: int) -> ActionResult:
+def equip_artifact(storage: Storage, telegram_id: int, item_key: str = "artifact") -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    if item_key not in ARTIFACT_INVENTORY_TO_NAME:
+        # Auto-pick best available artifact from inventory.
+        for candidate in ("artifact_power", "artifact_vitality", "artifact"):
+            if int(player.inventory.get(candidate, 0)) > 0:
+                item_key = candidate
+                break
+        else:
+            return ActionResult(False, "У тебя нет артефакта в инвентаре.")
     equipped_artifact = str(player.equipment.get("artifact", "Нет"))
     if equipped_artifact != "Нет":
-        return ActionResult(False, "Артефакт уже экипирован.")
-    if not storage.remove_item(telegram_id, "artifact", 1):
+        return ActionResult(False, "Артефакт уже экипирован. Сначала продай или сними текущий.")
+    if not storage.remove_item(telegram_id, item_key, 1):
         return ActionResult(False, "У тебя нет артефакта в инвентаре.")
-    storage.set_equipment_item(telegram_id, "artifact", "Артефакт Зоны")
+    artifact_name = ARTIFACT_INVENTORY_TO_NAME[item_key]
+    storage.set_equipment_item(telegram_id, "artifact", artifact_name)
+    _sync_character_gear_power(storage, telegram_id)
+    bonus = ARTIFACT_EQUIP_BONUSES.get(artifact_name, {"power": 0, "hp": 0})
+    bonus_parts = []
+    if bonus.get("power"):
+        bonus_parts.append(f"+{bonus['power']} к силе")
+    if bonus.get("hp"):
+        bonus_parts.append(f"+{bonus['hp']} HP")
+        storage.change_health(telegram_id, int(bonus["hp"]))
+    if not bonus_parts:
+        bonus_parts.append("+5% реген энергии")
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     return ActionResult(
         True,
-        f"Артефакт экипирован. Бонус к восстановлению выносливости (+5%) активирован.{achievements_text}",
+        f"Экипирован {artifact_name}. Бонус: {', '.join(bonus_parts)}.{achievements_text}",
     )
 
 
 def format_inventory(character: Character) -> str:
-    skin = resolve_skin(character)
+    skin = resolve_skin(character, gear_power=equipment_power(character))
+    faction_note = f" | окраска {character.faction}" if character.faction else ""
     if character.inventory:
         items = "\n".join(
             f"• {ITEM_LABELS.get(key, key)} x{amount}"
@@ -1282,7 +1430,7 @@ def format_inventory(character: Character) -> str:
         f"Здоровье: {character.health}\n"
         f"Энергия: {character.energy}/{character.max_energy}\n"
         f"Сила снаряги: {current_gear_power}\n"
-        f"Скин: {skin.title}\n"
+        f"Скин: {skin.title}{faction_note}\n"
         f"Баланс: {character.money} RU\n"
         f"Транспорт: {vehicle}\n"
         f"Спальник: {sleeping_bag}\n"
@@ -1465,86 +1613,10 @@ def declare_war(storage: Storage, telegram_id: int, target_faction: str) -> Acti
 
 
 def attack_location(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
-    character = storage.get_character(telegram_id)
-    if character is None:
-        return ActionResult(False, "Сначала создай персонажа.")
-    if _is_dead(character):
-        return ActionResult(False, _dead_block_text())
-    if character.faction is None:
-        return ActionResult(False, "Сначала выбери группировку.")
-    if storage.get_faction_active_members_count(character.faction) < WAR_MIN_FACTION_MEMBERS:
-        return ActionResult(
-            False,
-            f"Для войны нужно минимум {WAR_MIN_FACTION_MEMBERS} бойцов группировки с живым персонажем.",
-        )
-
-    locations = {loc["name"]: loc for loc in storage.get_locations()}
-    if location_name not in locations:
-        return ActionResult(False, "Локация не найдена.")
-
-    target = locations[location_name]
-    if target["point_type"] == "база" and target["controlled_by"] == character.faction:
-        return ActionResult(False, "Нельзя атаковать собственную базу своей группировки.")
-    target_owner = target["controlled_by"]
-    if (
-        isinstance(target_owner, str)
-        and target_owner
-        and target_owner != character.faction
-        and character.faction is not None
-        and storage.are_factions_allied(character.faction, target_owner)
-    ):
-        return ActionResult(False, f"Нельзя атаковать союзную точку: {target_owner} — ваш союзник.")
-
-    faction_power = storage.get_faction_power(character.faction)
-    squad_power = max(1, faction_power)
-    enemy_power = int(target["npc_power"])
-    if target["controlled_by"] and target["controlled_by"] != character.faction:
-        enemy_power += 10
-
-    if not storage.spend_energy(telegram_id, 24):
-        return ActionResult(False, "Недостаточно энергии для штурма (нужно 24).")
-
-    chance = int(round((squad_power / (squad_power + enemy_power)) * 100))
-    chance = max(10, min(90, chance))
-    weapon_penalty = _durability_penalty(_durability_percent(character, "weapon"), max_penalty=18)
-    armor_penalty = _durability_penalty(_durability_percent(character, "armor"), max_penalty=12)
-    chance = max(8, chance - weapon_penalty - armor_penalty // 2)
-    roll = random.randint(1, 100)
-    success = roll <= chance
-
-    durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=5, armor_loss=4)
-    if success:
-        storage.set_location_control(location_name, character.faction)
-        personal_reward = 250
-        treasury_reward = 0
-
-        if target["point_type"] == "точка ресурсов":
-            treasury_reward = 1800
-            storage.change_faction_treasury(character.faction, treasury_reward)
-        elif target["point_type"] == "база":
-            treasury_reward = 900
-            storage.change_faction_treasury(character.faction, treasury_reward)
-
-        storage.change_money(telegram_id, personal_reward)
-        _add_rating(storage, telegram_id, RATING_REWARD["war_success"])
-        storage.add_player_stat(telegram_id, "wars_won", 1)
-        storage.add_player_stat(telegram_id, "money_earned", personal_reward)
-        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
-        return ActionResult(
-            True,
-            f"Штурм успешен! Шанс {chance}% (бросок {roll}).\n"
-            f"Точка «{location_name}» под контролем {character.faction}.\n"
-            f"Личная награда: {personal_reward} RU.\n"
-            f"В казну группировки: {treasury_reward} RU.{durability_text}{achievements_text}",
-        )
-
-    loss = random.randint(80, 170)
-    storage.change_money(telegram_id, -loss)
-    _add_rating(storage, telegram_id, -RATING_REWARD["war_fail"])
+    _ = (storage, telegram_id, location_name)
     return ActionResult(
         False,
-        f"Штурм провален. Шанс {chance}% (бросок {roll}).\n"
-        f"Потери отряда на снабжение: {loss} RU.{durability_text}",
+        "Соло-штурм отключен. Захватывай точки через «Военные лобби».",
     )
 
 
@@ -1760,13 +1832,15 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
             )
             if artifacts_reward > 0:
                 storage.add_item(member.telegram_id, "artifact", artifacts_reward)
+                storage.add_player_stat(member.telegram_id, "artifacts_found", artifacts_reward)
+            stash_text = _maybe_grant_stash(storage, member.telegram_id)
             _add_rating(storage, member.telegram_id, RATING_REWARD["raid_success"])
             storage.add_player_stat(member.telegram_id, "raids_completed", 1)
             if member.telegram_id in battle["wounds"]:
                 storage.change_health(member.telegram_id, -14)
             achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
             if member.telegram_id == leader.telegram_id:
-                notes.append(durability_text + achievement_text)
+                notes.append(durability_text + stash_text + achievement_text)
         new_npc_power = max(12, enemy_power - random.randint(4, 10))
         storage.set_location_npc_power(location_name, new_npc_power)
         storage.finish_raid(
@@ -2255,12 +2329,21 @@ def build_war_lobby_overview(storage: Storage, telegram_id: int) -> str:
         percent = int(round((count / total) * 100)) if total > 0 else 0
         share_lines.append(f"• {faction_name}: {count} бойцов ({percent}%)")
     shares_block = "\n".join(share_lines) if share_lines else "• Нет данных"
+    leader_id = int(lobby["leader_id"])
+    leader = storage.get_character(leader_id, refresh_energy=False)
+    leader_name = leader.nickname if leader else str(leader_id)
+    members_block = "\n".join(
+        f"• {member.nickname} [{member.faction or '—'}] id={member.telegram_id}"
+        for member in members
+    ) or "• Пока пусто"
     return (
         f"Военное лобби #{war_id}\n"
         f"Локация: {lobby['location']}\n"
-        f"Хост: {lobby['host_faction']}\n"
+        f"Создал: {leader_name} (id {leader_id})\n"
+        f"Хост-фракция: {lobby['host_faction']}\n"
         f"Участников: {len(member_ids)}\n"
-        f"Распределение сил:\n{shares_block}"
+        f"Распределение сил:\n{shares_block}\n\n"
+        f"Состав:\n{members_block}"
     )
 
 
@@ -2306,6 +2389,11 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
     if success:
         storage.set_location_control(location_name, winner)
         storage.finish_war_lobby(war_id, "success", f"Победа: {winner}")
+        for member in active:
+            if member.faction == winner:
+                storage.add_player_stat(member.telegram_id, "wars_won", 1)
+                _maybe_grant_stash(storage, member.telegram_id)
+                _progress_and_unlock_achievements(storage, member.telegram_id)
         breakdown = ", ".join(f"{f}:{faction_counts[f]}" for f in sorted(faction_counts))
         return ActionResult(
             True,
@@ -2339,6 +2427,9 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
     if player is None or player.faction is None:
         return "Экономика доступна только после выбора группировки."
 
+    income_result = apply_controlled_points_income(storage)
+    income_note = f"\n{income_result.text}\n" if income_result.ok else "\n"
+
     warehouse = storage.get_faction_warehouse(player.faction)
     factions = storage.get_factions()
     faction_info = next((f for f in factions if f["name"] == player.faction), None)
@@ -2362,9 +2453,11 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
 
     return (
         f"Экономика группировки «{player.faction}»\n"
-        f"Казна: {treasury} RU\n\n"
+        f"Казна: {treasury} RU"
+        f"{income_note}"
         f"Склад:\n{chr(10).join(warehouse_lines)}\n\n"
-        f"Аукцион:\n{chr(10).join(auctions_lines)}"
+        f"Аукцион:\n{chr(10).join(auctions_lines)}\n\n"
+        f"Пассивный доход: ресурсы {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч, базы {BASE_POINT_INCOME_PER_HOUR} RU/ч."
     )
 
 
@@ -2396,15 +2489,22 @@ def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
         storage.change_money(telegram_id, reward)
         storage.change_faction_treasury(player.faction, reward // 3)
         storage.change_faction_warehouse_item(player.faction, "ammo_pack", warehouse_bonus)
+        personal_drops = roll_smuggling_personal_loot()
+        for item_key, amount in personal_drops:
+            storage.add_item(telegram_id, item_key, amount)
+        stash_text = _maybe_grant_stash(storage, telegram_id)
         _add_rating(storage, telegram_id, RATING_REWARD["smuggle_success"])
         storage.add_player_stat(telegram_id, "smuggling_success", 1)
         storage.add_player_stat(telegram_id, "money_earned", reward)
         achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+        drops_text = _format_loot_lines(personal_drops)
+        drops_block = f"\nЛичный дроп:\n{drops_text}" if drops_text else ""
         return ActionResult(
             True,
             f"Контрабанда удалась! Шанс {chance}% (бросок {roll}).\n"
             f"Ты получил {reward} RU, в казну ушло {reward // 3} RU.\n"
-            f"На склад добавлено патронов: +{warehouse_bonus}.{durability_text}{achievements_text}",
+            f"На склад добавлено патронов: +{warehouse_bonus}."
+            f"{drops_block}{stash_text}{durability_text}{achievements_text}",
         )
 
     penalty = random.randint(120, 240)
@@ -2466,3 +2566,222 @@ def build_events_overview(storage: Storage) -> str:
             f"• {location}: {event.get('description')} (мод {modifier:+d}, NPC {npc_power}, ~{minutes_left} мин)"
         )
     return "\n".join(lines)
+
+
+def cancel_faction_raids(storage: Storage, telegram_id: int, raid_id: int | None = None) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if raid_id is not None:
+        raid = storage.get_raid(raid_id)
+        if raid is None or str(raid.get("status")) != "open":
+            return ActionResult(False, f"Открытый рейд #{raid_id} не найден.")
+        if str(raid.get("faction")) != player.faction and int(raid.get("leader_id", 0)) != telegram_id:
+            return ActionResult(False, "Можно отменять только рейды своей группировки.")
+        if int(raid.get("leader_id", 0)) != telegram_id and storage.get_faction_leader_id(player.faction) != telegram_id:
+            return ActionResult(False, "Отменять рейд может создатель или лидер группировки.")
+        if not storage.cancel_open_raid(raid_id, "Рейд отменен игроком."):
+            return ActionResult(False, "Не удалось отменить рейд.")
+        return ActionResult(True, f"Рейд #{raid_id} отменен.")
+    cancelled = storage.cancel_open_raids_for_faction(player.faction, "Рейды отменены игроком.")
+    if cancelled <= 0:
+        return ActionResult(False, "Открытых рейдов у твоей группировки нет.")
+    return ActionResult(True, f"Отменено рейдов: {cancelled}.")
+
+
+def dissolve_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+    lobby = storage.get_open_war_lobby_for_faction(player.faction)
+    if lobby is None:
+        return ActionResult(False, "Открытого военного лобби нет.")
+    if int(lobby["leader_id"]) != telegram_id and storage.get_faction_leader_id(player.faction) != telegram_id:
+        return ActionResult(False, "Распустить лобби может только создатель или лидер группировки.")
+    war_id = int(lobby["id"])
+    storage.finish_war_lobby(war_id, status="cancelled", result_text="Лобби распущено.")
+    return ActionResult(True, f"Военное лобби #{war_id} распущено.")
+
+
+def open_stash_case(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if not storage.remove_item(telegram_id, STASH_ITEM_KEY, 1):
+        return ActionResult(False, "У тебя нет тайника. Купи у торговца или найди в активностях.")
+    drops = open_stash_loot()
+    for item_key, amount in drops:
+        storage.add_item(telegram_id, item_key, amount)
+        if item_key.startswith("artifact"):
+            storage.add_player_stat(telegram_id, "artifacts_found", amount)
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    return ActionResult(
+        True,
+        "Тайник вскрыт!\nСодержимое:\n"
+        f"{_format_loot_lines(drops)}{achievements_text}",
+    )
+
+
+def build_character_stats_overview(storage: Storage, telegram_id: int) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return "Сначала создай персонажа через /start."
+    stats = storage.get_player_stats(telegram_id)
+    skin = resolve_skin(player, gear_power=equipment_power(player))
+    return (
+        f"📊 Статистика {player.nickname}\n"
+        f"Telegram ID: {player.telegram_id}\n"
+        f"Скин: {skin.title}\n"
+        f"Сила снаряги: {equipment_power(player)}\n\n"
+        f"Заданий выполнено: {stats['quests_completed']}\n"
+        f"Заданий провалено: {stats['quests_failed']}\n"
+        f"Успешных рейдов: {stats['raids_completed']}\n"
+        f"Проваленных рейдов: {stats['raids_failed']}\n"
+        f"Захватов точек: {stats['wars_won']}\n"
+        f"Успешных контрабанд: {stats['smuggling_success']}\n"
+        f"Сделок у торговца: {stats['trades_done']}\n"
+        f"Денег заработано: {stats['money_earned']} RU\n"
+        f"Артефактов найдено: {stats['artifacts_found']}\n"
+        f"Смертей: {stats['deaths']}\n"
+        f"Рейтинг: {stats['rating_points']}\n"
+        f"Достижений: {stats['achievements_unlocked']}"
+    )
+
+
+def build_players_directory(storage: Storage, limit: int = 40) -> str:
+    rows = storage.list_players(limit=limit)
+    if not rows:
+        return "Игроков пока нет."
+    lines = ["👥 Игроки Зоны (ник / Telegram ID):"]
+    for row in rows:
+        faction = row.get("faction") or "без гп"
+        lines.append(f"• {row['nickname']} — {row['telegram_id']} [{faction}]")
+    if len(rows) >= limit:
+        lines.append(f"\nПоказаны первые {limit}.")
+    return "\n".join(lines)
+
+
+def apply_controlled_points_income(storage: Storage) -> ActionResult:
+    raw_last = storage.get_meta("points_income_last_at")
+    now = datetime.now(timezone.utc)
+    if raw_last:
+        try:
+            last = datetime.fromisoformat(raw_last)
+        except ValueError:
+            last = now - timedelta(hours=1)
+    else:
+        last = now - timedelta(hours=1)
+    hours = int((now - last).total_seconds() // 3600)
+    if hours <= 0:
+        return ActionResult(False, "Приток с точек пока не начислен (меньше часа).")
+    hours = min(hours, 24)
+    totals: dict[str, int] = {}
+    for location in storage.get_locations():
+        owner = location.get("controlled_by")
+        if not owner:
+            continue
+        point_type = str(location.get("point_type"))
+        if point_type == "точка ресурсов":
+            income = RESOURCE_POINT_INCOME_PER_HOUR * hours
+        elif point_type == "база":
+            income = BASE_POINT_INCOME_PER_HOUR * hours
+        else:
+            continue
+        storage.change_faction_treasury(str(owner), income)
+        totals[str(owner)] = totals.get(str(owner), 0) + income
+    storage.set_meta("points_income_last_at", now.isoformat())
+    if not totals:
+        return ActionResult(True, f"Прошло {hours} ч., но контролируемых ресурсных точек/баз нет.")
+    lines = [f"Приток за {hours} ч.:"]
+    for faction, amount in sorted(totals.items()):
+        lines.append(f"• {faction}: +{amount} RU в казну")
+    return ActionResult(True, "\n".join(lines))
+
+
+def process_emission_cycle(storage: Storage) -> tuple[str, list[int]]:
+    """Returns (public_message, telegram_ids_to_notify). Empty message means no event."""
+    now = datetime.now(timezone.utc)
+    raw_at = storage.get_meta("emission_at")
+    warn60 = storage.get_meta("emission_warn60_sent") == "1"
+    warn30 = storage.get_meta("emission_warn30_sent") == "1"
+    notify_ids = [int(row["telegram_id"]) for row in storage.list_players(limit=200)]
+
+    if raw_at is None:
+        emission_at = now + timedelta(hours=EMISSION_INTERVAL_HOURS)
+        storage.set_meta("emission_at", emission_at.isoformat())
+        storage.set_meta("emission_warn60_sent", "0")
+        storage.set_meta("emission_warn30_sent", "0")
+        return ("", [])
+
+    try:
+        emission_at = datetime.fromisoformat(raw_at)
+    except ValueError:
+        emission_at = now + timedelta(hours=EMISSION_INTERVAL_HOURS)
+        storage.set_meta("emission_at", emission_at.isoformat())
+        return ("", [])
+
+    minutes_left = (emission_at - now).total_seconds() / 60.0
+    if minutes_left > EMISSION_WARN_60_MINUTES:
+        return ("", [])
+
+    if minutes_left > EMISSION_WARN_30_MINUTES and not warn60:
+        storage.set_meta("emission_warn60_sent", "1")
+        return (
+            "⚠️ ВЫБРОС через 60 минут!\n"
+            "Если ты не на базе к моменту Выброса — персонаж погибнет.",
+            notify_ids,
+        )
+
+    if 0 < minutes_left <= EMISSION_WARN_30_MINUTES and not warn30:
+        storage.set_meta("emission_warn30_sent", "1")
+        return (
+            "☢️ ВЫБРОС через 30 минут!\n"
+            "Срочно уходи на базу (Росток / Кордон / Армейские склады / Свалка).",
+            notify_ids,
+        )
+
+    if minutes_left > 0:
+        return ("", [])
+
+    killed: list[str] = []
+    for row in storage.list_players(limit=200):
+        player = storage.get_character(int(row["telegram_id"]), refresh_energy=False)
+        if player is None or player.health <= 0:
+            continue
+        if player.location in BASE_SAFE_LOCATIONS:
+            continue
+        storage.change_health(player.telegram_id, -player.health)
+        killed.append(player.nickname)
+
+    next_at = now + timedelta(hours=EMISSION_INTERVAL_HOURS)
+    storage.set_meta("emission_at", next_at.isoformat())
+    storage.set_meta("emission_warn60_sent", "0")
+    storage.set_meta("emission_warn30_sent", "0")
+    killed_text = ", ".join(killed[:20]) if killed else "никто не пострадал (все были на базах)"
+    return (
+        f"💥 ВЫБРОС прошел по Зоне!\nПогибшие вне баз: {killed_text}.\n"
+        f"Следующий Выброс примерно через {EMISSION_INTERVAL_HOURS} ч.",
+        notify_ids,
+    )
+
+
+def build_faction_broadcast_text(storage: Storage, telegram_id: int, custom_text: str | None = None) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+    if storage.get_faction_leader_id(player.faction) != telegram_id:
+        return ActionResult(False, "Рассылку может делать только лидер группировки.")
+    body = (custom_text or "Бойцы, общий сбор!").strip()
+    text = f"📣 [{player.faction}] {player.nickname}:\n{body}"
+    return ActionResult(True, text)
+
+
+def list_faction_broadcast_targets(storage: Storage, telegram_id: int) -> list[int]:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return []
+    return [tid for tid in storage.list_faction_member_ids(player.faction) if tid != telegram_id]

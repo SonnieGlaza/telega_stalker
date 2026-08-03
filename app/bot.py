@@ -23,6 +23,15 @@ from app.game_logic import (
     build_events_overview,
     build_raids_overview,
     build_rating_overview,
+    build_character_stats_overview,
+    build_players_directory,
+    build_faction_broadcast_text,
+    list_faction_broadcast_targets,
+    cancel_faction_raids,
+    dissolve_war_lobby,
+    open_stash_case,
+    process_emission_cycle,
+    apply_controlled_points_income,
     buy_item,
     buy_first_faction_auction,
     cancel_own_first_auction,
@@ -521,6 +530,9 @@ async def process_nickname(message: Message, state: FSMContext) -> None:
         return
     if len(nickname) > 24:
         await message.answer("Прозвище слишком длинное. Максимум 24 символа.")
+        return
+    if get_storage().is_nickname_taken(nickname):
+        await message.answer("Это прозвище уже занято. Выбери другое.")
         return
 
     await state.update_data(nickname=nickname)
@@ -1126,21 +1138,28 @@ async def war_lobby_section_callback(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "war:section:assault")
 async def war_assault_section_callback(callback: CallbackQuery) -> None:
-    db = get_storage()
-    player = db.get_character(callback.from_user.id, refresh_energy=False)
-    if player is None or not player_ready(player):
-        await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
+    await callback.message.answer("Соло-штурм отключен. Используй «Военные лобби».")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("war:transfer:"))
+async def war_transfer_location_callback(callback: CallbackQuery) -> None:
+    ally_faction = (callback.data or "").split(":", maxsplit=2)[2]
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Персонаж не найден.", show_alert=True)
         return
-    await callback.message.answer(
-        "Выбери точку для штурма:",
-        reply_markup=locations_keyboard(db.get_locations(), mode="war"),
-    )
+    result = transfer_location_to_ally(get_storage(), callback.from_user.id, player.location, ally_faction)
+    await callback.message.answer(result.text)
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("war:"))
 async def handle_war(callback: CallbackQuery) -> None:
     location = (callback.data or "").split(":", maxsplit=1)[1]
+    if location.startswith("section:") or location.startswith("transfer:"):
+        await callback.answer()
+        return
     result = attack_location(get_storage(), callback.from_user.id, location)
     await callback.message.answer(result.text)
     await callback.answer()
@@ -1176,14 +1195,9 @@ async def war_lobby_launch_callback(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("war:transfer:"))
-async def war_transfer_location_callback(callback: CallbackQuery) -> None:
-    ally_faction = (callback.data or "").split(":", maxsplit=2)[2]
-    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
-    if player is None:
-        await callback.answer("Персонаж не найден.", show_alert=True)
-        return
-    result = transfer_location_to_ally(get_storage(), callback.from_user.id, player.location, ally_faction)
+@router.callback_query(F.data == "war_lobby:dissolve")
+async def war_lobby_dissolve_callback(callback: CallbackQuery) -> None:
+    result = dissolve_war_lobby(get_storage(), callback.from_user.id)
     await callback.message.answer(result.text)
     await callback.answer()
 
@@ -1363,6 +1377,86 @@ async def launch_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
                 logger.exception("Failed to deliver raid result to member %s", member_id)
     if callback.from_user.id not in notified:
         await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "raid:cancel:all")
+async def raid_cancel_all_callback(callback: CallbackQuery) -> None:
+    result = cancel_faction_raids(get_storage(), callback.from_user.id, raid_id=None)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "raid:cancel:mine")
+async def raid_cancel_mine_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Нужен персонаж с группировкой.", show_alert=True)
+        return
+    open_raid = storage.get_open_raid_for_faction(player.faction)
+    if open_raid is None:
+        await callback.message.answer("Открытого рейда нет.")
+        await callback.answer()
+        return
+    result = cancel_faction_raids(storage, callback.from_user.id, raid_id=int(open_raid["id"]))
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.message(F.text == "📊 Статистика")
+async def show_stats(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    await message.answer(build_character_stats_overview(get_storage(), player.telegram_id))
+
+
+@router.message(F.text == "👥 Игроки")
+async def show_players(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    await message.answer(build_players_directory(get_storage(), limit=50))
+
+
+@router.message(F.text == "📣 Сбор")
+async def faction_broadcast(message: Message, bot: Bot) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    result = build_faction_broadcast_text(get_storage(), player.telegram_id)
+    if not result.ok:
+        await message.answer(result.text)
+        return
+    targets = list_faction_broadcast_targets(get_storage(), player.telegram_id)
+    sent = 0
+    for target_id in targets:
+        try:
+            await bot.send_message(target_id, result.text)
+            sent += 1
+        except Exception:
+            logger.exception("Failed to deliver faction broadcast to %s", target_id)
+    await message.answer(f"{result.text}\n\nДоставлено бойцам: {sent}.")
+
+
+@router.message(F.text == "📦 Открыть тайник")
+async def open_stash_message(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    result = open_stash_case(get_storage(), player.telegram_id)
+    await message.answer(result.text)
+
+
+@router.callback_query(F.data == "stash:open")
+async def open_stash_callback(callback: CallbackQuery) -> None:
+    result = open_stash_case(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
     await callback.answer()
 
 
@@ -1592,18 +1686,40 @@ async def run_bot() -> None:
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+
+    async def periodic_zone_systems() -> None:
+        while True:
+            await asyncio.sleep(60)
+            try:
+                apply_controlled_points_income(get_storage())
+            except Exception:
+                logger.exception("Points income tick failed")
+            try:
+                message_text, notify_ids = process_emission_cycle(get_storage())
+                if message_text:
+                    for user_id in notify_ids:
+                        try:
+                            await bot.send_message(user_id, message_text)
+                        except Exception:
+                            logger.debug("Failed emission notify to %s", user_id)
+            except Exception:
+                logger.exception("Emission cycle tick failed")
+
+    zone_task = asyncio.create_task(periodic_zone_systems())
     dp = Dispatcher()
     dp.include_router(router)
     try:
         await dp.start_polling(bot)
     finally:
         sync_task.cancel()
-        try:
-            await sync_task
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("Snapshot sync task finished with error")
+        zone_task.cancel()
+        for task in (sync_task, zone_task):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("Background task finished with error")
         try:
             get_storage().save_snapshot()
         except Exception:

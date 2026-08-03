@@ -27,7 +27,8 @@ SKINS: tuple[SkinTheme, ...] = (
     SkinTheme(
         key="veteran",
         title="Ветеран",
-        min_gear_power=4,
+        # Было 4: понижено, чтобы прогресс скина ощущался раньше.
+        min_gear_power=2,
         coat_color=(82, 98, 86),
         visor_color=(128, 170, 120),
         accent_color=(105, 130, 85),
@@ -35,7 +36,7 @@ SKINS: tuple[SkinTheme, ...] = (
     SkinTheme(
         key="heavy",
         title="Тяжелый штурмовик",
-        min_gear_power=8,
+        min_gear_power=5,
         coat_color=(78, 84, 95),
         visor_color=(120, 160, 185),
         accent_color=(95, 110, 145),
@@ -43,17 +44,31 @@ SKINS: tuple[SkinTheme, ...] = (
     SkinTheme(
         key="legend",
         title="Легенда Зоны",
-        min_gear_power=13,
+        min_gear_power=9,
         coat_color=(75, 76, 92),
         visor_color=(185, 165, 88),
         accent_color=(150, 130, 75),
     ),
 )
 
+FACTION_SKIN_ACCENTS: dict[str, tuple[int, int, int]] = {
+    "Долг": (180, 70, 70),
+    "Свобода": (70, 150, 90),
+    "Нейтралы": (150, 140, 110),
+    "Бандиты": (120, 90, 150),
+}
 
-def resolve_skin(character: Character) -> SkinTheme:
+
+def resolve_skin(character: Character, gear_power: int | None = None) -> SkinTheme:
+    power = character.gear_power if gear_power is None else gear_power
     selected = SKINS[0]
     for skin in SKINS:
-        if character.gear_power >= skin.min_gear_power:
+        if power >= skin.min_gear_power:
             selected = skin
     return selected
+
+
+def resolve_faction_accent(faction: str | None) -> tuple[int, int, int] | None:
+    if not faction:
+        return None
+    return FACTION_SKIN_ACCENTS.get(faction)

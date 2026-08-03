@@ -34,6 +34,8 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🗺 Карта"), KeyboardButton(text="🪖 Рейды")],
             [KeyboardButton(text="🛰 События"), KeyboardButton(text="🏦 Экономика")],
             [KeyboardButton(text="🎖 Достижения"), KeyboardButton(text="🏆 Рейтинг")],
+            [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="👥 Игроки")],
+            [KeyboardButton(text="📣 Сбор"), KeyboardButton(text="📦 Открыть тайник")],
             [KeyboardButton(text="⚡ Выпить энергетик"), KeyboardButton(text="⭐ Пополнить")],
             [KeyboardButton(text="ℹ️ Информация")],
         ],
@@ -88,6 +90,7 @@ def trader_buy_consumables_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Купить минералку (100)", callback_data="buy:mineral_water")],
             [InlineKeyboardButton(text="Купить чай Бороды (250)", callback_data="buy:beard_tea")],
             [InlineKeyboardButton(text="Купить топливо +5 (450)", callback_data="buy:fuel_can")],
+            [InlineKeyboardButton(text="Купить тайник (1000)", callback_data="buy:stash_case")],
             [InlineKeyboardButton(text="⬅️ Назад к категориям покупки", callback_data="trade:menu:buy")],
         ]
     )
@@ -125,6 +128,7 @@ def inventory_equipment_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Экипировать оружие", callback_data="equip:menu:weapon")],
             [InlineKeyboardButton(text="Экипировать броню", callback_data="equip:menu:armor")],
             [InlineKeyboardButton(text="Экипировать артефакт", callback_data="equip:artifact")],
+            [InlineKeyboardButton(text="📦 Открыть тайник", callback_data="stash:open")],
             [InlineKeyboardButton(text="☠️ Респавн (если HP=0)", callback_data="player:respawn")],
         ]
     )
@@ -312,6 +316,8 @@ def raid_keyboard(locations: list[dict[str, str | int | None]]) -> InlineKeyboar
         [InlineKeyboardButton(text="➕ Присоединиться к открытому рейду", callback_data="raid:join")],
         [InlineKeyboardButton(text="🤝 Союзник: присоединиться к рейду", callback_data="raid:ally:join")],
         [InlineKeyboardButton(text="🚀 Запустить мой открытый рейд", callback_data="raid:launch")],
+        [InlineKeyboardButton(text="🛑 Отменить все рейды гп", callback_data="raid:cancel:all")],
+        [InlineKeyboardButton(text="🛑 Отменить мой текущий рейд", callback_data="raid:cancel:mine")],
     ]
     for location in locations:
         name = str(location["name"])
@@ -323,6 +329,7 @@ def war_lobby_keyboard(locations: list[dict[str, str | int | None]]) -> InlineKe
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="➕ Вступить в военное лобби", callback_data="war_lobby:join")],
         [InlineKeyboardButton(text="🚀 Запустить военное лобби", callback_data="war_lobby:launch")],
+        [InlineKeyboardButton(text="🛑 Распустить лобби", callback_data="war_lobby:dissolve")],
     ]
     for location in locations:
         name = str(location["name"])
@@ -346,7 +353,6 @@ def war_sections_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="📘 Сценарий войны", callback_data="war:section:scenario")],
             [InlineKeyboardButton(text="🪖 Военные лобби", callback_data="war:section:lobby")],
-            [InlineKeyboardButton(text="🎯 Точка для штурма", callback_data="war:section:assault")],
         ]
     )
 
