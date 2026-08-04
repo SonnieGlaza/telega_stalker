@@ -754,6 +754,14 @@ def _achievement_rules() -> tuple[AchievementRule, ...]:
             check=lambda stats, _: stats["wars_won"] >= 10,
         ),
         AchievementRule(
+            key="enemy_base_1",
+            title="Штурм вражеской базы",
+            description="Захвати вражескую базу группировки",
+            reward_ru=1200,
+            reward_rating=80,
+            check=lambda stats, _: stats["enemy_bases_captured"] >= 1,
+        ),
+        AchievementRule(
             key="smuggle_10",
             title="Контрабандист",
             description="Успешно проведи 10 контрабанд",
@@ -1002,6 +1010,7 @@ def build_character_stats_overview(storage: Storage, telegram_id: int) -> str:
         f"📋 Заданий выполнено: {stats['quests_completed']}\n"
         f"🪖 Успешных рейдов: {stats['raids_completed']}\n"
         f"⚔️ Захватов точек: {stats['wars_won']}\n"
+        f"🏛 Вражеских баз захвачено: {stats['enemy_bases_captured']}\n"
         f"💰 Денег накоплено: {stats['money_earned']} RU\n"
         f"🔮 Артефактов найдено: {stats['artifacts_found']}\n"
         f"☠️ Смертей: {stats['deaths']}\n\n"
@@ -2472,6 +2481,12 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
     battle = _simulate_raid_battle(ready_members, enemy_power)
 
     if battle["success"]:
+        previous_owner = str(location.get("controlled_by") or "")
+        captured_enemy_base = (
+            str(location.get("point_type") or "") == "база"
+            and bool(previous_owner)
+            and previous_owner != leader.faction
+        )
         storage.set_location_control(location_name, leader.faction)
         treasury_gain = 1400 + len(ready_members) * 180
         storage.change_faction_treasury(leader.faction, treasury_gain)
@@ -2499,6 +2514,8 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
                 stash_finds += 1
             _add_rating(storage, member.telegram_id, RATING_REWARD["raid_success"])
             storage.add_player_stat(member.telegram_id, "raids_completed", 1)
+            if captured_enemy_base:
+                storage.add_player_stat(member.telegram_id, "enemy_bases_captured", 1)
             if member.telegram_id in battle["wounds"]:
                 storage.change_health(member.telegram_id, -14)
             achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
@@ -3261,6 +3278,12 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
     chance = max(10, min(90, chance))
     success = random.randint(1, 100) <= chance
     if success:
+        previous_owner = str(target.get("controlled_by") or "")
+        captured_enemy_base = (
+            str(target.get("point_type") or "") == "база"
+            and bool(previous_owner)
+            and previous_owner != winner
+        )
         storage.set_location_control(location_name, winner)
         storage.finish_war_lobby(war_id, "success", f"Победа: {winner}")
         achievement_notes: list[str] = []
@@ -3268,15 +3291,18 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
             if str(member.faction) != winner:
                 continue
             storage.add_player_stat(member.telegram_id, "wars_won", 1)
+            if captured_enemy_base:
+                storage.add_player_stat(member.telegram_id, "enemy_bases_captured", 1)
             _add_rating(storage, member.telegram_id, RATING_REWARD["war_success"])
             note = _progress_and_unlock_achievements(storage, member.telegram_id)
             if note and member.telegram_id == telegram_id:
                 achievement_notes.append(note)
         breakdown = ", ".join(f"{f}:{faction_counts[f]}" for f in sorted(faction_counts))
+        base_note = "\nЗахвачена вражеская база!" if captured_enemy_base else ""
         return ActionResult(
             True,
             f"Штурм лобби #{war_id} успешен (шанс {chance}%).\n"
-            f"Локация «{location_name}» перешла под контроль: {winner}.\n"
+            f"Локация «{location_name}» перешла под контроль: {winner}.{base_note}\n"
             f"Распределение бойцов: {breakdown}."
             f"{''.join(achievement_notes)}",
         )
