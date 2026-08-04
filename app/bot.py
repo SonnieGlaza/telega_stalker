@@ -150,6 +150,32 @@ async def safe_callback_answer(callback: CallbackQuery, *args: Any, **kwargs: An
         raise
 
 
+async def edit_menu_message(
+    callback: CallbackQuery,
+    text: str,
+    reply_markup: Any = None,
+) -> None:
+    """Обновляет меню на месте, чтобы не копить сообщения в чате."""
+    message = callback.message
+    if message is None:
+        await safe_callback_answer(callback)
+        return
+    try:
+        await message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as exc:
+        error_text = str(exc).lower()
+        if "message is not modified" in error_text:
+            await safe_callback_answer(callback)
+            return
+        # Нельзя отредактировать (например, это не текст) — шлём новое и пытаемся убрать старое.
+        await message.answer(text, reply_markup=reply_markup)
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
+    await safe_callback_answer(callback)
+
+
 @router.error()
 async def ignore_stale_callback_query_error(event: Any) -> bool:
     exc = getattr(event, "exception", None)
@@ -925,89 +951,92 @@ async def show_trader(message: Message) -> None:
 
 @router.callback_query(F.data == "trade:menu:buy")
 async def show_buy_menu(callback: CallbackQuery) -> None:
-    await callback.message.answer("Покупка: выбери категорию.", reply_markup=trader_buy_categories_keyboard())
-    await callback.answer()
+    await edit_menu_message(
+        callback,
+        "Покупка: выбери категорию.",
+        trader_buy_categories_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "trade:menu:sell")
 async def show_sell_menu(callback: CallbackQuery) -> None:
-    await callback.message.answer("Продажа: выбери категорию.", reply_markup=trader_sell_categories_keyboard())
-    await callback.answer()
+    await edit_menu_message(
+        callback,
+        "Продажа: выбери категорию.",
+        trader_sell_categories_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "trade:menu:root")
 async def show_trade_root(callback: CallbackQuery) -> None:
-    await callback.message.answer("Торговец на связи. Выбери раздел:", reply_markup=trader_keyboard())
-    await callback.answer()
+    await edit_menu_message(
+        callback,
+        "Торговец на связи. Выбери раздел:",
+        trader_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "trade:buy:consumables")
 async def show_buy_consumables(callback: CallbackQuery) -> None:
-    await callback.message.answer("Покупка расходников:", reply_markup=trader_buy_consumables_keyboard())
-    await callback.answer()
+    await edit_menu_message(callback, "Покупка расходников:", trader_buy_consumables_keyboard())
 
 
 @router.callback_query(F.data == "trade:buy:gear")
 async def show_buy_gear(callback: CallbackQuery) -> None:
-    await callback.message.answer(
+    await edit_menu_message(
+        callback,
         "Снаряжение и обслуживание:\n"
         "• Оружие и броня покупаются отдельно в своих разделах.\n"
         "• После покупки предмет попадает в инвентарь.\n"
         "• Экипировка выполняется во вкладке «🎒 Инвентарь».",
-        reply_markup=trader_buy_gear_keyboard(),
+        trader_buy_gear_keyboard(),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data == "trade:buy:armor")
 async def show_buy_armor(callback: CallbackQuery) -> None:
-    await callback.message.answer(
+    await edit_menu_message(
+        callback,
         "Покупка брони и костюмов.\n"
         "После покупки предмет добавляется в инвентарь.",
-        reply_markup=trader_buy_armor_keyboard(),
+        trader_buy_armor_keyboard(),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data == "trade:buy:weapons")
 async def show_buy_weapons(callback: CallbackQuery) -> None:
-    await callback.message.answer(
+    await edit_menu_message(
+        callback,
         "Покупка оружия.\n"
         "После покупки предмет добавляется в инвентарь.",
-        reply_markup=trader_buy_weapons_keyboard(),
+        trader_buy_weapons_keyboard(),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data == "trade:sell:consumables")
 async def show_sell_consumables(callback: CallbackQuery) -> None:
-    await callback.message.answer("Продажа расходников:", reply_markup=trader_sell_consumables_keyboard())
-    await callback.answer()
+    await edit_menu_message(callback, "Продажа расходников:", trader_sell_consumables_keyboard())
 
 
 @router.callback_query(F.data == "trade:sell:gear")
 async def show_sell_gear(callback: CallbackQuery) -> None:
-    await callback.message.answer("Продажа/ремонт снаряжения:", reply_markup=trader_sell_gear_keyboard())
-    await callback.answer()
+    await edit_menu_message(callback, "Продажа/ремонт снаряжения:", trader_sell_gear_keyboard())
 
 
 @router.callback_query(F.data == "trade:sell:gear:armor")
 async def show_sell_gear_armor(callback: CallbackQuery) -> None:
-    await callback.message.answer("Продажа брони и костюмов:", reply_markup=trader_sell_armor_keyboard())
-    await callback.answer()
+    await edit_menu_message(callback, "Продажа брони и костюмов:", trader_sell_armor_keyboard())
 
 
 @router.callback_query(F.data == "trade:sell:armor")
 async def show_sell_armor_alias_callback(callback: CallbackQuery) -> None:
     # Backward-compatible alias used by current sell categories keyboard.
-    await callback.message.answer("Продажа брони и костюмов:", reply_markup=trader_sell_armor_keyboard())
-    await callback.answer()
+    await edit_menu_message(callback, "Продажа брони и костюмов:", trader_sell_armor_keyboard())
 
 
 @router.callback_query(F.data == "trade:sell:weapons")
 async def show_sell_weapons(callback: CallbackQuery) -> None:
-    await callback.message.answer("Продажа оружия:", reply_markup=trader_sell_weapons_keyboard())
-    await callback.answer()
+    await edit_menu_message(callback, "Продажа оружия:", trader_sell_weapons_keyboard())
 
 
 @router.callback_query(F.data.startswith("buy:"))
