@@ -2685,6 +2685,20 @@ def withdraw_from_faction_warehouse(
     return ActionResult(True, f"Со склада получено: {ITEM_LABELS.get(key, key)} x{amount}.")
 
 
+def deposit_to_faction_treasury(storage: Storage, telegram_id: int, amount: int) -> ActionResult:
+    if amount <= 0:
+        return ActionResult(False, "Некорректная сумма для пополнения казны.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Казна доступна только бойцам группировки.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if not storage.change_money(telegram_id, -amount):
+        return ActionResult(False, f"Недостаточно RU. Нужно {amount} RU.")
+    storage.change_faction_treasury(player.faction, amount)
+    return ActionResult(True, f"В казну {player.faction} внесено {amount} RU.")
+
+
 def withdraw_from_faction_treasury(storage: Storage, telegram_id: int, amount: int) -> ActionResult:
     if amount <= 0:
         return ActionResult(False, "Некорректная сумма для вывода из казны.")
@@ -3320,7 +3334,8 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
         f"Склад:\n{chr(10).join(warehouse_lines)}\n\n"
         f"Пассивный доход с точек:\n"
         f"• точка ресурсов: {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч\n"
-        f"• база: {BASE_POINT_INCOME_PER_HOUR} RU/ч"
+        f"• база: {BASE_POINT_INCOME_PER_HOUR} RU/ч\n\n"
+        f"Любой боец может пополнить казну."
         f"{leader_hint}"
     )
 

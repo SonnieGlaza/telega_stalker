@@ -94,6 +94,7 @@ from app.game_logic import (
     cancel_own_first_market_lot,
     withdraw_from_faction_warehouse,
     withdraw_from_faction_treasury,
+    deposit_to_faction_treasury,
     assign_faction_rank,
     build_faction_ranks_overview,
     build_faction_member_rank_pick_text,
@@ -2500,6 +2501,18 @@ async def warehouse_deposit_callback(callback: CallbackQuery) -> None:
 async def warehouse_withdraw_callback(callback: CallbackQuery) -> None:
     item_key = (callback.data or "").split(":", maxsplit=3)[3]
     result = withdraw_from_faction_warehouse(get_storage(), callback.from_user.id, item_key, 1)
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data.startswith("eco:treasury:deposit:"))
+async def treasury_deposit_callback(callback: CallbackQuery) -> None:
+    raw_amount = (callback.data or "").split(":", maxsplit=3)[3]
+    try:
+        amount = int(raw_amount)
+    except ValueError:
+        await callback.answer("Некорректная сумма.", show_alert=True)
+        return
+    result = deposit_to_faction_treasury(get_storage(), callback.from_user.id, amount)
     await reply_action_result(callback, result.text)
 
 
