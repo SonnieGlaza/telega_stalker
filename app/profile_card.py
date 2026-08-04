@@ -217,33 +217,23 @@ def _draw_stalker_quote(
     font: ImageFont.ImageFont,
 ) -> None:
     quote = random.choice(STALKER_QUOTES)
-    padding_x = 12
-    padding_y = 10
+    padding_x = 8
     inner_left = left + padding_x
-    inner_top = top + padding_y
     inner_right = right - padding_x
-    inner_bottom = bottom - padding_y
     max_width = max(40, inner_right - inner_left)
-    line_height = 19
-    max_height = max(1, inner_bottom - inner_top)
+    line_height = 23
+    max_height = max(1, bottom - top)
     max_lines = max(1, max_height // line_height)
     lines = _wrap_text_lines(draw, f"«{quote}»", font, max_width, max_lines)
     if not lines:
         return
     text_block_h = len(lines) * line_height
-    start_y = inner_top + max(0, (max_height - text_block_h) // 2)
-    draw.rounded_rectangle(
-        (left, top, right, bottom),
-        radius=10,
-        fill=(42, 44, 56),
-        outline=(72, 74, 88),
-        width=1,
-    )
+    start_y = top + max(0, (max_height - text_block_h) // 2)
     for idx, line in enumerate(lines):
         draw.text(
             (inner_left, start_y + idx * line_height),
             line,
-            fill=(175, 180, 195),
+            fill=(232, 235, 245),
             font=font,
         )
 
@@ -336,7 +326,7 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     subtitle_font = _load_font(22)
     body_font = _load_font(18)
     small_font = _load_font(16)
-    quote_font = _load_font(14)
+    quote_font = _load_font(18)
 
     faction_color = _faction_color(character.faction)
     location_color = _location_color(character.location)
@@ -366,18 +356,7 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     panel_left = 46
     panel_right = 408
     panel_bottom = 676
-    quote_top = 262
-    quote_bottom = 398
-    avatar_top = 408
-
-    _draw_stalker_quote(
-        draw,
-        left=panel_left,
-        top=quote_top,
-        right=panel_right,
-        bottom=quote_bottom,
-        font=quote_font,
-    )
+    avatar_top = 268
 
     avatar = render_avatar(character, rating_points=rating, width=248, height=320)
 
@@ -391,6 +370,18 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
 
     avatar_x = panel_left + (available_w - avatar.width) // 2
     avatar_y = avatar_top + max(0, (available_h - avatar.height) // 2)
+
+    quote_top = 262
+    quote_bottom = max(quote_top + 24, avatar_y - 6)
+    _draw_stalker_quote(
+        draw,
+        left=panel_left,
+        top=quote_top,
+        right=panel_right,
+        bottom=quote_bottom,
+        font=quote_font,
+    )
+
     if avatar.mode in {"RGBA", "LA"}:
         # Сохраняем прозрачность, чтобы не появлялся темный фон вокруг спрайта.
         img.paste(avatar, (avatar_x, avatar_y), avatar)
