@@ -124,6 +124,7 @@ from app.keyboards import (
     locations_keyboard,
     main_menu_keyboard,
     pda_keyboard,
+    sortie_keyboard,
     quests_keyboard,
     events_keyboard,
     raid_keyboard,
@@ -529,6 +530,7 @@ def _build_info_text(player: Character) -> str:
         "ℹ️ Информация по игре\n\n"
         "Разделы меню:\n"
         "• 📟 КПК — профиль, чаты, рейтинг, карта, игроки, рефералка.\n"
+        "• 🏕 Вылазка — война, переходы и рейды.\n"
         "• 👥 Группировка — склад, казна, звания лидера.\n"
         "• 🏦 Экономика — биржа и рынок экипировки.\n"
         "• 📋 Задания — сложности и отдельная контрабанда.\n\n"
@@ -2047,6 +2049,19 @@ async def pay_command(message: Message) -> None:
         return
     result = transfer_money_with_fee(get_storage(), sender_id, target_telegram_id, amount)
     await message.answer(action_result_text(sender_id, result.text))
+
+
+@router.message(F.text == "🏕 Вылазка")
+async def show_sortie(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    await message.answer(
+        "🏕 Вылазка\n"
+        "Война, переходы по Зоне и рейды.",
+        reply_markup=sortie_keyboard(),
+    )
 
 
 @router.message(F.text == "🗺 Переход")
