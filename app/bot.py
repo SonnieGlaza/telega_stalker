@@ -229,7 +229,16 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     # No account for this Telegram ID yet -> normal registration flow.
     player = db.get_character(telegram_id)
     if player is None:
+        pending_nick = db.get_pending_registration(telegram_id)
         current_state = await state.get_state()
+        if pending_nick:
+            await state.update_data(nickname=pending_nick)
+            await state.set_state(Registration.gender)
+            await message.answer(
+                f"Нашёл сохранённое прозвище: {pending_nick}.\nВыбери пол персонажа:",
+                reply_markup=gender_keyboard(),
+            )
+            return
         if current_state == Registration.nickname.state:
             await message.answer("Регистрация уже начата. Введи прозвище.")
             return
@@ -608,6 +617,14 @@ async def process_nickname(message: Message, state: FSMContext) -> None:
         await message.answer("Прозвище слишком длинное. Максимум 24 символа.")
         return
 
+    db = get_storage()
+    try:
+        db.save_pending_registration(message.from_user.id, nickname)
+    except Exception:
+        logger.exception("Failed to persist pending nickname for user %s", message.from_user.id)
+        await message.answer("Не удалось сохранить прозвище. Попробуй ещё раз.")
+        return
+
     await state.update_data(nickname=nickname)
     await state.set_state(Registration.gender)
     await message.answer("Отлично. Выбери пол персонажа:", reply_markup=gender_keyboard())
@@ -626,22 +643,25 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
         return
     gender = "Мужской" if gender_code == "male" else "Женский"
 
-    # Не завязываемся жёстко на FSM-state: после редеплоя Railway состояние может сброситься.
+    # Ник сначала из FSM, при редеплое — из БД (pending_registrations).
+    db = get_storage()
     data = await state.get_data()
     nickname = str(data.get("nickname") or "").strip()
     if not nickname:
+        nickname = db.get_pending_registration(callback.from_user.id) or ""
+    if not nickname:
         await state.set_state(Registration.nickname)
         await callback.message.answer(
-            "Сессия регистрации сбросилась (обычно после обновления бота).\n"
+            "Сессия регистрации сбросилась, и сохранённого прозвища нет.\n"
             "Введи прозвище заново:"
         )
         await safe_callback_answer(callback)
         return
 
-    db = get_storage()
     existing = db.get_character(callback.from_user.id, refresh_energy=False)
     if existing is not None:
         await state.clear()
+        db.clear_pending_registration(callback.from_user.id)
         if player_ready(existing):
             await callback.message.answer(
                 f"Персонаж уже есть: {existing.nickname}.",

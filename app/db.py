@@ -30,6 +30,7 @@ TABLE_PRIMARY_KEYS: dict[str, tuple[str, ...]] = {
     "player_achievements": ("telegram_id", "achievement_key"),
     "alliances": ("faction_a", "faction_b"),
     "alliance_requests": ("requester_faction", "target_faction"),
+    "pending_registrations": ("telegram_id",),
 }
 
 

@@ -132,6 +132,12 @@ class Storage:
                 player_achievements = [
                     dict(row) for row in conn.execute("SELECT * FROM player_achievements").fetchall()
                 ]
+                try:
+                    pending_registrations = [
+                        dict(row) for row in conn.execute("SELECT * FROM pending_registrations").fetchall()
+                    ]
+                except Exception:
+                    pending_registrations = []
             payload = {
                 "version": 2,
                 "characters": characters,
@@ -149,6 +155,7 @@ class Storage:
                 "map_events": map_events,
                 "player_stats": player_stats,
                 "player_achievements": player_achievements,
+                "pending_registrations": pending_registrations,
             }
             self.snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
         except Exception:
@@ -181,6 +188,7 @@ class Storage:
         map_events = payload.get("map_events") or []
         player_stats = payload.get("player_stats") or []
         player_achievements = payload.get("player_achievements") or []
+        pending_registrations = payload.get("pending_registrations") or []
         if not characters:
             return
 
@@ -424,6 +432,22 @@ class Storage:
                     row.get("unlocked_at") or utc_now().isoformat(),
                 ),
             )
+        for row in pending_registrations:
+            nick = str(row.get("nickname") or "").strip()
+            if not nick:
+                continue
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO pending_registrations(
+                    telegram_id, nickname, created_at
+                ) VALUES (?, ?, ?)
+                """,
+                (
+                    int(row.get("telegram_id")),
+                    nick,
+                    row.get("created_at") or utc_now().isoformat(),
+                ),
+            )
 
     def save_snapshot(self) -> None:
         self._write_snapshot()
@@ -637,6 +661,16 @@ class Storage:
                 )
                 """
             )
+            # Черновик регистрации: ник живёт в БД, а не только в MemoryStorage FSM.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pending_registrations (
+                    telegram_id INTEGER PRIMARY KEY,
+                    nickname TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
             conn.executemany(
                 "INSERT OR IGNORE INTO factions(name, treasury, leader_id) VALUES(?, ?, NULL)",
                 [
@@ -701,6 +735,43 @@ class Storage:
                 (telegram_id, player_uid, nickname, gender, now_iso, default_equipment, now_iso, now_iso),
             )
             self._ensure_player_stats_row(conn, telegram_id)
+            conn.execute(
+                "DELETE FROM pending_registrations WHERE telegram_id = ?",
+                (telegram_id,),
+            )
+        self.save_snapshot()
+
+    def save_pending_registration(self, telegram_id: int, nickname: str) -> None:
+        nick = (nickname or "").strip()
+        if not nick:
+            raise ValueError("nickname is empty")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO pending_registrations(telegram_id, nickname, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (telegram_id, nick, utc_now().isoformat()),
+            )
+        self.save_snapshot()
+
+    def get_pending_registration(self, telegram_id: int) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT nickname FROM pending_registrations WHERE telegram_id = ?",
+                (telegram_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        nick = str(row["nickname"] or "").strip()
+        return nick or None
+
+    def clear_pending_registration(self, telegram_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM pending_registrations WHERE telegram_id = ?",
+                (telegram_id,),
+            )
         self.save_snapshot()
 
     def get_character(self, telegram_id: int, refresh_energy: bool = True) -> Character | None:
