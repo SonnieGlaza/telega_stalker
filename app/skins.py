@@ -14,11 +14,11 @@ class SkinTheme:
 
 
 # Пороги рейтинга для «повышения» внешнего вида.
-# Новичок: 0–499, Ветеран: 500–1999, Тяжелый штурмовик: 2000–4999, Легенда: 5000+
+# Новичек: 0–499, Опытный: 500–1999, Ветеран: 2000–4999, Легенда: 5000+
 SKINS: tuple[SkinTheme, ...] = (
     SkinTheme(
         key="novice",
-        title="Новичок",
+        title="Новичек",
         min_rating=0,
         coat_color=(95, 95, 102),
         visor_color=(125, 130, 145),
@@ -26,7 +26,7 @@ SKINS: tuple[SkinTheme, ...] = (
     ),
     SkinTheme(
         key="veteran",
-        title="Ветеран",
+        title="Опытный",
         min_rating=500,
         coat_color=(82, 98, 86),
         visor_color=(128, 170, 120),
@@ -34,7 +34,7 @@ SKINS: tuple[SkinTheme, ...] = (
     ),
     SkinTheme(
         key="heavy",
-        title="Тяжелый штурмовик",
+        title="Ветеран",
         min_rating=2000,
         coat_color=(78, 84, 95),
         visor_color=(120, 160, 185),
@@ -42,7 +42,7 @@ SKINS: tuple[SkinTheme, ...] = (
     ),
     SkinTheme(
         key="legend",
-        title="Легенда Зоны",
+        title="Легенда",
         min_rating=5000,
         coat_color=(75, 76, 92),
         visor_color=(185, 165, 88),

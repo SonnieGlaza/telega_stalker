@@ -805,7 +805,7 @@ def _achievement_rules() -> tuple[AchievementRule, ...]:
         ),
         AchievementRule(
             key="rating_5000",
-            title="Легенда Зоны",
+            title="Легенда",
             description="Достигни 5000 рейтинга",
             reward_ru=1500,
             reward_rating=100,
