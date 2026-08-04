@@ -262,6 +262,12 @@ class Registration(StatesGroup):
     gender = State()
     topup_custom_stars = State()
     market_lot_price = State()
+    treasury_deposit_custom = State()
+    treasury_withdraw_custom = State()
+
+
+TREASURY_CUSTOM_MIN_RU = 1
+TREASURY_CUSTOM_MAX_RU = 1_000_000
 
 
 def get_storage() -> Storage:
@@ -2505,8 +2511,25 @@ async def warehouse_withdraw_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("eco:treasury:deposit:"))
-async def treasury_deposit_callback(callback: CallbackQuery) -> None:
+async def treasury_deposit_callback(callback: CallbackQuery, state: FSMContext) -> None:
     raw_amount = (callback.data or "").split(":", maxsplit=3)[3]
+    if raw_amount == "custom":
+        storage = get_storage()
+        player = storage.get_character(callback.from_user.id, refresh_energy=False)
+        if player is None or player.faction is None:
+            await callback.answer("Сначала выбери группировку.", show_alert=True)
+            return
+        if storage.get_faction_leader_id(player.faction) != player.telegram_id:
+            await callback.answer("Вносить своё количество может только лидер.", show_alert=True)
+            return
+        await state.set_state(Registration.treasury_deposit_custom)
+        if callback.message is not None:
+            await callback.message.answer(
+                "Введи сумму для внесения в казну (целое число RU).\n"
+                f"Допустимо: от {TREASURY_CUSTOM_MIN_RU} до {TREASURY_CUSTOM_MAX_RU}."
+            )
+        await callback.answer()
+        return
     try:
         amount = int(raw_amount)
     except ValueError:
@@ -2517,8 +2540,25 @@ async def treasury_deposit_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("eco:treasury:withdraw:"))
-async def treasury_withdraw_callback(callback: CallbackQuery) -> None:
+async def treasury_withdraw_callback(callback: CallbackQuery, state: FSMContext) -> None:
     raw_amount = (callback.data or "").split(":", maxsplit=3)[3]
+    if raw_amount == "custom":
+        storage = get_storage()
+        player = storage.get_character(callback.from_user.id, refresh_energy=False)
+        if player is None or player.faction is None:
+            await callback.answer("Сначала выбери группировку.", show_alert=True)
+            return
+        if storage.get_faction_leader_id(player.faction) != player.telegram_id:
+            await callback.answer("Снимать своё количество может только лидер.", show_alert=True)
+            return
+        await state.set_state(Registration.treasury_withdraw_custom)
+        if callback.message is not None:
+            await callback.message.answer(
+                "Введи сумму для снятия из казны (целое число RU).\n"
+                f"Допустимо: от {TREASURY_CUSTOM_MIN_RU} до {TREASURY_CUSTOM_MAX_RU}."
+            )
+        await callback.answer()
+        return
     try:
         amount = int(raw_amount)
     except ValueError:
@@ -2526,6 +2566,63 @@ async def treasury_withdraw_callback(callback: CallbackQuery) -> None:
         return
     result = withdraw_from_faction_treasury(get_storage(), callback.from_user.id, amount)
     await reply_action_result(callback, result.text)
+
+
+def _parse_treasury_custom_amount(raw: str) -> int | None:
+    cleaned = (raw or "").strip().replace(" ", "").replace("_", "")
+    try:
+        amount = int(cleaned)
+    except ValueError:
+        return None
+    if amount < TREASURY_CUSTOM_MIN_RU or amount > TREASURY_CUSTOM_MAX_RU:
+        return None
+    return amount
+
+
+@router.message(Registration.treasury_deposit_custom)
+async def process_treasury_deposit_custom(message: Message, state: FSMContext) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await state.clear()
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    storage = get_storage()
+    if player.faction is None or storage.get_faction_leader_id(player.faction) != player.telegram_id:
+        await state.clear()
+        await message.answer("Вносить своё количество может только лидер группировки.")
+        return
+    amount = _parse_treasury_custom_amount(message.text or "")
+    if amount is None:
+        await message.answer(
+            f"Нужно целое число от {TREASURY_CUSTOM_MIN_RU} до {TREASURY_CUSTOM_MAX_RU}, например: 2500"
+        )
+        return
+    await state.clear()
+    result = deposit_to_faction_treasury(storage, message.from_user.id, amount)
+    await message.answer(action_result_text(message.from_user.id, result.text))
+
+
+@router.message(Registration.treasury_withdraw_custom)
+async def process_treasury_withdraw_custom(message: Message, state: FSMContext) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await state.clear()
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    storage = get_storage()
+    if player.faction is None or storage.get_faction_leader_id(player.faction) != player.telegram_id:
+        await state.clear()
+        await message.answer("Снимать своё количество может только лидер группировки.")
+        return
+    amount = _parse_treasury_custom_amount(message.text or "")
+    if amount is None:
+        await message.answer(
+            f"Нужно целое число от {TREASURY_CUSTOM_MIN_RU} до {TREASURY_CUSTOM_MAX_RU}, например: 2500"
+        )
+        return
+    await state.clear()
+    result = withdraw_from_faction_treasury(storage, message.from_user.id, amount)
+    await message.answer(action_result_text(message.from_user.id, result.text))
 
 
 @router.callback_query(F.data == "faction:menu:root")
