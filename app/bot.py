@@ -396,7 +396,8 @@ def _build_info_text(player: Character) -> str:
         "• /сбор [текст] — рассылка бойцам своей группировки (только командир).\n"
         "  Без текста отправит: «Бойцы, общий сбор!».\n"
         "• /commander [группировка] [telegram_id] — назначить командира (админ).\n"
-        "  То же самое: /leader.\n\n"
+        "  То же самое: /leader.\n"
+        "• /всем [текст] — рассылка всем игрокам (админ).\n\n"
         "Механики:\n"
         "• 🚚 Грузовик ускоряет переходы и снижает расход энергии на поездку,\n"
         "  но тратит 1 топливо за каждый переход.\n"
@@ -1276,6 +1277,54 @@ async def faction_broadcast_command(message: Message, bot: Bot) -> None:
     parts = (message.text or "").split(maxsplit=1)
     custom = parts[1].strip() if len(parts) > 1 else None
     await _send_faction_broadcast(message, bot, custom_text=custom)
+
+
+def _extract_broadcast_body(raw_command_text: str) -> str | None:
+    parts = (raw_command_text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+    body = parts[1].strip()
+    if len(body) >= 2 and (
+        (body[0] == body[-1] and body[0] in {'"', "'"})
+        or (body.startswith("«") and body.endswith("»"))
+    ):
+        if body.startswith("«") and body.endswith("»"):
+            body = body[1:-1].strip()
+        else:
+            body = body[1:-1].strip()
+    return body or None
+
+
+@router.message(Command("всем"))
+@router.message(Command("all"))
+async def broadcast_all_command(message: Message, bot: Bot) -> None:
+    sender_id = message.from_user.id
+    if not is_admin_user(sender_id):
+        await message.answer("Команда доступна только администратору.")
+        return
+
+    body = _extract_broadcast_body(message.text or "")
+    if body is None:
+        await message.answer(
+            "Использование: /всем [текст]\n"
+            "Пример: /всем Внимание, сталкеры! Выброс через час."
+        )
+        return
+
+    sender = get_storage().get_character(sender_id, refresh_energy=False)
+    sender_name = sender.nickname if sender is not None else str(sender_id)
+    text = f"📢 Объявление:\n{body}\n\n— {sender_name}"
+
+    targets = [tid for tid in get_storage().list_player_ids() if tid != sender_id]
+    sent = 0
+    for target_id in targets:
+        try:
+            await bot.send_message(target_id, text)
+            sent += 1
+        except Exception:
+            logger.exception("Failed to deliver global broadcast to %s", target_id)
+
+    await message.answer(f"{text}\n\nДоставлено игрокам: {sent}.")
 
 
 @router.callback_query(F.data == "players:root")
