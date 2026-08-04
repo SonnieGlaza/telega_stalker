@@ -36,6 +36,7 @@ from app.game_logic import (
     launch_open_raid,
     build_quest_overview,
     apply_controlled_points_income,
+    process_emission_cycle,
     deposit_to_faction_warehouse,
     format_inventory,
     RESOURCE_POINT_INCOME_PER_HOUR,
@@ -1939,29 +1940,39 @@ async def run_bot() -> None:
             except Exception:
                 logger.exception("Periodic snapshot sync failed")
 
-    async def periodic_points_income() -> None:
+    bot = Bot(
+        token=settings.bot_token,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+
+    async def periodic_zone_systems() -> None:
         while True:
             await asyncio.sleep(POINTS_INCOME_TICK_SECONDS)
             try:
                 apply_controlled_points_income(get_storage())
             except Exception:
                 logger.exception("Points income tick failed")
+            try:
+                message_text, notify_ids = process_emission_cycle(get_storage())
+                if message_text:
+                    for user_id in notify_ids:
+                        try:
+                            await bot.send_message(user_id, message_text)
+                        except Exception:
+                            logger.debug("Failed emission notify to %s", user_id)
+            except Exception:
+                logger.exception("Emission cycle tick failed")
 
     sync_task = asyncio.create_task(periodic_snapshot_sync())
-    income_task = asyncio.create_task(periodic_points_income())
-
-    bot = Bot(
-        token=settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
+    zone_task = asyncio.create_task(periodic_zone_systems())
     dp = Dispatcher()
     dp.include_router(router)
     try:
         await dp.start_polling(bot)
     finally:
         sync_task.cancel()
-        income_task.cancel()
-        for task in (sync_task, income_task):
+        zone_task.cancel()
+        for task in (sync_task, zone_task):
             try:
                 await task
             except asyncio.CancelledError:

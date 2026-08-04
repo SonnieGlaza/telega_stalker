@@ -1871,6 +1871,25 @@ class Storage:
             )
         self.save_snapshot()
 
+    def list_player_ids(self) -> list[int]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT telegram_id FROM characters").fetchall()
+        return [int(row["telegram_id"]) for row in rows]
+
+    def list_players(self, limit: int = 200) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(500, int(limit)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT telegram_id, nickname, faction, location, health
+                FROM characters
+                ORDER BY nickname
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def get_factions(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT name, treasury, leader_id FROM factions ORDER BY name").fetchall()

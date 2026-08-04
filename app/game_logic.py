@@ -269,6 +269,12 @@ RESOURCE_POINT_INCOME_PER_HOUR = 100
 BASE_POINT_INCOME_PER_HOUR = 50
 POINTS_INCOME_META_KEY = "points_income_last_at"
 POINTS_INCOME_MAX_HOURS = 24
+EMISSION_INTERVAL_HOURS = 6
+EMISSION_WARN_60_MINUTES = 60
+EMISSION_WARN_30_MINUTES = 30
+EMISSION_META_AT = "emission_at"
+EMISSION_META_WARN60 = "emission_warn60_sent"
+EMISSION_META_WARN30 = "emission_warn30_sent"
 
 ZONE_EVENT_POOL: tuple[tuple[str, int, str], ...] = (
     ("mutant_swarm", 10, "Миграция мутантов: сопротивление на локации выросло."),
@@ -2603,6 +2609,128 @@ def apply_controlled_points_income(storage: Storage) -> ActionResult:
     return ActionResult(True, "\n".join(lines))
 
 
+def _safe_base_location_names(storage: Storage) -> set[str]:
+    return {
+        str(location["name"])
+        for location in storage.get_locations()
+        if str(location.get("point_type") or "") == "база"
+    }
+
+
+def _parse_meta_datetime(raw: str | None, fallback: datetime) -> datetime:
+    if not raw:
+        return fallback
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return fallback
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def process_emission_cycle(storage: Storage) -> tuple[str, list[int]]:
+    """Цикл Выброса: предупреждения за 60/30 мин, убийство вне базы.
+
+    Возвращает (текст оповещения, telegram_id для рассылки).
+    Пустой текст — нечего слать.
+    """
+    now = datetime.now(timezone.utc)
+    notify_ids = storage.list_player_ids()
+    raw_at = storage.get_meta(EMISSION_META_AT)
+    warn60 = storage.get_meta(EMISSION_META_WARN60) == "1"
+    warn30 = storage.get_meta(EMISSION_META_WARN30) == "1"
+
+    if raw_at is None:
+        emission_at = now + timedelta(hours=EMISSION_INTERVAL_HOURS)
+        storage.set_meta(EMISSION_META_AT, emission_at.isoformat())
+        storage.set_meta(EMISSION_META_WARN60, "0")
+        storage.set_meta(EMISSION_META_WARN30, "0")
+        return ("", [])
+
+    emission_at = _parse_meta_datetime(raw_at, now + timedelta(hours=EMISSION_INTERVAL_HOURS))
+    minutes_left = (emission_at - now).total_seconds() / 60.0
+
+    if minutes_left > EMISSION_WARN_60_MINUTES:
+        return ("", [])
+
+    base_names = ", ".join(sorted(_safe_base_location_names(storage))) or "базы группировок"
+
+    if minutes_left > EMISSION_WARN_30_MINUTES and not warn60:
+        storage.set_meta(EMISSION_META_WARN60, "1")
+        return (
+            "⚠️ ВЫБРОС через 60 минут!\n"
+            "Если ты не на базе к моменту Выброса — персонаж погибнет.\n"
+            f"Безопасные базы: {base_names}.",
+            notify_ids,
+        )
+
+    if 0 < minutes_left <= EMISSION_WARN_30_MINUTES:
+        if not warn60:
+            storage.set_meta(EMISSION_META_WARN60, "1")
+        if not warn30:
+            storage.set_meta(EMISSION_META_WARN30, "1")
+            return (
+                "☢️ ВЫБРОС через 30 минут!\n"
+                "Срочно уходи на базу — вне базы Выброс убивает.\n"
+                f"Безопасные базы: {base_names}.",
+                notify_ids,
+            )
+        return ("", [])
+
+    if minutes_left > 0:
+        return ("", [])
+
+    safe_bases = _safe_base_location_names(storage)
+    killed: list[str] = []
+    for row in storage.list_players(limit=500):
+        if int(row.get("health") or 0) <= 0:
+            continue
+        location = str(row.get("location") or "")
+        if location in safe_bases:
+            continue
+        telegram_id = int(row["telegram_id"])
+        storage.change_health(telegram_id, -int(row["health"]))
+        killed.append(str(row.get("nickname") or telegram_id))
+
+    next_at = now + timedelta(hours=EMISSION_INTERVAL_HOURS)
+    storage.set_meta(EMISSION_META_AT, next_at.isoformat())
+    storage.set_meta(EMISSION_META_WARN60, "0")
+    storage.set_meta(EMISSION_META_WARN30, "0")
+
+    killed_text = (
+        ", ".join(killed[:20]) + ("…" if len(killed) > 20 else "")
+        if killed
+        else "никто не пострадал (все были на базах)"
+    )
+    return (
+        f"💥 ВЫБРОС прошел по Зоне!\n"
+        f"Погибшие вне баз: {killed_text}.\n"
+        f"Следующий Выброс примерно через {EMISSION_INTERVAL_HOURS} ч.",
+        notify_ids,
+    )
+
+
+def build_emission_status(storage: Storage) -> str:
+    now = datetime.now(timezone.utc)
+    raw_at = storage.get_meta(EMISSION_META_AT)
+    if raw_at is None:
+        return (
+            f"Выброс: расписание ещё не запущено "
+            f"(цикл раз в {EMISSION_INTERVAL_HOURS} ч., предупреждения за 60 и 30 мин)."
+        )
+    emission_at = _parse_meta_datetime(raw_at, now + timedelta(hours=EMISSION_INTERVAL_HOURS))
+    minutes_left = max(0, int((emission_at - now).total_seconds() // 60))
+    hours_left = minutes_left // 60
+    mins = minutes_left % 60
+    bases = ", ".join(sorted(_safe_base_location_names(storage))) or "базы"
+    return (
+        f"Выброс через ~{hours_left} ч. {mins} мин.\n"
+        f"Вне базы ({bases}) Выброс убивает персонажа.\n"
+        "Оповещения: за 60 и 30 минут."
+    )
+
+
 def _roll_smuggling_loot(storage: Storage, telegram_id: int) -> list[str]:
     """Независимые роллы дропа контрабанды. Возвращает строки для отчёта."""
     drops: list[str] = []
@@ -2730,12 +2858,13 @@ def apply_dynamic_zone_event(storage: Storage) -> ActionResult:
 def build_events_overview(storage: Storage) -> str:
     storage.delete_expired_map_events()
     events = storage.get_map_events()
+    emission_status = build_emission_status(storage)
     if not events:
-        return "Активных событий на карте нет. Зона затихла."
+        return f"{emission_status}\n\nАктивных событий на карте нет. Зона затихла."
 
     now = datetime.now(timezone.utc)
     by_location = {loc["name"]: int(loc["npc_power"]) for loc in storage.get_locations()}
-    lines = ["Активные события Зоны:"]
+    lines = [emission_status, "", "Активные события Зоны:"]
     for event in events:
         location = str(event.get("location"))
         expires_at = _safe_fromiso(str(event.get("expires_at", "")))
