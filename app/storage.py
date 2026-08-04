@@ -1955,6 +1955,23 @@ class Storage:
             )
         self.save_snapshot()
 
+    def withdraw_faction_treasury(self, faction: str, amount: int) -> bool:
+        if amount <= 0:
+            return False
+        with self._connect() as conn:
+            row = conn.execute("SELECT treasury FROM factions WHERE name = ?", (faction,)).fetchone()
+            if row is None:
+                return False
+            treasury = int(row["treasury"] or 0)
+            if treasury < amount:
+                return False
+            conn.execute(
+                "UPDATE factions SET treasury = treasury - ? WHERE name = ?",
+                (amount, faction),
+            )
+        self.save_snapshot()
+        return True
+
     def get_meta(self, key: str) -> str | None:
         with self._connect() as conn:
             conn.execute(

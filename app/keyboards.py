@@ -456,6 +456,8 @@ def economy_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📤 Забрать 1 патроны со склада", callback_data="eco:warehouse:withdraw:ammo_pack")],
             [InlineKeyboardButton(text="📥 Сдать 1 аптечку на склад", callback_data="eco:warehouse:deposit:medkit")],
             [InlineKeyboardButton(text="📤 Забрать 1 аптечку со склада", callback_data="eco:warehouse:withdraw:medkit")],
+            [InlineKeyboardButton(text="🏦 Лидер: вывести 500 RU из казны", callback_data="eco:treasury:withdraw:500")],
+            [InlineKeyboardButton(text="🏦 Лидер: вывести 1000 RU из казны", callback_data="eco:treasury:withdraw:1000")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот артефакт", callback_data="eco:auction:create:artifact")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот патроны", callback_data="eco:auction:create:ammo_pack")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот аптечки", callback_data="eco:auction:create:medkit")],

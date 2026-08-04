@@ -2546,6 +2546,23 @@ def withdraw_from_faction_warehouse(
     return ActionResult(True, f"Со склада получено: {ITEM_LABELS.get(key, key)} x{amount}.")
 
 
+def withdraw_from_faction_treasury(storage: Storage, telegram_id: int, amount: int) -> ActionResult:
+    if amount <= 0:
+        return ActionResult(False, "Некорректная сумма для вывода из казны.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Казна доступна только бойцам группировки.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    leader_id = storage.get_faction_leader_id(player.faction)
+    if leader_id != telegram_id:
+        return ActionResult(False, "Снимать деньги из казны может только лидер группировки.")
+    if not storage.withdraw_faction_treasury(player.faction, amount):
+        return ActionResult(False, "В казне недостаточно денег для вывода.")
+    storage.change_money(telegram_id, amount)
+    return ActionResult(True, f"Из казны {player.faction} выведено {amount} RU в твой баланс.")
+
+
 def create_faction_auction(storage: Storage, telegram_id: int, lot_key: str) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction is None:
@@ -3075,6 +3092,10 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
     if not auctions_lines:
         auctions_lines = ["• Открытых лотов нет"]
 
+    leader_hint = ""
+    if storage.get_faction_leader_id(player.faction) == telegram_id:
+        leader_hint = "\nЛидер может выводить RU из казны через кнопки экономики."
+
     return (
         f"Экономика группировки «{player.faction}»\n"
         f"Казна: {treasury} RU"
@@ -3084,6 +3105,7 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
         f"Пассивный доход с точек:\n"
         f"• точка ресурсов: {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч\n"
         f"• база: {BASE_POINT_INCOME_PER_HOUR} RU/ч"
+        f"{leader_hint}"
     )
 
 
