@@ -90,6 +90,7 @@ from app.game_logic import (
 from app.keyboards import (
     economy_keyboard,
     inventory_equipment_keyboard,
+    inventory_consumables_keyboard,
     dead_character_keyboard,
     faction_keyboard,
     gender_keyboard,
@@ -994,6 +995,26 @@ async def open_inventory_callback(callback: CallbackQuery) -> None:
         callback,
         format_inventory(player),
         inventory_equipment_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "inventory:consumables")
+async def open_inventory_consumables_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    if player.health <= 0:
+        await edit_menu_message(
+            callback,
+            build_dead_character_text(player),
+            dead_character_keyboard(),
+        )
+        return
+    await edit_menu_message(
+        callback,
+        "🧰 Расходники\nВыбери предмет для использования:",
+        inventory_consumables_keyboard(),
     )
 
 
