@@ -2228,6 +2228,63 @@ class Storage:
             )
         self.save_snapshot()
 
+    def list_open_raids_led_by(self, leader_id: int) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, faction, location, leader_id, status, created_at
+                FROM raids
+                WHERE leader_id = ? AND status = 'open'
+                ORDER BY id DESC
+                """,
+                (leader_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def cancel_raid(self, raid_id: int, leader_id: int) -> dict[str, Any] | None:
+        """Отменить открытый рейд. Только лидер-создатель. Возвращает данные рейда или None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, faction, location, leader_id, status
+                FROM raids
+                WHERE id = ? AND status = 'open'
+                """,
+                (raid_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            if int(row["leader_id"]) != int(leader_id):
+                return None
+            now_iso = utc_now().isoformat()
+            cursor = conn.execute(
+                """
+                UPDATE raids
+                SET status = 'cancelled', finished_at = ?, result_text = ?
+                WHERE id = ? AND leader_id = ? AND status = 'open'
+                """,
+                (
+                    now_iso,
+                    f"Рейд отменён создателем (telegram_id={leader_id}).",
+                    raid_id,
+                    leader_id,
+                ),
+            )
+            if int(cursor.rowcount or 0) <= 0:
+                return None
+            result = dict(row)
+        self.save_snapshot()
+        return result
+
+    def cancel_all_open_raids_led_by(self, leader_id: int) -> list[dict[str, Any]]:
+        open_raids = self.list_open_raids_led_by(leader_id)
+        cancelled: list[dict[str, Any]] = []
+        for raid in open_raids:
+            done = self.cancel_raid(int(raid["id"]), leader_id)
+            if done is not None:
+                cancelled.append(done)
+        return cancelled
+
     def get_faction_warehouse(self, faction: str) -> dict[str, int]:
         with self._connect() as conn:
             rows = conn.execute(

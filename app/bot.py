@@ -29,6 +29,8 @@ from app.game_logic import (
     buy_item,
     buy_first_faction_auction,
     cancel_own_first_auction,
+    cancel_all_raids_by_leader,
+    cancel_raid_by_leader,
     create_faction_auction,
     create_or_join_faction_raid,
     launch_open_raid,
@@ -1545,7 +1547,11 @@ async def show_raids(message: Message) -> None:
         return
     db = get_storage()
     text = build_raids_overview(db, player.telegram_id)
-    await message.answer(text, reply_markup=raid_keyboard(db.get_locations()))
+    led_raids = db.list_open_raids_led_by(player.telegram_id)
+    await message.answer(
+        text,
+        reply_markup=raid_keyboard(db.get_locations(), led_raids=led_raids),
+    )
 
 
 @router.callback_query(F.data.startswith("raid:create:"))
@@ -1609,6 +1615,59 @@ async def launch_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
     if callback.from_user.id not in notified:
         await callback.message.answer(result.text)
     await callback.answer()
+
+
+@router.callback_query(F.data == "raid:cancel:all")
+async def cancel_all_raids_callback(callback: CallbackQuery, bot: Bot) -> None:
+    storage = get_storage()
+    leader_id = callback.from_user.id
+    open_raids = storage.list_open_raids_led_by(leader_id)
+    notify_ids: set[int] = set()
+    for raid in open_raids:
+        notify_ids.update(storage.get_raid_member_ids(int(raid["id"])))
+
+    result = cancel_all_raids_by_leader(storage, leader_id)
+    if result.ok:
+        for member_id in notify_ids:
+            if member_id == leader_id:
+                continue
+            try:
+                await bot.send_message(
+                    member_id,
+                    f"📣 Рейд отменён создателем.\n{result.text}",
+                )
+            except Exception:
+                logger.exception("Failed to notify raid member %s about cancel-all", member_id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("raid:cancel:"))
+async def cancel_one_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
+    payload = (callback.data or "").split(":")
+    # raid:cancel:all handled above; raid:cancel:<id>
+    if len(payload) != 3 or payload[2] == "all":
+        return
+    try:
+        raid_id = int(payload[2])
+    except ValueError:
+        await callback.answer("Некорректный рейд", show_alert=True)
+        return
+
+    storage = get_storage()
+    leader_id = callback.from_user.id
+    member_ids = storage.get_raid_member_ids(raid_id)
+    result = cancel_raid_by_leader(storage, leader_id, raid_id)
+    if result.ok:
+        for member_id in member_ids:
+            if member_id == leader_id:
+                continue
+            try:
+                await bot.send_message(member_id, f"📣 {result.text}")
+            except Exception:
+                logger.exception("Failed to notify raid member %s about cancel", member_id)
+    await callback.message.answer(result.text)
+    await safe_callback_answer(callback, "Ок" if result.ok else result.text, show_alert=not result.ok)
 
 
 @router.message(F.text == "🛰 События")

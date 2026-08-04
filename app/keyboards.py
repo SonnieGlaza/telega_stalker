@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 
@@ -307,12 +309,32 @@ def topup_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def raid_keyboard(locations: list[dict[str, str | int | None]]) -> InlineKeyboardMarkup:
+def raid_keyboard(
+    locations: list[dict[str, str | int | None]],
+    *,
+    led_raids: list[dict[str, Any]] | None = None,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="➕ Присоединиться к открытому рейду", callback_data="raid:join")],
         [InlineKeyboardButton(text="🤝 Союзник: присоединиться к рейду", callback_data="raid:ally:join")],
         [InlineKeyboardButton(text="🚀 Запустить мой открытый рейд", callback_data="raid:launch")],
     ]
+    led = led_raids or []
+    if led:
+        for raid in led:
+            raid_id = int(raid["id"])
+            location = str(raid.get("location") or "?")
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"❌ Отменить рейд #{raid_id}: {location}",
+                        callback_data=f"raid:cancel:{raid_id}",
+                    )
+                ]
+            )
+        rows.append(
+            [InlineKeyboardButton(text="🗑 Отменить все мои рейды", callback_data="raid:cancel:all")]
+        )
     for location in locations:
         name = str(location["name"])
         rows.append([InlineKeyboardButton(text=f"Создать рейд на логово: {name}", callback_data=f"raid:create:{name}")])

@@ -1848,7 +1848,51 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
         f"Лидер: {open_raid['leader_id']}\n"
         f"Участников: {len(member_ids)}\n"
         f"Сила NPC: {npc_power} (модификатор событий {event_modifier:+d})\n\n"
-        f"Состав:\n{members_text or '• Пока пусто'}"
+        f"Состав:\n{members_text or '• Пока пусто'}\n\n"
+        "Отменить рейд может только тот, кто его создал."
+    )
+
+
+def cancel_raid_by_leader(storage: Storage, telegram_id: int, raid_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+
+    raid = storage.get_raid(raid_id)
+    if raid is None or str(raid.get("status")) != "open":
+        return ActionResult(False, f"Открытый рейд #{raid_id} не найден.")
+    if int(raid["leader_id"]) != telegram_id:
+        return ActionResult(False, "Отменить рейд может только тот, кто его создал.")
+
+    cancelled = storage.cancel_raid(raid_id, telegram_id)
+    if cancelled is None:
+        return ActionResult(False, "Не удалось отменить рейд.")
+    return ActionResult(
+        True,
+        f"Рейд #{raid_id} на «{cancelled.get('location')}» отменён создателем.",
+    )
+
+
+def cancel_all_raids_by_leader(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+
+    open_raids = storage.list_open_raids_led_by(telegram_id)
+    if not open_raids:
+        return ActionResult(False, "У тебя нет открытых рейдов для отмены.")
+
+    cancelled = storage.cancel_all_open_raids_led_by(telegram_id)
+    if not cancelled:
+        return ActionResult(False, "Не удалось отменить рейды.")
+    lines = [f"• #{item['id']} — {item.get('location')}" for item in cancelled]
+    return ActionResult(
+        True,
+        "Отменены твои открытые рейды:\n" + "\n".join(lines),
     )
 
 
