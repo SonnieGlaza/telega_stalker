@@ -241,6 +241,7 @@ def _draw_stalker_quote(
     right: int,
     bottom: int,
     font: ImageFont.ImageFont,
+    gap_bottom: int | None = None,
 ) -> None:
     padding_x = 16
     max_width = max(40, right - left - padding_x * 2)
@@ -272,10 +273,10 @@ def _draw_stalker_quote(
         return
     line_step = _quote_line_step(font, max_height)
     text_block_h = _quote_block_height(lines, font, line_step)
-    max_block_h = (MAX_QUOTE_LINES - 1) * line_step + font.getmetrics()[0] + font.getmetrics()[1]
-    quote_anchor_y = (top + bottom) / 2 + QUOTE_Y_OFFSET
-    quote_anchor_y = max(top + max_block_h / 2, min(bottom - max_block_h / 2, quote_anchor_y))
+    gap_end = gap_bottom if gap_bottom is not None else bottom
+    quote_anchor_y = (top + gap_end) / 2 + QUOTE_Y_OFFSET
     start_y = int(round(quote_anchor_y - text_block_h / 2))
+    start_y = max(top, min(start_y, bottom - text_block_h))
     box_width = right - left
     for idx, line in enumerate(lines):
         line_width = draw.textlength(line, font=font)
@@ -477,7 +478,8 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
             left=info_box_left,
             top=info_box_bottom,
             right=info_box_right,
-            bottom=avatar_y,
+            bottom=avatar_y + QUOTE_Y_OFFSET,
+            gap_bottom=avatar_y,
             font=quote_font,
         )
 
