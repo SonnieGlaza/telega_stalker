@@ -7,7 +7,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from app.avatar_render import render_avatar
-from app.game_logic import ITEM_LABELS, equipment_power
+from app.game_logic import ITEM_LABELS, effective_max_health, equipment_power
 from app.skins import resolve_skin
 from app.storage import Character
 
@@ -311,9 +311,10 @@ def build_character_card(character: Character) -> bytes:
     bar_x = right_x + 184
     value_x = bar_x + 252
 
+    max_hp = effective_max_health(character)
     draw.text((right_x, 318), "Здоровье", fill=(220, 220, 220), font=small_font)
-    _draw_power_bar(draw, bar_x, 322, character.health, 100, (190, 70, 70))
-    draw.text((value_x, 318), f"{character.health}/100", fill=(220, 220, 220), font=small_font)
+    _draw_power_bar(draw, bar_x, 322, character.health, max_hp, (190, 70, 70))
+    draw.text((value_x, 318), f"{character.health}/{max_hp}", fill=(220, 220, 220), font=small_font)
 
     draw.text((right_x, 344), "Энергия", fill=(220, 220, 220), font=small_font)
     _draw_power_bar(draw, bar_x, 348, character.energy, max(1, character.max_energy), (70, 150, 220))

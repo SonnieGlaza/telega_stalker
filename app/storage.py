@@ -1374,7 +1374,13 @@ class Storage:
         new_radiation = max(0, min(200, character.radiation + radiation_delta))
         new_hunger = max(0, min(200, character.hunger + hunger_delta))
         new_thirst = max(0, min(200, character.thirst + thirst_delta))
-        new_health = max(0, min(100, character.health + health_delta))
+        try:
+            from app.game_logic import effective_max_health
+
+            max_hp = int(effective_max_health(character))
+        except Exception:
+            max_hp = 100
+        new_health = max(0, min(max_hp, character.health + health_delta))
         with self._connect() as conn:
             conn.execute(
                 """
@@ -1437,15 +1443,17 @@ class Storage:
                 return
 
             regen_multiplier = 2.0 if _as_int(self._row_get(row, "sleeping_bag_owned", 0), 0) == 1 else 1.0
-            has_artifact_equipped = False
+            has_zone_artifact = False
             try:
                 equipment = json.loads(self._row_get(row, "equipment_json", "{}") or "{}")
                 if isinstance(equipment, dict):
-                    artifact_value = equipment.get("artifact")
-                    has_artifact_equipped = bool(str(artifact_value or "").strip())
-            except (TypeError, json.JSONDecodeError):
-                has_artifact_equipped = False
-            if has_artifact_equipped:
+                    artifact_value = str(equipment.get("artifact") or "").strip()
+                    from app.game_logic import ARTIFACT_ENERGY_REGEN_NAMES
+
+                    has_zone_artifact = artifact_value in ARTIFACT_ENERGY_REGEN_NAMES
+            except (TypeError, json.JSONDecodeError, ImportError):
+                has_zone_artifact = False
+            if has_zone_artifact:
                 regen_multiplier *= 1.05
             gained = int(minutes_passed * ENERGY_REGEN_PER_MINUTE * regen_multiplier)
             new_energy = min(max_energy, energy + gained)
@@ -1871,11 +1879,20 @@ class Storage:
         self.save_snapshot()
         return True
 
-    def change_health(self, telegram_id: int, delta: int) -> bool:
+    def change_health(self, telegram_id: int, delta: int, *, max_health: int | None = None) -> bool:
         character = self.get_character(telegram_id, refresh_energy=False)
         if character is None:
             return False
-        new_health = max(0, min(100, character.health + delta))
+        cap = 100 if max_health is None else max(1, int(max_health))
+        # Если арт на HP уже экипирован, а max не передали — не режем запас ниже текущего бонуса.
+        if max_health is None:
+            try:
+                from app.game_logic import effective_max_health
+
+                cap = max(cap, int(effective_max_health(character)))
+            except Exception:
+                cap = 100
+        new_health = max(0, min(cap, character.health + delta))
         with self._connect() as conn:
             conn.execute(
                 "UPDATE characters SET health = ? WHERE telegram_id = ?",

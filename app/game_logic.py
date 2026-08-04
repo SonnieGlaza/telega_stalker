@@ -34,7 +34,9 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "energy_drink": {"name": "Энергетик", "buy_price": 250, "sell_price": 170},
     "medkit": {"name": "Аптечка", "buy_price": 260, "sell_price": 120},
     "ammo_pack": {"name": "Патроны", "buy_price": 120, "sell_price": 55},
-    "artifact": {"name": "Артефакт", "buy_price": 0, "sell_price": 900},
+    "artifact": {"name": "Артефакт Зоны", "buy_price": 0, "sell_price": 900},
+    "artifact_power": {"name": "Арт «Сила»", "buy_price": 0, "sell_price": 1100},
+    "artifact_vitality": {"name": "Арт «Живучесть»", "buy_price": 0, "sell_price": 1100},
     "vodka": {"name": "Водка", "buy_price": 150, "sell_price": 50},
     "antirad": {"name": "Антирад", "buy_price": 400, "sell_price": 130},
     "bread": {"name": "Хлеб", "buy_price": 50, "sell_price": 16},
@@ -151,7 +153,9 @@ ITEM_LABELS = {
     "energy_drink": "Энергетик",
     "medkit": "Аптечка",
     "ammo_pack": "Патроны",
-    "artifact": "Артефакт",
+    "artifact": "Артефакт Зоны",
+    "artifact_power": "Арт «Сила»",
+    "artifact_vitality": "Арт «Живучесть»",
     "vodka": "Водка",
     "antirad": "Антирад",
     "bread": "Хлеб",
@@ -203,6 +207,21 @@ ARTIFACT_DETECTORS: tuple[tuple[str, str, int], ...] = (
     ("detector_veles", "Велес", 35),
     ("detector_svarog", "Сварог", 50),
 )
+
+# Экипированные арты: бонус к силе и/или к запасу HP.
+ARTIFACT_EQUIP_BONUSES: dict[str, dict[str, int]] = {
+    "Артефакт Зоны": {"power": 2, "hp": 0},
+    "Артефакт": {"power": 2, "hp": 0},  # старые сейвы
+    "Арт «Сила»": {"power": 1, "hp": 0},
+    "Арт «Живучесть»": {"power": 0, "hp": 10},
+}
+ARTIFACT_ENERGY_REGEN_NAMES = frozenset({"Артефакт Зоны", "Артефакт"})
+ARTIFACT_INVENTORY_TO_NAME: dict[str, str] = {
+    "artifact": "Артефакт Зоны",
+    "artifact_power": "Арт «Сила»",
+    "artifact_vitality": "Арт «Живучесть»",
+}
+ARTIFACT_DROP_KEYS = ("artifact", "artifact_power", "artifact_vitality")
 
 WAREHOUSE_ITEM_KEYS = ("ammo_pack", "medkit", "energy_drink", "artifact")
 
@@ -403,9 +422,24 @@ def equipment_power(character: Character) -> int:
 
     weapon_level = _weapon_rating(weapon_name)
     armor_level = _armor_rating(armor_name)
-    artifact_bonus = 2 if artifact_name and artifact_name != "Нет" else 0
+    if artifact_name in ARTIFACT_EQUIP_BONUSES:
+        artifact_bonus = int(ARTIFACT_EQUIP_BONUSES[artifact_name].get("power", 0))
+    elif artifact_name and artifact_name != "Нет":
+        # Старые сейвы с неизвестным артом — как базовый.
+        artifact_bonus = 2
+    else:
+        artifact_bonus = 0
     durability_penalty = _durability_penalty(weapon_durability, 6) + _durability_penalty(armor_durability, 6)
     return max(1, weapon_level + armor_level + artifact_bonus - durability_penalty)
+
+
+def _artifact_hp_bonus(character: Character) -> int:
+    artifact_name = str(character.equipment.get("artifact", "Нет"))
+    return int(ARTIFACT_EQUIP_BONUSES.get(artifact_name, {}).get("hp", 0))
+
+
+def effective_max_health(character: Character) -> int:
+    return 100 + max(0, _artifact_hp_bonus(character))
 
 
 def compute_total_gear_power(character: Character) -> int:
@@ -450,9 +484,10 @@ def _dead_block_text() -> str:
 
 
 def build_dead_character_text(character: Character) -> str:
+    max_hp = effective_max_health(character)
     return (
         f"☠️ {character.nickname}, ты погиб в Зоне.\n"
-        f"HP: {character.health}/100\n"
+        f"HP: {character.health}/{max_hp}\n"
         f"Локация: {character.location}\n"
         f"Для продолжения нужен респавн.\n"
         f"Стоимость: {RESPAWN_COST_RU} RU."
@@ -659,7 +694,12 @@ def calculate_equipment_bonus(character: Character) -> int:
     # Каждый уровень оружия/брони дает +1 к силе снаряжения (начиная с 1-го уровня).
     armor_bonus = _armor_rating(armor_name)
     weapon_bonus = _weapon_rating(weapon_name)
-    artifact_bonus = 2 if artifact_name and artifact_name != "Нет" else 0
+    if artifact_name in ARTIFACT_EQUIP_BONUSES:
+        artifact_bonus = int(ARTIFACT_EQUIP_BONUSES[artifact_name].get("power", 0))
+    elif artifact_name and artifact_name != "Нет":
+        artifact_bonus = 2
+    else:
+        artifact_bonus = 0
     armor_penalty = _durability_penalty(armor_durability, max_penalty=6)
     weapon_penalty = _durability_penalty(weapon_durability, max_penalty=6)
     return max(0, armor_bonus + weapon_bonus + artifact_bonus - armor_penalty - weapon_penalty)
@@ -800,8 +840,10 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
         storage.add_player_stat(telegram_id, "money_earned", reward)
 
         if random.random() < 0.18:
-            storage.add_item(telegram_id, "artifact", 1)
-            extra = "\nТы нашел редкий артефакт!"
+            art_key = random.choice(ARTIFACT_DROP_KEYS)
+            storage.add_item(telegram_id, art_key, 1)
+            storage.add_player_stat(telegram_id, "artifacts_found", 1)
+            extra = f"\nТы нашел редкий артефакт: {ITEM_LABELS.get(art_key, art_key)}!"
         else:
             extra = ""
         stash_text = _maybe_drop_stash(storage, telegram_id)
@@ -846,12 +888,13 @@ def use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
-    if player.health >= 100:
+    max_hp = effective_max_health(player)
+    if player.health >= max_hp:
         return ActionResult(False, "Здоровье уже полное, аптечка не требуется.")
     if not storage.remove_item(telegram_id, "medkit", 1):
         return ActionResult(False, "У тебя нет аптечки в инвентаре.")
-    heal_amount = min(25, 100 - player.health)
-    storage.change_health(telegram_id, heal_amount)
+    heal_amount = min(25, max_hp - player.health)
+    storage.change_health(telegram_id, heal_amount, max_health=max_hp)
     return ActionResult(True, f"Ты использовал аптечку и восстановил {heal_amount} HP.")
 
 
@@ -1073,12 +1116,14 @@ def search_artifacts(storage: Storage, telegram_id: int) -> ActionResult:
     roll = random.randint(1, 100)
     survival_text = _apply_active_survival(storage, telegram_id)
     if roll <= chance:
-        storage.add_item(telegram_id, "artifact", 1)
+        art_key = random.choice(ARTIFACT_DROP_KEYS)
+        storage.add_item(telegram_id, art_key, 1)
+        storage.add_player_stat(telegram_id, "artifacts_found", 1)
         return ActionResult(
             True,
             f"Поиск артефакта ({detector_name}) успешен!\n"
             f"Шанс: {chance}% (бросок {roll}).\n"
-            "Найдено: Артефакт x1."
+            f"Найдено: {ITEM_LABELS.get(art_key, art_key)} x1."
             f"{survival_text}",
         )
     return ActionResult(
@@ -1224,14 +1269,21 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
                 f"(Базовая цена {sell_price} RU снижена из-за износа.)",
             )
         return ActionResult(True, f"Продано: {title} за {final_sell_price} RU.")
-    if item_key == "artifact":
-        removed_from_inventory = storage.remove_item(telegram_id, "artifact", 1)
+    if item_key in ARTIFACT_INVENTORY_TO_NAME:
+        removed_from_inventory = storage.remove_item(telegram_id, item_key, 1)
         if not removed_from_inventory:
             equipped_artifact = str(character.equipment.get("artifact", "Нет"))
-            if equipped_artifact and equipped_artifact != "Нет":
+            expected_name = ARTIFACT_INVENTORY_TO_NAME[item_key]
+            if equipped_artifact == expected_name:
                 storage.set_equipment_item(telegram_id, "artifact", "Нет")
+                # После снятия арта «Живучесть» HP не выше 100.
+                if character.health > 100:
+                    storage.change_health(telegram_id, 100 - character.health, max_health=100)
+                storage.sync_gear_power(telegram_id)
             else:
-                return ActionResult(False, "У тебя нет артефакта для продажи.")
+                return ActionResult(False, f"У тебя нет артефакта: {title}.")
+        else:
+            storage.sync_gear_power(telegram_id)
         storage.change_money(telegram_id, sell_price)
         return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
     if item_key == "fuel_can":
@@ -1351,22 +1403,51 @@ def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult
     )
 
 
-def equip_artifact(storage: Storage, telegram_id: int) -> ActionResult:
+def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = None) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+
+    chosen_key = item_key
+    if chosen_key is None or chosen_key not in ARTIFACT_INVENTORY_TO_NAME:
+        # Автовыбор: сила → живучесть → обычный.
+        for candidate in ("artifact_power", "artifact_vitality", "artifact"):
+            if int(player.inventory.get(candidate, 0)) > 0:
+                chosen_key = candidate
+                break
+        else:
+            return ActionResult(False, "У тебя нет артефакта в инвентаре.")
+
     equipped_artifact = str(player.equipment.get("artifact", "Нет"))
-    if equipped_artifact != "Нет":
-        return ActionResult(False, "Артефакт уже экипирован.")
-    if not storage.remove_item(telegram_id, "artifact", 1):
+    if equipped_artifact and equipped_artifact != "Нет":
+        return ActionResult(False, "Артефакт уже экипирован. Сначала продай текущий у торговца.")
+    if not storage.remove_item(telegram_id, chosen_key, 1):
         return ActionResult(False, "У тебя нет артефакта в инвентаре.")
-    storage.set_equipment_item(telegram_id, "artifact", "Артефакт Зоны")
+
+    artifact_name = ARTIFACT_INVENTORY_TO_NAME[chosen_key]
+    storage.set_equipment_item(telegram_id, "artifact", artifact_name)
+    storage.sync_gear_power(telegram_id)
+
+    bonus = ARTIFACT_EQUIP_BONUSES.get(artifact_name, {"power": 0, "hp": 0})
+    bonus_parts: list[str] = []
+    if bonus.get("power"):
+        bonus_parts.append(f"+{bonus['power']} к силе")
+    hp_bonus = int(bonus.get("hp") or 0)
+    if hp_bonus:
+        bonus_parts.append(f"+{hp_bonus} к запасу HP")
+        max_hp = 100 + hp_bonus
+        storage.change_health(telegram_id, hp_bonus, max_health=max_hp)
+    if chosen_key == "artifact":
+        bonus_parts.append("+5% реген энергии")
+    if not bonus_parts:
+        bonus_parts.append("без доп. бонуса")
+
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     return ActionResult(
         True,
-        f"Артефакт экипирован. Бонус к восстановлению выносливости (+5%) активирован.{achievements_text}",
+        f"Экипирован {artifact_name}. Бонус: {', '.join(bonus_parts)}.{achievements_text}",
     )
 
 
@@ -1390,11 +1471,7 @@ def format_inventory(character: Character) -> str:
     weapon_durability = _durability_percent(character, "weapon")
     armor_durability = _durability_percent(character, "armor")
     equipment = "\n".join(
-        (
-            f"• {equipment_labels.get(k, k)}: {v}"
-            if k in {"weapon", "armor"}
-            else f"• {k}: {v}"
-        )
+        f"• {equipment_labels.get(k, k)}: {v}"
         for k, v in character.equipment.items()
         if k in {"weapon", "armor", "artifact"}
     )
@@ -1415,7 +1492,7 @@ def format_inventory(character: Character) -> str:
         f"Telegram ID: {character.telegram_id}\n"
         f"Фракция: {character.faction or 'не выбрана'}\n"
         f"Локация: {character.location}\n"
-        f"Здоровье: {character.health}\n"
+        f"Здоровье: {character.health}/{effective_max_health(character)}\n"
         f"Энергия: {character.energy}/{character.max_energy}\n"
         f"Сила снаряги: {current_gear_power}\n"
         f"Скин: {skin.title}\n"
@@ -1897,7 +1974,10 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
                 armor_loss=5,
             )
             if artifacts_reward > 0:
-                storage.add_item(member.telegram_id, "artifact", artifacts_reward)
+                for _ in range(artifacts_reward):
+                    art_key = random.choice(ARTIFACT_DROP_KEYS)
+                    storage.add_item(member.telegram_id, art_key, 1)
+                storage.add_player_stat(member.telegram_id, "artifacts_found", artifacts_reward)
             if _maybe_drop_stash(storage, member.telegram_id):
                 stash_finds += 1
             _add_rating(storage, member.telegram_id, RATING_REWARD["raid_success"])
@@ -1923,7 +2003,8 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
             True,
             f"Рейд #{raid_id} завершен успешно на логове «{location_name}».\n"
             f"Бойцов: {len(ready_members)}, критические попадания: {battle['total_crits']}.\n"
-            f"Награда каждому: артефакты x{artifacts_reward} (максимум {RAID_ARTIFACT_REWARD_CAP} за рейд).\n"
+            f"Награда каждому: артефакты x{artifacts_reward} "
+            f"(Зона / Сила / Живучесть, макс. {RAID_ARTIFACT_REWARD_CAP}).\n"
             f"Порог сложности для награды артефактами: от {RAID_ARTIFACT_MIN_ENEMY_POWER} силы.\n"
             f"В казну группировки: {treasury_gain} RU.\n"
             f"Раненых: {len(battle['wounds'])}."
