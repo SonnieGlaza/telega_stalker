@@ -413,7 +413,7 @@ def trader_sell_trophies_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
 def trader_sell_gear_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
     items = [
         ("Продать грузовик (3500)", "sell:truck"),
-        ("Продать тайник (600)", "sell:stash_case"),
+        ("Продать тайник (500)", "sell:stash_case"),
     ]
     return _trader_page_keyboard(
         items,
