@@ -1851,87 +1851,12 @@ def declare_war(storage: Storage, telegram_id: int, target_faction: str) -> Acti
 
 
 def attack_location(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
-    character = storage.get_character(telegram_id)
-    if character is None:
-        return ActionResult(False, "Сначала создай персонажа.")
-    if _is_dead(character):
-        return ActionResult(False, _dead_block_text())
-    if character.faction is None:
-        return ActionResult(False, "Сначала выбери группировку.")
-    if storage.get_faction_active_members_count(character.faction) < WAR_MIN_FACTION_MEMBERS:
-        return ActionResult(
-            False,
-            f"Для войны нужно минимум {WAR_MIN_FACTION_MEMBERS} бойцов группировки с живым персонажем.",
-        )
-
-    locations = {loc["name"]: loc for loc in storage.get_locations()}
-    if location_name not in locations:
-        return ActionResult(False, "Локация не найдена.")
-
-    target = locations[location_name]
-    if target["point_type"] == "база" and target["controlled_by"] == character.faction:
-        return ActionResult(False, "Нельзя атаковать собственную базу своей группировки.")
-    target_owner = target["controlled_by"]
-    if (
-        isinstance(target_owner, str)
-        and target_owner
-        and target_owner != character.faction
-        and character.faction is not None
-        and storage.are_factions_allied(character.faction, target_owner)
-    ):
-        return ActionResult(False, f"Нельзя атаковать союзную точку: {target_owner} — ваш союзник.")
-
-    faction_power = storage.get_faction_power(character.faction)
-    squad_power = max(1, faction_power)
-    enemy_power = int(target["npc_power"])
-    if target["controlled_by"] and target["controlled_by"] != character.faction:
-        enemy_power += 10
-
-    if not storage.spend_energy(telegram_id, 24):
-        return ActionResult(False, "Недостаточно энергии для штурма (нужно 24).")
-
-    chance = int(round((squad_power / (squad_power + enemy_power)) * 100))
-    chance = max(10, min(90, chance))
-    weapon_penalty = _durability_penalty(_durability_percent(character, "weapon"), max_penalty=18)
-    armor_penalty = _durability_penalty(_durability_percent(character, "armor"), max_penalty=12)
-    chance = max(8, chance - weapon_penalty - armor_penalty // 2)
-    roll = random.randint(1, 100)
-    success = roll <= chance
-
-    durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=5, armor_loss=4)
-    if success:
-        storage.set_location_control(location_name, character.faction)
-        personal_reward = 250
-        treasury_reward = 0
-
-        if target["point_type"] == "точка ресурсов":
-            treasury_reward = 1800
-            storage.change_faction_treasury(character.faction, treasury_reward)
-        elif target["point_type"] == "база":
-            treasury_reward = 900
-            storage.change_faction_treasury(character.faction, treasury_reward)
-
-        storage.change_money(telegram_id, personal_reward)
-        _add_rating(storage, telegram_id, RATING_REWARD["war_success"])
-        storage.add_player_stat(telegram_id, "wars_won", 1)
-        storage.add_player_stat(telegram_id, "money_earned", personal_reward)
-        stash_text = _maybe_drop_stash(storage, telegram_id)
-        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
-        return ActionResult(
-            True,
-            f"Штурм успешен! Шанс {chance}% (бросок {roll}).\n"
-            f"Точка «{location_name}» под контролем {character.faction}.\n"
-            f"Личная награда: {personal_reward} RU.\n"
-            f"В казну группировки: {treasury_reward} RU.{stash_text}{durability_text}{achievements_text}",
-        )
-
-    loss = random.randint(80, 170)
-    storage.change_money(telegram_id, -loss)
-    _add_rating(storage, telegram_id, -RATING_REWARD["war_fail"])
+    """Сolo-штурм отключён: захват точек только через военное лобби (мин. 5 бойцов)."""
+    _ = (storage, telegram_id, location_name)
     return ActionResult(
         False,
-        f"Штурм провален. Шанс {chance}% (бросок {roll}).\n"
-        f"Потери отряда на снабжение: {loss} RU.{durability_text}",
+        f"Соло-штурм отключён. Собери военное лобби и запусти штурм минимум из "
+        f"{WAR_MIN_FACTION_MEMBERS} живых бойцов (раздел «⚔️ Война» → «🪖 Военные лобби»).",
     )
 
 
@@ -2683,7 +2608,10 @@ def build_war_lobby_overview(storage: Storage, telegram_id: int) -> str:
                 lobby = ally_lobby
                 break
     if lobby is None:
-        return "Открытых военных лобби нет. Создай лобби на нужную локацию."
+        return (
+            "Открытых военных лобби нет. Создай лобби на нужную локацию.\n"
+            f"Для захвата точки нужно минимум {WAR_MIN_FACTION_MEMBERS} живых бойцов в лобби."
+        )
     war_id = int(lobby["id"])
     member_ids = storage.get_war_lobby_member_ids(war_id)
     members = storage.get_characters_by_ids(member_ids)
@@ -2702,7 +2630,7 @@ def build_war_lobby_overview(storage: Storage, telegram_id: int) -> str:
         f"Военное лобби #{war_id}\n"
         f"Локация: {lobby['location']}\n"
         f"Хост: {lobby['host_faction']}\n"
-        f"Участников: {len(member_ids)}\n"
+        f"Участников: {len(member_ids)} / мин. {WAR_MIN_FACTION_MEMBERS} для запуска\n"
         f"Распределение сил:\n{shares_block}"
     )
 

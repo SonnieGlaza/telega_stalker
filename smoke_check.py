@@ -99,7 +99,8 @@ def run_smoke_check() -> None:
         war_launch = launch_war_lobby(storage, 111)
         assert war_launch.text
         assert build_war_lobby_overview(storage, 111)
-        assert attack_location(storage, 111, "Свалка").text
+        solo_assault = attack_location(storage, 111, "Свалка")
+        assert not solo_assault.ok, solo_assault.text
         assert attempt_smuggling(storage, 111).text
 
         # Market + lots.
@@ -117,7 +118,7 @@ def run_smoke_check() -> None:
         assert "artifact:search" in callbacks
         assert "war:section:scenario" in callbacks
         assert "war:section:lobby" in callbacks
-        assert "war:section:assault" in callbacks
+        assert "war:section:assault" not in callbacks
         _, _, missing_callbacks = _callback_handler_coverage()
         assert not missing_callbacks, f"Missing callback handlers: {', '.join(missing_callbacks)}"
 

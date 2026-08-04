@@ -434,8 +434,7 @@ def war_sections_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📘 Сценарий войны", callback_data="war:section:scenario")],
-            [InlineKeyboardButton(text="🪖 Военные лобби", callback_data="war:section:lobby")],
-            [InlineKeyboardButton(text="🎯 Точка для штурма", callback_data="war:section:assault")],
+            [InlineKeyboardButton(text="🪖 Военные лобби (штурм от 5)", callback_data="war:section:lobby")],
         ]
     )
 

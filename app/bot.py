@@ -1775,6 +1775,8 @@ async def war_scenario_section_callback(callback: CallbackQuery) -> None:
     alliance_overview = build_alliance_overview(db, player.telegram_id)
     explainer = (
         "Сценарий войны (базовая версия):\n"
+        "• Захват точек — только через военное лобби (минимум 5 бойцов).\n"
+        "• Соло-штурм одним игроком отключён.\n"
         "• Точки ресурсов приносят деньги группировке.\n"
         "• Базы дают безопасную точку и сервис.\n"
         "• Точки интереса уменьшают время прибытия.\n"
@@ -1803,20 +1805,6 @@ async def war_lobby_section_callback(callback: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data == "war:section:assault")
-async def war_assault_section_callback(callback: CallbackQuery) -> None:
-    db = get_storage()
-    player = db.get_character(callback.from_user.id, refresh_energy=False)
-    if player is None or not player_ready(player):
-        await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
-        return
-    await edit_menu_message(
-        callback,
-        "Выбери точку для штурма:",
-        locations_keyboard(db.get_locations(), mode="war", back_callback="war:section:root"),
-    )
-
-
 @router.callback_query(F.data.startswith("war:transfer:"))
 async def war_transfer_location_callback(callback: CallbackQuery) -> None:
     ally_faction = (callback.data or "").split(":", maxsplit=2)[2]
@@ -1829,7 +1817,8 @@ async def war_transfer_location_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("war:"))
-async def handle_war(callback: CallbackQuery) -> None:
+async def handle_war_legacy_callback(callback: CallbackQuery) -> None:
+    """Старые кнопки solo-штурма (war:<локация>) — только отказ."""
     location = (callback.data or "").split(":", maxsplit=1)[1]
     if location.startswith("section:") or location.startswith("transfer:"):
         await safe_callback_answer(callback)
