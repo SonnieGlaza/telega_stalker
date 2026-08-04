@@ -40,7 +40,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "energy_drink": {"name": "Энергетик", "buy_price": 250, "sell_price": 170},
     "medkit": {"name": "Аптечка", "buy_price": 260, "sell_price": 120},
     "ammo_pack": {"name": "Патроны", "buy_price": 120, "sell_price": 55},
-    "artifact": {"name": "Артефакт Зоны", "buy_price": 0, "sell_price": 900},
+    "artifact": {"name": "Артефакт Зоны", "buy_price": 0, "sell_price": 5000},
     "artifact_power": {"name": "Арт «Сила»", "buy_price": 0, "sell_price": 1100},
     "artifact_vitality": {"name": "Арт «Живучесть»", "buy_price": 0, "sell_price": 1100},
     "vodka": {"name": "Водка", "buy_price": 150, "sell_price": 50},
@@ -320,7 +320,7 @@ STASH_WEAPON_BY_TIER: dict[int, tuple[str, ...]] = {
 STASH_CONSUMABLE_DROP_CHANCE = 40  # % на каждый тип расходника при открытии
 
 AUCTION_DEFAULT_LOTS: dict[str, tuple[str, int, int]] = {
-    "artifact": ("artifact", 1, 900),
+    "artifact": ("artifact", 1, 5000),
     "artifact_power": ("artifact_power", 1, 1100),
     "artifact_vitality": ("artifact_vitality", 1, 1100),
     "ammo_pack": ("ammo_pack", 5, 520),
