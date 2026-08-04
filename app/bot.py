@@ -37,6 +37,7 @@ from app.game_logic import (
     build_quest_overview,
     apply_controlled_points_income,
     process_emission_cycle,
+    build_players_directory,
     deposit_to_faction_warehouse,
     format_inventory,
     RESOURCE_POINT_INCOME_PER_HOUR,
@@ -385,7 +386,8 @@ def _build_info_text(player: Character) -> str:
         "• /start — создать персонажа или войти в существующего.\n"
         "• /menu — открыть главное меню.\n"
         "• /info — открыть эту справку.\n"
-        "• /pay [telegram_id] [сумма] — перевод игроку (комиссия 30%).\n\n"
+        "• /pay [telegram_id] [сумма] — перевод игроку (комиссия 30%).\n"
+        "  ID смотри в разделе «👥 Игроки».\n\n"
         "Механики:\n"
         "• 🚚 Грузовик ускоряет переходы и снижает расход энергии на поездку,\n"
         "  но тратит 1 топливо за каждый переход.\n"
@@ -1202,6 +1204,15 @@ async def show_rating(message: Message) -> None:
         return
     text = build_rating_overview(get_storage(), player.telegram_id, limit=10)
     await message.answer(text, reply_markup=ratings_keyboard())
+
+
+@router.message(F.text == "👥 Игроки")
+async def show_players(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    await message.answer(build_players_directory(get_storage(), limit=50))
 
 
 @router.callback_query(F.data == "ratings:achievements")

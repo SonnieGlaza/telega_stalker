@@ -2609,6 +2609,19 @@ def apply_controlled_points_income(storage: Storage) -> ActionResult:
     return ActionResult(True, "\n".join(lines))
 
 
+def build_players_directory(storage: Storage, limit: int = 50) -> str:
+    rows = storage.list_players(limit=limit)
+    if not rows:
+        return "Игроков пока нет."
+    lines = ["👥 Игроки Зоны (ник / Telegram ID):"]
+    for row in rows:
+        faction = row.get("faction") or "без гп"
+        lines.append(f"• {row['nickname']} — {row['telegram_id']} [{faction}]")
+    if len(rows) >= limit:
+        lines.append(f"\nПоказаны первые {limit}.")
+    return "\n".join(lines)
+
+
 def _safe_base_location_names(storage: Storage) -> set[str]:
     return {
         str(location["name"])
