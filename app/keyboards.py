@@ -459,6 +459,7 @@ def economy_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📤 Забрать 1 аптечку со склада", callback_data="eco:warehouse:withdraw:medkit")],
             [InlineKeyboardButton(text="🏦 Лидер: вывести 500 RU из казны", callback_data="eco:treasury:withdraw:500")],
             [InlineKeyboardButton(text="🏦 Лидер: вывести 1000 RU из казны", callback_data="eco:treasury:withdraw:1000")],
+            [InlineKeyboardButton(text="🎖 Лидер: назначить звание", callback_data="rank:menu")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот артефакт", callback_data="eco:auction:create:artifact")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот патроны", callback_data="eco:auction:create:ammo_pack")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот аптечки", callback_data="eco:auction:create:medkit")],
@@ -617,4 +618,53 @@ def players_faction_page_keyboard(faction_key: str, *, page: int, total_pages: i
         )
     rows.append(nav)
     rows.append([InlineKeyboardButton(text="⬅️ К группировкам", callback_data="players:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def faction_ranks_members_keyboard(
+    members: list[dict[str, str | int]],
+    *,
+    leader_id: int,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for member in members[:30]:
+        telegram_id = int(member["telegram_id"])
+        nickname = str(member.get("nickname") or telegram_id)
+        if telegram_id == leader_id:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"⭐ {nickname} (лидер)",
+                        callback_data="rank:menu",
+                    )
+                ]
+            )
+            continue
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=nickname,
+                    callback_data=f"rank:member:{telegram_id}",
+                )
+            ]
+        )
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Бойцов нет", callback_data="eco:menu:root")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def faction_rank_pick_keyboard(target_id: int, ranks: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for key, title in ranks:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=title,
+                    callback_data=f"rank:set:{target_id}:{key}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ К списку бойцов", callback_data="rank:menu")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

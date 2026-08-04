@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from app.faction_ranks import (
+    leader_title,
+    rank_by_key,
+    ranks_for_faction,
+    resolve_rank_title,
+)
 from app.skins import next_skin_progress, resolve_skin
 from app.storage import Character, Storage
 
@@ -1918,7 +1924,12 @@ def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = No
     )
 
 
-def format_inventory(character: Character, *, rating_points: int = 0) -> str:
+def format_inventory(
+    character: Character,
+    *,
+    rating_points: int = 0,
+    storage: Storage | None = None,
+) -> str:
     rating = max(0, int(rating_points))
     skin = resolve_skin(rating)
     _, next_skin, rating_left = next_skin_progress(rating)
@@ -1966,12 +1977,23 @@ def format_inventory(character: Character, *, rating_points: int = 0) -> str:
         f"💧 Жажда: {character.thirst}"
     )
     craving_notice = build_survival_craving_notice(character)
+    is_leader = False
+    if storage is not None and character.faction:
+        is_leader = storage.get_faction_leader_id(character.faction) == character.telegram_id
+    rank_title = resolve_rank_title(
+        faction=character.faction,
+        faction_rank=character.faction_rank,
+        is_leader=is_leader,
+    )
+    faction_line = f"Фракция: {character.faction or 'не выбрана'}"
+    if rank_title:
+        faction_line = f"Фракция: {character.faction} | Звание: {rank_title}"
     return (
         f"{craving_notice}"
         f"👤 {character.nickname} ({character.gender})\n"
         f"ID-адрес: {character.player_uid}\n"
         f"Telegram ID: {character.telegram_id}\n"
-        f"Фракция: {character.faction or 'не выбрана'}\n"
+        f"{faction_line}\n"
         f"Локация: {character.location}\n"
         f"Здоровье: {character.health}/{effective_max_health(character)}\n"
         f"Энергия: {character.energy}/{character.max_energy}\n"
@@ -2599,21 +2621,89 @@ def withdraw_from_faction_warehouse(
     return ActionResult(True, f"Со склада получено: {ITEM_LABELS.get(key, key)} x{amount}.")
 
 
-def withdraw_from_faction_treasury(storage: Storage, telegram_id: int, amount: int) -> ActionResult:
-    if amount <= 0:
-        return ActionResult(False, "Некорректная сумма для вывода из казны.")
+def character_rank_title(storage: Storage, character: Character) -> str | None:
+    if character.faction is None:
+        return None
+    is_leader = storage.get_faction_leader_id(character.faction) == character.telegram_id
+    return resolve_rank_title(
+        faction=character.faction,
+        faction_rank=character.faction_rank,
+        is_leader=is_leader,
+    )
+
+
+def assign_faction_rank(
+    storage: Storage,
+    leader_telegram_id: int,
+    target_telegram_id: int,
+    rank_key: str,
+) -> ActionResult:
+    leader = storage.get_character(leader_telegram_id, refresh_energy=False)
+    if leader is None or leader.faction is None:
+        return ActionResult(False, "Сначала вступи в группировку.")
+    if storage.get_faction_leader_id(leader.faction) != leader_telegram_id:
+        return ActionResult(False, "Назначать звания может только лидер группировки.")
+
+    target = storage.get_character(target_telegram_id, refresh_energy=False)
+    if target is None or target.faction != leader.faction:
+        return ActionResult(False, "Игрок не состоит в твоей группировке.")
+    if target.telegram_id == leader_telegram_id:
+        title = leader_title(leader.faction) or "лидер"
+        return ActionResult(False, f"Тебе уже закреплено звание лидера: {title}.")
+
+    rank = rank_by_key(leader.faction, rank_key)
+    if rank is None:
+        return ActionResult(False, "Некорректное звание.")
+    if not storage.set_faction_rank(target.telegram_id, rank.key):
+        return ActionResult(False, "Не удалось сохранить звание.")
+    return ActionResult(
+        True,
+        f"{target.nickname} теперь «{rank.title}» в группировке «{leader.faction}».",
+    )
+
+
+def build_faction_ranks_overview(storage: Storage, telegram_id: int) -> str:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction is None:
-        return ActionResult(False, "Казна доступна только бойцам группировки.")
-    if _is_dead(player):
-        return ActionResult(False, _dead_block_text())
-    leader_id = storage.get_faction_leader_id(player.faction)
-    if leader_id != telegram_id:
-        return ActionResult(False, "Снимать деньги из казны может только лидер группировки.")
-    if not storage.withdraw_faction_treasury(player.faction, amount):
-        return ActionResult(False, "В казне недостаточно денег для вывода.")
-    storage.change_money(telegram_id, amount)
-    return ActionResult(True, f"Из казны {player.faction} выведено {amount} RU в твой баланс.")
+        return "Звания доступны после выбора группировки."
+    if storage.get_faction_leader_id(player.faction) != telegram_id:
+        own = character_rank_title(storage, player) or "без звания"
+        return (
+            f"Звания группировки «{player.faction}»\n"
+            f"Твоё звание: {own}\n\n"
+            "Назначать звания может только лидер."
+        )
+
+    ranks = ranks_for_faction(player.faction)
+    leader_name = leader_title(player.faction) or "Лидер"
+    lines = [
+        f"🎖 Звания «{player.faction}»",
+        f"Лидер: {leader_name} (ты)",
+        "",
+        "Выбери бойца, затем звание:",
+    ]
+    for rank in ranks:
+        lines.append(f"{rank.level}) {rank.title}")
+    return "\n".join(lines)
+
+
+def build_faction_member_rank_pick_text(
+    storage: Storage,
+    leader_telegram_id: int,
+    target_telegram_id: int,
+) -> str:
+    leader = storage.get_character(leader_telegram_id, refresh_energy=False)
+    target = storage.get_character(target_telegram_id, refresh_energy=False)
+    if leader is None or leader.faction is None:
+        return "Сначала вступи в группировку."
+    if target is None or target.faction != leader.faction:
+        return "Игрок не в твоей группировке."
+    current = character_rank_title(storage, target) or "без звания"
+    return (
+        f"Боец: {target.nickname}\n"
+        f"Сейчас: {current}\n\n"
+        "Выбери новое звание:"
+    )
 
 
 def create_faction_auction(storage: Storage, telegram_id: int, lot_key: str) -> ActionResult:
@@ -3147,7 +3237,9 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
 
     leader_hint = ""
     if storage.get_faction_leader_id(player.faction) == telegram_id:
-        leader_hint = "\nЛидер может выводить RU из казны через кнопки экономики."
+        leader_hint = (
+            "\nЛидер может выводить RU из казны и назначать звания через кнопки экономики."
+        )
 
     return (
         f"Экономика группировки «{player.faction}»\n"
@@ -3289,7 +3381,10 @@ def build_players_faction_page_text(
         "",
     ]
     for row in chunk:
-        lines.append(f"• {row['nickname']} — {row['telegram_id']}")
+        member = storage.get_character(int(row["telegram_id"]), refresh_energy=False)
+        rank = character_rank_title(storage, member) if member else None
+        rank_part = f" [{rank}]" if rank else ""
+        lines.append(f"• {row['nickname']}{rank_part} — {row['telegram_id']}")
     return ("\n".join(lines), faction_key, safe_page, total_pages)
 
 

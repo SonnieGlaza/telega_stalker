@@ -79,6 +79,10 @@ from app.game_logic import (
     cancel_own_first_market_lot,
     withdraw_from_faction_warehouse,
     withdraw_from_faction_treasury,
+    assign_faction_rank,
+    build_faction_ranks_overview,
+    build_faction_member_rank_pick_text,
+    character_rank_title,
     build_dead_character_text,
     respawn_character,
     build_alliance_overview,
@@ -95,6 +99,8 @@ from app.game_logic import (
 )
 from app.keyboards import (
     economy_keyboard,
+    faction_ranks_members_keyboard,
+    faction_rank_pick_keyboard,
     inventory_equipment_keyboard,
     inventory_consumables_keyboard,
     dead_character_keyboard,
@@ -137,6 +143,7 @@ from app.export_players import (
     migrate_payload_to_storage,
 )
 from app.profile_card import build_character_card
+from app.faction_ranks import ranks_for_faction
 from app.storage import Character, Storage, NicknameTakenError
 from app.zone_map import build_zone_map_image
 
@@ -967,14 +974,17 @@ def action_result_text(telegram_id: int, text: str) -> str:
 
 
 async def send_profile_snapshot(message: Message, player: Character) -> None:
+    storage = get_storage()
+    rank = character_rank_title(storage, player)
+    rank_line = f"\nЗвание: {rank}" if rank else ""
     caption = (
         f"Профиль сталкера {player.nickname}\n"
         f"ID: {player.player_uid}\n"
-        f"Фракция: {player.faction or 'не выбрана'}"
+        f"Фракция: {player.faction or 'не выбрана'}{rank_line}"
     )
-    stats = get_storage().get_player_stats(player.telegram_id)
+    stats = storage.get_player_stats(player.telegram_id)
     rating = int(stats.get("rating_points", 0))
-    image_bytes = build_character_card(player, rating_points=rating)
+    image_bytes = build_character_card(player, rating_points=rating, storage=storage)
     image = BufferedInputFile(image_bytes, filename=f"{player.player_uid}.png")
     await message.answer_photo(photo=image, caption=caption)
 
@@ -989,7 +999,11 @@ async def show_inventory(message: Message) -> None:
         await message.answer(build_dead_character_text(player), reply_markup=dead_character_keyboard())
         return
     await message.answer(
-        format_inventory(player, rating_points=int(get_storage().get_player_stats(player.telegram_id).get("rating_points", 0))),
+        format_inventory(
+            player,
+            rating_points=int(get_storage().get_player_stats(player.telegram_id).get("rating_points", 0)),
+            storage=get_storage(),
+        ),
         reply_markup=inventory_equipment_keyboard(),
     )
 
@@ -1009,7 +1023,11 @@ async def open_inventory_callback(callback: CallbackQuery) -> None:
         return
     await edit_menu_message(
         callback,
-        format_inventory(player, rating_points=int(get_storage().get_player_stats(player.telegram_id).get("rating_points", 0))),
+        format_inventory(
+            player,
+            rating_points=int(get_storage().get_player_stats(player.telegram_id).get("rating_points", 0)),
+            storage=get_storage(),
+        ),
         inventory_equipment_keyboard(),
     )
 
@@ -2217,6 +2235,76 @@ async def economy_root_callback(callback: CallbackQuery) -> None:
         return
     text = build_economy_overview(get_storage(), player.telegram_id)
     await edit_menu_message(callback, text, economy_keyboard())
+
+
+@router.callback_query(F.data == "rank:menu")
+async def faction_ranks_menu_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Сначала выбери группировку.", show_alert=True)
+        return
+    if storage.get_faction_leader_id(player.faction) != player.telegram_id:
+        await callback.answer("Назначать звания может только лидер.", show_alert=True)
+        return
+    members = storage.list_faction_members(player.faction)
+    text = build_faction_ranks_overview(storage, player.telegram_id)
+    await edit_menu_message(
+        callback,
+        text,
+        faction_ranks_members_keyboard(members, leader_id=player.telegram_id),
+    )
+
+
+@router.callback_query(F.data.startswith("rank:member:"))
+async def faction_rank_member_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Сначала выбери группировку.", show_alert=True)
+        return
+    if storage.get_faction_leader_id(player.faction) != player.telegram_id:
+        await callback.answer("Назначать звания может только лидер.", show_alert=True)
+        return
+    raw_id = (callback.data or "").split(":", maxsplit=2)[2]
+    try:
+        target_id = int(raw_id)
+    except ValueError:
+        await callback.answer("Некорректный игрок.", show_alert=True)
+        return
+    text = build_faction_member_rank_pick_text(storage, player.telegram_id, target_id)
+    ranks = [(rank.key, f"{rank.level}) {rank.title}") for rank in ranks_for_faction(player.faction)]
+    await edit_menu_message(callback, text, faction_rank_pick_keyboard(target_id, ranks))
+
+
+@router.callback_query(F.data.startswith("rank:set:"))
+async def faction_rank_set_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    parts = (callback.data or "").split(":", maxsplit=3)
+    if len(parts) != 4:
+        await callback.answer("Некорректные данные.", show_alert=True)
+        return
+    try:
+        target_id = int(parts[2])
+    except ValueError:
+        await callback.answer("Некорректный игрок.", show_alert=True)
+        return
+    rank_key = parts[3]
+    result = assign_faction_rank(storage, callback.from_user.id, target_id, rank_key)
+    if not result.ok:
+        await callback.answer(result.text, show_alert=True)
+        return
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await reply_action_result(callback, result.text)
+        return
+    members = storage.list_faction_members(player.faction)
+    overview = build_faction_ranks_overview(storage, player.telegram_id)
+    await edit_menu_message(
+        callback,
+        f"{result.text}\n\n{overview}",
+        faction_ranks_members_keyboard(members, leader_id=player.telegram_id),
+    )
 
 
 @router.callback_query(F.data == "eco:warehouse:view")

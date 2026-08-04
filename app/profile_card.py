@@ -8,9 +8,10 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from app.avatar_render import render_avatar
+from app.faction_ranks import resolve_rank_title
 from app.game_logic import ITEM_LABELS, effective_max_health, equipment_power
 from app.skins import resolve_skin
-from app.storage import Character
+from app.storage import Character, Storage
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -470,7 +471,12 @@ def _ellipsize_text(
     return (current + suffix) if current else suffix
 
 
-def build_character_card(character: Character, *, rating_points: int = 0) -> bytes:
+def build_character_card(
+    character: Character,
+    *,
+    rating_points: int = 0,
+    storage: Storage | None = None,
+) -> bytes:
     width, height = 1180, 700
     img = Image.new("RGB", (width, height), color=(21, 21, 26))
     draw = ImageDraw.Draw(img)
@@ -485,6 +491,14 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     location_color = _location_color(character.location)
     rating = max(0, int(rating_points))
     skin = resolve_skin(rating)
+    is_leader = False
+    if storage is not None and character.faction:
+        is_leader = storage.get_faction_leader_id(character.faction) == character.telegram_id
+    rank_title = resolve_rank_title(
+        faction=character.faction,
+        faction_rank=character.faction_rank,
+        is_leader=is_leader,
+    )
 
     draw.rectangle((0, 0, width, 90), fill=(28, 31, 40))
     draw.text((24, 16), "Карточка персонажа", fill=(235, 235, 235), font=title_font)
@@ -513,16 +527,19 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
         outline=(210, 210, 210),
         width=2,
     )
+    info_lines = [
+        f"Локация: {character.location}",
+        f"Группировка: {character.faction or 'не выбрана'}",
+    ]
+    if rank_title:
+        info_lines.append(f"Звание: {rank_title}")
     _draw_centered_lines_in_box(
         draw,
         left=info_box_left,
         top=info_box_top,
         right=info_box_right,
         bottom=info_box_bottom,
-        lines=[
-            f"Локация: {character.location}",
-            f"Группировка: {character.faction or 'не выбрана'}",
-        ],
+        lines=info_lines,
         font=small_font,
         fill=(248, 248, 248),
     )
@@ -575,9 +592,20 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
         fill=faction_color,
         font=body_font,
     )
-    draw.text((right_x, 184), f"Баланс: {character.money} рублей", fill=(225, 225, 225), font=body_font)
     draw.text(
-        (right_x, 210),
+        (right_x, 184),
+        _ellipsize_text(
+            draw,
+            f"Звание: {rank_title}" if rank_title else "Звание: —",
+            body_font,
+            right_max_width,
+        ),
+        fill=(225, 225, 225),
+        font=body_font,
+    )
+    draw.text((right_x, 210), f"Баланс: {character.money} рублей", fill=(225, 225, 225), font=body_font)
+    draw.text(
+        (right_x, 236),
         (
             f"Транспорт: Грузовик ({max(0, min(100, int(character.truck_durability)))}%)"
             if character.truck_owned
@@ -586,34 +614,34 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
         fill=(225, 225, 225),
         font=body_font,
     )
-    draw.text((right_x, 236), f"Топливо: {character.fuel}", fill=(225, 225, 225), font=body_font)
+    draw.text((right_x, 262), f"Топливо: {character.fuel}", fill=(225, 225, 225), font=body_font)
     draw.text(
-        (right_x, 262),
+        (right_x, 288),
         _ellipsize_text(draw, skin.title, body_font, right_max_width),
         fill=skin.accent_color,
         font=body_font,
     )
 
-    draw.text((right_x, 292), "Индикаторы состояния", fill=(210, 210, 210), font=body_font)
+    draw.text((right_x, 318), "Индикаторы состояния", fill=(210, 210, 210), font=body_font)
     current_gear_power = equipment_power(character)
     bar_x = right_x + 184
     value_x = bar_x + 252
 
     max_hp = effective_max_health(character)
-    draw.text((right_x, 318), "Здоровье", fill=(220, 220, 220), font=small_font)
-    _draw_power_bar(draw, bar_x, 322, character.health, max_hp, (190, 70, 70))
-    draw.text((value_x, 318), f"{character.health}/{max_hp}", fill=(220, 220, 220), font=small_font)
+    draw.text((right_x, 344), "Здоровье", fill=(220, 220, 220), font=small_font)
+    _draw_power_bar(draw, bar_x, 348, character.health, max_hp, (190, 70, 70))
+    draw.text((value_x, 344), f"{character.health}/{max_hp}", fill=(220, 220, 220), font=small_font)
 
-    draw.text((right_x, 344), "Энергия", fill=(220, 220, 220), font=small_font)
-    _draw_power_bar(draw, bar_x, 348, character.energy, max(1, character.max_energy), (70, 150, 220))
-    draw.text((value_x, 344), f"{character.energy}/{character.max_energy}", fill=(220, 220, 220), font=small_font)
+    draw.text((right_x, 370), "Энергия", fill=(220, 220, 220), font=small_font)
+    _draw_power_bar(draw, bar_x, 374, character.energy, max(1, character.max_energy), (70, 150, 220))
+    draw.text((value_x, 370), f"{character.energy}/{character.max_energy}", fill=(220, 220, 220), font=small_font)
 
-    draw.text((right_x, 370), "Сила снаряжения", fill=(220, 220, 220), font=small_font)
-    _draw_power_bar(draw, bar_x, 374, current_gear_power, 20, (170, 170, 95))
-    draw.text((value_x, 370), f"{current_gear_power}/20", fill=(220, 220, 220), font=small_font)
+    draw.text((right_x, 396), "Сила снаряжения", fill=(220, 220, 220), font=small_font)
+    _draw_power_bar(draw, bar_x, 400, current_gear_power, 20, (170, 170, 95))
+    draw.text((value_x, 396), f"{current_gear_power}/20", fill=(220, 220, 220), font=small_font)
 
     draw.text(
-        (right_x, 398),
+        (right_x, 424),
         f"Радиация: {character.radiation}   Голод: {character.hunger}   Жажда: {character.thirst}",
         fill=(208, 208, 208),
         font=small_font,
@@ -640,7 +668,7 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     _draw_text_block(
         draw=draw,
         x=480,
-        y=436,
+        y=456,
         header="Снаряжение",
         lines=equipment_lines,
         header_font=small_font,
@@ -651,7 +679,7 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     _draw_text_block(
         draw=draw,
         x=810,
-        y=436,
+        y=456,
         header="Инвентарь",
         lines=_inventory_lines(character),
         header_font=small_font,

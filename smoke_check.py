@@ -72,6 +72,19 @@ def run_smoke_check() -> None:
         assert storage.set_faction_leader("Долг", 111)
         assert storage.set_faction_leader("Бандиты", 333)
 
+        # Faction ranks assigned by leader.
+        from app.game_logic import assign_faction_rank, character_rank_title
+
+        assert character_rank_title(storage, storage.get_character(111)) == "Полковник"
+        assert character_rank_title(storage, storage.get_character(222)) == "Рядовой"
+        promote = assign_faction_rank(storage, 111, 222, "r3")
+        assert promote.ok, promote.text
+        assert character_rank_title(storage, storage.get_character(222)) == "Прапорщик"
+        denied = assign_faction_rank(storage, 222, 111, "r2")
+        assert not denied.ok
+        bandit_rank = assign_faction_rank(storage, 333, 333, "r1")
+        assert not bandit_rank.ok
+
         # Economy / trader items.
         assert buy_item(storage, 111, "detector_otklik").ok
         storage.change_money(111, 100000)
@@ -159,6 +172,7 @@ def run_smoke_check() -> None:
         # Keyboard callback sanity (basic non-empty check).
         callbacks = _all_callback_data()
         assert "artifact:search" in callbacks
+        assert "rank:menu" in callbacks
         assert "war:section:scenario" in callbacks
         assert "war:section:lobby" in callbacks
         assert "war:section:assault" not in callbacks

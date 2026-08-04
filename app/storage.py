@@ -33,6 +33,7 @@ class Character:
     nickname: str
     gender: str
     faction: str | None
+    faction_rank: str | None
     money: int
     energy: int
     max_energy: int
@@ -310,11 +311,11 @@ class Storage:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO characters(
-                    telegram_id, player_uid, avatar_style, nickname, gender, faction, money,
+                    telegram_id, player_uid, avatar_style, nickname, gender, faction, faction_rank, money,
                     energy, max_energy, energy_updated_at, health, gear_power, location,
                     inventory_json, equipment_json, truck_owned, truck_durability, sleeping_bag_owned, fuel,
                     radiation, hunger, thirst, needs_updated_at, survival_damage_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(row.get("telegram_id")),
@@ -323,6 +324,7 @@ class Storage:
                     row.get("nickname") or "Сталкер",
                     row.get("gender") or "Мужской",
                     row.get("faction"),
+                    row.get("faction_rank"),
                     int(row.get("money", 1000)),
                     int(row.get("energy", 100)),
                     int(row.get("max_energy", 100)),
@@ -572,6 +574,7 @@ class Storage:
                     nickname TEXT NOT NULL,
                     gender TEXT NOT NULL,
                     faction TEXT,
+                    faction_rank TEXT,
                     money INTEGER NOT NULL DEFAULT 1000,
                     energy INTEGER NOT NULL DEFAULT 100,
                     max_energy INTEGER NOT NULL DEFAULT 100,
@@ -1238,12 +1241,40 @@ class Storage:
         return row is not None
 
     def set_faction(self, telegram_id: int, faction: str) -> None:
+        from app.faction_ranks import default_rank_key
+
+        rank_key = default_rank_key(faction)
         with self._connect() as conn:
             conn.execute(
-                "UPDATE characters SET faction = ? WHERE telegram_id = ?",
-                (faction, telegram_id),
+                "UPDATE characters SET faction = ?, faction_rank = ? WHERE telegram_id = ?",
+                (faction, rank_key, telegram_id),
             )
         self.save_snapshot()
+
+    def set_faction_rank(self, telegram_id: int, rank_key: str | None) -> bool:
+        character = self.get_character(telegram_id, refresh_energy=False)
+        if character is None or character.faction is None:
+            return False
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET faction_rank = ? WHERE telegram_id = ?",
+                (rank_key, telegram_id),
+            )
+        self.save_snapshot()
+        return True
+
+    def list_faction_members(self, faction: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT telegram_id, nickname, faction, faction_rank, location, health
+                FROM characters
+                WHERE faction = ?
+                ORDER BY nickname
+                """,
+                (faction,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def set_location(self, telegram_id: int, location: str) -> None:
         with self._connect() as conn:
@@ -1582,6 +1613,7 @@ class Storage:
                     nickname = ?,
                     gender = ?,
                     faction = ?,
+                    faction_rank = ?,
                     money = ?,
                     energy = ?,
                     max_energy = ?,
@@ -1608,6 +1640,7 @@ class Storage:
                     character.nickname,
                     character.gender,
                     character.faction,
+                    character.faction_rank,
                     character.money,
                     character.energy,
                     character.max_energy,
@@ -2048,7 +2081,7 @@ class Storage:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT telegram_id, nickname, faction, location, health
+                SELECT telegram_id, nickname, faction, faction_rank, location, health
                 FROM characters
                 ORDER BY nickname
                 LIMIT ?
@@ -2904,6 +2937,7 @@ class Storage:
                 "truck_durability",
                 "ALTER TABLE characters ADD COLUMN truck_durability INTEGER NOT NULL DEFAULT 0",
             ),
+            ("faction_rank", "ALTER TABLE characters ADD COLUMN faction_rank TEXT"),
         ]
         for col_name, ddl in add_columns:
             if col_name in column_names:
@@ -2993,6 +3027,22 @@ class Storage:
             """,
             (now_iso,),
         )
+        # Старым бойцам без звания — стартовый ранг группировки.
+        try:
+            from app.faction_ranks import DEFAULT_RANK_KEY, FACTION_RANKS
+
+            for faction_name in FACTION_RANKS:
+                conn.execute(
+                    """
+                    UPDATE characters
+                    SET faction_rank = ?
+                    WHERE faction = ?
+                      AND (faction_rank IS NULL OR TRIM(faction_rank) = '')
+                    """,
+                    (DEFAULT_RANK_KEY, faction_name),
+                )
+        except Exception:
+            pass
         rows = conn.execute(
             "SELECT telegram_id, equipment_json FROM characters"
         ).fetchall()
@@ -3093,6 +3143,7 @@ class Storage:
             nickname=str(Storage._row_get(row, "nickname") or "Сталкер"),
             gender=str(Storage._row_get(row, "gender") or "Мужской"),
             faction=Storage._row_get(row, "faction"),
+            faction_rank=Storage._row_get(row, "faction_rank"),
             money=_as_int(Storage._row_get(row, "money"), 1000),
             energy=_as_int(Storage._row_get(row, "energy"), 100),
             max_energy=_as_int(Storage._row_get(row, "max_energy"), 100),
