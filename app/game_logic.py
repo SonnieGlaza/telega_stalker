@@ -3324,7 +3324,7 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
     leader_hint = ""
     if storage.get_faction_leader_id(player.faction) == telegram_id:
         leader_hint = (
-            "\nЛидер может вносить/снимать своё количество RU из казны и назначать звания."
+            "\nЛидер может снимать своё количество RU из казны и назначать звания."
         )
 
     return (

@@ -2519,9 +2519,6 @@ async def treasury_deposit_callback(callback: CallbackQuery, state: FSMContext) 
         if player is None or player.faction is None:
             await callback.answer("Сначала выбери группировку.", show_alert=True)
             return
-        if storage.get_faction_leader_id(player.faction) != player.telegram_id:
-            await callback.answer("Вносить своё количество может только лидер.", show_alert=True)
-            return
         await state.set_state(Registration.treasury_deposit_custom)
         if callback.message is not None:
             await callback.message.answer(

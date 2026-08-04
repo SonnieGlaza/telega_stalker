@@ -561,7 +561,7 @@ def faction_group_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📤 Забрать 1 аптечку со склада", callback_data="eco:warehouse:withdraw:medkit")],
             [InlineKeyboardButton(text="💰 Внести 500 RU в казну", callback_data="eco:treasury:deposit:500")],
             [InlineKeyboardButton(text="💰 Внести 1000 RU в казну", callback_data="eco:treasury:deposit:1000")],
-            [InlineKeyboardButton(text="🏦 Лидер: внести своё количество", callback_data="eco:treasury:deposit:custom")],
+            [InlineKeyboardButton(text="💰 Внести своё количество", callback_data="eco:treasury:deposit:custom")],
             [InlineKeyboardButton(text="🏦 Лидер: вывести 500 RU из казны", callback_data="eco:treasury:withdraw:500")],
             [InlineKeyboardButton(text="🏦 Лидер: вывести 1000 RU из казны", callback_data="eco:treasury:withdraw:1000")],
             [InlineKeyboardButton(text="🏦 Лидер: снять своё количество", callback_data="eco:treasury:withdraw:custom")],
