@@ -49,6 +49,7 @@ def pda_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🏆 Рейтинг"), KeyboardButton(text="🗺 Карта")],
             [KeyboardButton(text="🎖 Достижения"), KeyboardButton(text="📊 Статистика")],
             [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="📣 Сбор")],
+            [KeyboardButton(text="🔗 Реферальная система")],
             [KeyboardButton(text="⬅️ В меню")],
         ],
         resize_keyboard=True,

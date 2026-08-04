@@ -493,7 +493,23 @@ def _build_pda_chats_text(player: Character) -> str:
     return "\n".join(lines)
 
 
-def _build_info_text(player: Character, *, referral_link: str | None = None) -> str:
+def _build_referral_system_text(*, referral_link: str | None = None) -> str:
+    pack = ", ".join(
+        f"{ITEM_LABELS.get(key, key)} x{amount}" for key, amount in REFERRAL_STARTER_PACK
+    )
+    if referral_link:
+        link_line = f"• Твоя ссылка: {referral_link}"
+    else:
+        link_line = "• Ссылка появится после запуска бота с username."
+    return (
+        "🔗 Реферальная система\n\n"
+        f"{link_line}\n"
+        f"• За друга: +{REFERRAL_INVITER_BONUS_RU} RU тебе.\n"
+        f"• Другу при вступлении: {pack}."
+    )
+
+
+def _build_info_text(player: Character) -> str:
     faction_chat = FACTION_CHATS.get(player.faction or "")
     if faction_chat:
         chats_block = (
@@ -506,24 +522,6 @@ def _build_info_text(player: Character, *, referral_link: str | None = None) -> 
             "Чаты:\n"
             f"• 🌐 Общий: {COMMON_CHAT}\n"
             "• 🛡 Выбери группировку, чтобы увидеть чат своей фракции."
-        )
-
-    pack = ", ".join(
-        f"{ITEM_LABELS.get(key, key)} x{amount}" for key, amount in REFERRAL_STARTER_PACK
-    )
-    if referral_link:
-        referral_block = (
-            "Рефералка:\n"
-            f"• Твоя ссылка: {referral_link}\n"
-            f"• За друга: +{REFERRAL_INVITER_BONUS_RU} RU тебе.\n"
-            f"• Другу при вступлении: {pack}."
-        )
-    else:
-        referral_block = (
-            "Рефералка:\n"
-            "• Ссылка появится после запуска бота с username.\n"
-            f"• За друга: +{REFERRAL_INVITER_BONUS_RU} RU тебе.\n"
-            f"• Другу при вступлении: {pack}."
         )
 
     return (
@@ -548,7 +546,7 @@ def _build_info_text(player: Character, *, referral_link: str | None = None) -> 
         "• 🎖 Скин персонажа повышается от рейтинга:\n"
         "  — Новичек: 0–499, Опытный: 500–1999,\n"
         "    Ветеран: 2000–4999, Легенда: 5000+.\n\n"
-        f"{referral_block}"
+        "Рефералка: смотри «🔗 Реферальная система» в КПК."
     )
 
 
@@ -559,15 +557,7 @@ async def show_info(message: Message, state: FSMContext, bot: Bot) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     await state.clear()
-    referral_link = None
-    try:
-        me = await bot.get_me()
-        if me.username:
-            referral_link = build_referral_link(me.username, player.telegram_id)
-    except Exception:
-        logger.exception("Failed to resolve bot username for referral link")
-    info_text = _build_info_text(player, referral_link=referral_link)
-    await message.answer(info_text)
+    await message.answer(_build_info_text(player))
 
 
 @router.callback_query(F.data.startswith("topup:"))
@@ -1732,7 +1722,27 @@ async def show_pda(message: Message) -> None:
         "• 🎖 Достижения — прогресс и награды\n"
         "• 📊 Статистика — личные показатели\n"
         "• 👥 Игроки — список по группировкам\n"
-        "• 📣 Сбор — оповещение бойцов фракции",
+        "• 📣 Сбор — оповещение бойцов фракции\n"
+        "• 🔗 Реферальная система — ссылка и бонусы",
+        reply_markup=pda_keyboard(),
+    )
+
+
+@router.message(F.text == "🔗 Реферальная система")
+async def show_referral_system(message: Message, bot: Bot) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    referral_link = None
+    try:
+        me = await bot.get_me()
+        if me.username:
+            referral_link = build_referral_link(me.username, player.telegram_id)
+    except Exception:
+        logger.exception("Failed to resolve bot username for referral link")
+    await message.answer(
+        _build_referral_system_text(referral_link=referral_link),
         reply_markup=pda_keyboard(),
     )
 
@@ -2723,14 +2733,7 @@ async def fallback(message: Message, bot: Bot) -> None:
     if player is not None and (
         normalized_text.endswith("информация") or normalized_text.startswith("/info")
     ):
-        referral_link = None
-        try:
-            me = await bot.get_me()
-            if me.username:
-                referral_link = build_referral_link(me.username, player.telegram_id)
-        except Exception:
-            logger.exception("Failed to resolve bot username for referral link")
-        await message.answer(_build_info_text(player, referral_link=referral_link))
+        await message.answer(_build_info_text(player))
         return
     if player is not None:
         await message.answer(
