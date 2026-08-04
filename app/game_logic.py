@@ -29,10 +29,10 @@ class QuestType:
 
 
 QUESTS: dict[str, QuestType] = {
-    "easy": QuestType("easy", "Легко", 50, 10, 270, 410, 0, 0),
-    "hard": QuestType("hard", "Средне", 80, 16, 350, 1200, 0, 0),
-    "heavy": QuestType("heavy", "Опасно", 70, 22, 500, 750, 2, 1),
-    "impossible": QuestType("impossible", "Невозможно", 60, 28, 700, 1500, 3, 1),
+    "easy": QuestType("easy", "Легко", 80, 10, 270, 410, 0, 0),
+    "hard": QuestType("hard", "Средне", 70, 16, 350, 1200, 0, 0),
+    "heavy": QuestType("heavy", "Опасно", 60, 22, 500, 750, 2, 1),
+    "impossible": QuestType("impossible", "Невозможно", 50, 28, 700, 1500, 3, 1),
 }
 
 
@@ -1123,26 +1123,14 @@ def calculate_quest_success_for_quest(
     character: Character,
     quest: QuestType,
 ) -> QuestChanceBreakdown:
-    """Шанс успеха по заданию. «Легко» — фиксированные 50%."""
-    if quest.key == "easy":
-        return QuestChanceBreakdown(
-            chance=50,
-            base_chance=50,
-            gear_bonus=0,
-            ammo_bonus=0,
-            medkit_bonus=0,
-        )
-    ammo_stock = int(character.inventory.get("ammo_pack", 0))
-    medkit_stock = int(character.inventory.get("medkit", 0))
-    gear_bonus = calculate_equipment_bonus(character)
-    return calculate_quest_success(
-        gear_power=compute_total_gear_power(character),
-        gear_bonus=gear_bonus,
-        max_success=quest.max_success,
-        ammo_stock=ammo_stock,
-        medkit_stock=medkit_stock,
-        ammo_required=quest.ammo_required,
-        medkit_required=quest.medkit_required,
+    """Шанс успеха по заданию — фиксированный для каждой сложности."""
+    del character  # снаряга больше не влияет на шанс квеста
+    return QuestChanceBreakdown(
+        chance=quest.max_success,
+        base_chance=quest.max_success,
+        gear_bonus=0,
+        ammo_bonus=0,
+        medkit_bonus=0,
     )
 
 
@@ -1161,11 +1149,11 @@ def build_quest_overview(character: Character) -> str:
         chance = calculate_quest_success_for_quest(character, quest).chance
         if quest.key == "easy":
             lines.append(
-                f"• {quest.title}: шанс ~{chance}%, энергия {quest.energy_cost}, без обязательного расхода"
+                f"• {quest.title}: шанс {chance}%, энергия {quest.energy_cost}, без обязательного расхода"
             )
             continue
         lines.append(
-            f"• {quest.title}: шанс ~{chance}%, энергия {quest.energy_cost}, "
+            f"• {quest.title}: шанс {chance}%, энергия {quest.energy_cost}, "
             f"патроны {quest.ammo_required}, аптечки {quest.medkit_required}"
         )
     lines.extend(
@@ -1255,18 +1243,9 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
             extra = ""
         stash_text = _maybe_drop_stash(storage, telegram_id)
         achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
-        formula_line = (
-            "Шанс фикс. 50%."
-            if quest.key == "easy"
-            else (
-                f"База {breakdown.base_chance}% (+снар {breakdown.gear_bonus}%) "
-                f"+патр {breakdown.ammo_bonus}% +апт {breakdown.medkit_bonus}%."
-            )
-        )
         return ActionResult(
             True,
-            f"«{quest.title}» выполнено! {breakdown.chance}% (бросок {roll}).\n"
-            f"{formula_line}\n"
+            f"«{quest.title}» выполнено! Шанс {breakdown.chance}% (бросок {roll}).\n"
             f"Расход: патр {quest.ammo_required}, апт {quest.medkit_required}. "
             f"Награда: {reward} RU.{extra}{stash_text}{durability_text}{achievements_text}",
         )
