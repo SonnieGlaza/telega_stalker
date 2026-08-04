@@ -2574,7 +2574,6 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
     battle = _simulate_raid_battle(ready_members, enemy_power)
 
     if battle["success"]:
-        previous_owner = str(location.get("controlled_by") or "")
         captured_enemy_base = False
         storage.set_location_control(location_name, leader.faction)
         treasury_gain = 1400 + len(ready_members) * 180
