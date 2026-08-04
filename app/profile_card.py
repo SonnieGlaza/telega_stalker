@@ -173,7 +173,7 @@ STALKER_QUOTES: tuple[str, ...] = (
 
 
 MAX_QUOTE_LINES = 3
-QUOTE_Y_OFFSET = 10
+QUOTE_Y_OFFSET = 30
 
 
 def _wrap_text_lines(
