@@ -37,7 +37,8 @@ from app.game_logic import (
     build_quest_overview,
     apply_controlled_points_income,
     process_emission_cycle,
-    build_players_directory,
+    build_players_root_text,
+    build_players_faction_page_text,
     deposit_to_faction_warehouse,
     format_inventory,
     RESOURCE_POINT_INCOME_PER_HOUR,
@@ -116,6 +117,8 @@ from app.keyboards import (
     market_lots_keyboard,
     market_create_select_keyboard,
     war_sections_keyboard,
+    players_factions_keyboard,
+    players_faction_page_keyboard,
 )
 from app.export_players import (
     build_players_export_files,
@@ -1212,7 +1215,39 @@ async def show_players(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
-    await message.answer(build_players_directory(get_storage(), limit=50))
+    text, items = build_players_root_text(get_storage())
+    await message.answer(text, reply_markup=players_factions_keyboard(items))
+
+
+@router.callback_query(F.data == "players:root")
+async def players_root_callback(callback: CallbackQuery) -> None:
+    text, items = build_players_root_text(get_storage())
+    await edit_menu_message(callback, text, players_factions_keyboard(items))
+
+
+@router.callback_query(F.data.startswith("players:f:"))
+async def players_faction_page_callback(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":")
+    # players:f:<faction_key>:<page>
+    if len(parts) < 4:
+        await callback.answer("Некорректная страница.", show_alert=True)
+        return
+    faction_key = parts[2]
+    try:
+        page = int(parts[3])
+    except ValueError:
+        await callback.answer("Некорректный номер страницы.", show_alert=True)
+        return
+    text, safe_key, safe_page, total_pages = build_players_faction_page_text(
+        get_storage(),
+        faction_key,
+        page,
+    )
+    await edit_menu_message(
+        callback,
+        text,
+        players_faction_page_keyboard(safe_key, page=safe_page, total_pages=total_pages),
+    )
 
 
 @router.callback_query(F.data == "ratings:achievements")

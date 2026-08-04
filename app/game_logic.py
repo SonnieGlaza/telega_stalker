@@ -2609,17 +2609,96 @@ def apply_controlled_points_income(storage: Storage) -> ActionResult:
     return ActionResult(True, "\n".join(lines))
 
 
-def build_players_directory(storage: Storage, limit: int = 50) -> str:
-    rows = storage.list_players(limit=limit)
-    if not rows:
-        return "Игроков пока нет."
-    lines = ["👥 Игроки Зоны (ник / Telegram ID):"]
+PLAYERS_PAGE_SIZE = 10
+PLAYERS_FACTION_ORDER = ("Долг", "Свобода", "Нейтралы", "Бандиты")
+PLAYERS_NO_FACTION_KEY = "_none"
+PLAYERS_NO_FACTION_LABEL = "Без группировки"
+
+
+def _players_nickname_sort_key(row: dict[str, Any]) -> str:
+    return str(row.get("nickname") or "").casefold()
+
+
+def group_players_by_faction(storage: Storage) -> list[tuple[str, str, list[dict[str, Any]]]]:
+    """[(faction_key, title, players_sorted), ...] с известными гп сверху."""
+    rows = storage.list_players(limit=500)
+    buckets: dict[str, list[dict[str, Any]]] = {key: [] for key in PLAYERS_FACTION_ORDER}
+    buckets[PLAYERS_NO_FACTION_KEY] = []
+    extra: dict[str, list[dict[str, Any]]] = {}
+
     for row in rows:
-        faction = row.get("faction") or "без гп"
-        lines.append(f"• {row['nickname']} — {row['telegram_id']} [{faction}]")
-    if len(rows) >= limit:
-        lines.append(f"\nПоказаны первые {limit}.")
-    return "\n".join(lines)
+        faction = str(row.get("faction") or "").strip()
+        if not faction:
+            buckets[PLAYERS_NO_FACTION_KEY].append(row)
+        elif faction in buckets:
+            buckets[faction].append(row)
+        else:
+            extra.setdefault(faction, []).append(row)
+
+    result: list[tuple[str, str, list[dict[str, Any]]]] = []
+    for faction in PLAYERS_FACTION_ORDER:
+        players = sorted(buckets[faction], key=_players_nickname_sort_key)
+        result.append((faction, faction, players))
+    for faction in sorted(extra.keys(), key=lambda name: name.casefold()):
+        players = sorted(extra[faction], key=_players_nickname_sort_key)
+        result.append((faction, faction, players))
+    none_players = sorted(buckets[PLAYERS_NO_FACTION_KEY], key=_players_nickname_sort_key)
+    result.append((PLAYERS_NO_FACTION_KEY, PLAYERS_NO_FACTION_LABEL, none_players))
+    return result
+
+
+def build_players_root_text(storage: Storage) -> tuple[str, list[tuple[str, str, int]]]:
+    groups = group_players_by_faction(storage)
+    total = sum(len(players) for _, _, players in groups)
+    menu_items = [(key, title, len(players)) for key, title, players in groups]
+    if total == 0:
+        return ("Игроков пока нет.", menu_items)
+
+    lines = [
+        "👥 Игроки Зоны",
+        "Выбери группировку. Ники внутри — по алфавиту, по 10 на страницу.",
+        f"Всего игроков: {total}",
+        "",
+    ]
+    for _key, title, count in menu_items:
+        lines.append(f"• {title}: {count}")
+    return ("\n".join(lines), menu_items)
+
+
+def build_players_faction_page_text(
+    storage: Storage,
+    faction_key: str,
+    page: int = 0,
+) -> tuple[str, str, int, int]:
+    """Возвращает (text, faction_key, page, total_pages)."""
+    groups = {key: (title, players) for key, title, players in group_players_by_faction(storage)}
+    if faction_key not in groups:
+        return ("Группировка не найдена. Вернись к списку группировок.", faction_key, 0, 1)
+
+    title, players = groups[faction_key]
+    total = len(players)
+    if total == 0:
+        return (f"👥 {title}\nПока никого нет.", faction_key, 0, 1)
+
+    total_pages = max(1, (total + PLAYERS_PAGE_SIZE - 1) // PLAYERS_PAGE_SIZE)
+    safe_page = max(0, min(int(page), total_pages - 1))
+    start = safe_page * PLAYERS_PAGE_SIZE
+    chunk = players[start : start + PLAYERS_PAGE_SIZE]
+
+    lines = [
+        f"👥 {title}",
+        f"Страница {safe_page + 1}/{total_pages} • игроков: {total}",
+        "",
+    ]
+    for row in chunk:
+        lines.append(f"• {row['nickname']} — {row['telegram_id']}")
+    return ("\n".join(lines), faction_key, safe_page, total_pages)
+
+
+def build_players_directory(storage: Storage, limit: int = 50) -> str:
+    """Совместимость: текстовый обзор без inline-меню."""
+    text, _items = build_players_root_text(storage)
+    return text
 
 
 def _safe_base_location_names(storage: Storage) -> set[str]:

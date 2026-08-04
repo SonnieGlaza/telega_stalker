@@ -506,3 +506,47 @@ def alliance_pending_keyboard(pending_from: list[str]) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="Входящих договоров нет", callback_data="alliance:none")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="alliance:menu:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def players_factions_keyboard(items: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for faction_key, title, count in items:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{title} ({count})",
+                    callback_data=f"players:f:{faction_key}:0",
+                )
+            ]
+        )
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Игроков нет", callback_data="players:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def players_faction_page_keyboard(faction_key: str, *, page: int, total_pages: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(
+                text="⬅️",
+                callback_data=f"players:f:{faction_key}:{page - 1}",
+            )
+        )
+    nav.append(
+        InlineKeyboardButton(
+            text=f"{page + 1}/{total_pages}",
+            callback_data=f"players:f:{faction_key}:{page}",
+        )
+    )
+    if page + 1 < total_pages:
+        nav.append(
+            InlineKeyboardButton(
+                text="➡️",
+                callback_data=f"players:f:{faction_key}:{page + 1}",
+            )
+        )
+    rows.append(nav)
+    rows.append([InlineKeyboardButton(text="⬅️ К группировкам", callback_data="players:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
