@@ -36,8 +36,9 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🗺 Карта"), KeyboardButton(text="🪖 Рейды")],
             [KeyboardButton(text="🛰 События"), KeyboardButton(text="🏦 Экономика")],
             [KeyboardButton(text="🎖 Достижения"), KeyboardButton(text="🏆 Рейтинг")],
-            [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="ℹ️ Информация")],
-            [KeyboardButton(text="⚡ Выпить энергетик"), KeyboardButton(text="⭐ Пополнить")],
+            [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="📣 Сбор")],
+            [KeyboardButton(text="ℹ️ Информация"), KeyboardButton(text="⭐ Пополнить")],
+            [KeyboardButton(text="⚡ Выпить энергетик")],
         ],
         resize_keyboard=True,
     )

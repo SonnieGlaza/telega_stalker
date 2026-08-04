@@ -2701,6 +2701,32 @@ def build_players_directory(storage: Storage, limit: int = 50) -> str:
     return text
 
 
+def build_faction_broadcast_text(
+    storage: Storage,
+    telegram_id: int,
+    custom_text: str | None = None,
+) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if storage.get_faction_leader_id(player.faction) != telegram_id:
+        return ActionResult(False, "Рассылку может делать только командир группировки.")
+    body = (custom_text or "Бойцы, общий сбор!").strip()
+    if not body:
+        return ActionResult(False, "Текст рассылки пустой.")
+    text = f"📣 [{player.faction}] {player.nickname}:\n{body}"
+    return ActionResult(True, text)
+
+
+def list_faction_broadcast_targets(storage: Storage, telegram_id: int) -> list[int]:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return []
+    return [tid for tid in storage.list_faction_member_ids(player.faction) if tid != telegram_id]
+
+
 def _safe_base_location_names(storage: Storage) -> set[str]:
     return {
         str(location["name"])

@@ -39,6 +39,8 @@ from app.game_logic import (
     process_emission_cycle,
     build_players_root_text,
     build_players_faction_page_text,
+    build_faction_broadcast_text,
+    list_faction_broadcast_targets,
     deposit_to_faction_warehouse,
     format_inventory,
     RESOURCE_POINT_INCOME_PER_HOUR,
@@ -390,7 +392,11 @@ def _build_info_text(player: Character) -> str:
         "• /menu — открыть главное меню.\n"
         "• /info — открыть эту справку.\n"
         "• /pay [telegram_id] [сумма] — перевод игроку (комиссия 30%).\n"
-        "  ID смотри в разделе «👥 Игроки».\n\n"
+        "  ID смотри в разделе «👥 Игроки».\n"
+        "• /сбор [текст] — рассылка бойцам своей группировки (только командир).\n"
+        "  Без текста отправит: «Бойцы, общий сбор!».\n"
+        "• /commander [группировка] [telegram_id] — назначить командира (админ).\n"
+        "  То же самое: /leader.\n\n"
         "Механики:\n"
         "• 🚚 Грузовик ускоряет переходы и снижает расход энергии на поездку,\n"
         "  но тратит 1 топливо за каждый переход.\n"
@@ -566,7 +572,8 @@ async def cmd_give(message: Message) -> None:
 
 
 @router.message(Command("leader"))
-async def cmd_set_leader(message: Message) -> None:
+@router.message(Command("commander"))
+async def cmd_set_leader(message: Message, bot: Bot) -> None:
     sender_id = message.from_user.id
     if not is_admin_user(sender_id):
         await message.answer("Команда доступна только администратору.")
@@ -574,24 +581,42 @@ async def cmd_set_leader(message: Message) -> None:
 
     parts = (message.text or "").strip().split(maxsplit=2)
     if len(parts) != 3:
-        await message.answer("Использование: /leader [группировка] [telegram_id]")
+        await message.answer(
+            "Назначение командира группировки:\n"
+            "• /commander [группировка] [telegram_id]\n"
+            "• /leader [группировка] [telegram_id]\n"
+            "Пример: /commander Долг 123456789"
+        )
         return
 
     faction_name = parts[1]
     try:
         leader_id = int(parts[2])
     except ValueError:
-        await message.answer("Telegram ID лидера должен быть целым числом.")
+        await message.answer("Telegram ID командира должен быть целым числом.")
         return
 
     db = get_storage()
     if not db.set_faction_leader(faction_name, leader_id):
         await message.answer(
-            "Не удалось назначить лидера. Проверь, что группировка существует, "
+            "Не удалось назначить командира. Проверь, что группировка существует, "
             "а игрок состоит в этой группировке."
         )
         return
-    await message.answer(f"Лидер группировки {faction_name} назначен: {leader_id}.")
+
+    leader = db.get_character(leader_id, refresh_energy=False)
+    leader_name = leader.nickname if leader is not None else str(leader_id)
+    await message.answer(
+        f"Командир группировки «{faction_name}» назначен: {leader_name} ({leader_id})."
+    )
+    try:
+        await bot.send_message(
+            leader_id,
+            f"⭐ Тебя назначили командиром группировки «{faction_name}».\n"
+            "Доступна кнопка «📣 Сбор» и команда /сбор для оповещения бойцов.",
+        )
+    except Exception:
+        logger.exception("Failed to notify new faction commander %s", leader_id)
 
 
 @router.message(Command("export_players"))
@@ -1217,6 +1242,40 @@ async def show_players(message: Message) -> None:
         return
     text, items = build_players_root_text(get_storage())
     await message.answer(text, reply_markup=players_factions_keyboard(items))
+
+
+async def _send_faction_broadcast(message: Message, bot: Bot, custom_text: str | None = None) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    storage = get_storage()
+    result = build_faction_broadcast_text(storage, player.telegram_id, custom_text=custom_text)
+    if not result.ok:
+        await message.answer(result.text)
+        return
+    targets = list_faction_broadcast_targets(storage, player.telegram_id)
+    sent = 0
+    for target_id in targets:
+        try:
+            await bot.send_message(target_id, result.text)
+            sent += 1
+        except Exception:
+            logger.exception("Failed to deliver faction broadcast to %s", target_id)
+    await message.answer(f"{result.text}\n\nДоставлено бойцам: {sent}.")
+
+
+@router.message(F.text == "📣 Сбор")
+async def faction_broadcast_button(message: Message, bot: Bot) -> None:
+    await _send_faction_broadcast(message, bot)
+
+
+@router.message(Command("сбор"))
+@router.message(Command("sbor"))
+async def faction_broadcast_command(message: Message, bot: Bot) -> None:
+    parts = (message.text or "").split(maxsplit=1)
+    custom = parts[1].strip() if len(parts) > 1 else None
+    await _send_faction_broadcast(message, bot, custom_text=custom)
 
 
 @router.callback_query(F.data == "players:root")

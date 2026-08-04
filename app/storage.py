@@ -1890,6 +1890,19 @@ class Storage:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_faction_member_ids(self, faction: str) -> list[int]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT telegram_id
+                FROM characters
+                WHERE faction = ?
+                ORDER BY nickname
+                """,
+                (faction,),
+            ).fetchall()
+        return [int(row["telegram_id"]) for row in rows]
+
     def get_factions(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT name, treasury, leader_id FROM factions ORDER BY name").fetchall()
