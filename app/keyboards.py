@@ -106,6 +106,7 @@ def trader_buy_gear_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Купить детектор «Сварог» (30000)", callback_data="buy:detector_svarog")],
             [InlineKeyboardButton(text="Купить грузовик (7000)", callback_data="buy:truck")],
             [InlineKeyboardButton(text="Купить спальник (30000)", callback_data="buy:sleeping_bag")],
+            [InlineKeyboardButton(text="Купить тайник (1000)", callback_data="buy:stash_case")],
             [InlineKeyboardButton(text="⬅️ Назад к категориям покупки", callback_data="trade:menu:buy")],
         ]
     )
@@ -115,6 +116,7 @@ def inventory_equipment_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🩹 Использовать аптечку", callback_data="use:medkit")],
+            [InlineKeyboardButton(text="📦 Открыть тайник", callback_data="use:stash_case")],
             [InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")],
             [InlineKeyboardButton(text="🍸 Выпить водку (-20 рад.)", callback_data="use:vodka")],
             [InlineKeyboardButton(text="💉 Использовать антирад (-50 рад.)", callback_data="use:antirad")],
@@ -242,6 +244,7 @@ def trader_sell_gear_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Продать грузовик (3500)", callback_data="sell:truck")],
+            [InlineKeyboardButton(text="Продать тайник (200)", callback_data="sell:stash_case")],
             [InlineKeyboardButton(text="⬅️ Назад к категориям продажи", callback_data="trade:menu:sell")],
         ]
     )

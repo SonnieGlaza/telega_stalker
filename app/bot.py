@@ -51,6 +51,7 @@ from app.game_logic import (
     use_water,
     use_mineralka,
     use_beard_tea,
+    open_stash,
     search_artifacts,
     transfer_money_with_fee,
     create_or_join_war_lobby,
@@ -1249,6 +1250,13 @@ async def use_mineralka_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "use:beard_tea")
 async def use_beard_tea_callback(callback: CallbackQuery) -> None:
     result = use_beard_tea(get_storage(), callback.from_user.id)
+    await callback.message.answer(result.text)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "use:stash_case")
+async def use_stash_case_callback(callback: CallbackQuery) -> None:
+    result = open_stash(get_storage(), callback.from_user.id)
     await callback.message.answer(result.text)
     await callback.answer()
 

@@ -51,6 +51,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "truck": {"name": "Грузовик", "buy_price": 7000, "sell_price": 0},
     "sleeping_bag": {"name": "Спальник", "buy_price": 30000, "sell_price": 10000},
     "fuel_can": {"name": "Канистра топлива (+5)", "buy_price": 450, "sell_price": 200},
+    "stash_case": {"name": "Тайник", "buy_price": 1000, "sell_price": 200},
 }
 
 ARMOR_CATALOG: dict[str, dict[str, int | str]] = {
@@ -164,6 +165,7 @@ ITEM_LABELS = {
     "detector_veles": "Детектор «Велес»",
     "detector_svarog": "Детектор «Сварог»",
     "sleeping_bag": "Спальник",
+    "stash_case": "Тайник",
     "armor_leather": "Кожаная куртка",
     "armor_stalker_vest": "Сталкерский бронежилет",
     "armor_psz7d": "ПСЗ-7 «Долг»",
@@ -214,6 +216,46 @@ SMUGGLING_FOOD_DROP_KEYS = ("bread", "sausage", "stew")
 SMUGGLING_WATER_DROP_KEYS = ("water_bottle", "mineral_water")
 SMUGGLING_ARMOR_T2_KEYS = ("armor_stalker_vest", "armor_zarya")
 SMUGGLING_WEAPON_T1_KEYS = ("weapon_pm", "weapon_sawedoff", "weapon_fort12")
+
+# Тайники (кейсы): дроп с активностей + покупка у торговца.
+STASH_ITEM_KEY = "stash_case"
+STASH_ACTIVITY_DROP_CHANCE = 5  # %
+STASH_CONSUMABLE_KEYS = (
+    "medkit",
+    "energy_drink",
+    "ammo_pack",
+    "vodka",
+    "antirad",
+    "bread",
+    "sausage",
+    "stew",
+    "water_bottle",
+    "mineral_water",
+    "beard_tea",
+)
+# Шансы тира снаряги при открытии (броня ИЛИ оружие, не вместе), %:
+# 1-2: 4%, 3: 2%, 4: 0.5%, 5: 0.01%
+STASH_GEAR_TIER_CHANCES: tuple[tuple[int | tuple[int, int], float], ...] = (
+    ((1, 2), 4.0),
+    (3, 2.0),
+    (4, 0.5),
+    (5, 0.01),
+)
+STASH_ARMOR_BY_TIER: dict[int, tuple[str, ...]] = {
+    1: ("armor_leather",),
+    2: ("armor_stalker_vest", "armor_zarya"),
+    3: ("armor_bulat", "armor_seva", "armor_scientific"),
+    4: ("armor_exo",),
+    5: ("armor_nosorog",),
+}
+STASH_WEAPON_BY_TIER: dict[int, tuple[str, ...]] = {
+    1: ("weapon_pm", "weapon_fort12", "weapon_sawedoff"),
+    2: ("weapon_mp5", "weapon_chaser13", "weapon_aks74u"),
+    3: ("weapon_ak74", "weapon_spas12"),
+    4: ("weapon_lr300", "weapon_il86", "weapon_an94"),
+    5: ("weapon_gp37", "weapon_vintar", "weapon_svd", "weapon_rp74"),
+}
+STASH_CONSUMABLE_DROP_CHANCE = 40  # % на каждый тип расходника при открытии
 
 AUCTION_DEFAULT_LOTS: dict[str, tuple[str, int, int]] = {
     "artifact": ("artifact", 1, 900),
@@ -752,6 +794,7 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
             extra = "\nТы нашел редкий артефакт!"
         else:
             extra = ""
+        stash_text = _maybe_drop_stash(storage, telegram_id)
         achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
         return ActionResult(
             True,
@@ -759,7 +802,7 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
             f"Формула: база {breakdown.base_chance}% (включая снарягу +{breakdown.gear_bonus}%) "
             f"+ патроны {breakdown.ammo_bonus}% + аптечки {breakdown.medkit_bonus}%.\n"
             f"Расход: патроны {quest.ammo_required}, аптечки {quest.medkit_required}.\n"
-            f"Награда: {reward} RU.{extra}{durability_text}{achievements_text}",
+            f"Награда: {reward} RU.{extra}{stash_text}{durability_text}{achievements_text}",
         )
 
     min_penalty, max_penalty = QUEST_FAIL_PENALTY_RANGE.get(quest.key, (50, 120))
@@ -918,6 +961,78 @@ def use_beard_tea(storage: Storage, telegram_id: int) -> ActionResult:
         "beard_tea",
         thirst_delta=-50,
         text="Ты выпил чай Бороды. Жажда снижена на 50.",
+    )
+
+
+def _maybe_drop_stash(storage: Storage, telegram_id: int) -> str:
+    """5% шанс найти тайник после успешной активности."""
+    if random.randint(1, 100) > STASH_ACTIVITY_DROP_CHANCE:
+        return ""
+    storage.add_item(telegram_id, STASH_ITEM_KEY, 1)
+    return f"\nНаходка: {ITEM_LABELS[STASH_ITEM_KEY]}!"
+
+
+def _roll_stash_gear_tier() -> int | None:
+    """Взаимоисключающий ролл тира снаряги. Без дропа — None."""
+    roll = random.random() * 100.0
+    cumulative = 0.0
+    # Редкость сверху вниз (T5 → T1-2), шансы из STASH_GEAR_TIER_CHANCES.
+    for tier_spec, chance in reversed(STASH_GEAR_TIER_CHANCES):
+        cumulative += float(chance)
+        if roll < cumulative:
+            if isinstance(tier_spec, tuple):
+                return int(random.choice(list(tier_spec)))
+            return int(tier_spec)
+    return None
+
+
+def _roll_stash_loot(storage: Storage, telegram_id: int) -> list[str]:
+    """Лут из тайника: расходники + броня ИЛИ оружие (не вместе)."""
+    drops: list[str] = []
+
+    for item_key in STASH_CONSUMABLE_KEYS:
+        if random.randint(1, 100) > STASH_CONSUMABLE_DROP_CHANCE:
+            continue
+        amount = random.randint(1, 2)
+        storage.add_item(telegram_id, item_key, amount)
+        drops.append(f"{ITEM_LABELS.get(item_key, item_key)} x{amount}")
+
+    # Гарантия хотя бы одного расходника, если ничего не выпало.
+    if not drops:
+        item_key = random.choice(STASH_CONSUMABLE_KEYS)
+        amount = random.randint(1, 2)
+        storage.add_item(telegram_id, item_key, amount)
+        drops.append(f"{ITEM_LABELS.get(item_key, item_key)} x{amount}")
+
+    tier = _roll_stash_gear_tier()
+    if tier is not None:
+        # Броня или оружие — взаимоисключающе.
+        pool_kind = random.choice(("armor", "weapon"))
+        pool = STASH_ARMOR_BY_TIER if pool_kind == "armor" else STASH_WEAPON_BY_TIER
+        candidates = pool.get(tier, ())
+        if candidates:
+            gear_key = random.choice(candidates)
+            storage.add_item(telegram_id, gear_key, 1)
+            kind_label = "броня" if pool_kind == "armor" else "оружие"
+            drops.append(f"{ITEM_LABELS.get(gear_key, gear_key)} (тир {tier}, {kind_label})")
+
+    return drops
+
+
+def open_stash(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if not storage.remove_item(telegram_id, STASH_ITEM_KEY, 1):
+        return ActionResult(False, "У тебя нет тайника в инвентаре.")
+
+    loot_lines = _roll_stash_loot(storage, telegram_id)
+    loot_text = "\n".join(f"• {line}" for line in loot_lines)
+    return ActionResult(
+        True,
+        f"Ты открыл тайник и нашёл:\n{loot_text}",
     )
 
 
@@ -1540,13 +1655,14 @@ def attack_location(storage: Storage, telegram_id: int, location_name: str) -> A
         _add_rating(storage, telegram_id, RATING_REWARD["war_success"])
         storage.add_player_stat(telegram_id, "wars_won", 1)
         storage.add_player_stat(telegram_id, "money_earned", personal_reward)
+        stash_text = _maybe_drop_stash(storage, telegram_id)
         achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
         return ActionResult(
             True,
             f"Штурм успешен! Шанс {chance}% (бросок {roll}).\n"
             f"Точка «{location_name}» под контролем {character.faction}.\n"
             f"Личная награда: {personal_reward} RU.\n"
-            f"В казну группировки: {treasury_reward} RU.{durability_text}{achievements_text}",
+            f"В казну группировки: {treasury_reward} RU.{stash_text}{durability_text}{achievements_text}",
         )
 
     loss = random.randint(80, 170)
@@ -1762,6 +1878,7 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
                 random.randint(1, RAID_ARTIFACT_REWARD_CAP),
             )
         notes: list[str] = []
+        stash_finds = 0
         for member in ready_members:
             durability_text = _apply_durability_decay(
                 storage,
@@ -1771,6 +1888,8 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
             )
             if artifacts_reward > 0:
                 storage.add_item(member.telegram_id, "artifact", artifacts_reward)
+            if _maybe_drop_stash(storage, member.telegram_id):
+                stash_finds += 1
             _add_rating(storage, member.telegram_id, RATING_REWARD["raid_success"])
             storage.add_player_stat(member.telegram_id, "raids_completed", 1)
             if member.telegram_id in battle["wounds"]:
@@ -1785,6 +1904,11 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
             status="success",
             result_text=f"Рейд успешен. Критов: {battle['total_crits']}.",
         )
+        stash_line = (
+            f"\nТайники найдены у {stash_finds} бойцов."
+            if stash_finds > 0
+            else ""
+        )
         return RaidLaunchResult(
             True,
             f"Рейд #{raid_id} завершен успешно на логове «{location_name}».\n"
@@ -1793,7 +1917,7 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
             f"Порог сложности для награды артефактами: от {RAID_ARTIFACT_MIN_ENEMY_POWER} силы.\n"
             f"В казну группировки: {treasury_gain} RU.\n"
             f"Раненых: {len(battle['wounds'])}."
-            f"{''.join(notes)}",
+            f"{stash_line}{''.join(notes)}",
             tuple(member_ids),
         )
 
