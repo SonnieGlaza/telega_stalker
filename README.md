@@ -90,19 +90,14 @@ python3 run.py
 
 ## Деплой на Railway
 
-Важно: в `main` у тебя сейчас только `README.md`.  
-Если Railway подключен к `main`, он не увидит Python-файлы и покажет ошибку вида:
-`Railpack could not determine how to build the app`.
-
-Что сделать:
-
-1. В Railway выбери ветку с кодом бота:  
-   `cursor/aiogram-stalker-game-d161`
-2. Добавь переменную окружения:
+1. Добавь переменные окружения:
    - `BOT_TOKEN` — токен Telegram-бота
-3. Укажи `DB_PATH=/data/stalker_game.db`
-4. Укажи `SNAPSHOT_PATH=/data/stalker_game.backup.json`
-5. Команда запуска уже поддержана через `start.sh` и `railway.json`.
+   - `DATABASE_URL` — URL Postgres от Railway (подтягивается автоматически при добавлении Postgres)
+   - `ADMIN_IDS` — Telegram ID админов через запятую
+   - (опционально) `SNAPSHOT_PATH=/data/stalker_game.backup.json`
+2. Если `DATABASE_URL` задан — бот использует **Postgres**.
+3. Если `DATABASE_URL` пустой — используется локальный SQLite через `DB_PATH`.
+4. Команда запуска уже в `start.sh` / `railway.json`.
 
 Локальная проверка start-скрипта:
 
