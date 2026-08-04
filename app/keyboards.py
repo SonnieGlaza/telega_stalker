@@ -178,7 +178,7 @@ def trader_buy_gear_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
         ("Купить детектор «Сварог» (30000)", "buy:detector_svarog"),
         ("Купить грузовик (50000)", "buy:truck"),
         ("Купить спальник (30000)", "buy:sleeping_bag"),
-        ("Купить тайник (1000)", "buy:stash_case"),
+        ("Купить тайник (3000)", "buy:stash_case"),
     ]
     return _trader_page_keyboard(
         items,
@@ -413,7 +413,7 @@ def trader_sell_trophies_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
 def trader_sell_gear_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
     items = [
         ("Продать грузовик (3500)", "sell:truck"),
-        ("Продать тайник (200)", "sell:stash_case"),
+        ("Продать тайник (600)", "sell:stash_case"),
     ]
     return _trader_page_keyboard(
         items,
