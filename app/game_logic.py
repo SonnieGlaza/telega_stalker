@@ -827,7 +827,7 @@ def build_achievements_overview(storage: Storage, telegram_id: int) -> str:
         recent_lines.append(f"• {title}")
     progress_lines = []
     for rule in ACHIEVEMENT_RULES:
-        marker = "✅" if rule.key in unlocked_keys else "⬜"
+        marker = "✅" if rule.key in unlocked_keys else "🔒"
         progress_lines.append(f"{marker} {rule.title} — {rule.description}")
     if not recent_lines:
         recent_lines = ["• Пока нет открытых достижений"]
