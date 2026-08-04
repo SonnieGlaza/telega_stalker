@@ -172,20 +172,25 @@ STALKER_QUOTES: tuple[str, ...] = (
 )
 
 
+MAX_QUOTE_LINES = 3
+
+
 def _wrap_text_lines(
     draw: ImageDraw.ImageDraw,
     text: str,
     font: ImageFont.ImageFont,
     max_width: int,
     max_lines: int,
-) -> list[str]:
+) -> tuple[list[str], bool]:
     if max_lines <= 0:
-        return []
+        return [], False
     words = text.split()
     if not words:
-        return []
+        return [], True
     lines: list[str] = []
     current = words[0]
+    if draw.textlength(current, font=font) > max_width:
+        current = _ellipsize_text(draw, current, font, max_width)
     word_idx = 1
     while word_idx < len(words):
         word = words[word_idx]
@@ -197,16 +202,17 @@ def _wrap_text_lines(
         lines.append(current)
         if len(lines) >= max_lines:
             lines[-1] = _ellipsize_text(draw, lines[-1], font, max_width)
-            return lines
+            return lines, False
         current = word
-        word_idx += 1
-    if len(lines) < max_lines:
         if draw.textlength(current, font=font) > max_width:
             current = _ellipsize_text(draw, current, font, max_width)
+        word_idx += 1
+    if len(lines) < max_lines:
         lines.append(current)
     elif lines:
         lines[-1] = _ellipsize_text(draw, lines[-1], font, max_width)
-    return lines[:max_lines]
+        return lines[:max_lines], False
+    return lines[:max_lines], word_idx >= len(words)
 
 
 def _draw_stalker_quote(
@@ -218,13 +224,33 @@ def _draw_stalker_quote(
     bottom: int,
     font: ImageFont.ImageFont,
 ) -> None:
-    quote = random.choice(STALKER_QUOTES)
     padding_x = 16
     max_width = max(40, right - left - padding_x * 2)
-    line_height = 23
     max_height = max(1, bottom - top)
-    max_lines = max(1, max_height // line_height)
-    lines = _wrap_text_lines(draw, f"«{quote}»", font, max_width, max_lines)
+    line_height = min(22, max(16, max_height // MAX_QUOTE_LINES))
+
+    lines: list[str] = []
+    for _ in range(12):
+        quote = random.choice(STALKER_QUOTES)
+        candidate, complete = _wrap_text_lines(
+            draw,
+            f"«{quote}»",
+            font,
+            max_width,
+            MAX_QUOTE_LINES,
+        )
+        if complete and candidate:
+            lines = candidate
+            break
+    if not lines:
+        quote = min(STALKER_QUOTES, key=len)
+        lines, _ = _wrap_text_lines(
+            draw,
+            f"«{quote}»",
+            font,
+            max_width,
+            MAX_QUOTE_LINES,
+        )
     if not lines:
         return
     text_block_h = len(lines) * line_height
@@ -377,7 +403,7 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     avatar_x = panel_left + (available_w - avatar.width) // 2
     avatar_y = avatar_top + max(0, (available_h - avatar.height) // 2)
 
-    quote_margin = 8
+    quote_margin = 6
     quote_top = info_box_bottom + quote_margin
     quote_bottom = avatar_y - quote_margin
     if quote_bottom > quote_top:
