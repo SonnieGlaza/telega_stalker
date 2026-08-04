@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -10,6 +11,20 @@ from app.storage import Character
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AVATAR_DIR = PROJECT_ROOT / "assets" / "avatars"
+FACTION_AVATAR_DIR = AVATAR_DIR / "factions"
+# Можно положить исходную папку «скины» сюда — бот тоже её просканирует.
+SKINS_DROP_DIR = AVATAR_DIR / "скины"
+
+# Ключи папок/файлов для каждой группировки (русские и латинские варианты).
+FACTION_SLUGS: dict[str, tuple[str, ...]] = {
+    "Долг": ("долг", "dolg", "duty"),
+    "Свобода": ("свобода", "svoboda", "freedom"),
+    "Нейтралы": ("нейтралы", "нейтрал", "neutraly", "neutrals", "neutral"),
+    "Бандиты": ("бандиты", "бандит", "bandity", "bandits", "bandit"),
+}
+
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+_TIER_IN_NAME = re.compile(r"(\d+)$")
 
 
 def _tier(rating_points: int) -> int:
@@ -50,30 +65,210 @@ def _palette(tier: int) -> dict[str, tuple[int, int, int]]:
     return palettes[tier]
 
 
-def _avatar_candidates(tier: int) -> tuple[Path, ...]:
-    return (
-        AVATAR_DIR / f"stalker_t{tier}.png",
-        AVATAR_DIR / f"stalker_{tier}.png",
-        AVATAR_DIR / f"tier_{tier}.png",
-        AVATAR_DIR / "stalker_default.png",
+def _normalize_token(value: str) -> str:
+    return re.sub(r"[\s_\-]+", "", (value or "").strip().casefold())
+
+
+def _faction_slugs(faction: str | None) -> tuple[str, ...]:
+    if not faction:
+        return ()
+    known = FACTION_SLUGS.get(faction)
+    if known:
+        return known
+    token = _normalize_token(faction)
+    return (token,) if token else ()
+
+
+def _stem_matches_faction_tier(stem: str, slugs: tuple[str, ...], tier: int) -> bool:
+    """Долг1 / dolg_1 / duty-t1 / 1 — совпадение с группировкой и этапом звания."""
+    token = _normalize_token(stem)
+    if not token:
+        return False
+    if token == str(tier) or token in {f"t{tier}", f"tier{tier}"}:
+        return True
+    for slug in slugs:
+        slug_token = _normalize_token(slug)
+        if not slug_token:
+            continue
+        if token == f"{slug_token}{tier}":
+            return True
+        if token.startswith(slug_token):
+            suffix = token[len(slug_token) :]
+            if suffix in {str(tier), f"t{tier}", f"tier{tier}"}:
+                return True
+            match = _TIER_IN_NAME.search(token)
+            if match and int(match.group(1)) == tier and token.startswith(slug_token):
+                return True
+    return False
+
+
+def _iter_image_files(directory: Path) -> list[Path]:
+    if not directory.is_dir():
+        return []
+    files: list[Path] = []
+    for path in sorted(directory.iterdir()):
+        if path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES:
+            files.append(path)
+    return files
+
+
+def _scan_named_faction_skins(tier: int, faction: str | None) -> list[Path]:
+    """Ищет Долг1.png и т.п. в assets/avatars, factions/* и assets/avatars/скины."""
+    slugs = _faction_slugs(faction)
+    if not slugs:
+        return []
+
+    search_roots: list[Path] = [AVATAR_DIR, FACTION_AVATAR_DIR, SKINS_DROP_DIR]
+    for slug in slugs:
+        search_roots.extend(
+            [
+                FACTION_AVATAR_DIR / slug,
+                SKINS_DROP_DIR / slug,
+                AVATAR_DIR / slug,
+            ]
+        )
+    if faction:
+        name = faction.strip()
+        search_roots.extend(
+            [
+                FACTION_AVATAR_DIR / name,
+                SKINS_DROP_DIR / name,
+                AVATAR_DIR / name,
+            ]
+        )
+
+    found: list[Path] = []
+    seen: set[Path] = set()
+    for root in search_roots:
+        for path in _iter_image_files(root):
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            if _stem_matches_faction_tier(path.stem, slugs, tier):
+                seen.add(resolved)
+                found.append(path)
+        # Один уровень вложенности: скины/Долг/*.png
+        if root.is_dir():
+            for child in sorted(root.iterdir()):
+                if not child.is_dir():
+                    continue
+                child_token = _normalize_token(child.name)
+                if child_token not in {_normalize_token(s) for s in slugs}:
+                    continue
+                for path in _iter_image_files(child):
+                    resolved = path.resolve()
+                    if resolved in seen:
+                        continue
+                    if _stem_matches_faction_tier(path.stem, slugs, tier):
+                        seen.add(resolved)
+                        found.append(path)
+    return found
+
+
+def _avatar_candidates(tier: int, faction: str | None = None) -> tuple[Path, ...]:
+    """Порядок поиска: скин группировки+звания, затем общий тир, затем default."""
+    candidates: list[Path] = []
+    slugs = _faction_slugs(faction)
+    faction_name = (faction or "").strip()
+
+    for slug in slugs:
+        for base in (FACTION_AVATAR_DIR / slug, SKINS_DROP_DIR / slug, AVATAR_DIR / slug):
+            candidates.extend(
+                [
+                    base / f"{tier}.png",
+                    base / f"t{tier}.png",
+                    base / f"stalker_t{tier}.png",
+                    base / f"{slug}{tier}.png",
+                    base / f"{slug}_{tier}.png",
+                    base / f"{slug}-t{tier}.png",
+                ]
+            )
+        # Файлы прямо в assets/avatars: Долг1.png / dolg1.png / dolg_1.png
+        candidates.extend(
+            [
+                AVATAR_DIR / f"{slug}{tier}.png",
+                AVATAR_DIR / f"{slug}_{tier}.png",
+                AVATAR_DIR / f"{slug}-t{tier}.png",
+                SKINS_DROP_DIR / f"{slug}{tier}.png",
+                SKINS_DROP_DIR / f"{slug}_{tier}.png",
+            ]
+        )
+
+    if faction_name:
+        candidates.extend(
+            [
+                AVATAR_DIR / f"{faction_name}{tier}.png",
+                AVATAR_DIR / f"{faction_name}_{tier}.png",
+                SKINS_DROP_DIR / f"{faction_name}{tier}.png",
+                SKINS_DROP_DIR / f"{faction_name}_{tier}.png",
+                FACTION_AVATAR_DIR / faction_name / f"{tier}.png",
+                FACTION_AVATAR_DIR / faction_name / f"{faction_name}{tier}.png",
+                SKINS_DROP_DIR / faction_name / f"{tier}.png",
+                SKINS_DROP_DIR / faction_name / f"{faction_name}{tier}.png",
+            ]
+        )
+
+    # Гибкий скан по имени файла (Долг1, Свобода2, ...).
+    candidates.extend(_scan_named_faction_skins(tier, faction))
+
+    candidates.extend(
+        [
+            AVATAR_DIR / f"stalker_t{tier}.png",
+            AVATAR_DIR / f"stalker_{tier}.png",
+            AVATAR_DIR / f"tier_{tier}.png",
+            AVATAR_DIR / "stalker_default.png",
+        ]
     )
 
+    # Убираем дубликаты, сохраняя порядок.
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in candidates:
+        key = Path(str(path))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return tuple(unique)
 
-def _load_avatar_asset(tier: int, width: int, height: int) -> Image.Image | None:
-    for candidate in _avatar_candidates(tier):
-        if not candidate.exists():
+
+def _fit_avatar_image(source: Image.Image, width: int, height: int) -> Image.Image:
+    """Вписать картинку в целевой слот (как раньше), чтобы карточка не «поехала»."""
+    fitted = source.convert("RGBA").copy()
+    fitted.thumbnail((width, height), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    offset_x = (width - fitted.width) // 2
+    offset_y = height - fitted.height
+    canvas.paste(fitted, (offset_x, offset_y), fitted)
+    return canvas
+
+
+def _resolve_existing_image(candidate: Path) -> Path | None:
+    if candidate.exists() and candidate.suffix.lower() in _IMAGE_SUFFIXES:
+        return candidate
+    if candidate.suffix.lower() == ".png":
+        for alt_suffix in (".jpg", ".jpeg", ".webp"):
+            alt = candidate.with_suffix(alt_suffix)
+            if alt.exists():
+                return alt
+    return None
+
+
+def _load_avatar_asset(
+    tier: int,
+    width: int,
+    height: int,
+    faction: str | None = None,
+) -> Image.Image | None:
+    for candidate in _avatar_candidates(tier, faction=faction):
+        resolved = _resolve_existing_image(candidate)
+        if resolved is None:
             continue
         try:
-            source = Image.open(candidate).convert("RGBA")
+            source = Image.open(resolved).convert("RGBA")
         except OSError:
             continue
-        fitted = source.copy()
-        fitted.thumbnail((width, height), Image.Resampling.LANCZOS)
-        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        offset_x = (width - fitted.width) // 2
-        offset_y = height - fitted.height
-        canvas.paste(fitted, (offset_x, offset_y), fitted)
-        return canvas
+        return _fit_avatar_image(source, width, height)
     return None
 
 
@@ -147,7 +342,17 @@ def render_avatar(
     height: int = 360,
 ) -> Image.Image:
     tier = _tier(rating_points)
-    asset_avatar = _load_avatar_asset(tier, width=width, height=height)
+    asset_avatar = _load_avatar_asset(
+        tier,
+        width=width,
+        height=height,
+        faction=character.faction,
+    )
     if asset_avatar is not None:
         return asset_avatar
-    return _render_stalker_avatar_fallback(character, rating_points=rating_points, width=width, height=height)
+    return _render_stalker_avatar_fallback(
+        character,
+        rating_points=rating_points,
+        width=width,
+        height=height,
+    )
