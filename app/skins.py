@@ -13,7 +13,8 @@ class SkinTheme:
     accent_color: tuple[int, int, int]
 
 
-# Пороги рейтинга для «повышения» внешнего вида (раньше — сила снаряжения 0/4/8/13).
+# Пороги рейтинга для «повышения» внешнего вида.
+# Новичок: 0–199, Ветеран: 200–999, Тяжелый штурмовик: 1000–2999, Легенда: 3000+
 SKINS: tuple[SkinTheme, ...] = (
     SkinTheme(
         key="novice",
@@ -26,7 +27,7 @@ SKINS: tuple[SkinTheme, ...] = (
     SkinTheme(
         key="veteran",
         title="Ветеран",
-        min_rating=60,
+        min_rating=200,
         coat_color=(82, 98, 86),
         visor_color=(128, 170, 120),
         accent_color=(105, 130, 85),
@@ -34,7 +35,7 @@ SKINS: tuple[SkinTheme, ...] = (
     SkinTheme(
         key="heavy",
         title="Тяжелый штурмовик",
-        min_rating=120,
+        min_rating=1000,
         coat_color=(78, 84, 95),
         visor_color=(120, 160, 185),
         accent_color=(95, 110, 145),
@@ -42,7 +43,7 @@ SKINS: tuple[SkinTheme, ...] = (
     SkinTheme(
         key="legend",
         title="Легенда Зоны",
-        min_rating=200,
+        min_rating=3000,
         coat_color=(75, 76, 92),
         visor_color=(185, 165, 88),
         accent_color=(150, 130, 75),
