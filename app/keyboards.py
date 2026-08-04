@@ -599,6 +599,14 @@ def faction_group_keyboard(
             ]
         )
     if is_leader:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🛡 Укрепить базу (10000 RU из казны)",
+                    callback_data="faction:base:fortify",
+                )
+            ]
+        )
         rows.append([InlineKeyboardButton(text="🎖 Назначить звание", callback_data="rank:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

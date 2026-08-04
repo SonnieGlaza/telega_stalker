@@ -334,6 +334,8 @@ EXCHANGE_SELL_FEE_PERCENT = 30
 TRADER_EQUIPMENT_SELL_RATE = 1 / 3
 RESOURCE_POINT_INCOME_PER_HOUR = 100
 BASE_POINT_INCOME_PER_HOUR = 50
+BASE_FORTIFY_COST_RU = 10_000
+BASE_FORTIFY_POWER_BONUS = 1
 POINTS_INCOME_META_KEY = "points_income_last_at"
 POINTS_INCOME_MAX_HOURS = 24
 EMISSION_INTERVAL_HOURS = 6
@@ -3463,11 +3465,15 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
     if _location_is_friendly_to_faction(storage, target, host_faction):
         _refund_spent_energy(storage, spent_ids, 24)
         return ActionResult(False, "Нельзя штурмовать свою или союзническую точку.")
-    enemy_power = int(target["npc_power"])
+    enemy_power = int(target["npc_power"]) + max(0, int(target.get("defense_bonus") or 0))
     total_power = sum(equipment_power(member) for member in active)
     chance = int(round((total_power / (total_power + enemy_power + 10)) * 100))
     chance = max(10, min(90, chance))
     success = random.randint(1, 100) <= chance
+    faction_counts: dict[str, int] = {}
+    for member in active:
+        fname = str(member.faction or "?")
+        faction_counts[fname] = faction_counts.get(fname, 0) + 1
     if success:
         previous_owner = str(target.get("controlled_by") or "")
         captured_enemy_base = (
@@ -3499,6 +3505,44 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
         )
     storage.finish_war_lobby(war_id, "failed", "Поражение штурма")
     return ActionResult(False, f"Штурм лобби #{war_id} провален (шанс {chance}%).")
+
+
+def upgrade_faction_base(storage: Storage, telegram_id: int) -> ActionResult:
+    """Укрепить домашнюю базу группировки за счёт казны: +1 к защите при чужом штурме."""
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Сначала создай персонажа и выбери группировку.")
+    if storage.get_faction_leader_id(player.faction) != telegram_id:
+        return ActionResult(False, "Укреплять базу может только лидер группировки.")
+
+    base_name = faction_home_base(player.faction)
+    location = storage.get_location(base_name)
+    if location is None:
+        return ActionResult(False, f"База «{base_name}» не найдена.")
+    if str(location.get("point_type") or "") != "база":
+        return ActionResult(False, f"«{base_name}» не является базой.")
+    if str(location.get("controlled_by") or "") != player.faction:
+        return ActionResult(
+            False,
+            f"База «{base_name}» не под вашим контролем. Сначала верните её штурмом.",
+        )
+
+    if not storage.withdraw_faction_treasury(player.faction, BASE_FORTIFY_COST_RU):
+        return ActionResult(
+            False,
+            f"В казне недостаточно средств. Нужно {BASE_FORTIFY_COST_RU} RU.",
+        )
+
+    new_bonus = storage.increment_location_defense_bonus(base_name, BASE_FORTIFY_POWER_BONUS)
+    if new_bonus is None:
+        storage.change_faction_treasury(player.faction, BASE_FORTIFY_COST_RU)
+        return ActionResult(False, "Не удалось укрепить базу. Средства возвращены в казну.")
+
+    return ActionResult(
+        True,
+        f"База «{base_name}» укреплена (−{BASE_FORTIFY_COST_RU} RU из казны).\n"
+        f"Пассивная защита при штурме другими группировками: +{new_bonus}.",
+    )
 
 
 def transfer_location_to_ally(storage: Storage, telegram_id: int, location_name: str, ally_faction: str) -> ActionResult:
@@ -3540,20 +3584,39 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
 
     leader_hint = ""
     if storage.get_faction_leader_id(player.faction) == telegram_id:
-        leader_hint = "\nТебе доступны вывод со склада/из казны и назначение званий."
+        leader_hint = (
+            "\nТебе доступны вывод со склада/из казны, назначение званий "
+            f"и укрепление базы (−{BASE_FORTIFY_COST_RU} RU из казны)."
+        )
     elif can_withdraw_faction_treasury(storage, player):
         leader_hint = "\nТебе доступен вывод со склада и из казны (ранг 5+)."
+
+    home_name = faction_home_base(player.faction)
+    home = storage.get_location(home_name)
+    if home is None:
+        base_line = f"Домашняя база: «{home_name}» (нет данных)"
+    else:
+        owner = str(home.get("controlled_by") or "нейтрал")
+        bonus = max(0, int(home.get("defense_bonus") or 0))
+        control = "ваша" if owner == player.faction else f"контроль: {owner}"
+        base_line = (
+            f"Домашняя база: «{home_name}» ({control})\n"
+            f"Укрепление: +{bonus} к пассивной защите при чужом штурме"
+        )
 
     return (
         f"Группировка «{player.faction}»\n"
         f"Казна: {treasury} RU"
         f"{income_note}"
+        f"{base_line}\n\n"
         f"Склад:\n{chr(10).join(warehouse_lines)}\n\n"
         f"Пассивный доход с точек:\n"
         f"• точка ресурсов: {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч\n"
         f"• база: {BASE_POINT_INCOME_PER_HOUR} RU/ч\n\n"
         f"Любой боец может сдать патроны/аптечки на склад и пополнить казну.\n"
-        f"Забирать со склада и из казны — с 5 ранга (или лидер)."
+        f"Забирать со склада и из казны — с 5 ранга (или лидер).\n"
+        f"Лидер может укрепить базу за {BASE_FORTIFY_COST_RU} RU "
+        f"(+{BASE_FORTIFY_POWER_BONUS} к защите от штурма)."
         f"{leader_hint}"
     )
 

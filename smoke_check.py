@@ -88,6 +88,23 @@ def run_smoke_check() -> None:
         bandit_rank = assign_faction_rank(storage, 333, 333, "r1")
         assert not bandit_rank.ok
 
+        # Faction base fortification (+1 defense per 10000 RU from treasury).
+        from app.game_logic import upgrade_faction_base, faction_home_base, BASE_FORTIFY_COST_RU
+
+        duty_base = faction_home_base("Долг")
+        assert int(storage.get_location(duty_base).get("defense_bonus") or 0) == 0
+        denied_fortify = upgrade_faction_base(storage, 222)
+        assert not denied_fortify.ok
+        before_treasury = next(f for f in storage.get_factions() if f["name"] == "Долг")["treasury"]
+        fortify = upgrade_faction_base(storage, 111)
+        assert fortify.ok, fortify.text
+        after_treasury = next(f for f in storage.get_factions() if f["name"] == "Долг")["treasury"]
+        assert before_treasury - after_treasury == BASE_FORTIFY_COST_RU
+        assert int(storage.get_location(duty_base)["defense_bonus"]) == 1
+        fortify2 = upgrade_faction_base(storage, 111)
+        assert fortify2.ok, fortify2.text
+        assert int(storage.get_location(duty_base)["defense_bonus"]) == 2
+
         # Referral rewards.
         from app.game_logic import (
             apply_referral_rewards,
