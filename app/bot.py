@@ -60,8 +60,6 @@ from app.game_logic import (
     list_faction_broadcast_targets,
     deposit_to_faction_warehouse,
     format_inventory,
-    RESOURCE_POINT_INCOME_PER_HOUR,
-    BASE_POINT_INCOME_PER_HOUR,
     repair_gear,
     run_quest,
     sell_item,
@@ -127,8 +125,8 @@ from app.keyboards import (
     main_menu_keyboard,
     pda_keyboard,
     quests_keyboard,
+    events_keyboard,
     raid_keyboard,
-    ratings_keyboard,
     topup_keyboard,
     trader_buy_categories_keyboard,
     trader_buy_armor_keyboard,
@@ -141,6 +139,7 @@ from app.keyboards import (
     trader_sell_armor_keyboard,
     trader_sell_consumables_keyboard,
     trader_sell_gear_keyboard,
+    trader_sell_trophies_keyboard,
     trader_sell_weapons_keyboard,
     equip_root_keyboard,
     equip_slot_page_keyboard,
@@ -503,7 +502,7 @@ def _build_pda_chats_text(player: Character) -> str:
         lines.extend(
             [
                 "",
-                "🛡️ Чат группировки появится после выбора фракции.",
+                "🛡️ Чат группировки появится после выбора группировки.",
             ]
         )
     return "\n".join(lines)
@@ -526,29 +525,19 @@ def _build_referral_system_text(*, referral_link: str | None = None) -> str:
 
 
 def _build_info_text(player: Character) -> str:
-    faction_chat = FACTION_CHATS.get(player.faction or "")
-    if faction_chat:
-        chats_block = (
-            "Чаты:\n"
-            f"• 🌐 Общий: {COMMON_CHAT}\n"
-            f"• 🛡 {player.faction}: {faction_chat}"
-        )
-    else:
-        chats_block = (
-            "Чаты:\n"
-            f"• 🌐 Общий: {COMMON_CHAT}\n"
-            "• 🛡 Выбери группировку, чтобы увидеть чат своей фракции."
-        )
-
     return (
         "ℹ️ Информация по игре\n\n"
-        f"{chats_block}\n\n"
+        "Разделы меню:\n"
+        "• 📟 КПК — профиль, чаты, рейтинг, карта, игроки, рефералка.\n"
+        "• 👥 Группировка — склад, казна, звания лидера.\n"
+        "• 🏦 Экономика — биржа и рынок экипировки.\n"
+        "• 📋 Задания — сложности и отдельная контрабанда.\n\n"
         "Команды:\n"
         "• /start — создать персонажа или войти в существующего.\n"
         "• /menu — открыть главное меню.\n"
         "• /info — открыть эту справку.\n"
         "• /pay [telegram_id] [сумма] — перевод игроку (комиссия 30%).\n"
-        "  ID смотри в разделе «👥 Игроки».\n\n"
+        "  ID смотри в КПК → «👥 Игроки».\n\n"
         "Механики:\n"
         "• 🚚 Грузовик ускоряет переходы и снижает расход энергии на поездку,\n"
         "  но тратит 1 топливо за каждый переход.\n"
@@ -557,12 +546,11 @@ def _build_info_text(player: Character) -> str:
         "  — Артефакт Зоны: +2 силы, +5% реген энергии\n"
         "  — Арт «Сила»: +1 к силе\n"
         "  — Арт «Живучесть»: +10 к запасу HP\n"
-        "• ⚙️ Экипировка в инвентаре: сам выбираешь оружие, броню и арты\n"
-        "  (меню по категориям, как список игроков).\n"
+        "• ⚙️ Экипировка в инвентаре: оружие, броня и арты по категориям.\n"
         "• 🎖 Скин персонажа повышается от рейтинга:\n"
-        "  — Новичек: 0–499, Опытный: 500–1999,\n"
+        "  — Новичок: 0–499, Опытный: 500–1999,\n"
         "    Ветеран: 2000–4999, Легенда: 5000+.\n\n"
-        "Рефералка: смотри «🔗 Реферальная система» в КПК."
+        "Чаты и рефералка: смотри в 📟 КПК."
     )
 
 
@@ -1317,10 +1305,10 @@ async def show_buy_gear(callback: CallbackQuery) -> None:
     page = _trade_category_page(callback.data, prefix="trade:buy:gear")
     await edit_menu_message(
         callback,
-        "Снаряжение:\n"
-        "• Оружие и броня покупаются отдельно в своих разделах.\n"
+        "Прочее:\n"
+        "• Оружие и броня — в своих разделах.\n"
         "• После покупки предмет попадает в инвентарь.\n"
-        "• Экипировка выполняется во вкладке «🎒 Инвентарь».\n"
+        "• Экипировка — во вкладке «🎒 Инвентарь».\n"
         "• Ремонт — в разделе «🔧 Ремонт».",
         trader_buy_gear_keyboard(page=page),
     )
@@ -1366,6 +1354,16 @@ async def show_sell_consumables(callback: CallbackQuery) -> None:
         callback,
         "Продажа расходников:",
         trader_sell_consumables_keyboard(page=page),
+    )
+
+
+@router.callback_query(F.data.startswith("trade:sell:trophies"))
+async def show_sell_trophies(callback: CallbackQuery) -> None:
+    page = _trade_category_page(callback.data, prefix="trade:sell:trophies")
+    await edit_menu_message(
+        callback,
+        "Продажа трофеев (артефакты):",
+        trader_sell_trophies_keyboard(page=page),
     )
 
 
@@ -1689,8 +1687,8 @@ async def show_quests(message: Message) -> None:
 
     overview = build_quest_overview(player)
     await message.answer(
-        "Выбери сложность задания или контрабанду.\n"
-        "Ниже указан обязательный расход амуниции.\n\n"
+        "Выбери сложность задания.\n"
+        "🚚 Контрабанда — отдельная кнопка ниже, это не сложность квеста.\n\n"
         f"{overview}",
         reply_markup=quests_keyboard(),
     )
@@ -1720,7 +1718,7 @@ async def show_character_stats(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     text = build_character_stats_overview(get_storage(), player.telegram_id)
-    await message.answer(text, reply_markup=ratings_keyboard())
+    await message.answer(text, reply_markup=pda_keyboard())
 
 
 @router.message(F.text == "📟 КПК")
@@ -1730,16 +1728,8 @@ async def show_pda(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     await message.answer(
-        "📟 КПК сталкера\n\n"
-        "• 🧾 Профиль — карточка персонажа\n"
-        "• 💬 Чаты — общий и чат твоей группировки\n"
-        "• 🏆 Рейтинг — топ сталкеров\n"
-        "• 🗺 Карта — точки Зоны и контроль\n"
-        "• 🎖 Достижения — прогресс и награды\n"
-        "• 📊 Статистика — личные показатели\n"
-        "• 👥 Игроки — список по группировкам\n"
-        "• 📣 Сбор — оповещение бойцов фракции\n"
-        "• 🔗 Реферальная система — ссылка и бонусы",
+        "📟 КПК сталкера\n"
+        "Профиль, связь, рейтинг, карта, игроки и рефералка.",
         reply_markup=pda_keyboard(),
     )
 
@@ -1788,7 +1778,7 @@ async def show_rating(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     text = build_rating_overview(get_storage(), player.telegram_id, limit=10)
-    await message.answer(text, reply_markup=ratings_keyboard())
+    await message.answer(text, reply_markup=pda_keyboard())
 
 
 @router.message(F.text == "🗺 Карта")
@@ -1937,7 +1927,7 @@ async def show_character_stats_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     text = build_character_stats_overview(get_storage(), player.telegram_id)
-    await edit_menu_message(callback, text, ratings_keyboard())
+    await edit_menu_message(callback, text, None)
 
 
 @router.callback_query(F.data == "ratings:achievements")
@@ -1947,7 +1937,7 @@ async def show_achievements_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     text = build_achievements_overview(get_storage(), player.telegram_id)
-    await edit_menu_message(callback, text, ratings_keyboard())
+    await edit_menu_message(callback, text, None)
 
 
 @router.callback_query(F.data == "ratings:leaderboard")
@@ -1957,7 +1947,7 @@ async def show_rating_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     text = build_rating_overview(get_storage(), player.telegram_id, limit=10)
-    await edit_menu_message(callback, text, ratings_keyboard())
+    await edit_menu_message(callback, text, None)
 
 
 @router.message(F.text == "⚡ Выпить энергетик")
@@ -2109,29 +2099,19 @@ async def war_scenario_section_callback(callback: CallbackQuery) -> None:
     if player is None or not player_ready(player):
         await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
         return
-    factions = db.get_factions()
-    current_faction = player.faction or ""
-    own_faction = next((f for f in factions if f["name"] == current_faction), None)
-    own_treasury_text = (
-        f"• {current_faction}: казна {own_faction['treasury']} RU"
-        if own_faction is not None
-        else "• Данные по казне временно недоступны"
-    )
     alliance_overview = build_alliance_overview(db, player.telegram_id)
     explainer = (
-        "Сценарий войны (базовая версия):\n"
+        "Сценарий войны:\n"
         "• Захват точек — только через военное лобби (минимум 5 бойцов).\n"
         "• Соло-штурм одним игроком отключён.\n"
-        "• Точки ресурсов приносят деньги группировке.\n"
-        "• Базы дают безопасную точку и сервис.\n"
+        "• Точки ресурсов и базы дают контроль и преимущества на карте.\n"
         "• Точки интереса уменьшают время прибытия.\n"
         "• Шанс боя: сила отряда / (сила отряда + сила NPC).\n"
-        f"• Пассивный доход в казну: ресурсы {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч, "
-        f"базы {BASE_POINT_INCOME_PER_HOUR} RU/ч.\n"
+        "• Казна и склад — в разделе «👥 Группировка».\n"
     )
     await edit_menu_message(
         callback,
-        explainer + "\nЭкономика твоей группировки:\n" + own_treasury_text + "\n\n" + alliance_overview,
+        explainer + "\n" + alliance_overview,
         alliance_keyboard(),
     )
 
@@ -2459,15 +2439,39 @@ async def cancel_one_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
     await reply_action_result(callback, result.text)
 
 
+def _faction_group_keyboard_for(telegram_id: int):
+    storage = get_storage()
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    is_leader = bool(
+        player
+        and player.faction
+        and storage.get_faction_leader_id(player.faction) == telegram_id
+    )
+    return faction_group_keyboard(is_leader=is_leader)
+
+
 @router.message(F.text == "🛰 События")
 async def show_events(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
+    overview = build_events_overview(get_storage())
+    await message.answer(
+        overview + "\n\nНажми «🎲 Случайное событие», чтобы сгенерировать новое.",
+        reply_markup=events_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "events:roll")
+async def roll_events_callback(callback: CallbackQuery) -> None:
     result = apply_dynamic_zone_event(get_storage())
     overview = build_events_overview(get_storage())
-    await message.answer(result.text + "\n\n" + overview)
+    await edit_menu_message(
+        callback,
+        f"{result.text}\n\n{overview}",
+        events_keyboard(),
+    )
 
 
 @router.message(F.text == "👥 Группировка")
@@ -2480,7 +2484,7 @@ async def show_faction_group(message: Message) -> None:
         await message.answer("Сначала выбери группировку.")
         return
     text = build_faction_group_overview(get_storage(), player.telegram_id)
-    await message.answer(text, reply_markup=faction_group_keyboard())
+    await message.answer(text, reply_markup=_faction_group_keyboard_for(player.telegram_id))
 
 
 @router.message(F.text == "🏦 Экономика")
@@ -2633,7 +2637,7 @@ async def faction_group_root_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала выбери группировку.", show_alert=True)
         return
     text = build_faction_group_overview(get_storage(), player.telegram_id)
-    await edit_menu_message(callback, text, faction_group_keyboard())
+    await edit_menu_message(callback, text, _faction_group_keyboard_for(player.telegram_id))
 
 
 @router.callback_query(F.data == "eco:menu:root")

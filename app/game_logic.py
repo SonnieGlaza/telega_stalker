@@ -30,8 +30,8 @@ class QuestType:
 
 QUESTS: dict[str, QuestType] = {
     "easy": QuestType("easy", "Легко", 50, 10, 270, 410, 0, 0),
-    "hard": QuestType("hard", "Сложно", 80, 16, 350, 1200, 0, 0),
-    "heavy": QuestType("heavy", "Тяжело", 70, 22, 500, 750, 2, 1),
+    "hard": QuestType("hard", "Средне", 80, 16, 350, 1200, 0, 0),
+    "heavy": QuestType("heavy", "Опасно", 70, 22, 500, 750, 2, 1),
     "impossible": QuestType("impossible", "Невозможно", 60, 28, 700, 1500, 3, 1),
 }
 
@@ -1122,19 +1122,30 @@ def build_quest_overview(character: Character) -> str:
     ammo_stock = int(character.inventory.get("ammo_pack", 0))
     medkit_stock = int(character.inventory.get("medkit", 0))
     lines = [
-        "Текущие запасы расходников:",
-        f"• Запас патронов: {ammo_stock}",
-        f"• Запас аптечек: {medkit_stock}",
+        "Текущие запасы:",
+        f"• Патроны: {ammo_stock}",
+        f"• Аптечки: {medkit_stock}",
+        f"• Энергия: {character.energy}/{character.max_energy}",
         "",
+        "Сложности заданий:",
     ]
     for quest in QUESTS.values():
+        chance = calculate_quest_success_for_quest(character, quest).chance
         if quest.key == "easy":
-            lines.append(f"• {quest.title}: шанс победы 50%, без обязательного расхода расходников")
+            lines.append(
+                f"• {quest.title}: шанс ~{chance}%, энергия {quest.energy_cost}, без обязательного расхода"
+            )
             continue
-        if quest.ammo_required == 0 and quest.medkit_required == 0:
-            lines.append(f"• {quest.title}: без обязательного расхода расходников")
-            continue
-        lines.append(f"• {quest.title}: расход патроны {quest.ammo_required}, аптечки {quest.medkit_required}")
+        lines.append(
+            f"• {quest.title}: шанс ~{chance}%, энергия {quest.energy_cost}, "
+            f"патроны {quest.ammo_required}, аптечки {quest.medkit_required}"
+        )
+    lines.extend(
+        [
+            "",
+            "🚚 Контрабанда — отдельная активность (не сложность задания).",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -1217,18 +1228,18 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
         stash_text = _maybe_drop_stash(storage, telegram_id)
         achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
         formula_line = (
-            "Шанс фиксированный: 50%."
+            "Шанс фикс. 50%."
             if quest.key == "easy"
             else (
-                f"Формула: база {breakdown.base_chance}% (включая снарягу +{breakdown.gear_bonus}%) "
-                f"+ патроны {breakdown.ammo_bonus}% + аптечки {breakdown.medkit_bonus}%."
+                f"База {breakdown.base_chance}% (+снар {breakdown.gear_bonus}%) "
+                f"+патр {breakdown.ammo_bonus}% +апт {breakdown.medkit_bonus}%."
             )
         )
         return ActionResult(
             True,
-            f"Задание «{quest.title}» выполнено! Шанс {breakdown.chance}% (бросок {roll}).\n"
+            f"«{quest.title}» выполнено! {breakdown.chance}% (бросок {roll}).\n"
             f"{formula_line}\n"
-            f"Расход: патроны {quest.ammo_required}, аптечки {quest.medkit_required}.\n"
+            f"Расход: патр {quest.ammo_required}, апт {quest.medkit_required}. "
             f"Награда: {reward} RU.{extra}{stash_text}{durability_text}{achievements_text}",
         )
 
@@ -2422,7 +2433,7 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
     host_faction = str(open_raid["faction"])
     member_faction = player.faction
     if not storage.are_factions_allied(host_faction, member_faction) and host_faction != member_faction:
-        return ActionResult(False, "К рейду можно присоединяться только своей фракцией или союзниками.")
+        return ActionResult(False, "К рейду можно присоединяться только своей группировкой или союзниками.")
     if not storage.add_raid_member(raid_id, telegram_id):
         return ActionResult(False, "Не удалось присоединиться к рейду.")
     member_ids = storage.get_raid_member_ids(raid_id)
@@ -3091,7 +3102,7 @@ def build_market_lots_overview(
         price = int(lot["price"])
         seller_id = int(lot["seller_id"])
         rows.append({"id": lot_id, "title": title, "amount": amount, "price": price, "seller_id": seller_id})
-        lines.append(f"• #{lot_id} {title} x{amount} — {price} RU (seller {seller_id})")
+        lines.append(f"• #{lot_id} {title} x{amount} — {price} RU (продавец {seller_id})")
     return ("\n".join(lines), rows)
 
 
@@ -3248,7 +3259,7 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала выбери группировку.")
     lobby = storage.get_open_war_lobby_for_faction(leader.faction)
     if lobby is None:
-        return ActionResult(False, "У твоей фракции нет открытого военного лобби.")
+        return ActionResult(False, "У твоей группировки нет открытого военного лобби.")
     if int(lobby["leader_id"]) != telegram_id:
         return ActionResult(False, "Запускать лобби может только лидер, который его создал.")
     war_id = int(lobby["id"])
@@ -3315,14 +3326,14 @@ def transfer_location_to_ally(storage: Storage, telegram_id: int, location_name:
     if player is None or player.faction is None:
         return ActionResult(False, "Сначала создай персонажа и выбери группировку.")
     if storage.get_faction_leader_id(player.faction) != telegram_id:
-        return ActionResult(False, "Передавать локацию может только лидер фракции.")
+        return ActionResult(False, "Передавать локацию может только лидер группировки.")
     if not storage.are_factions_allied(player.faction, ally_faction):
         return ActionResult(False, "Локацию можно передать только союзнику.")
     location = storage.get_location(location_name)
     if location is None:
         return ActionResult(False, "Локация не найдена.")
     if str(location.get("controlled_by") or "") != player.faction:
-        return ActionResult(False, "Передавать можно только локацию своей фракции.")
+        return ActionResult(False, "Передавать можно только локацию своей группировки.")
     storage.set_location_control(location_name, ally_faction)
     return ActionResult(True, f"Локация «{location_name}» передана союзнику: {ally_faction}.")
 
@@ -3330,7 +3341,7 @@ def transfer_location_to_ally(storage: Storage, telegram_id: int, location_name:
 def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction is None:
-        return "Группировка доступна только после выбора фракции."
+        return "Группировка доступна только после выбора группировки."
 
     income_result = apply_controlled_points_income(storage)
     income_note = f"\n{income_result.text}\n" if income_result.ok else "\n"
@@ -3350,7 +3361,7 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
     leader_hint = ""
     if storage.get_faction_leader_id(player.faction) == telegram_id:
         leader_hint = (
-            "\nЛидер может снимать своё количество RU из казны и назначать звания."
+            "\nТебе доступны вывод из казны и назначение званий."
         )
 
     return (

@@ -31,12 +31,12 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📟 КПК")],
-            [KeyboardButton(text="🎒 Инвентарь")],
-            [KeyboardButton(text="🛒 Торговец"), KeyboardButton(text="📋 Задания")],
-            [KeyboardButton(text="⚔️ Война"), KeyboardButton(text="🗺 Переход")],
-            [KeyboardButton(text="🪖 Рейды"), KeyboardButton(text="🛰 События")],
-            [KeyboardButton(text="👥 Группировка"), KeyboardButton(text="🏦 Экономика")],
-            [KeyboardButton(text="ℹ️ Информация"), KeyboardButton(text="⭐ Пополнить")],
+            [KeyboardButton(text="🎒 Инвентарь"), KeyboardButton(text="📋 Задания")],
+            [KeyboardButton(text="🛒 Торговец"), KeyboardButton(text="⚔️ Война")],
+            [KeyboardButton(text="🗺 Переход"), KeyboardButton(text="🪖 Рейды")],
+            [KeyboardButton(text="🛰 События"), KeyboardButton(text="👥 Группировка")],
+            [KeyboardButton(text="🏦 Экономика"), KeyboardButton(text="ℹ️ Информация")],
+            [KeyboardButton(text="⭐ Пополнить")],
         ],
         resize_keyboard=True,
     )
@@ -60,10 +60,18 @@ def quests_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🟢 Легко", callback_data="quest:easy")],
-            [InlineKeyboardButton(text="🟡 Сложно", callback_data="quest:hard")],
-            [InlineKeyboardButton(text="🟠 Тяжело", callback_data="quest:heavy")],
+            [InlineKeyboardButton(text="🟡 Средне", callback_data="quest:hard")],
+            [InlineKeyboardButton(text="🟠 Опасно", callback_data="quest:heavy")],
             [InlineKeyboardButton(text="🔴 Невозможно", callback_data="quest:impossible")],
             [InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:run")],
+        ]
+    )
+
+
+def events_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎲 Случайное событие", callback_data="events:roll")],
         ]
     )
 
@@ -128,7 +136,7 @@ def trader_buy_categories_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🧰 Расходники", callback_data="trade:buy:consumables:0")],
-            [InlineKeyboardButton(text="🛡 Снаряжение", callback_data="trade:buy:gear:0")],
+            [InlineKeyboardButton(text="🛠 Прочее", callback_data="trade:buy:gear:0")],
             [InlineKeyboardButton(text="🦺 Броня", callback_data="trade:buy:armor:0")],
             [InlineKeyboardButton(text="🔫 Оружие", callback_data="trade:buy:weapons:0")],
             [InlineKeyboardButton(text="🔧 Ремонт", callback_data="trade:buy:repair")],
@@ -195,7 +203,6 @@ def inventory_equipment_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🧰 Расходники", callback_data="inventory:consumables")],
-            [InlineKeyboardButton(text="⚡ Выпить энергетик", callback_data="use:energy_drink")],
             [InlineKeyboardButton(text="📦 Открыть тайник", callback_data="use:stash_case")],
             [InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")],
             [InlineKeyboardButton(text="⚙️ Экипировка", callback_data="equip:root")],
@@ -209,14 +216,14 @@ def inventory_consumables_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="⚡ Выпить энергетик", callback_data="use:energy_drink")],
             [InlineKeyboardButton(text="🩹 Использовать аптечку", callback_data="use:medkit")],
-            [InlineKeyboardButton(text="🍸 Выпить водку (-20 рад.)", callback_data="use:vodka")],
-            [InlineKeyboardButton(text="💉 Использовать антирад (-50 рад.)", callback_data="use:antirad")],
-            [InlineKeyboardButton(text="🍞 Поесть хлеб (+10 сытости)", callback_data="use:bread")],
-            [InlineKeyboardButton(text="🥓 Поесть колбасу (+20 сытости)", callback_data="use:sausage")],
-            [InlineKeyboardButton(text="🥫 Поесть тушёнку (+50 сытости)", callback_data="use:stew")],
-            [InlineKeyboardButton(text="💧 Выпить воду (+10 жажды)", callback_data="use:water_bottle")],
-            [InlineKeyboardButton(text="🧴 Выпить минералку (+20 жажды)", callback_data="use:mineral_water")],
-            [InlineKeyboardButton(text="🍵 Выпить чай Бороды (+50 жажды)", callback_data="use:beard_tea")],
+            [InlineKeyboardButton(text="🍸 Выпить водку (−20 рад.)", callback_data="use:vodka")],
+            [InlineKeyboardButton(text="💉 Использовать антирад (−50 рад.)", callback_data="use:antirad")],
+            [InlineKeyboardButton(text="🍞 Поесть хлеб (голод −10)", callback_data="use:bread")],
+            [InlineKeyboardButton(text="🥓 Поесть колбасу (голод −20)", callback_data="use:sausage")],
+            [InlineKeyboardButton(text="🥫 Поесть тушёнку (голод −50)", callback_data="use:stew")],
+            [InlineKeyboardButton(text="💧 Выпить воду (жажда −10)", callback_data="use:water_bottle")],
+            [InlineKeyboardButton(text="🧴 Выпить минералку (жажда −20)", callback_data="use:mineral_water")],
+            [InlineKeyboardButton(text="🍵 Выпить чай Бороды (жажда −50)", callback_data="use:beard_tea")],
             [InlineKeyboardButton(text="⬅️ Назад в инвентарь", callback_data="inventory:open")],
         ]
     )
@@ -361,7 +368,8 @@ def trader_sell_categories_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🧰 Расходники", callback_data="trade:sell:consumables:0")],
-            [InlineKeyboardButton(text="🛡 Снаряжение", callback_data="trade:sell:gear:0")],
+            [InlineKeyboardButton(text="💎 Трофеи", callback_data="trade:sell:trophies:0")],
+            [InlineKeyboardButton(text="🛠 Прочее", callback_data="trade:sell:gear:0")],
             [InlineKeyboardButton(text="🦺 Броня", callback_data="trade:sell:armor:0")],
             [InlineKeyboardButton(text="🔫 Оружие", callback_data="trade:sell:weapons:0")],
             [InlineKeyboardButton(text="⬅️ Назад в Торговец", callback_data="trade:menu:root")],
@@ -374,15 +382,27 @@ def trader_sell_consumables_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
         ("Продать энергетик (170)", "sell:energy_drink"),
         ("Продать аптечку (120)", "sell:medkit"),
         ("Продать патроны (55)", "sell:ammo_pack"),
-        ("Продать артефакт Зоны (900)", "sell:artifact"),
-        ("Продать Арт «Сила» (1100)", "sell:artifact_power"),
-        ("Продать Арт «Живучесть» (1100)", "sell:artifact_vitality"),
         ("Продать топливо +5 (200)", "sell:fuel_can"),
     ]
     return _trader_page_keyboard(
         items,
         page=page,
         page_prefix="trade:sell:consumables",
+        back_callback="trade:menu:sell",
+        back_text="⬅️ Назад к категориям продажи",
+    )
+
+
+def trader_sell_trophies_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
+    items = [
+        ("Продать артефакт Зоны (900)", "sell:artifact"),
+        ("Продать Арт «Сила» (1100)", "sell:artifact_power"),
+        ("Продать Арт «Живучесть» (1100)", "sell:artifact_vitality"),
+    ]
+    return _trader_page_keyboard(
+        items,
+        page=page,
+        page_prefix="trade:sell:trophies",
         back_callback="trade:menu:sell",
         back_text="⬅️ Назад к категориям продажи",
     )
@@ -406,9 +426,9 @@ def trader_sell_armor_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
     items = [
         ("Продать Кожаную куртку (420)", "sell:armor_leather"),
         ("Продать Сталкерский бронежилет (850)", "sell:armor_stalker_vest"),
-        ("Продать «Заря» (1000)", "sell:armor_sunrise"),
+        ("Продать Комбинезон «Заря» (1000)", "sell:armor_sunrise"),
         ("Продать Берилл-5М (2650)", "sell:armor_berill5m"),
-        ("Продать СЕВА (2700)", "sell:armor_seva"),
+        ("Продать Костюм СЕВА (2700)", "sell:armor_seva"),
         ("Продать Экзоскелет (9000)", "sell:armor_exoskeleton"),
         ("Продать Носорог (12000)", "sell:armor_nosorog"),
     ]
@@ -551,23 +571,27 @@ def war_sections_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def faction_group_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📦 Склад группировки", callback_data="faction:warehouse:view")],
-            [InlineKeyboardButton(text="📥 Сдать 1 патроны на склад", callback_data="eco:warehouse:deposit:ammo_pack")],
-            [InlineKeyboardButton(text="📤 Забрать 1 патроны со склада", callback_data="eco:warehouse:withdraw:ammo_pack")],
-            [InlineKeyboardButton(text="📥 Сдать 1 аптечку на склад", callback_data="eco:warehouse:deposit:medkit")],
-            [InlineKeyboardButton(text="📤 Забрать 1 аптечку со склада", callback_data="eco:warehouse:withdraw:medkit")],
-            [InlineKeyboardButton(text="💰 Внести 500 RU в казну", callback_data="eco:treasury:deposit:500")],
-            [InlineKeyboardButton(text="💰 Внести 1000 RU в казну", callback_data="eco:treasury:deposit:1000")],
-            [InlineKeyboardButton(text="💰 Внести своё количество", callback_data="eco:treasury:deposit:custom")],
-            [InlineKeyboardButton(text="🏦 Лидер: вывести 500 RU из казны", callback_data="eco:treasury:withdraw:500")],
-            [InlineKeyboardButton(text="🏦 Лидер: вывести 1000 RU из казны", callback_data="eco:treasury:withdraw:1000")],
-            [InlineKeyboardButton(text="🏦 Лидер: снять своё количество", callback_data="eco:treasury:withdraw:custom")],
-            [InlineKeyboardButton(text="🎖 Лидер: назначить звание", callback_data="rank:menu")],
-        ]
-    )
+def faction_group_keyboard(*, is_leader: bool = False) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="📦 Склад группировки", callback_data="faction:warehouse:view")],
+        [InlineKeyboardButton(text="📥 Сдать 1 патроны на склад", callback_data="eco:warehouse:deposit:ammo_pack")],
+        [InlineKeyboardButton(text="📤 Забрать 1 патроны со склада", callback_data="eco:warehouse:withdraw:ammo_pack")],
+        [InlineKeyboardButton(text="📥 Сдать 1 аптечку на склад", callback_data="eco:warehouse:deposit:medkit")],
+        [InlineKeyboardButton(text="📤 Забрать 1 аптечку со склада", callback_data="eco:warehouse:withdraw:medkit")],
+        [InlineKeyboardButton(text="💰 Внести 500 RU в казну", callback_data="eco:treasury:deposit:500")],
+        [InlineKeyboardButton(text="💰 Внести 1000 RU в казну", callback_data="eco:treasury:deposit:1000")],
+        [InlineKeyboardButton(text="💰 Внести своё количество", callback_data="eco:treasury:deposit:custom")],
+    ]
+    if is_leader:
+        rows.extend(
+            [
+                [InlineKeyboardButton(text="🏦 Вывести 500 RU из казны", callback_data="eco:treasury:withdraw:500")],
+                [InlineKeyboardButton(text="🏦 Вывести 1000 RU из казны", callback_data="eco:treasury:withdraw:1000")],
+                [InlineKeyboardButton(text="🏦 Снять своё количество", callback_data="eco:treasury:withdraw:custom")],
+                [InlineKeyboardButton(text="🎖 Назначить звание", callback_data="rank:menu")],
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def economy_keyboard() -> InlineKeyboardMarkup:
@@ -596,7 +620,7 @@ def market_lots_keyboard(lots: list[dict[str, str | int]]) -> InlineKeyboardMark
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"#{lot_id} {title} x{amount} • {price} RU • seller {seller_id}",
+                    text=f"#{lot_id} {title} x{amount} • {price} RU • продавец {seller_id}",
                     callback_data=f"eco:market:buy:{lot_id}",
                 )
             ]
@@ -672,7 +696,7 @@ def alliance_target_keyboard(
         else:
             rows.append([InlineKeyboardButton(text=f"💔 Разорвать с {name}", callback_data=f"alliance:break:{name}")])
     if not rows:
-        rows.append([InlineKeyboardButton(text="Нет доступных фракций", callback_data="alliance:none")])
+        rows.append([InlineKeyboardButton(text="Нет доступных группировок", callback_data="alliance:none")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="alliance:menu:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
