@@ -221,7 +221,7 @@ ARTIFACT_EQUIP_BONUSES: dict[str, dict[str, int]] = {
     "Артефакт Зоны": {"power": 2, "hp": 0},
     "Артефакт": {"power": 2, "hp": 0},  # старые сейвы
     "Арт «Сила»": {"power": 1, "hp": 0},
-    "Арт «Живучесть»": {"power": 0, "hp": 10},
+    "Арт «Живучесть»": {"power": 1, "hp": 10},
 }
 ARTIFACT_ENERGY_REGEN_NAMES = frozenset({"Артефакт Зоны", "Артефакт"})
 ARTIFACT_INVENTORY_TO_NAME: dict[str, str] = {
