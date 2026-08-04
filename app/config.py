@@ -8,6 +8,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.db import normalize_database_url
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -15,6 +17,7 @@ class Settings:
     db_path: str
     snapshot_path: str
     admin_ids: tuple[int, ...]
+    database_url: str | None = None
 
 
 def _is_writable_dir(path: Path) -> bool:
@@ -81,7 +84,10 @@ def _resolve_default_db_path() -> str:
 
 
 def _resolve_default_snapshot_path(db_path: str) -> str:
-    primary = Path(db_path).with_suffix(".backup.json")
+    if db_path.startswith("postgresql"):
+        primary = Path("/data/stalker_game.backup.json")
+    else:
+        primary = Path(db_path).with_suffix(".backup.json")
     if primary.exists():
         return str(primary)
 
@@ -89,6 +95,7 @@ def _resolve_default_snapshot_path(db_path: str) -> str:
         Path("stalker_game.backup.json"),
         Path("/workspace/stalker_game.backup.json"),
         Path("/app/stalker_game.backup.json"),
+        Path("/data/stalker_game.backup.json"),
     )
     seen: set[Path] = set()
     for legacy in legacy_candidates:
@@ -126,7 +133,16 @@ def load_settings() -> Settings:
     token = os.getenv("BOT_TOKEN", "").strip()
     if not token:
         raise ValueError("BOT_TOKEN is not set. Put it in .env or environment variables.")
-    db_path = os.getenv("DB_PATH", "").strip() or _resolve_default_db_path()
+
+    database_url_raw = os.getenv("DATABASE_URL", "").strip()
+    database_url = normalize_database_url(database_url_raw) if database_url_raw else None
+
+    # Prefer Railway/Postgres DATABASE_URL when present.
+    if database_url:
+        db_path = database_url
+    else:
+        db_path = os.getenv("DB_PATH", "").strip() or _resolve_default_db_path()
+
     snapshot_path = os.getenv("SNAPSHOT_PATH", "").strip() or _resolve_default_snapshot_path(db_path)
     admin_ids = _parse_admin_ids(os.getenv("ADMIN_IDS", ""))
     return Settings(
@@ -134,4 +150,5 @@ def load_settings() -> Settings:
         db_path=db_path,
         snapshot_path=snapshot_path,
         admin_ids=admin_ids,
+        database_url=database_url,
     )

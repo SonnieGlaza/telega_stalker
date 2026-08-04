@@ -1574,7 +1574,11 @@ async def run_bot() -> None:
     settings = load_settings()
     global storage, admin_ids
     admin_ids = settings.admin_ids
-    storage = Storage(settings.db_path, snapshot_path=settings.snapshot_path)
+    storage = Storage(
+        settings.db_path,
+        snapshot_path=settings.snapshot_path,
+        database_url=settings.database_url,
+    )
     storage.init_db()
     storage.restore_from_snapshot_if_empty()
 

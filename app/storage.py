@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from app.db import DbConfig, DbConnection, connect as db_connect, integrity_error_types
 
 ENERGY_REGEN_PER_MINUTE = 2
 BASE_LOCATION_NPC_POWER = 100
@@ -53,20 +54,61 @@ SURVIVAL_DAMAGE_TICK_MINUTES = 30
 
 
 class Storage:
-    def __init__(self, db_path: str, snapshot_path: str | None = None) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        snapshot_path: str | None = None,
+        database_url: str | None = None,
+    ) -> None:
         self.db_path = db_path
-        db_parent = Path(db_path).parent
-        db_parent.mkdir(parents=True, exist_ok=True)
+        self.database_url = (database_url or "").strip() or None
+        if self.database_url:
+            self.backend = "postgres"
+            # Snapshot рядом с volume /data, а не "рядом с URL".
+            default_snapshot = Path("/data/stalker_game.backup.json")
+        else:
+            self.backend = "sqlite"
+            default_snapshot = Path(db_path).with_suffix(".backup.json")
+            db_parent = Path(db_path).parent
+            db_parent.mkdir(parents=True, exist_ok=True)
+
         if snapshot_path:
             self.snapshot_path = Path(snapshot_path)
         else:
-            self.snapshot_path = Path(db_path).with_suffix(".backup.json")
+            self.snapshot_path = default_snapshot
         self.snapshot_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _db_config(self) -> DbConfig:
+        if self.backend == "postgres":
+            return DbConfig(backend="postgres", database_url=self.database_url)
+        return DbConfig(backend="sqlite", sqlite_path=self.db_path)
+
+    def _connect(self) -> DbConnection:
+        return db_connect(self._db_config())
+
+    def _table_columns(self, conn: DbConnection, table_name: str) -> set[str]:
+        if conn.backend == "postgres":
+            rows = conn.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = ?
+                """,
+                (table_name,),
+            ).fetchall()
+            return {str(row["column_name"]) for row in rows}
+        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        return {str(row["name"]) for row in rows}
+
+    def _insert_returning_id(self, conn: DbConnection, sql: str, params: tuple[Any, ...]) -> int:
+        if conn.backend == "postgres":
+            statement = sql.rstrip().rstrip(";") + " RETURNING id"
+            row = conn.execute(statement, params).fetchone()
+            if row is None:
+                raise RuntimeError("INSERT RETURNING id returned no row")
+            return int(row["id"])
+        cursor = conn.execute(sql, params)
+        return int(cursor.lastrowid)
 
     def _write_snapshot(self) -> None:
         try:
@@ -113,7 +155,7 @@ class Storage:
             # Не ломаем игру, если в окружении временно нет прав на запись backup-файла.
             return
 
-    def _restore_from_snapshot_if_needed(self, conn: sqlite3.Connection) -> None:
+    def _restore_from_snapshot_if_needed(self, conn: DbConnection) -> None:
         count_row = conn.execute("SELECT COUNT(*) AS cnt FROM characters").fetchone()
         existing_count = int(count_row["cnt"]) if count_row else 0
         if existing_count > 0:
@@ -430,9 +472,8 @@ class Storage:
                 )
                 """
             )
-            columns = conn.execute("PRAGMA table_info(factions)").fetchall()
-            column_names = {str(row["name"]) for row in columns}
-            if "leader_id" not in column_names:
+            columns = self._table_columns(conn, "factions")
+            if "leader_id" not in columns:
                 conn.execute("ALTER TABLE factions ADD COLUMN leader_id INTEGER")
             conn.execute(
                 """
@@ -1390,14 +1431,14 @@ class Storage:
     def create_raid(self, faction: str, location: str, leader_id: int) -> int:
         now_iso = utc_now().isoformat()
         with self._connect() as conn:
-            cursor = conn.execute(
+            raid_id = self._insert_returning_id(
+                conn,
                 """
                 INSERT INTO raids(faction, location, leader_id, status, created_at)
                 VALUES (?, ?, ?, 'open', ?)
                 """,
                 (faction, location, leader_id, now_iso),
             )
-            raid_id = int(cursor.lastrowid)
             conn.execute(
                 """
                 INSERT OR IGNORE INTO raid_members(raid_id, telegram_id, joined_at)
@@ -1465,14 +1506,14 @@ class Storage:
     def create_war_lobby(self, host_faction: str, location: str, leader_id: int) -> int:
         now_iso = utc_now().isoformat()
         with self._connect() as conn:
-            cursor = conn.execute(
+            war_id = self._insert_returning_id(
+                conn,
                 """
                 INSERT INTO war_lobbies(host_faction, location, leader_id, status, created_at)
                 VALUES (?, ?, ?, 'open', ?)
                 """,
                 (host_faction, location, leader_id, now_iso),
             )
-            war_id = int(cursor.lastrowid)
             conn.execute(
                 """
                 INSERT OR IGNORE INTO war_lobby_members(war_id, telegram_id, joined_at)
@@ -1584,14 +1625,14 @@ class Storage:
         price: int,
     ) -> int:
         with self._connect() as conn:
-            cursor = conn.execute(
+            auction_id = self._insert_returning_id(
+                conn,
                 """
                 INSERT INTO auctions(seller_id, faction, item_key, amount, price, status, created_at)
                 VALUES (?, ?, ?, ?, ?, 'open', ?)
                 """,
                 (seller_id, faction, item_key, amount, price, utc_now().isoformat()),
             )
-            auction_id = int(cursor.lastrowid)
         self.save_snapshot()
         return auction_id
 
@@ -1736,7 +1777,7 @@ class Storage:
                         utc_now().isoformat(),
                     ),
                 )
-            except sqlite3.IntegrityError:
+            except integrity_error_types():
                 return False, True
 
             conn.execute(
@@ -1760,7 +1801,7 @@ class Storage:
                 (json.dumps(equipment, ensure_ascii=False), telegram_id),
             )
 
-    def _ensure_player_stats_rows(self, conn: sqlite3.Connection) -> None:
+    def _ensure_player_stats_rows(self, conn: DbConnection) -> None:
         conn.execute(
             """
             INSERT OR IGNORE INTO player_stats(telegram_id)
@@ -1768,13 +1809,13 @@ class Storage:
             """
         )
 
-    def _ensure_player_stats_row(self, conn: sqlite3.Connection, telegram_id: int) -> None:
+    def _ensure_player_stats_row(self, conn: DbConnection, telegram_id: int) -> None:
         conn.execute(
             "INSERT OR IGNORE INTO player_stats(telegram_id) VALUES (?)",
             (telegram_id,),
         )
 
-    def _enforce_location_power_baseline(self, conn: sqlite3.Connection) -> None:
+    def _enforce_location_power_baseline(self, conn: DbConnection) -> None:
         conn.execute(
             """
             UPDATE locations
@@ -1792,9 +1833,8 @@ class Storage:
             ),
         )
 
-    def _ensure_characters_schema(self, conn: sqlite3.Connection) -> None:
-        columns = conn.execute("PRAGMA table_info(characters)").fetchall()
-        column_names = {row["name"] for row in columns}
+    def _ensure_characters_schema(self, conn: DbConnection) -> None:
+        column_names = self._table_columns(conn, "characters")
         if "player_uid" not in column_names:
             conn.execute("ALTER TABLE characters ADD COLUMN player_uid TEXT")
         if "avatar_style" not in column_names:
@@ -1878,7 +1918,7 @@ class Storage:
                 )
 
     @staticmethod
-    def _row_to_character(row: sqlite3.Row) -> Character:
+    def _row_to_character(row: Any) -> Character:
         inventory = json.loads(row["inventory_json"])
         if not isinstance(inventory, dict):
             inventory = {}
