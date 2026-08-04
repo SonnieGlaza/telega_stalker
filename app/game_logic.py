@@ -3611,12 +3611,35 @@ def _players_nickname_sort_key(row: dict[str, Any]) -> str:
     return str(row.get("nickname") or "").casefold()
 
 
+def _players_rank_sort_key(
+    storage: Storage,
+    row: dict[str, Any],
+    *,
+    leader_id: int | None,
+) -> tuple[int, int, str]:
+    """Сортировка по должности: лидер → выше ранг → ник."""
+    telegram_id = int(row.get("telegram_id") or 0)
+    is_leader = leader_id is not None and telegram_id == leader_id
+    # Лидер выше всех (0), остальные — по убыванию level (инвертируем).
+    leader_order = 0 if is_leader else 1
+    faction = str(row.get("faction") or "").strip() or None
+    rank = rank_by_key(faction, row.get("faction_rank"))
+    rank_level = rank.level if rank is not None else 0
+    if is_leader:
+        rank_level = 99
+    return (leader_order, -rank_level, _players_nickname_sort_key(row))
+
+
 def group_players_by_faction(storage: Storage) -> list[tuple[str, str, list[dict[str, Any]]]]:
     """[(faction_key, title, players_sorted), ...] с известными гп сверху."""
     rows = storage.list_players(limit=500)
     buckets: dict[str, list[dict[str, Any]]] = {key: [] for key in PLAYERS_FACTION_ORDER}
     buckets[PLAYERS_NO_FACTION_KEY] = []
     extra: dict[str, list[dict[str, Any]]] = {}
+    leaders: dict[str, int | None] = {
+        faction["name"]: (int(faction["leader_id"]) if faction.get("leader_id") is not None else None)
+        for faction in storage.get_factions()
+    }
 
     for row in rows:
         faction = str(row.get("faction") or "").strip()
@@ -3629,10 +3652,18 @@ def group_players_by_faction(storage: Storage) -> list[tuple[str, str, list[dict
 
     result: list[tuple[str, str, list[dict[str, Any]]]] = []
     for faction in PLAYERS_FACTION_ORDER:
-        players = sorted(buckets[faction], key=_players_nickname_sort_key)
+        leader_id = leaders.get(faction)
+        players = sorted(
+            buckets[faction],
+            key=lambda row: _players_rank_sort_key(storage, row, leader_id=leader_id),
+        )
         result.append((faction, faction, players))
     for faction in sorted(extra.keys(), key=lambda name: name.casefold()):
-        players = sorted(extra[faction], key=_players_nickname_sort_key)
+        leader_id = leaders.get(faction)
+        players = sorted(
+            extra[faction],
+            key=lambda row: _players_rank_sort_key(storage, row, leader_id=leader_id),
+        )
         result.append((faction, faction, players))
     none_players = sorted(buckets[PLAYERS_NO_FACTION_KEY], key=_players_nickname_sort_key)
     result.append((PLAYERS_NO_FACTION_KEY, PLAYERS_NO_FACTION_LABEL, none_players))
@@ -3648,7 +3679,7 @@ def build_players_root_text(storage: Storage) -> tuple[str, list[tuple[str, str,
 
     lines = [
         "👥 Игроки Зоны",
-        "Выбери группировку. Ники внутри — по алфавиту, по 10 на страницу.",
+        "Выбери группировку. Внутри — по должности (выше ранг сверху), по 10 на страницу.",
         f"Всего игроков: {total}",
         "",
     ]
