@@ -8,8 +8,7 @@
 Цифра = звание:
   1 Новичек, 2 Опытный, 3 Ветеран, 4 Легенда
 
-Картинки подгоняются под слот профиля 248×320 (как текущая аватарка),
-чтобы карточка не съезжала.
+Скины сохраняются в исходном 1:1 размере без принудительного ресайза.
 
 Пример:
   python3 scripts/import_faction_skins.py "/path/to/скины"
@@ -30,16 +29,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from app.avatar_render import (  # noqa: E402
     FACTION_AVATAR_DIR,
     FACTION_SLUGS,
-    _fit_avatar_image,
+    _native_avatar_image,
     _normalize_token,
 )
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 TIER_RE = re.compile(r"(\d+)$")
-
-# Целевой размер как на карточке профиля (profile_card.py).
-TARGET_WIDTH = 248
-TARGET_HEIGHT = 320
 
 # Канонические slug-папки в assets/avatars/factions/
 CANONICAL_SLUG: dict[str, str] = {
@@ -55,7 +50,6 @@ def _faction_for_token(token: str) -> str | None:
     for faction, slugs in FACTION_SLUGS.items():
         for slug in slugs:
             if normalized == _normalize_token(slug) or normalized.startswith(_normalize_token(slug)):
-                # Если это просто имя фракции без цифры — ок.
                 slug_n = _normalize_token(slug)
                 if normalized == slug_n:
                     return faction
@@ -100,7 +94,6 @@ def _iter_source_images(source: Path) -> list[tuple[str, int, Path]]:
             return
         faction = folder_faction or _faction_for_token(path.stem)
         if faction is None and folder_faction is None:
-            # Попробуем по имени родительской папки.
             faction = _faction_for_token(path.parent.name)
         if faction is None:
             return
@@ -113,12 +106,10 @@ def _iter_source_images(source: Path) -> list[tuple[str, int, Path]]:
         consider(source)
         return results
 
-    # Файлы в корне и во вложенных папках группировок.
     for path in sorted(source.rglob("*")):
         if not path.is_file():
             continue
         folder_faction = None
-        # Если лежит в папке Долг/dolg/...
         for parent in path.parents:
             if parent == source:
                 break
@@ -148,12 +139,13 @@ def import_skins(source: Path, *, dry_run: bool = False) -> int:
             continue
         out_dir.mkdir(parents=True, exist_ok=True)
         try:
-            source_img = Image.open(path).convert("RGBA")
+            source_img = Image.open(path)
         except OSError as exc:
             print(f"  пропуск (не открылось): {exc}")
             continue
-        fitted = _fit_avatar_image(source_img, TARGET_WIDTH, TARGET_HEIGHT)
-        fitted.save(out_path, format="PNG")
+        native = _native_avatar_image(source_img)
+        print(f"  размер: {native.width}×{native.height}")
+        native.save(out_path, format="PNG")
         imported += 1
     return imported
 
@@ -172,7 +164,7 @@ def main() -> int:
         print(f"Путь не найден: {source}")
         return 1
     count = import_skins(source, dry_run=args.dry_run)
-    print(f"Готово: {count} скин(ов). Целевой размер: {TARGET_WIDTH}×{TARGET_HEIGHT}")
+    print(f"Готово: {count} скин(ов). Сохранены в исходном 1:1 размере.")
     return 0 if count else 2
 
 

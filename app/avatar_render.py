@@ -232,6 +232,20 @@ def _avatar_candidates(tier: int, faction: str | None = None) -> tuple[Path, ...
     return tuple(unique)
 
 
+def _native_avatar_image(source: Image.Image) -> Image.Image:
+    """Вернуть скин группировки в исходном 1:1 размере без масштабирования."""
+    img = source.convert("RGBA")
+    width, height = img.size
+    if width <= 0 or height <= 0:
+        return img
+    if width == height:
+        return img
+    side = min(width, height)
+    left = (width - side) // 2
+    top = (height - side) // 2
+    return img.crop((left, top, left + side, top + side))
+
+
 def _fit_avatar_image(source: Image.Image, width: int, height: int) -> Image.Image:
     """Обрезать/масштабировать в точный слот (cover): один размер, без полей.
 
@@ -284,6 +298,8 @@ def _load_avatar_asset(
             source = Image.open(resolved).convert("RGBA")
         except OSError:
             continue
+        if faction:
+            return _native_avatar_image(source)
         return _fit_avatar_image(source, width, height)
     return None
 
