@@ -24,6 +24,7 @@ FACTION_SLUGS: dict[str, tuple[str, ...]] = {
 }
 
 FACTION_AVATAR_SIZE = 250
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 _TIER_IN_NAME = re.compile(r"(\d+)$")
 
 
