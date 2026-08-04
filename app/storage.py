@@ -13,6 +13,10 @@ BASE_LOCATION_NPC_POWER = 100
 REGULAR_LOCATION_NPC_POWER = 60
 
 
+class NicknameTakenError(ValueError):
+    """Прозвище уже занято другим персонажем."""
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -765,6 +769,7 @@ class Storage:
             # Черновик регистрации: ник/пол живут в БД, а не только в MemoryStorage FSM.
             self._ensure_pending_registrations_schema(conn)
             self._ensure_bigint_telegram_ids(conn)
+            self._ensure_unique_nicknames(conn)
             conn.executemany(
                 "INSERT OR IGNORE INTO factions(name, treasury, leader_id) VALUES(?, ?, NULL)",
                 [
@@ -814,6 +819,8 @@ class Storage:
             raise ValueError("nickname is empty")
         if not gen:
             raise ValueError("gender is empty")
+        if self.is_nickname_taken(nick, exclude_telegram_id=telegram_id):
+            raise NicknameTakenError(nick)
 
         with self._connect() as schema_conn:
             self._ensure_pending_registrations_schema(schema_conn)
@@ -821,6 +828,7 @@ class Storage:
             # не должно abort'ить INSERT персонажа.
             self._ensure_characters_schema(schema_conn)
             self._ensure_bigint_telegram_ids(schema_conn)
+            self._ensure_unique_nicknames(schema_conn)
 
         with self._connect() as conn:
             # Убираем коллизии player_uid у других аккаунтов — иначе INSERT падает
@@ -871,6 +879,9 @@ class Storage:
                 except integrity_error_types():
                     if conn.backend == "postgres":
                         conn.rollback_to_savepoint("sp_create_character")
+                    # Конфликт мог быть и по нику (unique index), и по telegram_id.
+                    if self.is_nickname_taken(nick, exclude_telegram_id=telegram_id):
+                        raise NicknameTakenError(nick)
                     conn.execute(
                         """
                         UPDATE characters
@@ -892,6 +903,74 @@ class Storage:
             )
         self.save_snapshot()
         self.sync_gear_power(telegram_id)
+
+    def is_nickname_taken(self, nickname: str, exclude_telegram_id: int | None = None) -> bool:
+        normalized = (nickname or "").strip().casefold()
+        if not normalized:
+            return False
+        with self._connect() as conn:
+            if exclude_telegram_id is None:
+                row = conn.execute(
+                    "SELECT 1 AS ok FROM characters WHERE lower(nickname) = ? LIMIT 1",
+                    (normalized,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT 1 AS ok
+                    FROM characters
+                    WHERE lower(nickname) = ? AND telegram_id <> ?
+                    LIMIT 1
+                    """,
+                    (normalized, exclude_telegram_id),
+                ).fetchone()
+        return row is not None
+
+    def _ensure_unique_nicknames(self, conn: DbConnection) -> None:
+        """Чинит старые дубликаты ников и ставит уникальный индекс без учёта регистра."""
+        try:
+            conn.savepoint("sp_nick_dedupe")
+            rows = conn.execute(
+                """
+                SELECT telegram_id, nickname
+                FROM characters
+                ORDER BY telegram_id
+                """
+            ).fetchall()
+            seen: dict[str, int] = {}
+            for row in rows:
+                tid = int(row["telegram_id"])
+                nick = str(row["nickname"] or "").strip()
+                key = nick.casefold()
+                if not key:
+                    continue
+                if key not in seen:
+                    seen[key] = tid
+                    continue
+                # Дубликат: переименовываем более поздний аккаунт.
+                suffix = f"#{tid}"
+                base = nick[: max(1, 24 - len(suffix))]
+                new_nick = f"{base}{suffix}"
+                guard = 0
+                while new_nick.casefold() in seen:
+                    guard += 1
+                    new_nick = f"id{tid}"[:24] if guard > 3 else f"n{tid}_{guard}"[:24]
+                    if guard > 10:
+                        break
+                conn.execute(
+                    "UPDATE characters SET nickname = ? WHERE telegram_id = ?",
+                    (new_nick, tid),
+                )
+                seen[new_nick.casefold()] = tid
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_nickname_ci ON characters (lower(nickname))"
+            )
+            conn.release_savepoint("sp_nick_dedupe")
+        except Exception:
+            try:
+                conn.rollback_to_savepoint("sp_nick_dedupe")
+            except Exception:
+                pass
 
     def _ensure_pending_registrations_schema(self, conn: DbConnection) -> None:
         # Базовая таблица совместима со старым деплоем (только nick + created_at).

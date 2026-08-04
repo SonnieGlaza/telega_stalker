@@ -129,7 +129,7 @@ from app.export_players import (
     migrate_payload_to_storage,
 )
 from app.profile_card import build_character_card
-from app.storage import Character, Storage
+from app.storage import Character, Storage, NicknameTakenError
 from app.zone_map import build_zone_map_image
 
 logger = logging.getLogger(__name__)
@@ -296,6 +296,13 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
                     saved = db.get_character(telegram_id, refresh_energy=False)
                     if saved is None:
                         raise RuntimeError("character missing after resume create")
+                except NicknameTakenError:
+                    await state.set_state(Registration.nickname)
+                    await message.answer(
+                        f"Черновик найден, но прозвище «{nickname}» уже занято.\n"
+                        "Введи другое прозвище:"
+                    )
+                    return
                 except Exception:
                     logger.exception("Failed to resume character create for user %s", telegram_id)
                     await state.set_state(Registration.gender)
@@ -391,6 +398,7 @@ def _build_info_text(player: Character) -> str:
         "• /start — создать персонажа или войти в существующего.\n"
         "• /menu — открыть главное меню.\n"
         "• /info — открыть эту справку.\n"
+        "• Прозвища уникальны (без повторов, без учёта регистра).\n"
         "• /pay [telegram_id] [сумма] — перевод игроку (комиссия 30%).\n"
         "  ID смотри в разделе «👥 Игроки».\n"
         "• /сбор [текст] — рассылка бойцам своей группировки (только командир).\n"
@@ -777,6 +785,10 @@ async def process_nickname(message: Message, state: FSMContext) -> None:
         return
 
     db = get_storage()
+    if db.is_nickname_taken(nickname, exclude_telegram_id=message.from_user.id):
+        await message.answer("Это прозвище уже занято. Выбери другое.")
+        return
+
     try:
         db.save_pending_registration(message.from_user.id, nickname, step="gender")
     except Exception:
@@ -836,11 +848,26 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
 
     await state.update_data(nickname=nickname, gender=gender)
 
+    if db.is_nickname_taken(nickname, exclude_telegram_id=callback.from_user.id):
+        await state.set_state(Registration.nickname)
+        await callback.message.answer(
+            "Это прозвище уже занято. Введи другое прозвище:"
+        )
+        await safe_callback_answer(callback, "Прозвище занято", show_alert=True)
+        return
+
     existing = db.get_character(callback.from_user.id, refresh_energy=False)
     if existing is not None:
         await state.clear()
         try:
             db.create_character(callback.from_user.id, nickname=nickname, gender=gender)
+        except NicknameTakenError:
+            await state.set_state(Registration.nickname)
+            await callback.message.answer(
+                "Это прозвище уже занято. Введи другое прозвище:"
+            )
+            await safe_callback_answer(callback, "Прозвище занято", show_alert=True)
+            return
         except Exception:
             logger.exception("Failed to update existing character gender for %s", callback.from_user.id)
         db.clear_pending_registration(callback.from_user.id)
@@ -862,6 +889,13 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
         saved = db.get_character(callback.from_user.id, refresh_energy=False)
         if saved is None:
             raise RuntimeError("character row missing after create_character")
+    except NicknameTakenError:
+        await state.set_state(Registration.nickname)
+        await callback.message.answer(
+            "Это прозвище уже занято. Введи другое прозвище:"
+        )
+        await safe_callback_answer(callback, "Прозвище занято", show_alert=True)
+        return
     except Exception as exc:
         logger.exception("Failed to create character for user %s", callback.from_user.id)
         await state.set_state(Registration.gender)
