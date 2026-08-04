@@ -233,10 +233,10 @@ def _avatar_candidates(tier: int, faction: str | None = None) -> tuple[Path, ...
 
 
 def _fit_avatar_image(source: Image.Image, width: int, height: int) -> Image.Image:
-    """Обрезать/масштабировать в точный слот (cover): один размер, без полей по бокам.
+    """Обрезать/масштабировать в точный слот (cover): один размер, без полей.
 
-    Картинка заполняет width×height целиком; лишнее срезается со всех сторон
-    по центру. Позиция на карточке профиля не меняется.
+    Горизонтально — по центру, вертикально — прижато к низу (ноги у края),
+    как было до center-crop.
     """
     img = source.convert("RGBA")
     if img.width <= 0 or img.height <= 0:
@@ -248,7 +248,7 @@ def _fit_avatar_image(source: Image.Image, width: int, height: int) -> Image.Ima
     resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
     left = max(0, (new_w - width) // 2)
-    top = max(0, (new_h - height) // 2)
+    top = max(0, new_h - height)
     right = left + width
     bottom = top + height
     cropped = resized.crop((left, top, right, bottom))

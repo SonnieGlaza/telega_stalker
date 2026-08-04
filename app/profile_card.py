@@ -237,6 +237,8 @@ STALKER_QUOTES: tuple[str, ...] = (
 
 MAX_QUOTE_LINES = 3
 QUOTE_Y_OFFSET = 30
+# Смещение аватарки вниз внутри левой панели (0 = прижать к низу зоны).
+AVATAR_BOTTOM_PADDING = 8
 # Ориентир по длине, чтобы фраза уверенно влезала в 3 строки карточки.
 MAX_QUOTE_CHAR_HINT = 130
 
@@ -541,7 +543,8 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
         avatar = avatar.resize((resized_w, resized_h), Image.Resampling.LANCZOS)
 
     avatar_x = panel_left + (available_w - avatar.width) // 2
-    avatar_y = avatar_top + max(0, (available_h - avatar.height) // 2)
+    avatar_y = panel_bottom - avatar.height - AVATAR_BOTTOM_PADDING
+    avatar_y = max(avatar_top, avatar_y)
 
     if avatar_y > info_box_bottom:
         _draw_stalker_quote(
