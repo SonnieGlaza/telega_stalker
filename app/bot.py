@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+from pathlib import Path
 from typing import Any
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -105,6 +108,12 @@ from app.keyboards import (
     market_lots_keyboard,
     market_create_select_keyboard,
     war_sections_keyboard,
+)
+from app.export_players import (
+    build_players_export_files,
+    load_current_payload,
+    load_legacy_payload,
+    migrate_payload_to_storage,
 )
 from app.profile_card import build_character_card
 from app.storage import Character, Storage
@@ -496,6 +505,82 @@ async def cmd_set_leader(message: Message) -> None:
         )
         return
     await message.answer(f"Лидер группировки {faction_name} назначен: {leader_id}.")
+
+
+@router.message(Command("export_players"))
+async def cmd_export_players(message: Message) -> None:
+    sender_id = message.from_user.id
+    if not is_admin_user(sender_id):
+        await message.answer("Команда доступна только администратору.")
+        return
+
+    source = "unknown"
+    try:
+        payload, source = load_legacy_payload()
+    except FileNotFoundError:
+        payload, source = load_current_payload(get_storage())
+
+    files, count = build_players_export_files(
+        payload.get("characters") or [],
+        payload.get("player_stats") or [],
+        Path("/tmp/stalker_export"),
+    )
+    await message.answer(f"Выгрузка игроков: {count}\nИсточник: {source}")
+    for key in ("txt", "csv", "json"):
+        path = files[key]
+        data = path.read_bytes()
+        await message.answer_document(
+            BufferedInputFile(data, filename=path.name),
+            caption=f"{path.name} ({len(data)} bytes)",
+        )
+
+
+@router.message(Command("migrate_db"))
+async def cmd_migrate_db(message: Message) -> None:
+    sender_id = message.from_user.id
+    if not is_admin_user(sender_id):
+        await message.answer("Команда доступна только администратору.")
+        return
+
+    settings_url = (os.getenv("DATABASE_URL") or "").strip()
+    if not settings_url:
+        await message.answer("DATABASE_URL не задан в окружении Railway.")
+        return
+
+    try:
+        payload, source = load_legacy_payload()
+    except FileNotFoundError as exc:
+        await message.answer(str(exc))
+        return
+
+    from app.db import normalize_database_url
+
+    database_url = normalize_database_url(settings_url)
+    export_dir = Path("/tmp/stalker_export")
+    files, count = build_players_export_files(
+        payload.get("characters") or [],
+        payload.get("player_stats") or [],
+        export_dir,
+    )
+    full_dump = export_dir / "full_source_dump.json"
+    full_dump.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    target = Storage(
+        db_path=database_url,
+        snapshot_path=str(export_dir / "migration.backup.json"),
+        database_url=database_url,
+    )
+    target.init_db()
+    pg_count = migrate_payload_to_storage(target, payload)
+
+    await message.answer(
+        f"Миграция завершена.\nИсточник: {source}\n"
+        f"Игроков в выгрузке: {count}\nИгроков в Postgres: {pg_count}"
+    )
+    await message.answer_document(
+        BufferedInputFile(files["txt"].read_bytes(), filename="old_players.txt"),
+        caption="Список старых игроков",
+    )
 
 
 @router.message(Registration.nickname)
