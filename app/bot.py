@@ -14,7 +14,15 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    LabeledPrice,
+    Message,
+    PreCheckoutQuery,
+    ReplyKeyboardMarkup,
+)
 
 from app.config import load_settings
 from app.game_logic import (
@@ -1115,7 +1123,12 @@ def action_result_text(telegram_id: int, text: str) -> str:
     return append_survival_craving_notice(get_storage(), telegram_id, (text or "").strip())
 
 
-async def send_profile_snapshot(message: Message, player: Character) -> None:
+async def send_profile_snapshot(
+    message: Message,
+    player: Character,
+    *,
+    reply_markup: ReplyKeyboardMarkup | InlineKeyboardMarkup | None = None,
+) -> None:
     storage = get_storage()
     rank = character_rank_title(storage, player)
     rank_line = f"\nЗвание: {rank}" if rank else ""
@@ -1128,7 +1141,7 @@ async def send_profile_snapshot(message: Message, player: Character) -> None:
     rating = int(stats.get("rating_points", 0))
     image_bytes = build_character_card(player, rating_points=rating, storage=storage)
     image = BufferedInputFile(image_bytes, filename=f"{player.player_uid}.png")
-    await message.answer_photo(photo=image, caption=caption)
+    await message.answer_photo(photo=image, caption=caption, reply_markup=reply_markup)
 
 
 @router.message(F.text == "🎒 Инвентарь")
@@ -1226,7 +1239,7 @@ async def show_profile(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
-    await send_profile_snapshot(message, player)
+    await send_profile_snapshot(message, player, reply_markup=pda_keyboard())
 
 
 @router.message(F.text == "🛒 Торговец")
@@ -1712,6 +1725,7 @@ async def show_pda(message: Message) -> None:
         return
     await message.answer(
         "📟 КПК сталкера\n\n"
+        "• 🧾 Профиль — карточка персонажа\n"
         "• 💬 Чаты — общий и чат твоей группировки\n"
         "• 🏆 Рейтинг — топ сталкеров\n"
         "• 🗺 Карта — точки Зоны и контроль\n"
