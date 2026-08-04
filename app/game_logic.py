@@ -240,6 +240,7 @@ EQUIP_SLOT_LABELS = {
 }
 
 WAREHOUSE_ITEM_KEYS = ("ammo_pack", "medkit", "energy_drink", "artifact")
+TREASURY_WITHDRAW_MIN_RANK = 5
 
 # Дроп контрабанды (независимые роллы при успехе).
 SMUGGLING_CONSUMABLE_CHANCE = 20  # аптечка / еда / вода — каждый тип отдельно
@@ -2681,6 +2682,22 @@ def _normalize_item_key(item_key: str) -> str:
     return item_key if item_key in WAREHOUSE_ITEM_KEYS else "ammo_pack"
 
 
+def character_rank_level(character: Character) -> int:
+    rank = rank_by_key(character.faction, character.faction_rank)
+    if rank is None:
+        return 0
+    return rank.level
+
+
+def can_withdraw_faction_treasury(storage: Storage, character: Character) -> bool:
+    """Вывод из казны: лидер или звание от 5 уровня (по назначению лидера)."""
+    if character.faction is None:
+        return False
+    if storage.get_faction_leader_id(character.faction) == character.telegram_id:
+        return True
+    return character_rank_level(character) >= TREASURY_WITHDRAW_MIN_RANK
+
+
 def deposit_to_faction_warehouse(
     storage: Storage,
     telegram_id: int,
@@ -2745,9 +2762,11 @@ def withdraw_from_faction_treasury(storage: Storage, telegram_id: int, amount: i
         return ActionResult(False, "Казна доступна только бойцам группировки.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
-    leader_id = storage.get_faction_leader_id(player.faction)
-    if leader_id != telegram_id:
-        return ActionResult(False, "Снимать деньги из казны может только лидер группировки.")
+    if not can_withdraw_faction_treasury(storage, player):
+        return ActionResult(
+            False,
+            "Снимать деньги из казны можно с 5 ранга (или лидеру группировки).",
+        )
     if not storage.withdraw_faction_treasury(player.faction, amount):
         return ActionResult(False, "В казне недостаточно денег для вывода.")
     storage.change_money(telegram_id, amount)
@@ -3380,9 +3399,9 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
 
     leader_hint = ""
     if storage.get_faction_leader_id(player.faction) == telegram_id:
-        leader_hint = (
-            "\nТебе доступны вывод из казны и назначение званий."
-        )
+        leader_hint = "\nТебе доступно назначение званий."
+    elif can_withdraw_faction_treasury(storage, player):
+        leader_hint = "\nТебе доступен вывод из казны (ранг 5+)."
 
     return (
         f"Группировка «{player.faction}»\n"
@@ -3392,7 +3411,8 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
         f"Пассивный доход с точек:\n"
         f"• точка ресурсов: {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч\n"
         f"• база: {BASE_POINT_INCOME_PER_HOUR} RU/ч\n\n"
-        f"Любой боец может пополнить казну."
+        f"Любой боец может сдать патроны/аптечки на склад и пополнить казну.\n"
+        f"Вывод из казны — с 5 ранга (или лидер)."
         f"{leader_hint}"
     )
 

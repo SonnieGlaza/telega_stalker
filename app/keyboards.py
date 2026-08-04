@@ -572,7 +572,11 @@ def war_sections_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def faction_group_keyboard(*, is_leader: bool = False) -> InlineKeyboardMarkup:
+def faction_group_keyboard(
+    *,
+    is_leader: bool = False,
+    can_withdraw_treasury: bool = False,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="📦 Склад группировки", callback_data="faction:warehouse:view")],
         [InlineKeyboardButton(text="📥 Сдать 1 патроны на склад", callback_data="eco:warehouse:deposit:ammo_pack")],
@@ -583,15 +587,16 @@ def faction_group_keyboard(*, is_leader: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="💰 Внести 1000 RU в казну", callback_data="eco:treasury:deposit:1000")],
         [InlineKeyboardButton(text="💰 Внести своё количество", callback_data="eco:treasury:deposit:custom")],
     ]
-    if is_leader:
+    if can_withdraw_treasury:
         rows.extend(
             [
                 [InlineKeyboardButton(text="🏦 Вывести 500 RU из казны", callback_data="eco:treasury:withdraw:500")],
                 [InlineKeyboardButton(text="🏦 Вывести 1000 RU из казны", callback_data="eco:treasury:withdraw:1000")],
                 [InlineKeyboardButton(text="🏦 Снять своё количество", callback_data="eco:treasury:withdraw:custom")],
-                [InlineKeyboardButton(text="🎖 Назначить звание", callback_data="rank:menu")],
             ]
         )
+    if is_leader:
+        rows.append([InlineKeyboardButton(text="🎖 Назначить звание", callback_data="rank:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
