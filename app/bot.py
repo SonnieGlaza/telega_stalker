@@ -240,6 +240,8 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
                 try:
                     db.create_character(telegram_id, nickname=nickname, gender=gender)
                     saved = db.get_character(telegram_id, refresh_energy=False)
+                    if saved is None:
+                        raise RuntimeError("character missing after resume create")
                 except Exception:
                     logger.exception("Failed to resume character create for user %s", telegram_id)
                     await state.set_state(Registration.gender)
@@ -250,7 +252,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
                     )
                     return
                 await state.clear()
-                uid_line = f"\nТвой ID в Зоне: {saved.player_uid}" if saved else ""
+                uid_line = f"\nТвой ID в Зоне: {saved.player_uid}"
                 await message.answer(
                     f"Персонаж восстановлен: {nickname} ({gender}).{uid_line}\nВыбери сторону:",
                     reply_markup=faction_keyboard(),

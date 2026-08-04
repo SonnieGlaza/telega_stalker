@@ -84,33 +84,29 @@ def _resolve_default_db_path() -> str:
 
 
 def _resolve_default_snapshot_path(db_path: str) -> str:
-    if db_path.startswith("postgresql"):
-        primary = Path("/data/stalker_game.backup.json")
+    if db_path.startswith("postgresql") or db_path.startswith("postgres://"):
+        candidates = (
+            Path("/data/stalker_game.backup.json"),
+            Path("/tmp/stalker_game.backup.json"),
+            Path("stalker_game.backup.json"),
+        )
     else:
-        primary = Path(db_path).with_suffix(".backup.json")
-    if primary.exists():
-        return str(primary)
+        candidates = (
+            Path(db_path).with_suffix(".backup.json"),
+            Path("/data/stalker_game.backup.json"),
+            Path("/tmp/stalker_game.backup.json"),
+            Path("stalker_game.backup.json"),
+        )
 
-    legacy_candidates = (
-        Path("stalker_game.backup.json"),
-        Path("/workspace/stalker_game.backup.json"),
-        Path("/app/stalker_game.backup.json"),
-        Path("/data/stalker_game.backup.json"),
-    )
-    seen: set[Path] = set()
-    for legacy in legacy_candidates:
-        if legacy in seen:
-            continue
-        seen.add(legacy)
-        if not legacy.exists() or primary == legacy:
-            continue
-        try:
-            primary.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(legacy, primary)
-            return str(primary)
-        except OSError:
-            return str(legacy)
-    return str(primary)
+    # Prefer existing snapshot with data.
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file() and candidate.stat().st_size > 0:
+            return str(candidate)
+
+    for candidate in candidates:
+        if _is_writable_dir(candidate.parent):
+            return str(candidate)
+    return str(candidates[-1])
 
 
 def _parse_admin_ids(raw_value: str) -> tuple[int, ...]:

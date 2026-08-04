@@ -70,13 +70,35 @@ class Storage:
             self.backend = "sqlite"
             default_snapshot = Path(db_path).with_suffix(".backup.json")
             db_parent = Path(db_path).parent
-            db_parent.mkdir(parents=True, exist_ok=True)
+            try:
+                db_parent.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
 
-        if snapshot_path:
-            self.snapshot_path = Path(snapshot_path)
-        else:
-            self.snapshot_path = default_snapshot
-        self.snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        requested = Path(snapshot_path) if snapshot_path else default_snapshot
+        self.snapshot_path = self._resolve_writable_snapshot_path(requested)
+
+    @staticmethod
+    def _resolve_writable_snapshot_path(preferred: Path) -> Path:
+        fallbacks = [
+            preferred,
+            Path("/tmp/stalker_game.backup.json"),
+            Path("stalker_game.backup.json"),
+        ]
+        seen: set[Path] = set()
+        for candidate in fallbacks:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            try:
+                candidate.parent.mkdir(parents=True, exist_ok=True)
+                probe = candidate.parent / ".stalker_write_probe"
+                probe.write_text("ok", encoding="utf-8")
+                probe.unlink(missing_ok=True)
+                return candidate
+            except OSError:
+                continue
+        return preferred
 
     def _db_config(self) -> DbConfig:
         if self.backend == "postgres":
@@ -85,6 +107,20 @@ class Storage:
 
     def _connect(self) -> DbConnection:
         return db_connect(self._db_config())
+
+    def _sync_serial_sequences(self, conn: DbConnection) -> None:
+        if conn.backend != "postgres":
+            return
+        for table in ("auctions", "raids", "war_lobbies"):
+            conn.execute(
+                f"""
+                SELECT setval(
+                    pg_get_serial_sequence('{table}', 'id'),
+                    COALESCE((SELECT MAX(id) FROM {table}), 1),
+                    true
+                )
+                """  # noqa: S608
+            )
 
     def _table_columns(self, conn: DbConnection, table_name: str) -> set[str]:
         if conn.backend == "postgres":
@@ -132,11 +168,16 @@ class Storage:
                 player_achievements = [
                     dict(row) for row in conn.execute("SELECT * FROM player_achievements").fetchall()
                 ]
+                pending_registrations: list[dict[str, Any]] = []
+                conn.savepoint("sp_pending_snap")
                 try:
+                    self._ensure_pending_registrations_schema(conn)
                     pending_registrations = [
                         dict(row) for row in conn.execute("SELECT * FROM pending_registrations").fetchall()
                     ]
+                    conn.release_savepoint("sp_pending_snap")
                 except Exception:
+                    conn.rollback_to_savepoint("sp_pending_snap")
                     pending_registrations = []
             payload = {
                 "version": 2,
@@ -243,13 +284,15 @@ class Storage:
                 ),
             )
         for row in characters:
+            now_iso = utc_now().isoformat()
             conn.execute(
                 """
                 INSERT OR REPLACE INTO characters(
                     telegram_id, player_uid, avatar_style, nickname, gender, faction, money,
                     energy, max_energy, energy_updated_at, health, gear_power, location,
-                    inventory_json, equipment_json, truck_owned, fuel
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    inventory_json, equipment_json, truck_owned, sleeping_bag_owned, fuel,
+                    radiation, hunger, thirst, needs_updated_at, survival_damage_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(row.get("telegram_id")),
@@ -261,14 +304,21 @@ class Storage:
                     int(row.get("money", 1000)),
                     int(row.get("energy", 100)),
                     int(row.get("max_energy", 100)),
-                    row.get("energy_updated_at") or utc_now().isoformat(),
+                    row.get("energy_updated_at") or now_iso,
                     int(row.get("health", 100)),
                     int(row.get("gear_power", 2)),
                     row.get("location") or "База новичков",
                     row.get("inventory_json") or "{}",
-                    row.get("equipment_json") or '{"weapon":"Нож","armor":"Куртка новичка"}',
+                    row.get("equipment_json")
+                    or '{"weapon":"Нож","armor":"Куртка новичка","weapon_durability":100,"armor_durability":100}',
                     int(row.get("truck_owned", 0)),
+                    int(row.get("sleeping_bag_owned", 0)),
                     int(row.get("fuel", 0)),
+                    int(row.get("radiation", 0)),
+                    int(row.get("hunger", 0)),
+                    int(row.get("thirst", 0)),
+                    row.get("needs_updated_at") or now_iso,
+                    row.get("survival_damage_at") or now_iso,
                 ),
             )
         for row in topup_payments:
@@ -455,6 +505,9 @@ class Storage:
                     row.get("updated_at") or now_iso,
                 ),
             )
+        # Backfill survival columns / UIDs after restore, then fix SERIAL counters.
+        self._ensure_characters_schema(conn)
+        self._sync_serial_sequences(conn)
 
     def save_snapshot(self) -> None:
         self._write_snapshot()
@@ -702,6 +755,8 @@ class Storage:
                 "UPDATE locations SET point_type = 'база', controlled_by = 'Бандиты' WHERE name = 'Свалка'"
             )
             self._restore_from_snapshot_if_needed(conn)
+            self._ensure_characters_schema(conn)
+            self._sync_serial_sequences(conn)
             self._enforce_location_power_baseline(conn)
             self._ensure_player_stats_rows(conn)
 
@@ -750,7 +805,7 @@ class Storage:
                 )
             else:
                 if conn.backend == "postgres":
-                    conn.execute("SAVEPOINT sp_create_character")
+                    conn.savepoint("sp_create_character")
                 try:
                     conn.execute(
                         """
@@ -769,10 +824,10 @@ class Storage:
                         (telegram_id, player_uid, nick, gen, now_iso, default_equipment, now_iso, now_iso),
                     )
                     if conn.backend == "postgres":
-                        conn.execute("RELEASE SAVEPOINT sp_create_character")
+                        conn.release_savepoint("sp_create_character")
                 except integrity_error_types():
                     if conn.backend == "postgres":
-                        conn.execute("ROLLBACK TO SAVEPOINT sp_create_character")
+                        conn.rollback_to_savepoint("sp_create_character")
                     conn.execute(
                         """
                         UPDATE characters
@@ -782,6 +837,12 @@ class Storage:
                         (nick, gen, player_uid, telegram_id),
                     )
             self._ensure_player_stats_row(conn, telegram_id)
+            saved = conn.execute(
+                "SELECT 1 AS ok FROM characters WHERE telegram_id = ?",
+                (telegram_id,),
+            ).fetchone()
+            if saved is None:
+                raise RuntimeError(f"create_character failed for telegram_id={telegram_id}")
             conn.execute(
                 "DELETE FROM pending_registrations WHERE telegram_id = ?",
                 (telegram_id,),
@@ -834,11 +895,17 @@ class Storage:
         now_iso = utc_now().isoformat()
         with self._connect() as conn:
             self._ensure_pending_registrations_schema(conn)
+            # Сохраняем created_at при повторном сохранении черновика.
             conn.execute(
                 """
-                INSERT OR REPLACE INTO pending_registrations(
+                INSERT INTO pending_registrations(
                     telegram_id, nickname, gender, step, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(telegram_id) DO UPDATE SET
+                    nickname = EXCLUDED.nickname,
+                    gender = EXCLUDED.gender,
+                    step = EXCLUDED.step,
+                    updated_at = EXCLUDED.updated_at
                 """,
                 (telegram_id, nick, gen, step_value, now_iso, now_iso),
             )
@@ -955,12 +1022,32 @@ class Storage:
             if row is None:
                 return
             now = utc_now()
-            needs_updated_at = datetime.fromisoformat(row["needs_updated_at"])
-            survival_damage_at = datetime.fromisoformat(row["survival_damage_at"])
-            radiation = int(row["radiation"])
-            hunger = int(row["hunger"])
-            thirst = int(row["thirst"])
-            health = int(row["health"])
+
+            def _as_dt(value: Any) -> datetime:
+                if isinstance(value, datetime):
+                    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+                if value is None or str(value).strip() == "":
+                    return now
+                try:
+                    parsed = datetime.fromisoformat(str(value))
+                except ValueError:
+                    return now
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+            def _as_int(value: Any, default: int = 0) -> int:
+                try:
+                    if value is None:
+                        return default
+                    return int(value)
+                except (TypeError, ValueError):
+                    return default
+
+            needs_updated_at = _as_dt(row["needs_updated_at"])
+            survival_damage_at = _as_dt(row["survival_damage_at"])
+            radiation = _as_int(row["radiation"], 0)
+            hunger = _as_int(row["hunger"], 0)
+            thirst = _as_int(row["thirst"], 0)
+            health = _as_int(row["health"], 100)
 
             hours_passed = int((now - needs_updated_at).total_seconds() // 3600)
             if hours_passed > 0:
@@ -1042,21 +1129,42 @@ class Storage:
             if row is None:
                 return
 
-            energy = int(row["energy"])
-            max_energy = int(row["max_energy"])
-            last_update = datetime.fromisoformat(row["energy_updated_at"])
-            minutes_passed = int((utc_now() - last_update).total_seconds() // 60)
+            now = utc_now()
+
+            def _as_int(value: Any, default: int = 0) -> int:
+                try:
+                    if value is None:
+                        return default
+                    return int(value)
+                except (TypeError, ValueError):
+                    return default
+
+            def _as_dt(value: Any) -> datetime:
+                if isinstance(value, datetime):
+                    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+                if value is None or str(value).strip() == "":
+                    return now
+                try:
+                    parsed = datetime.fromisoformat(str(value))
+                except ValueError:
+                    return now
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+            energy = _as_int(row["energy"], 0)
+            max_energy = _as_int(row["max_energy"], 100)
+            last_update = _as_dt(row["energy_updated_at"])
+            minutes_passed = int((now - last_update).total_seconds() // 60)
             if minutes_passed <= 0:
                 return
 
-            regen_multiplier = 2.0 if int(row["sleeping_bag_owned"]) == 1 else 1.0
+            regen_multiplier = 2.0 if _as_int(self._row_get(row, "sleeping_bag_owned", 0), 0) == 1 else 1.0
             has_artifact_equipped = False
             try:
-                equipment = json.loads(row["equipment_json"] or "{}")
+                equipment = json.loads(self._row_get(row, "equipment_json", "{}") or "{}")
                 if isinstance(equipment, dict):
                     artifact_value = equipment.get("artifact")
                     has_artifact_equipped = bool(str(artifact_value or "").strip())
-            except json.JSONDecodeError:
+            except (TypeError, json.JSONDecodeError):
                 has_artifact_equipped = False
             if has_artifact_equipped:
                 regen_multiplier *= 1.05
@@ -1068,7 +1176,7 @@ class Storage:
                 SET energy = ?, energy_updated_at = ?
                 WHERE telegram_id = ?
                 """,
-                (new_energy, utc_now().isoformat(), telegram_id),
+                (new_energy, now.isoformat(), telegram_id),
             )
 
     def change_money(self, telegram_id: int, delta: int) -> bool:
@@ -1476,14 +1584,14 @@ class Storage:
             ).fetchall()
             if len(rows) < 2:
                 return False
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO alliance_requests(requester_faction, target_faction, proposed_by, created_at)
                 VALUES(?, ?, ?, ?)
                 """,
                 (requester_faction, target_faction, proposed_by, utc_now().isoformat()),
             )
-            created = conn.total_changes > 0
+            created = int(cursor.rowcount or 0) > 0
         if created:
             self.save_snapshot()
         return created
@@ -1953,6 +2061,7 @@ class Storage:
             if row is None:
                 return False, False
             new_money = int(row["money"]) + ru_amount
+            conn.savepoint("sp_topup")
             try:
                 conn.execute(
                     """
@@ -1968,7 +2077,9 @@ class Storage:
                         utc_now().isoformat(),
                     ),
                 )
+                conn.release_savepoint("sp_topup")
             except integrity_error_types():
+                conn.rollback_to_savepoint("sp_topup")
                 return False, True
 
             conn.execute(
@@ -2081,19 +2192,16 @@ class Storage:
                     (build_player_uid(tid), tid),
                 )
         try:
-            if conn.backend == "postgres":
-                conn.execute("SAVEPOINT sp_uid_index")
+            conn.savepoint("sp_uid_index")
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_player_uid ON characters(player_uid)"
             )
-            if conn.backend == "postgres":
-                conn.execute("RELEASE SAVEPOINT sp_uid_index")
+            conn.release_savepoint("sp_uid_index")
         except Exception:
-            if conn.backend == "postgres":
-                try:
-                    conn.execute("ROLLBACK TO SAVEPOINT sp_uid_index")
-                except Exception:
-                    pass
+            try:
+                conn.rollback_to_savepoint("sp_uid_index")
+            except Exception:
+                pass
             # Не блокируем создание персонажа из-за индекса.
         conn.execute(
             """

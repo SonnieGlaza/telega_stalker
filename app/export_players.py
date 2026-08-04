@@ -24,6 +24,7 @@ TABLES = (
     "map_events",
     "player_stats",
     "player_achievements",
+    "pending_registrations",
 )
 
 SQLITE_CANDIDATES = (
@@ -161,10 +162,17 @@ def build_players_export_files(
 
 def clear_postgres_tables(storage: Storage) -> None:
     with storage._connect() as conn:
-        for table in reversed(TABLES):
+        for idx, table in enumerate(reversed(TABLES)):
+            sp = f"sp_clear_{idx}"
             try:
+                conn.savepoint(sp)
                 conn.execute(f"DELETE FROM {table}")  # noqa: S608
+                conn.release_savepoint(sp)
             except Exception:
+                try:
+                    conn.rollback_to_savepoint(sp)
+                except Exception:
+                    pass
                 continue
 
 
@@ -179,20 +187,12 @@ def migrate_payload_to_storage(storage: Storage, payload: dict[str, list[dict[st
     clear_postgres_tables(storage)
     with storage._connect() as conn:
         storage._restore_from_snapshot_if_needed(conn)
+        storage._ensure_characters_schema(conn)
+        storage._ensure_pending_registrations_schema(conn)
         storage._ensure_player_stats_rows(conn)
         storage._enforce_location_power_baseline(conn)
+        storage._sync_serial_sequences(conn)
 
     with storage._connect() as conn:
-        if conn.backend == "postgres":
-            for table in ("auctions", "raids", "war_lobbies"):
-                conn.execute(
-                    f"""
-                    SELECT setval(
-                        pg_get_serial_sequence('{table}', 'id'),
-                        COALESCE((SELECT MAX(id) FROM {table}), 1),
-                        true
-                    )
-                    """  # noqa: S608
-                )
         row = conn.execute("SELECT COUNT(*) AS cnt FROM characters").fetchone()
         return int(row["cnt"] if isinstance(row, dict) else row[0])

@@ -12,6 +12,11 @@ INSERT_OR_REPLACE_RE = re.compile(
     r"^\s*INSERT\s+OR\s+REPLACE\s+INTO\s+([a-zA-Z_][\w]*)\s*\(([^)]+)\)\s*VALUES\s*\((.+)\)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
+AUTOINCREMENT_RE = re.compile(
+    r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT",
+    re.IGNORECASE,
+)
+DML_HEAD_RE = re.compile(r"^\s*(INSERT|UPDATE|DELETE|REPLACE)\b", re.IGNORECASE)
 
 # Primary keys for INSERT OR REPLACE → ON CONFLICT DO UPDATE translation.
 TABLE_PRIMARY_KEYS: dict[str, tuple[str, ...]] = {
@@ -49,10 +54,14 @@ def normalize_database_url(raw: str) -> str:
     return url
 
 
+def is_dml(sql: str) -> bool:
+    return bool(DML_HEAD_RE.match(sql or ""))
+
+
 def rewrite_sql_for_postgres(sql: str) -> str:
     text = sql.strip()
     text = text.replace("MAX(0,", "GREATEST(0,")
-    text = text.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    text = AUTOINCREMENT_RE.sub("SERIAL PRIMARY KEY", text)
 
     if INSERT_OR_IGNORE_RE.match(text):
         text = INSERT_OR_IGNORE_RE.sub("INSERT INTO ", text, count=1)
@@ -65,19 +74,22 @@ def rewrite_sql_for_postgres(sql: str) -> str:
         columns = [c.strip() for c in match.group(2).split(",")]
         values = match.group(3)
         pk = TABLE_PRIMARY_KEYS.get(table.lower())
-        if pk:
-            updates = [f"{col} = EXCLUDED.{col}" for col in columns if col not in pk]
-            conflict = ", ".join(pk)
-            if updates:
-                text = (
-                    f"INSERT INTO {table}({', '.join(columns)}) VALUES ({values}) "
-                    f"ON CONFLICT ({conflict}) DO UPDATE SET {', '.join(updates)}"
-                )
-            else:
-                text = (
-                    f"INSERT INTO {table}({', '.join(columns)}) VALUES ({values}) "
-                    f"ON CONFLICT ({conflict}) DO NOTHING"
-                )
+        if not pk:
+            raise ValueError(
+                f"INSERT OR REPLACE into '{table}' has no TABLE_PRIMARY_KEYS mapping for Postgres"
+            )
+        updates = [f"{col} = EXCLUDED.{col}" for col in columns if col not in pk]
+        conflict = ", ".join(pk)
+        if updates:
+            text = (
+                f"INSERT INTO {table}({', '.join(columns)}) VALUES ({values}) "
+                f"ON CONFLICT ({conflict}) DO UPDATE SET {', '.join(updates)}"
+            )
+        else:
+            text = (
+                f"INSERT INTO {table}({', '.join(columns)}) VALUES ({values}) "
+                f"ON CONFLICT ({conflict}) DO NOTHING"
+            )
 
     # Convert qmark placeholders to pyformat used by psycopg.
     text = PLACEHOLDER_RE.sub("%s", text)
@@ -128,8 +140,8 @@ class DbConnection:
             cursor = self._conn.cursor()
             wrapped = DbCursor(cursor, self.backend)
             wrapped.execute(sql, params)
-            # Approximate sqlite total_changes for "was anything written?" checks.
-            if wrapped.rowcount and wrapped.rowcount > 0:
+            # Match SQLite total_changes: only count DML, never SELECT.
+            if is_dml(sql) and wrapped.rowcount and wrapped.rowcount > 0:
                 self.total_changes += int(wrapped.rowcount)
             return wrapped
 
@@ -145,12 +157,24 @@ class DbConnection:
             cursor = self._conn.cursor()
             wrapped = DbCursor(cursor, self.backend)
             wrapped.executemany(sql, seq_of_params)
-            if wrapped.rowcount and wrapped.rowcount > 0:
+            if is_dml(sql) and wrapped.rowcount and wrapped.rowcount > 0:
                 self.total_changes += int(wrapped.rowcount)
             return wrapped
         cursor = self._conn.executemany(sql, list(seq_of_params))
         self.total_changes = int(getattr(self._conn, "total_changes", 0))
         return DbCursor(cursor, self.backend)
+
+    def savepoint(self, name: str) -> None:
+        if self.backend == "postgres":
+            self._conn.execute(f"SAVEPOINT {name}")
+
+    def release_savepoint(self, name: str) -> None:
+        if self.backend == "postgres":
+            self._conn.execute(f"RELEASE SAVEPOINT {name}")
+
+    def rollback_to_savepoint(self, name: str) -> None:
+        if self.backend == "postgres":
+            self._conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
 
     def commit(self) -> None:
         self._conn.commit()
