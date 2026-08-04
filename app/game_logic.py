@@ -30,8 +30,8 @@ class QuestType:
 
 QUESTS: dict[str, QuestType] = {
     "easy": QuestType("easy", "Легко", 80, 10, 270, 410, 0, 0),
-    "hard": QuestType("hard", "Средне", 70, 16, 350, 1200, 0, 0),
-    "heavy": QuestType("heavy", "Опасно", 60, 22, 500, 750, 2, 1),
+    "hard": QuestType("hard", "Средне", 70, 16, 400, 650, 0, 0),
+    "heavy": QuestType("heavy", "Опасно", 60, 22, 550, 1000, 2, 1),
     "impossible": QuestType("impossible", "Невозможно", 50, 28, 700, 1500, 3, 1),
 }
 
@@ -1107,7 +1107,7 @@ def calculate_quest_success(
     ammo_required: int,
     medkit_required: int,
 ) -> QuestChanceBreakdown:
-    # Шанс складывается из силы и качества снаряги + запасов амуниции/аптечек.
+    """Шанс = база от снаряги/пушек + бонусы запасов, потолок по сложности."""
     base_chance = 18 + gear_power * 4 + gear_bonus
     extra_ammo = max(0, ammo_stock - ammo_required)
     extra_medkits = max(0, medkit_stock - medkit_required)
@@ -1127,14 +1127,17 @@ def calculate_quest_success_for_quest(
     character: Character,
     quest: QuestType,
 ) -> QuestChanceBreakdown:
-    """Шанс успеха по заданию — фиксированный для каждой сложности."""
-    del character  # снаряга больше не влияет на шанс квеста
-    return QuestChanceBreakdown(
-        chance=quest.max_success,
-        base_chance=quest.max_success,
-        gear_bonus=0,
-        ammo_bonus=0,
-        medkit_bonus=0,
+    """Шанс успеха по заданию: снаряга и оружие влияют, потолок — max_success сложности."""
+    ammo_stock = int(character.inventory.get("ammo_pack", 0))
+    medkit_stock = int(character.inventory.get("medkit", 0))
+    return calculate_quest_success(
+        gear_power=compute_total_gear_power(character),
+        gear_bonus=calculate_equipment_bonus(character),
+        max_success=quest.max_success,
+        ammo_stock=ammo_stock,
+        medkit_stock=medkit_stock,
+        ammo_required=quest.ammo_required,
+        medkit_required=quest.medkit_required,
     )
 
 
@@ -1147,17 +1150,17 @@ def build_quest_overview(character: Character) -> str:
         f"• Аптечки: {medkit_stock}",
         f"• Энергия: {character.energy}/{character.max_energy}",
         "",
-        "Сложности заданий:",
+        "Сложности заданий (шанс растёт со снарягой, потолок по сложности):",
     ]
     for quest in QUESTS.values():
         chance = calculate_quest_success_for_quest(character, quest).chance
-        if quest.key == "easy":
+        if quest.ammo_required <= 0 and quest.medkit_required <= 0:
             lines.append(
-                f"• {quest.title}: шанс {chance}%, энергия {quest.energy_cost}, без обязательного расхода"
+                f"• {quest.title}: шанс ~{chance}%, энергия {quest.energy_cost}, без обязательного расхода"
             )
             continue
         lines.append(
-            f"• {quest.title}: шанс {chance}%, энергия {quest.energy_cost}, "
+            f"• {quest.title}: шанс ~{chance}%, энергия {quest.energy_cost}, "
             f"патроны {quest.ammo_required}, аптечки {quest.medkit_required}"
         )
     lines.extend(
@@ -1247,9 +1250,15 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
             extra = ""
         stash_text = _maybe_drop_stash(storage, telegram_id)
         achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+        formula_line = (
+            f"База {breakdown.base_chance}% (+снар {breakdown.gear_bonus}%) "
+            f"+патр {breakdown.ammo_bonus}% +апт {breakdown.medkit_bonus}% "
+            f"(потолок {quest.max_success}%)."
+        )
         return ActionResult(
             True,
             f"«{quest.title}» выполнено! Шанс {breakdown.chance}% (бросок {roll}).\n"
+            f"{formula_line}\n"
             f"Расход: патр {quest.ammo_required}, апт {quest.medkit_required}. "
             f"Награда: {reward} RU.{extra}{stash_text}{durability_text}{achievements_text}",
         )
@@ -2690,12 +2699,16 @@ def character_rank_level(character: Character) -> int:
 
 
 def can_withdraw_faction_treasury(storage: Storage, character: Character) -> bool:
-    """Вывод из казны: лидер или звание от 5 уровня (по назначению лидера)."""
+    """Вывод из казны и склада: лидер или звание от 5 уровня (по назначению лидера)."""
     if character.faction is None:
         return False
     if storage.get_faction_leader_id(character.faction) == character.telegram_id:
         return True
     return character_rank_level(character) >= TREASURY_WITHDRAW_MIN_RANK
+
+
+def can_withdraw_faction_warehouse(storage: Storage, character: Character) -> bool:
+    return can_withdraw_faction_treasury(storage, character)
 
 
 def deposit_to_faction_warehouse(
@@ -2733,6 +2746,11 @@ def withdraw_from_faction_warehouse(
         return ActionResult(False, "Склад доступен только бойцам группировки.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    if not can_withdraw_faction_warehouse(storage, player):
+        return ActionResult(
+            False,
+            "Забирать со склада можно с 5 ранга (или лидеру группировки).",
+        )
     key = _normalize_item_key(item_key)
     if not storage.change_faction_warehouse_item(player.faction, key, -amount):
         return ActionResult(False, "На складе недостаточно ресурсов.")
@@ -3399,9 +3417,9 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
 
     leader_hint = ""
     if storage.get_faction_leader_id(player.faction) == telegram_id:
-        leader_hint = "\nТебе доступно назначение званий."
+        leader_hint = "\nТебе доступны вывод со склада/из казны и назначение званий."
     elif can_withdraw_faction_treasury(storage, player):
-        leader_hint = "\nТебе доступен вывод из казны (ранг 5+)."
+        leader_hint = "\nТебе доступен вывод со склада и из казны (ранг 5+)."
 
     return (
         f"Группировка «{player.faction}»\n"
@@ -3412,7 +3430,7 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
         f"• точка ресурсов: {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч\n"
         f"• база: {BASE_POINT_INCOME_PER_HOUR} RU/ч\n\n"
         f"Любой боец может сдать патроны/аптечки на склад и пополнить казну.\n"
-        f"Вывод из казны — с 5 ранга (или лидер)."
+        f"Забирать со склада и из казны — с 5 ранга (или лидер)."
         f"{leader_hint}"
     )
 
