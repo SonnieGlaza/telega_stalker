@@ -85,6 +85,32 @@ def run_smoke_check() -> None:
         bandit_rank = assign_faction_rank(storage, 333, 333, "r1")
         assert not bandit_rank.ok
 
+        # Referral rewards.
+        from app.game_logic import (
+            apply_referral_rewards,
+            build_referral_link,
+            parse_referral_payload,
+            REFERRAL_INVITER_BONUS_RU,
+        )
+
+        assert parse_referral_payload("ref_111") == 111
+        assert parse_referral_payload("ref111") == 111
+        assert parse_referral_payload("hello") is None
+        assert build_referral_link("my_bot", 111) == "https://t.me/my_bot?start=ref_111"
+        storage.create_character(444, "NewbieRef", "Мужской")
+        before_money = storage.get_character(111, refresh_energy=False).money
+        referral = apply_referral_rewards(storage, 444, 111)
+        assert referral.ok, referral.text
+        newbie = storage.get_character(444, refresh_energy=False)
+        assert newbie.inventory.get("stew") == 2
+        assert newbie.inventory.get("antirad") == 1
+        assert newbie.inventory.get("water_bottle") == 1
+        assert newbie.inventory.get("weapon_pm") == 1
+        after_money = storage.get_character(111, refresh_energy=False).money
+        assert after_money == before_money + REFERRAL_INVITER_BONUS_RU
+        again = apply_referral_rewards(storage, 444, 111)
+        assert not again.ok
+
         # Economy / trader items.
         assert buy_item(storage, 111, "detector_otklik").ok
         storage.change_money(111, 100000)

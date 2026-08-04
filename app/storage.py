@@ -778,6 +778,7 @@ class Storage:
             )
             # Черновик регистрации: ник/пол живут в БД, а не только в MemoryStorage FSM.
             self._ensure_pending_registrations_schema(conn)
+            self._ensure_referrals_schema(conn)
             self._ensure_bigint_telegram_ids(conn)
             self._ensure_unique_nicknames(conn)
             conn.executemany(
@@ -999,6 +1000,7 @@ class Storage:
             ("gender", "ALTER TABLE pending_registrations ADD COLUMN gender TEXT"),
             ("registration_step", "ALTER TABLE pending_registrations ADD COLUMN registration_step TEXT"),
             ("updated_at", "ALTER TABLE pending_registrations ADD COLUMN updated_at TEXT"),
+            ("referrer_id", "ALTER TABLE pending_registrations ADD COLUMN referrer_id BIGINT"),
         ]
         # Старое имя колонки step → registration_step (step может конфликтовать в SQL).
         if "step" in columns and "registration_step" not in columns:
@@ -1054,12 +1056,87 @@ class Storage:
         except Exception:
             conn.rollback_to_savepoint("sp_pending_backfill")
 
+    def _ensure_referrals_schema(self, conn: DbConnection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS referrals (
+                invitee_id BIGINT PRIMARY KEY,
+                referrer_id BIGINT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+
+    def has_referral_claim(self, invitee_id: int) -> bool:
+        with self._connect() as conn:
+            self._ensure_referrals_schema(conn)
+            row = conn.execute(
+                "SELECT 1 AS ok FROM referrals WHERE invitee_id = ?",
+                (invitee_id,),
+            ).fetchone()
+        return row is not None
+
+    def record_referral(self, invitee_id: int, referrer_id: int) -> bool:
+        if invitee_id == referrer_id:
+            return False
+        with self._connect() as conn:
+            self._ensure_referrals_schema(conn)
+            existing = conn.execute(
+                "SELECT 1 AS ok FROM referrals WHERE invitee_id = ?",
+                (invitee_id,),
+            ).fetchone()
+            if existing is not None:
+                return False
+            conn.execute(
+                """
+                INSERT INTO referrals(invitee_id, referrer_id, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (invitee_id, referrer_id, utc_now().isoformat()),
+            )
+        self.save_snapshot()
+        return True
+
+    def set_pending_referrer(self, telegram_id: int, referrer_id: int | None) -> None:
+        key = f"pending_referrer:{int(telegram_id)}"
+        if referrer_id is None or int(referrer_id) <= 0 or int(referrer_id) == int(telegram_id):
+            with self._connect() as conn:
+                conn.execute("DELETE FROM meta_kv WHERE key = ?", (key,))
+            return
+        self.set_meta(key, str(int(referrer_id)))
+
+    def get_pending_referrer(self, telegram_id: int) -> int | None:
+        pending = self.get_pending_registration(telegram_id)
+        if pending and pending.get("referrer_id"):
+            try:
+                value = int(pending["referrer_id"])
+                if value > 0 and value != int(telegram_id):
+                    return value
+            except (TypeError, ValueError):
+                pass
+        raw = self.get_meta(f"pending_referrer:{int(telegram_id)}")
+        if not raw:
+            return None
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return None
+        if value <= 0 or value == int(telegram_id):
+            return None
+        return value
+
+    def clear_pending_referrer(self, telegram_id: int) -> None:
+        key = f"pending_referrer:{int(telegram_id)}"
+        with self._connect() as conn:
+            conn.execute("DELETE FROM meta_kv WHERE key = ?", (key,))
+
     def save_pending_registration(
         self,
         telegram_id: int,
         nickname: str,
         gender: str | None = None,
         step: str = "gender",
+        referrer_id: int | None = None,
     ) -> None:
         nick = (nickname or "").strip()
         if not nick:
@@ -1135,6 +1212,19 @@ class Storage:
             except Exception as exc:
                 last_error = exc
 
+        if referrer_id is not None and int(referrer_id) > 0 and int(referrer_id) != int(telegram_id):
+            try:
+                with self._connect() as conn:
+                    self._ensure_pending_registrations_schema(conn)
+                    columns = self._table_columns(conn, "pending_registrations")
+                    if "referrer_id" in columns:
+                        conn.execute(
+                            "UPDATE pending_registrations SET referrer_id = ? WHERE telegram_id = ?",
+                            (int(referrer_id), telegram_id),
+                        )
+            except Exception:
+                pass
+
         if last_error is not None:
             # Последний шанс: delete + insert минимальных полей в новой транзакции.
             try:
@@ -1187,6 +1277,8 @@ class Storage:
                 select_cols.append("registration_step")
             elif "step" in columns:
                 select_cols.append("step")
+            if "referrer_id" in columns:
+                select_cols.append("referrer_id")
             row = conn.execute(
                 f"SELECT {', '.join(select_cols)} FROM pending_registrations WHERE telegram_id = ?",  # noqa: S608
                 (telegram_id,),
@@ -1205,6 +1297,12 @@ class Storage:
         result = {"nickname": nick, "step": step}
         if gender:
             result["gender"] = gender
+        raw_ref = self._row_get(row, "referrer_id")
+        if raw_ref is not None and str(raw_ref).strip() != "":
+            try:
+                result["referrer_id"] = str(int(raw_ref))
+            except (TypeError, ValueError):
+                pass
         return result
 
     def clear_pending_registration(self, telegram_id: int) -> None:

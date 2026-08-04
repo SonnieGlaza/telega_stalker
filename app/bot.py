@@ -11,13 +11,19 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
 
 from app.config import load_settings
 from app.game_logic import (
+    apply_referral_rewards,
+    build_referral_link,
+    parse_referral_payload,
+    REFERRAL_INVITER_BONUS_RU,
+    REFERRAL_STARTER_PACK,
+    ITEM_LABELS,
     append_survival_craving_notice,
     apply_dynamic_zone_event,
     attack_location,
@@ -278,10 +284,46 @@ async def send_topup_invoice(bot: Bot, chat_id: int, stars_amount: int) -> None:
     )
 
 
+async def _apply_and_announce_referral(
+    *,
+    message: Message,
+    bot: Bot,
+    invitee_id: int,
+    referrer_id: int | None,
+) -> str:
+    """Применяет реферал-награду и возвращает текст для новичка (или пустую строку)."""
+    if referrer_id is None:
+        return ""
+    storage = get_storage()
+    result = apply_referral_rewards(storage, invitee_id, referrer_id)
+    storage.clear_pending_referrer(invitee_id)
+    if not result.ok:
+        return ""
+    try:
+        referrer = storage.get_character(int(referrer_id), refresh_energy=False)
+        invitee = storage.get_character(invitee_id, refresh_energy=False)
+        invitee_name = invitee.nickname if invitee else str(invitee_id)
+        await bot.send_message(
+            int(referrer_id),
+            f"👥 По твоей ссылке в Зону пришёл {invitee_name}.\n"
+            f"+{REFERRAL_INVITER_BONUS_RU} RU на баланс.",
+        )
+        if referrer is None:
+            pass
+    except Exception:
+        logger.exception("Failed to notify referrer %s", referrer_id)
+    return f"\n\n{result.text}"
+
+
 @router.message(Command("start"))
-async def cmd_start(message: Message, state: FSMContext) -> None:
+async def cmd_start(message: Message, state: FSMContext, command: CommandObject, bot: Bot) -> None:
     telegram_id = message.from_user.id
     db = get_storage()
+    referrer_id = parse_referral_payload(command.args)
+    if referrer_id is not None:
+        db.set_pending_referrer(telegram_id, referrer_id)
+        await state.update_data(referrer_id=referrer_id)
+
     player = db.get_character(telegram_id, refresh_energy=False)
 
     # Main guard: if ID already exists in DB, never restart registration flow.
@@ -307,7 +349,8 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         if pending:
             nickname = pending["nickname"]
             gender = pending.get("gender")
-            await state.update_data(nickname=nickname, gender=gender)
+            pending_ref = db.get_pending_referrer(telegram_id)
+            await state.update_data(nickname=nickname, gender=gender, referrer_id=pending_ref)
             if gender:
                 # Ник+пол уже сохранены — добиваем создание персонажа после редеплоя.
                 try:
@@ -331,10 +374,17 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
                         reply_markup=gender_keyboard(),
                     )
                     return
+                referral_note = await _apply_and_announce_referral(
+                    message=message,
+                    bot=bot,
+                    invitee_id=telegram_id,
+                    referrer_id=pending_ref,
+                )
                 await state.clear()
                 uid_line = f"\nТвой ID в Зоне: {saved.player_uid}"
                 await message.answer(
-                    f"Персонаж восстановлен: {nickname} ({gender}).{uid_line}\nВыбери сторону:",
+                    f"Персонаж восстановлен: {nickname} ({gender}).{uid_line}"
+                    f"{referral_note}\nВыбери сторону:",
                     reply_markup=faction_keyboard(),
                 )
                 return
@@ -350,8 +400,13 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         if current_state == Registration.gender.state:
             await message.answer("Регистрация уже начата. Выбери пол персонажа:", reply_markup=gender_keyboard())
             return
-        await state.clear()
         await state.set_state(Registration.nickname)
+        referral_hello = ""
+        if referrer_id is not None and db.character_exists(referrer_id):
+            referral_hello = (
+                "\n\nТы пришёл по приглашению сталкера. "
+                "После регистрации получишь стартовый набор."
+            )
         await message.answer(
             "Telegram-бот-игра в стиле S.T.A.L.K.E.R., где это не просто "
             "«нажал кнопку — получил ответ», а целый живой мир с прогрессом игрока.\n\n"
@@ -363,7 +418,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
             "🔫 Снаряжение с износом: оружие и броня теряют прочность, и это влияет на цену продажи.\n"
             "💎 Поиск артефактов: через детекторы с разной эффективностью.\n"
             "❤️ Смерть и респавн: если персонаж «падает», нужно восстанавливаться по правилам игры.\n\n"
-            "Если ты готов, то назови свое имя!"
+            f"Если ты готов, то назови свое имя!{referral_hello}"
         )
         return
     # Defensive fallback (should be unreachable).
@@ -393,7 +448,7 @@ def _normalize_info_trigger(value: str | None) -> str:
     return " ".join(normalized.split())
 
 
-def _build_info_text(player: Character) -> str:
+def _build_info_text(player: Character, *, referral_link: str | None = None) -> str:
     faction_chats = {
         "Свобода": "https://t.me/+kAvQ4NyrKndlNmI6",
         "Долг": "https://t.me/+IbIz9zSoruY0OTMy",
@@ -411,8 +466,20 @@ def _build_info_text(player: Character) -> str:
         f"• 🌐 Общий: {common_chat}\n"
         f"• Выбери группировку, чтобы увидеть чат своей фракции."
     )
+    pack = ", ".join(
+        f"{ITEM_LABELS.get(key, key)} x{amount}" for key, amount in REFERRAL_STARTER_PACK
+    )
+    referral_block = (
+        f"Рефералка:\n"
+        f"• Твоя ссылка: {referral_link}\n"
+        f"• За друга: +{REFERRAL_INVITER_BONUS_RU} RU тебе.\n"
+        f"• Другу при вступлении: {pack}.\n\n"
+        if referral_link
+        else ""
+    )
     return (
         "ℹ️ Информация по игре\n\n"
+        f"{referral_block}"
         "Команды:\n"
         "• /start — создать персонажа или войти в существующего.\n"
         "• /menu — открыть главное меню.\n"
@@ -439,13 +506,20 @@ def _build_info_text(player: Character) -> str:
 
 
 @router.message(F.text == "ℹ️ Информация")
-async def show_info(message: Message, state: FSMContext) -> None:
+async def show_info(message: Message, state: FSMContext, bot: Bot) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     await state.clear()
-    info_text = _build_info_text(player)
+    referral_link = None
+    try:
+        me = await bot.get_me()
+        if me.username:
+            referral_link = build_referral_link(me.username, player.telegram_id)
+    except Exception:
+        logger.exception("Failed to resolve bot username for referral link")
+    info_text = _build_info_text(player, referral_link=referral_link)
     await message.answer(info_text)
 
 
@@ -813,8 +887,22 @@ async def process_nickname(message: Message, state: FSMContext) -> None:
         await message.answer("Это прозвище уже занято. Выбери другое.")
         return
 
+    data = await state.get_data()
+    referrer_id = data.get("referrer_id")
+    if referrer_id is None:
+        referrer_id = db.get_pending_referrer(message.from_user.id)
     try:
-        db.save_pending_registration(message.from_user.id, nickname, step="gender")
+        referrer_id_int = int(referrer_id) if referrer_id is not None else None
+    except (TypeError, ValueError):
+        referrer_id_int = None
+
+    try:
+        db.save_pending_registration(
+            message.from_user.id,
+            nickname,
+            step="gender",
+            referrer_id=referrer_id_int,
+        )
     except Exception:
         # Не блокируем регистрацию: ник всё равно в FSM, персонаж создастся на шаге пола.
         logger.exception(
@@ -822,13 +910,13 @@ async def process_nickname(message: Message, state: FSMContext) -> None:
             message.from_user.id,
         )
 
-    await state.update_data(nickname=nickname)
+    await state.update_data(nickname=nickname, referrer_id=referrer_id_int)
     await state.set_state(Registration.gender)
     await message.answer("Отлично. Выбери пол персонажа:", reply_markup=gender_keyboard())
 
 
 @router.callback_query(F.data.startswith("gender:"))
-async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
+async def process_gender(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     payload = (callback.data or "").split(":", maxsplit=1)
     if len(payload) != 2:
         await safe_callback_answer(callback, "Некорректный выбор", show_alert=True)
@@ -856,6 +944,14 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
         await safe_callback_answer(callback)
         return
 
+    referrer_raw = data.get("referrer_id")
+    if referrer_raw is None:
+        referrer_raw = db.get_pending_referrer(callback.from_user.id)
+    try:
+        referrer_id = int(referrer_raw) if referrer_raw is not None else None
+    except (TypeError, ValueError):
+        referrer_id = None
+
     # Сразу пишем пол в черновик — даже если create_character упадёт, /start добьёт аккаунт.
     try:
         db.save_pending_registration(
@@ -863,6 +959,7 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
             nickname=nickname,
             gender=gender,
             step="faction",
+            referrer_id=referrer_id,
         )
     except Exception:
         logger.exception(
@@ -870,7 +967,7 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
             callback.from_user.id,
         )
 
-    await state.update_data(nickname=nickname, gender=gender)
+    await state.update_data(nickname=nickname, gender=gender, referrer_id=referrer_id)
 
     if db.is_nickname_taken(nickname, exclude_telegram_id=callback.from_user.id):
         await state.set_state(Registration.nickname)
@@ -931,10 +1028,16 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
         await safe_callback_answer(callback, "Ошибка БД, черновик сохранён", show_alert=True)
         return
 
+    referral_note = await _apply_and_announce_referral(
+        message=callback.message,
+        bot=bot,
+        invitee_id=callback.from_user.id,
+        referrer_id=referrer_id,
+    )
     await state.clear()
     uid_line = f"\nТвой ID в Зоне: {saved.player_uid}" if saved else ""
     await callback.message.answer(
-        f"Персонаж создан: {nickname} ({gender}).{uid_line}\nВыбери сторону:",
+        f"Персонаж создан: {nickname} ({gender}).{uid_line}{referral_note}\nВыбери сторону:",
         reply_markup=faction_keyboard(),
     )
     await safe_callback_answer(callback)
@@ -2440,13 +2543,20 @@ async def smuggle_callback(callback: CallbackQuery) -> None:
 
 
 @router.message()
-async def fallback(message: Message) -> None:
+async def fallback(message: Message, bot: Bot) -> None:
     player = ensure_character(message)
     normalized_text = _normalize_info_trigger(message.text)
     if player is not None and (
         normalized_text.endswith("информация") or normalized_text.startswith("/info")
     ):
-        await message.answer(_build_info_text(player))
+        referral_link = None
+        try:
+            me = await bot.get_me()
+            if me.username:
+                referral_link = build_referral_link(me.username, player.telegram_id)
+        except Exception:
+            logger.exception("Failed to resolve bot username for referral link")
+        await message.answer(_build_info_text(player, referral_link=referral_link))
         return
     if player is not None:
         await message.answer(

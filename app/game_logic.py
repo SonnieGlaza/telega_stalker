@@ -426,6 +426,70 @@ class ActionResult:
     text: str
 
 
+REFERRAL_INVITER_BONUS_RU = 2000
+REFERRAL_STARTER_PACK: tuple[tuple[str, int], ...] = (
+    ("stew", 2),
+    ("antirad", 1),
+    ("water_bottle", 1),
+    ("weapon_pm", 1),
+)
+
+
+def parse_referral_payload(raw: str | None) -> int | None:
+    """Извлекает telegram_id пригласившего из /start payload (ref_123 / ref123)."""
+    token = (raw or "").strip()
+    if not token:
+        return None
+    lowered = token.casefold()
+    if lowered.startswith("ref_"):
+        digits = token[4:]
+    elif lowered.startswith("ref"):
+        digits = token[3:]
+    else:
+        return None
+    if not digits.isdigit():
+        return None
+    value = int(digits)
+    return value if value > 0 else None
+
+
+def build_referral_link(bot_username: str, telegram_id: int) -> str:
+    username = (bot_username or "").lstrip("@").strip()
+    return f"https://t.me/{username}?start=ref_{int(telegram_id)}"
+
+
+def apply_referral_rewards(
+    storage: Storage,
+    invitee_id: int,
+    referrer_id: int | None,
+) -> ActionResult:
+    """Награда за реферал: пригласивший +2000 RU, новичок — стартовый набор."""
+    if referrer_id is None:
+        return ActionResult(False, "Реферал не указан.")
+    if int(referrer_id) == int(invitee_id):
+        return ActionResult(False, "Нельзя пригласить самого себя.")
+    if not storage.character_exists(int(referrer_id)):
+        return ActionResult(False, "Пригласивший ещё не зарегистрирован в Зоне.")
+    if storage.has_referral_claim(int(invitee_id)):
+        return ActionResult(False, "Стартовый набор по рефералу уже получен.")
+    if not storage.record_referral(invitee_id=int(invitee_id), referrer_id=int(referrer_id)):
+        return ActionResult(False, "Не удалось зафиксировать реферал.")
+
+    for item_key, amount in REFERRAL_STARTER_PACK:
+        storage.add_item(int(invitee_id), item_key, amount)
+    storage.change_money(int(referrer_id), REFERRAL_INVITER_BONUS_RU)
+
+    pack_text = ", ".join(
+        f"{ITEM_LABELS.get(key, key)} x{amount}" for key, amount in REFERRAL_STARTER_PACK
+    )
+    return ActionResult(
+        True,
+        f"Реферал засчитан.\n"
+        f"Тебе стартовый набор: {pack_text}.\n"
+        f"Пригласивший получил {REFERRAL_INVITER_BONUS_RU} RU.",
+    )
+
+
 @dataclass(frozen=True)
 class RaidLaunchResult:
     ok: bool
