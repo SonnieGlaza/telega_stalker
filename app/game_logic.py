@@ -2893,7 +2893,7 @@ def buy_first_faction_auction(storage: Storage, telegram_id: int) -> ActionResul
         return ActionResult(False, "Покупка на аукционе доступна только бойцам группировки.")
     if _is_dead(buyer):
         return ActionResult(False, _dead_block_text())
-    auctions = storage.list_open_auctions(buyer.faction)
+    auctions = _list_open_exchange_lots(storage)
     target = next((a for a in auctions if int(a["seller_id"]) != telegram_id), None)
     if target is None:
         return ActionResult(False, "Подходящих открытых лотов нет.")
@@ -2931,7 +2931,7 @@ def cancel_own_first_auction(storage: Storage, telegram_id: int) -> ActionResult
         return ActionResult(False, "Сначала создай персонажа и выбери группировку.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
-    auctions = storage.list_open_auctions(player.faction)
+    auctions = _list_open_exchange_lots(storage)
     target = next((a for a in auctions if int(a["seller_id"]) == telegram_id), None)
     if target is None:
         return ActionResult(False, "У тебя нет открытых лотов для отмены.")
@@ -2950,6 +2950,15 @@ def cancel_own_first_auction(storage: Storage, telegram_id: int) -> ActionResult
 
 def _is_equipment_item(item_key: str) -> bool:
     return item_key in WEAPON_CATALOG or item_key in ARMOR_CATALOG
+
+
+def _list_open_exchange_lots(storage: Storage) -> list[dict[str, Any]]:
+    """Биржа: общие лоты расходников/артефактов (не экипировка)."""
+    return [
+        lot
+        for lot in storage.list_open_auctions()
+        if not _is_equipment_item(str(lot.get("item_key", "")))
+    ]
 
 
 def _equipment_sell_price(base_sell_price: int, durability: int | None = None) -> int:
@@ -3051,8 +3060,8 @@ def buy_first_market_lot(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа.")
     if _is_dead(buyer):
         return ActionResult(False, _dead_block_text())
-    auctions = storage.list_open_auctions(buyer.faction or "market")
-    target = next((a for a in auctions if int(a["seller_id"]) != telegram_id and _is_equipment_item(str(a["item_key"]))), None)
+    auctions = list_market_lots(storage, telegram_id)
+    target = auctions[0] if auctions else None
     if target is None:
         return ActionResult(False, "Открытых рыночных лотов экипировки нет.")
     auction_id = int(target["id"])
@@ -3140,11 +3149,12 @@ def cancel_own_first_market_lot(storage: Storage, telegram_id: int) -> ActionRes
         return ActionResult(False, "Сначала создай персонажа.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
-    auctions = storage.list_open_auctions(player.faction or "market")
-    target = next(
-        (a for a in auctions if int(a["seller_id"]) == telegram_id and _is_equipment_item(str(a["item_key"]))),
-        None,
-    )
+    auctions = [
+        lot
+        for lot in storage.list_open_auctions()
+        if int(lot.get("seller_id", 0)) == telegram_id and _is_equipment_item(str(lot.get("item_key", "")))
+    ]
+    target = next(iter(auctions), None)
     if target is None:
         return ActionResult(False, "У тебя нет открытых рыночных лотов экипировки.")
     auction_id = int(target["id"])
@@ -3410,7 +3420,7 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
     if player is None or player.faction is None:
         return "Экономика доступна только после выбора группировки."
 
-    auctions = storage.list_open_auctions(player.faction)
+    auctions = _list_open_exchange_lots(storage)
     auctions_lines = [
         f"• #{a['id']} {ITEM_LABELS.get(str(a['item_key']), str(a['item_key']))} x{a['amount']} "
         f"за {a['price']} RU (продавец {a['seller_id']})"
@@ -3429,8 +3439,6 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
         market_lines = ["• Открытых лотов нет"]
 
     return (
-        f"Экономика — биржа и рынок\n"
-        f"Группировка: «{player.faction}»\n\n"
         f"Биржа:\n{chr(10).join(auctions_lines)}\n\n"
         f"Рынок экипировки:\n{chr(10).join(market_lines)}"
     )
