@@ -671,9 +671,37 @@ def ratings_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Моя статистика", callback_data="ratings:stats")],
             [InlineKeyboardButton(text="🎖 Мои достижения", callback_data="ratings:achievements")],
-            [InlineKeyboardButton(text="🏆 Топ сталкеров", callback_data="ratings:leaderboard")],
+            [InlineKeyboardButton(text="🏆 Топ сталкеров", callback_data="rating:page:0")],
         ]
     )
+
+
+def rating_page_keyboard(*, page: int, total_pages: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(
+                text="⬅️",
+                callback_data=f"rating:page:{page - 1}",
+            )
+        )
+    nav.append(
+        InlineKeyboardButton(
+            text=f"{page + 1}/{total_pages}",
+            callback_data=f"rating:page:{page}",
+        )
+    )
+    if page + 1 < total_pages:
+        nav.append(
+            InlineKeyboardButton(
+                text="➡️",
+                callback_data=f"rating:page:{page + 1}",
+            )
+        )
+    if nav:
+        rows.append(nav)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def alliance_keyboard() -> InlineKeyboardMarkup:

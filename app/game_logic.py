@@ -1093,30 +1093,58 @@ def build_character_stats_overview(storage: Storage, telegram_id: int) -> str:
     )
 
 
-def build_rating_overview(storage: Storage, requester_id: int, limit: int = 10) -> str:
-    top = storage.get_rating_leaderboard(limit=limit)
+RATING_PAGE_SIZE = 10
+RATING_MAX_PAGES = 10
+RATING_TOP_LIMIT = RATING_PAGE_SIZE * RATING_MAX_PAGES  # топ-100
+
+
+def build_rating_overview(
+    storage: Storage,
+    requester_id: int,
+    *,
+    page: int = 0,
+) -> tuple[str, int, int]:
+    """Возвращает (text, page, total_pages) для топ-100 по 10 на страницу."""
+    top = storage.get_rating_leaderboard(limit=RATING_TOP_LIMIT)
     if not top:
-        return "🏆 Рейтинг пока пуст. Стань первым сталкером!"
+        return ("🏆 Рейтинг пока пуст. Стань первым сталкером!", 0, 1)
+
+    total = len(top)
+    total_pages = max(1, min(RATING_MAX_PAGES, (total + RATING_PAGE_SIZE - 1) // RATING_PAGE_SIZE))
+    safe_page = max(0, min(int(page), total_pages - 1))
+    start = safe_page * RATING_PAGE_SIZE
+    chunk = top[start : start + RATING_PAGE_SIZE]
+
+    lines = [
+        "🏆 Рейтинг сталкеров (топ-100)",
+        f"Страница {safe_page + 1}/{total_pages} • по {RATING_PAGE_SIZE} игроков",
+        "",
+    ]
     requester_rank = None
-    lines = ["🏆 Рейтинг сталкеров (по очкам)"]
-    for idx, row in enumerate(top, start=1):
+    for offset, row in enumerate(chunk):
+        idx = start + offset + 1
         faction = row.get("faction") or "нейтрал"
         nickname = str(row.get("nickname") or f"Игрок {row.get('telegram_id')}")
         rating = int(row.get("rating_points") or 0)
         achievements = int(row.get("achievements_unlocked") or 0)
         marker = "👑 " if idx == 1 else ""
-        lines.append(f"{idx}. {marker}{nickname} [{faction}] — {rating} очк., достижений {achievements}")
+        lines.append(
+            f"{idx}. {marker}{nickname} [{faction}] — {rating} очк., достижений {achievements}"
+        )
         if int(row.get("telegram_id") or 0) == requester_id:
             requester_rank = idx
+
     if requester_rank is None:
-        all_top = storage.get_rating_leaderboard(limit=25)
-        for idx, row in enumerate(all_top, start=1):
+        for idx, row in enumerate(top, start=1):
             if int(row.get("telegram_id") or 0) == requester_id:
                 requester_rank = idx
                 break
+
     if requester_rank is not None:
         lines.append(f"\nТвоя позиция: #{requester_rank}")
-    return "\n".join(lines)
+    elif top:
+        lines.append("\nТебя нет в топ-100.")
+    return ("\n".join(lines), safe_page, total_pages)
 
 
 def calculate_equipment_bonus(character: Character) -> int:
