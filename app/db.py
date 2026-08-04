@@ -165,16 +165,15 @@ class DbConnection:
         return DbCursor(cursor, self.backend)
 
     def savepoint(self, name: str) -> None:
-        if self.backend == "postgres":
-            self._conn.execute(f"SAVEPOINT {name}")
+        # Работает и в SQLite, и в Postgres — нужно, чтобы ошибка ALTER
+        # не abort'ила всю транзакцию ensure-схемы.
+        self._conn.execute(f"SAVEPOINT {name}")
 
     def release_savepoint(self, name: str) -> None:
-        if self.backend == "postgres":
-            self._conn.execute(f"RELEASE SAVEPOINT {name}")
+        self._conn.execute(f"RELEASE SAVEPOINT {name}")
 
     def rollback_to_savepoint(self, name: str) -> None:
-        if self.backend == "postgres":
-            self._conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
+        self._conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
 
     def commit(self) -> None:
         self._conn.commit()

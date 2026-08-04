@@ -488,23 +488,39 @@ class Storage:
             if not nick:
                 continue
             gender = str(row.get("gender") or "").strip() or None
-            step = str(row.get("step") or "").strip() or ("faction" if gender else "gender")
+            step = str(
+                row.get("registration_step") or row.get("step") or ""
+            ).strip() or ("faction" if gender else "gender")
             now_iso = utc_now().isoformat()
             conn.execute(
                 """
-                INSERT OR REPLACE INTO pending_registrations(
-                    telegram_id, nickname, gender, step, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO pending_registrations(telegram_id, nickname, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(telegram_id) DO UPDATE SET nickname = EXCLUDED.nickname
                 """,
                 (
                     int(row.get("telegram_id")),
                     nick,
-                    gender,
-                    step,
                     row.get("created_at") or now_iso,
-                    row.get("updated_at") or now_iso,
                 ),
             )
+            columns = self._table_columns(conn, "pending_registrations")
+            tid = int(row.get("telegram_id"))
+            if "gender" in columns:
+                conn.execute(
+                    "UPDATE pending_registrations SET gender = ? WHERE telegram_id = ?",
+                    (gender, tid),
+                )
+            if "registration_step" in columns:
+                conn.execute(
+                    "UPDATE pending_registrations SET registration_step = ? WHERE telegram_id = ?",
+                    (step, tid),
+                )
+            if "updated_at" in columns:
+                conn.execute(
+                    "UPDATE pending_registrations SET updated_at = ? WHERE telegram_id = ?",
+                    (row.get("updated_at") or now_iso, tid),
+                )
         # Backfill survival columns / UIDs after restore, then fix SERIAL counters.
         self._ensure_characters_schema(conn)
         self._sync_serial_sequences(conn)
@@ -850,35 +866,75 @@ class Storage:
         self.save_snapshot()
 
     def _ensure_pending_registrations_schema(self, conn: DbConnection) -> None:
+        # Базовая таблица совместима со старым деплоем (только nick + created_at).
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS pending_registrations (
                 telegram_id INTEGER PRIMARY KEY,
                 nickname TEXT NOT NULL,
-                gender TEXT,
-                step TEXT NOT NULL DEFAULT 'gender',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                created_at TEXT NOT NULL
             )
             """
         )
         columns = self._table_columns(conn, "pending_registrations")
-        if "gender" not in columns:
-            conn.execute("ALTER TABLE pending_registrations ADD COLUMN gender TEXT")
-        if "step" not in columns:
-            conn.execute(
-                "ALTER TABLE pending_registrations ADD COLUMN step TEXT NOT NULL DEFAULT 'gender'"
-            )
-        if "updated_at" not in columns:
-            conn.execute("ALTER TABLE pending_registrations ADD COLUMN updated_at TEXT")
-            conn.execute(
-                """
-                UPDATE pending_registrations
-                SET updated_at = COALESCE(NULLIF(TRIM(created_at), ''), ?)
-                WHERE updated_at IS NULL OR TRIM(updated_at) = ''
-                """,
-                (utc_now().isoformat(),),
-            )
+        alters = [
+            ("gender", "ALTER TABLE pending_registrations ADD COLUMN gender TEXT"),
+            ("registration_step", "ALTER TABLE pending_registrations ADD COLUMN registration_step TEXT"),
+            ("updated_at", "ALTER TABLE pending_registrations ADD COLUMN updated_at TEXT"),
+        ]
+        # Старое имя колонки step → registration_step (step может конфликтовать в SQL).
+        if "step" in columns and "registration_step" not in columns:
+            try:
+                conn.savepoint("sp_pending_rename")
+                conn.execute(
+                    "ALTER TABLE pending_registrations ADD COLUMN registration_step TEXT"
+                )
+                conn.execute(
+                    """
+                    UPDATE pending_registrations
+                    SET registration_step = step
+                    WHERE registration_step IS NULL AND step IS NOT NULL
+                    """
+                )
+                conn.release_savepoint("sp_pending_rename")
+                columns = self._table_columns(conn, "pending_registrations")
+            except Exception:
+                conn.rollback_to_savepoint("sp_pending_rename")
+
+        for col_name, ddl in alters:
+            if col_name in columns:
+                continue
+            try:
+                conn.savepoint(f"sp_add_{col_name}")
+                conn.execute(ddl)
+                conn.release_savepoint(f"sp_add_{col_name}")
+                columns.add(col_name)
+            except Exception:
+                conn.rollback_to_savepoint(f"sp_add_{col_name}")
+
+        now_iso = utc_now().isoformat()
+        try:
+            conn.savepoint("sp_pending_backfill")
+            if "registration_step" in columns or "registration_step" in self._table_columns(conn, "pending_registrations"):
+                conn.execute(
+                    """
+                    UPDATE pending_registrations
+                    SET registration_step = 'gender'
+                    WHERE registration_step IS NULL OR TRIM(registration_step) = ''
+                    """
+                )
+            if "updated_at" in columns or "updated_at" in self._table_columns(conn, "pending_registrations"):
+                conn.execute(
+                    """
+                    UPDATE pending_registrations
+                    SET updated_at = COALESCE(NULLIF(TRIM(created_at), ''), ?)
+                    WHERE updated_at IS NULL OR TRIM(updated_at) = ''
+                    """,
+                    (now_iso,),
+                )
+            conn.release_savepoint("sp_pending_backfill")
+        except Exception:
+            conn.rollback_to_savepoint("sp_pending_backfill")
 
     def save_pending_registration(
         self,
@@ -893,33 +949,128 @@ class Storage:
         gen = (gender or "").strip() or None
         step_value = (step or "gender").strip() or "gender"
         now_iso = utc_now().isoformat()
+
+        # Схему коммитим отдельно — иначе падение ALTER abort'ит INSERT на Postgres.
         with self._connect() as conn:
             self._ensure_pending_registrations_schema(conn)
-            # Сохраняем created_at при повторном сохранении черновика.
-            conn.execute(
-                """
-                INSERT INTO pending_registrations(
-                    telegram_id, nickname, gender, step, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(telegram_id) DO UPDATE SET
-                    nickname = EXCLUDED.nickname,
-                    gender = EXCLUDED.gender,
-                    step = EXCLUDED.step,
-                    updated_at = EXCLUDED.updated_at
-                """,
-                (telegram_id, nick, gen, step_value, now_iso, now_iso),
-            )
-        self.save_snapshot()
+
+        last_error: Exception | None = None
+        with self._connect() as conn:
+            columns = self._table_columns(conn, "pending_registrations")
+            has_gender = "gender" in columns
+            has_step = "registration_step" in columns
+            has_updated = "updated_at" in columns
+            try:
+                if has_gender and has_step and has_updated:
+                    conn.execute(
+                        """
+                        INSERT INTO pending_registrations(
+                            telegram_id, nickname, gender, registration_step, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(telegram_id) DO UPDATE SET
+                            nickname = EXCLUDED.nickname,
+                            gender = EXCLUDED.gender,
+                            registration_step = EXCLUDED.registration_step,
+                            updated_at = EXCLUDED.updated_at
+                        """,
+                        (telegram_id, nick, gen, step_value, now_iso, now_iso),
+                    )
+                elif has_gender and has_step:
+                    conn.execute(
+                        """
+                        INSERT INTO pending_registrations(
+                            telegram_id, nickname, gender, registration_step, created_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(telegram_id) DO UPDATE SET
+                            nickname = EXCLUDED.nickname,
+                            gender = EXCLUDED.gender,
+                            registration_step = EXCLUDED.registration_step
+                        """,
+                        (telegram_id, nick, gen, step_value, now_iso),
+                    )
+                else:
+                    # Минимальная совместимость со старой таблицей.
+                    conn.execute(
+                        """
+                        INSERT INTO pending_registrations(telegram_id, nickname, created_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(telegram_id) DO UPDATE SET
+                            nickname = EXCLUDED.nickname
+                        """,
+                        (telegram_id, nick, now_iso),
+                    )
+                    if has_gender:
+                        conn.execute(
+                            "UPDATE pending_registrations SET gender = ? WHERE telegram_id = ?",
+                            (gen, telegram_id),
+                        )
+                    if has_step:
+                        conn.execute(
+                            "UPDATE pending_registrations SET registration_step = ? WHERE telegram_id = ?",
+                            (step_value, telegram_id),
+                        )
+                    if has_updated:
+                        conn.execute(
+                            "UPDATE pending_registrations SET updated_at = ? WHERE telegram_id = ?",
+                            (now_iso, telegram_id),
+                        )
+            except Exception as exc:
+                last_error = exc
+
+        if last_error is not None:
+            # Последний шанс: delete + insert минимальных полей в новой транзакции.
+            try:
+                with self._connect() as conn:
+                    self._ensure_pending_registrations_schema(conn)
+                    conn.execute(
+                        "DELETE FROM pending_registrations WHERE telegram_id = ?",
+                        (telegram_id,),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO pending_registrations(telegram_id, nickname, created_at)
+                        VALUES (?, ?, ?)
+                        """,
+                        (telegram_id, nick, now_iso),
+                    )
+                    columns = self._table_columns(conn, "pending_registrations")
+                    if "gender" in columns and gen is not None:
+                        conn.execute(
+                            "UPDATE pending_registrations SET gender = ? WHERE telegram_id = ?",
+                            (gen, telegram_id),
+                        )
+                    if "registration_step" in columns:
+                        conn.execute(
+                            "UPDATE pending_registrations SET registration_step = ? WHERE telegram_id = ?",
+                            (step_value, telegram_id),
+                        )
+                    if "updated_at" in columns:
+                        conn.execute(
+                            "UPDATE pending_registrations SET updated_at = ? WHERE telegram_id = ?",
+                            (now_iso, telegram_id),
+                        )
+            except Exception as exc:
+                raise RuntimeError(f"save_pending_registration failed: {exc}") from exc
+
+        try:
+            self.save_snapshot()
+        except Exception:
+            # Snapshot не должен ломать регистрацию.
+            pass
 
     def get_pending_registration(self, telegram_id: int) -> dict[str, str] | None:
         with self._connect() as conn:
             self._ensure_pending_registrations_schema(conn)
+            columns = self._table_columns(conn, "pending_registrations")
+            select_cols = ["nickname"]
+            if "gender" in columns:
+                select_cols.append("gender")
+            if "registration_step" in columns:
+                select_cols.append("registration_step")
+            elif "step" in columns:
+                select_cols.append("step")
             row = conn.execute(
-                """
-                SELECT nickname, gender, step
-                FROM pending_registrations
-                WHERE telegram_id = ?
-                """,
+                f"SELECT {', '.join(select_cols)} FROM pending_registrations WHERE telegram_id = ?",  # noqa: S608
                 (telegram_id,),
             ).fetchone()
         if row is None:
@@ -927,8 +1078,12 @@ class Storage:
         nick = str(row["nickname"] or "").strip()
         if not nick:
             return None
-        gender = str(row["gender"] or "").strip()
-        step = str(row["step"] or "").strip() or ("faction" if gender else "gender")
+        gender = str(self._row_get(row, "gender") or "").strip()
+        step = str(
+            self._row_get(row, "registration_step")
+            or self._row_get(row, "step")
+            or ""
+        ).strip() or ("faction" if gender else "gender")
         result = {"nickname": nick, "step": step}
         if gender:
             result["gender"] = gender
@@ -941,7 +1096,10 @@ class Storage:
                 "DELETE FROM pending_registrations WHERE telegram_id = ?",
                 (telegram_id,),
             )
-        self.save_snapshot()
+        try:
+            self.save_snapshot()
+        except Exception:
+            pass
 
     def get_character(self, telegram_id: int, refresh_energy: bool = True) -> Character | None:
         if refresh_energy:

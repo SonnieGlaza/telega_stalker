@@ -646,9 +646,11 @@ async def process_nickname(message: Message, state: FSMContext) -> None:
     try:
         db.save_pending_registration(message.from_user.id, nickname, step="gender")
     except Exception:
-        logger.exception("Failed to persist pending nickname for user %s", message.from_user.id)
-        await message.answer("Не удалось сохранить прозвище. Попробуй ещё раз.")
-        return
+        # Не блокируем регистрацию: ник всё равно в FSM, персонаж создастся на шаге пола.
+        logger.exception(
+            "Failed to persist pending nickname for user %s; continuing with FSM only",
+            message.from_user.id,
+        )
 
     await state.update_data(nickname=nickname)
     await state.set_state(Registration.gender)
@@ -693,7 +695,10 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
             step="faction",
         )
     except Exception:
-        logger.exception("Failed to persist pending gender for user %s", callback.from_user.id)
+        logger.exception(
+            "Failed to persist pending gender for user %s; continuing",
+            callback.from_user.id,
+        )
 
     await state.update_data(nickname=nickname, gender=gender)
 
