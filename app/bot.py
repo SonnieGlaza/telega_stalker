@@ -613,34 +613,63 @@ async def process_nickname(message: Message, state: FSMContext) -> None:
     await message.answer("Отлично. Выбери пол персонажа:", reply_markup=gender_keyboard())
 
 
-@router.callback_query(Registration.gender, F.data.startswith("gender:"))
+@router.callback_query(F.data.startswith("gender:"))
 async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
     payload = (callback.data or "").split(":", maxsplit=1)
     if len(payload) != 2:
-        await callback.answer("Некорректный выбор", show_alert=True)
+        await safe_callback_answer(callback, "Некорректный выбор", show_alert=True)
         return
 
     gender_code = payload[1]
+    if gender_code not in {"male", "female"}:
+        await safe_callback_answer(callback, "Некорректный пол", show_alert=True)
+        return
     gender = "Мужской" if gender_code == "male" else "Женский"
+
+    # Не завязываемся жёстко на FSM-state: после редеплоя Railway состояние может сброситься.
     data = await state.get_data()
-    nickname = data.get("nickname")
+    nickname = str(data.get("nickname") or "").strip()
     if not nickname:
         await state.set_state(Registration.nickname)
-        await callback.message.answer("Введи прозвище заново.")
-        await callback.answer()
+        await callback.message.answer(
+            "Сессия регистрации сбросилась (обычно после обновления бота).\n"
+            "Введи прозвище заново:"
+        )
+        await safe_callback_answer(callback)
         return
 
     db = get_storage()
-    db.create_character(callback.from_user.id, nickname=nickname, gender=gender)
+    existing = db.get_character(callback.from_user.id, refresh_energy=False)
+    if existing is not None:
+        await state.clear()
+        if player_ready(existing):
+            await callback.message.answer(
+                f"Персонаж уже есть: {existing.nickname}.",
+                reply_markup=main_menu_keyboard(),
+            )
+        else:
+            await callback.message.answer(
+                "Персонаж уже создан. Выбери группировку:",
+                reply_markup=faction_keyboard(),
+            )
+        await safe_callback_answer(callback)
+        return
+
+    try:
+        db.create_character(callback.from_user.id, nickname=nickname, gender=gender)
+        saved = db.get_character(callback.from_user.id, refresh_energy=False)
+    except Exception:
+        logger.exception("Failed to create character for user %s", callback.from_user.id)
+        await safe_callback_answer(callback, "Ошибка создания персонажа. Попробуй /start ещё раз.", show_alert=True)
+        return
 
     await state.clear()
-    saved = db.get_character(callback.from_user.id, refresh_energy=False)
     uid_line = f"\nТвой ID в Зоне: {saved.player_uid}" if saved else ""
     await callback.message.answer(
         f"Персонаж создан: {nickname} ({gender}).{uid_line}\nВыбери сторону:",
         reply_markup=faction_keyboard(),
     )
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data.startswith("faction:"))

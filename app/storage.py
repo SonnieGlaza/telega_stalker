@@ -150,9 +150,9 @@ class Storage:
                 "player_stats": player_stats,
                 "player_achievements": player_achievements,
             }
-            self.snapshot_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        except OSError:
-            # Не ломаем игру, если в окружении временно нет прав на запись backup-файла.
+            self.snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
+        except Exception:
+            # Не ломаем игру, если backup временно недоступен или данные не сериализуются.
             return
 
     def _restore_from_snapshot_if_needed(self, conn: DbConnection) -> None:
@@ -458,7 +458,12 @@ class Storage:
                     equipment_json TEXT NOT NULL DEFAULT '{"weapon":"Нож","armor":"Куртка новичка","weapon_durability":100,"armor_durability":100}',
                     truck_owned INTEGER NOT NULL DEFAULT 0,
                     sleeping_bag_owned INTEGER NOT NULL DEFAULT 0,
-                    fuel INTEGER NOT NULL DEFAULT 0
+                    fuel INTEGER NOT NULL DEFAULT 0,
+                    radiation INTEGER NOT NULL DEFAULT 0,
+                    hunger INTEGER NOT NULL DEFAULT 0,
+                    thirst INTEGER NOT NULL DEFAULT 0,
+                    needs_updated_at TEXT,
+                    survival_damage_at TEXT
                 )
                 """
             )
@@ -670,17 +675,30 @@ class Storage:
     def create_character(self, telegram_id: int, nickname: str, gender: str) -> None:
         player_uid = build_player_uid(telegram_id)
         now_iso = utc_now().isoformat()
+        default_equipment = (
+            '{"weapon":"Нож","armor":"Куртка новичка","weapon_durability":100,"armor_durability":100}'
+        )
         with self._connect() as conn:
+            # На случай старых схем без survival-колонок.
+            self._ensure_characters_schema(conn)
             conn.execute(
                 """
                 INSERT INTO characters(
-                    telegram_id, player_uid, nickname, gender, energy_updated_at, needs_updated_at, survival_damage_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                    telegram_id, player_uid, avatar_style, nickname, gender,
+                    money, energy, max_energy, energy_updated_at, health, gear_power, location,
+                    inventory_json, equipment_json, truck_owned, sleeping_bag_owned, fuel,
+                    radiation, hunger, thirst, needs_updated_at, survival_damage_at
+                ) VALUES(
+                    ?, ?, 'classic', ?, ?,
+                    1000, 100, 100, ?, 100, 2, 'База новичков',
+                    '{}', ?, 0, 0, 0,
+                    0, 0, 0, ?, ?
+                )
                 ON CONFLICT(telegram_id) DO UPDATE SET
-                    nickname = excluded.nickname,
-                    gender = excluded.gender
+                    nickname = EXCLUDED.nickname,
+                    gender = EXCLUDED.gender
                 """,
-                (telegram_id, player_uid, nickname, gender, now_iso, now_iso, now_iso),
+                (telegram_id, player_uid, nickname, gender, now_iso, default_equipment, now_iso, now_iso),
             )
             self._ensure_player_stats_row(conn, telegram_id)
         self.save_snapshot()
@@ -1919,10 +1937,18 @@ class Storage:
 
     @staticmethod
     def _row_to_character(row: Any) -> Character:
-        inventory = json.loads(row["inventory_json"])
+        inventory_raw = row["inventory_json"] if "inventory_json" in row.keys() else "{}"
+        equipment_raw = row["equipment_json"] if "equipment_json" in row.keys() else "{}"
+        try:
+            inventory = json.loads(inventory_raw or "{}")
+        except (TypeError, json.JSONDecodeError):
+            inventory = {}
         if not isinstance(inventory, dict):
             inventory = {}
-        equipment = json.loads(row["equipment_json"])
+        try:
+            equipment = json.loads(equipment_raw or "{}")
+        except (TypeError, json.JSONDecodeError):
+            equipment = {"weapon": "Нож", "armor": "Куртка новичка"}
         if not isinstance(equipment, dict):
             equipment = {"weapon": "Нож", "armor": "Куртка новичка"}
         if "weapon" not in equipment:
@@ -1939,28 +1965,47 @@ class Storage:
             armor_durability = 100
         equipment["weapon_durability"] = max(0, min(100, weapon_durability))
         equipment["armor_durability"] = max(0, min(100, armor_durability))
+
+        def _as_int(value: Any, default: int = 0) -> int:
+            try:
+                if value is None:
+                    return default
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        def _as_dt(value: Any) -> datetime:
+            if isinstance(value, datetime):
+                return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            if value is None or str(value).strip() == "":
+                return utc_now()
+            try:
+                return datetime.fromisoformat(str(value))
+            except ValueError:
+                return utc_now()
+
         return Character(
-            telegram_id=row["telegram_id"],
-            player_uid=row["player_uid"] or build_player_uid(row["telegram_id"]),
+            telegram_id=_as_int(row["telegram_id"]),
+            player_uid=(row["player_uid"] or build_player_uid(_as_int(row["telegram_id"]))),
             avatar_style=(row["avatar_style"] or "classic"),
             nickname=row["nickname"],
             gender=row["gender"],
             faction=row["faction"],
-            money=row["money"],
-            energy=row["energy"],
-            max_energy=row["max_energy"],
-            health=row["health"],
-            gear_power=row["gear_power"],
-            location=row["location"],
+            money=_as_int(row["money"], 1000),
+            energy=_as_int(row["energy"], 100),
+            max_energy=_as_int(row["max_energy"], 100),
+            health=_as_int(row["health"], 100),
+            gear_power=_as_int(row["gear_power"], 2),
+            location=row["location"] or "База новичков",
             inventory=inventory,
             equipment=equipment,
             truck_owned=bool(row["truck_owned"]),
             sleeping_bag_owned=bool(row["sleeping_bag_owned"]),
-            fuel=row["fuel"],
-            energy_updated_at=datetime.fromisoformat(row["energy_updated_at"]),
-            radiation=max(0, min(200, int(row["radiation"]))),
-            hunger=max(0, min(200, int(row["hunger"]))),
-            thirst=max(0, min(200, int(row["thirst"]))),
-            needs_updated_at=datetime.fromisoformat(row["needs_updated_at"]),
-            survival_damage_at=datetime.fromisoformat(row["survival_damage_at"]),
+            fuel=_as_int(row["fuel"], 0),
+            energy_updated_at=_as_dt(row["energy_updated_at"]),
+            radiation=max(0, min(200, _as_int(row["radiation"], 0))),
+            hunger=max(0, min(200, _as_int(row["hunger"], 0))),
+            thirst=max(0, min(200, _as_int(row["thirst"], 0))),
+            needs_updated_at=_as_dt(row["needs_updated_at"]),
+            survival_damage_at=_as_dt(row["survival_damage_at"]),
         )
