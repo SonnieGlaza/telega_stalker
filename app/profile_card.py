@@ -270,6 +270,35 @@ def _draw_stalker_quote(
         )
 
 
+def _draw_centered_lines_in_box(
+    draw: ImageDraw.ImageDraw,
+    *,
+    left: int,
+    top: int,
+    right: int,
+    bottom: int,
+    lines: list[str],
+    font: ImageFont.ImageFont,
+    fill: tuple[int, int, int],
+    line_step: int | None = None,
+) -> None:
+    if not lines:
+        return
+    padding_x = 16
+    max_width = max(40, right - left - padding_x * 2)
+    visible = [_ellipsize_text(draw, line, font, max_width) for line in lines]
+    ascent, descent = font.getmetrics()
+    step = line_step or max(ascent + descent + 4, 28)
+    block_h = (len(visible) - 1) * step + ascent + descent
+    center_y = (top + bottom) // 2
+    start_y = center_y - block_h // 2
+    box_width = right - left
+    for idx, line in enumerate(visible):
+        line_width = draw.textlength(line, font=font)
+        x = left + max(padding_x, int((box_width - line_width) / 2))
+        draw.text((x, start_y + idx * step), line, fill=fill, font=font)
+
+
 def _draw_power_bar(
     draw: ImageDraw.ImageDraw,
     x: int,
@@ -381,13 +410,31 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
         fill=(240, 240, 240),
         font=subtitle_font,
     )
-    draw.rounded_rectangle((46, 164, 408, 254), radius=12, fill=location_color, outline=(210, 210, 210), width=2)
-    draw.text((62, 188), f"Локация: {character.location}", fill=(248, 248, 248), font=small_font)
-    draw.text((62, 218), f"Группировка: {character.faction or 'не выбрана'}", fill=(248, 248, 248), font=small_font)
-
     info_box_left = 46
+    info_box_top = 164
     info_box_right = 408
     info_box_bottom = 254
+    draw.rounded_rectangle(
+        (info_box_left, info_box_top, info_box_right, info_box_bottom),
+        radius=12,
+        fill=location_color,
+        outline=(210, 210, 210),
+        width=2,
+    )
+    _draw_centered_lines_in_box(
+        draw,
+        left=info_box_left,
+        top=info_box_top,
+        right=info_box_right,
+        bottom=info_box_bottom,
+        lines=[
+            f"Локация: {character.location}",
+            f"Группировка: {character.faction or 'не выбрана'}",
+        ],
+        font=small_font,
+        fill=(248, 248, 248),
+    )
+
     panel_left = info_box_left
     panel_right = info_box_right
     panel_bottom = 676
