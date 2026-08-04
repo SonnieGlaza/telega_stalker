@@ -1958,7 +1958,7 @@ class Storage:
         return [{"achievement_key": row["achievement_key"], "unlocked_at": row["unlocked_at"]} for row in rows]
 
     def get_rating_leaderboard(self, limit: int = 10) -> list[dict[str, Any]]:
-        safe_limit = max(1, min(25, limit))
+        safe_limit = max(1, min(100, int(limit)))
         with self._connect() as conn:
             rows = conn.execute(
                 """

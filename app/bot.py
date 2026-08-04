@@ -155,6 +155,7 @@ from app.keyboards import (
     war_sections_keyboard,
     players_factions_keyboard,
     players_faction_page_keyboard,
+    rating_page_keyboard,
 )
 from app.export_players import (
     build_players_export_files,
@@ -1792,8 +1793,11 @@ async def show_rating(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
-    text = build_rating_overview(get_storage(), player.telegram_id, limit=10)
-    await message.answer(text, reply_markup=pda_keyboard())
+    text, page, total_pages = build_rating_overview(get_storage(), player.telegram_id, page=0)
+    await message.answer(
+        text,
+        reply_markup=rating_page_keyboard(page=page, total_pages=total_pages),
+    )
 
 
 @router.message(F.text == "🗺 Карта")
@@ -1956,13 +1960,29 @@ async def show_achievements_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "ratings:leaderboard")
+@router.callback_query(F.data.startswith("rating:page:"))
 async def show_rating_callback(callback: CallbackQuery) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     if player is None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
-    text = build_rating_overview(get_storage(), player.telegram_id, limit=10)
-    await edit_menu_message(callback, text, None)
+    page = 0
+    raw = callback.data or ""
+    if raw.startswith("rating:page:"):
+        try:
+            page = int(raw.rsplit(":", maxsplit=1)[-1])
+        except ValueError:
+            page = 0
+    text, safe_page, total_pages = build_rating_overview(
+        get_storage(),
+        player.telegram_id,
+        page=page,
+    )
+    await edit_menu_message(
+        callback,
+        text,
+        rating_page_keyboard(page=safe_page, total_pages=total_pages),
+    )
 
 
 @router.message(F.text == "⚡ Выпить энергетик")
