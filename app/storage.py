@@ -432,20 +432,27 @@ class Storage:
                     row.get("unlocked_at") or utc_now().isoformat(),
                 ),
             )
+        self._ensure_pending_registrations_schema(conn)
         for row in pending_registrations:
             nick = str(row.get("nickname") or "").strip()
             if not nick:
                 continue
+            gender = str(row.get("gender") or "").strip() or None
+            step = str(row.get("step") or "").strip() or ("faction" if gender else "gender")
+            now_iso = utc_now().isoformat()
             conn.execute(
                 """
                 INSERT OR REPLACE INTO pending_registrations(
-                    telegram_id, nickname, created_at
-                ) VALUES (?, ?, ?)
+                    telegram_id, nickname, gender, step, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(row.get("telegram_id")),
                     nick,
-                    row.get("created_at") or utc_now().isoformat(),
+                    gender,
+                    step,
+                    row.get("created_at") or now_iso,
+                    row.get("updated_at") or now_iso,
                 ),
             )
 
@@ -661,16 +668,8 @@ class Storage:
                 )
                 """
             )
-            # Черновик регистрации: ник живёт в БД, а не только в MemoryStorage FSM.
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS pending_registrations (
-                    telegram_id INTEGER PRIMARY KEY,
-                    nickname TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                )
-                """
-            )
+            # Черновик регистрации: ник/пол живут в БД, а не только в MemoryStorage FSM.
+            self._ensure_pending_registrations_schema(conn)
             conn.executemany(
                 "INSERT OR IGNORE INTO factions(name, treasury, leader_id) VALUES(?, ?, NULL)",
                 [
@@ -712,28 +711,76 @@ class Storage:
         default_equipment = (
             '{"weapon":"Нож","armor":"Куртка новичка","weapon_durability":100,"armor_durability":100}'
         )
+        nick = (nickname or "").strip()
+        gen = (gender or "").strip()
+        if not nick:
+            raise ValueError("nickname is empty")
+        if not gen:
+            raise ValueError("gender is empty")
+
+        with self._connect() as schema_conn:
+            self._ensure_pending_registrations_schema(schema_conn)
+            # Отдельная транзакция: падение CREATE INDEX на Postgres
+            # не должно abort'ить INSERT персонажа.
+            self._ensure_characters_schema(schema_conn)
+
         with self._connect() as conn:
-            # На случай старых схем без survival-колонок.
-            self._ensure_characters_schema(conn)
+            # Убираем коллизии player_uid у других аккаунтов — иначе INSERT падает
+            # по UNIQUE, а ON CONFLICT(telegram_id) это не ловит.
             conn.execute(
                 """
-                INSERT INTO characters(
-                    telegram_id, player_uid, avatar_style, nickname, gender,
-                    money, energy, max_energy, energy_updated_at, health, gear_power, location,
-                    inventory_json, equipment_json, truck_owned, sleeping_bag_owned, fuel,
-                    radiation, hunger, thirst, needs_updated_at, survival_damage_at
-                ) VALUES(
-                    ?, ?, 'classic', ?, ?,
-                    1000, 100, 100, ?, 100, 2, 'База новичков',
-                    '{}', ?, 0, 0, 0,
-                    0, 0, 0, ?, ?
-                )
-                ON CONFLICT(telegram_id) DO UPDATE SET
-                    nickname = EXCLUDED.nickname,
-                    gender = EXCLUDED.gender
+                UPDATE characters
+                SET player_uid = NULL
+                WHERE player_uid = ? AND telegram_id <> ?
                 """,
-                (telegram_id, player_uid, nickname, gender, now_iso, default_equipment, now_iso, now_iso),
+                (player_uid, telegram_id),
             )
+            existing = conn.execute(
+                "SELECT telegram_id FROM characters WHERE telegram_id = ?",
+                (telegram_id,),
+            ).fetchone()
+            if existing is not None:
+                conn.execute(
+                    """
+                    UPDATE characters
+                    SET nickname = ?, gender = ?, player_uid = COALESCE(NULLIF(TRIM(player_uid), ''), ?)
+                    WHERE telegram_id = ?
+                    """,
+                    (nick, gen, player_uid, telegram_id),
+                )
+            else:
+                if conn.backend == "postgres":
+                    conn.execute("SAVEPOINT sp_create_character")
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO characters(
+                            telegram_id, player_uid, avatar_style, nickname, gender,
+                            money, energy, max_energy, energy_updated_at, health, gear_power, location,
+                            inventory_json, equipment_json, truck_owned, sleeping_bag_owned, fuel,
+                            radiation, hunger, thirst, needs_updated_at, survival_damage_at
+                        ) VALUES(
+                            ?, ?, 'classic', ?, ?,
+                            1000, 100, 100, ?, 100, 2, 'База новичков',
+                            '{}', ?, 0, 0, 0,
+                            0, 0, 0, ?, ?
+                        )
+                        """,
+                        (telegram_id, player_uid, nick, gen, now_iso, default_equipment, now_iso, now_iso),
+                    )
+                    if conn.backend == "postgres":
+                        conn.execute("RELEASE SAVEPOINT sp_create_character")
+                except integrity_error_types():
+                    if conn.backend == "postgres":
+                        conn.execute("ROLLBACK TO SAVEPOINT sp_create_character")
+                    conn.execute(
+                        """
+                        UPDATE characters
+                        SET nickname = ?, gender = ?, player_uid = ?
+                        WHERE telegram_id = ?
+                        """,
+                        (nick, gen, player_uid, telegram_id),
+                    )
             self._ensure_player_stats_row(conn, telegram_id)
             conn.execute(
                 "DELETE FROM pending_registrations WHERE telegram_id = ?",
@@ -741,33 +788,88 @@ class Storage:
             )
         self.save_snapshot()
 
-    def save_pending_registration(self, telegram_id: int, nickname: str) -> None:
+    def _ensure_pending_registrations_schema(self, conn: DbConnection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_registrations (
+                telegram_id INTEGER PRIMARY KEY,
+                nickname TEXT NOT NULL,
+                gender TEXT,
+                step TEXT NOT NULL DEFAULT 'gender',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        columns = self._table_columns(conn, "pending_registrations")
+        if "gender" not in columns:
+            conn.execute("ALTER TABLE pending_registrations ADD COLUMN gender TEXT")
+        if "step" not in columns:
+            conn.execute(
+                "ALTER TABLE pending_registrations ADD COLUMN step TEXT NOT NULL DEFAULT 'gender'"
+            )
+        if "updated_at" not in columns:
+            conn.execute("ALTER TABLE pending_registrations ADD COLUMN updated_at TEXT")
+            conn.execute(
+                """
+                UPDATE pending_registrations
+                SET updated_at = COALESCE(NULLIF(TRIM(created_at), ''), ?)
+                WHERE updated_at IS NULL OR TRIM(updated_at) = ''
+                """,
+                (utc_now().isoformat(),),
+            )
+
+    def save_pending_registration(
+        self,
+        telegram_id: int,
+        nickname: str,
+        gender: str | None = None,
+        step: str = "gender",
+    ) -> None:
         nick = (nickname or "").strip()
         if not nick:
             raise ValueError("nickname is empty")
+        gen = (gender or "").strip() or None
+        step_value = (step or "gender").strip() or "gender"
+        now_iso = utc_now().isoformat()
         with self._connect() as conn:
+            self._ensure_pending_registrations_schema(conn)
             conn.execute(
                 """
-                INSERT OR REPLACE INTO pending_registrations(telegram_id, nickname, created_at)
-                VALUES (?, ?, ?)
+                INSERT OR REPLACE INTO pending_registrations(
+                    telegram_id, nickname, gender, step, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (telegram_id, nick, utc_now().isoformat()),
+                (telegram_id, nick, gen, step_value, now_iso, now_iso),
             )
         self.save_snapshot()
 
-    def get_pending_registration(self, telegram_id: int) -> str | None:
+    def get_pending_registration(self, telegram_id: int) -> dict[str, str] | None:
         with self._connect() as conn:
+            self._ensure_pending_registrations_schema(conn)
             row = conn.execute(
-                "SELECT nickname FROM pending_registrations WHERE telegram_id = ?",
+                """
+                SELECT nickname, gender, step
+                FROM pending_registrations
+                WHERE telegram_id = ?
+                """,
                 (telegram_id,),
             ).fetchone()
         if row is None:
             return None
         nick = str(row["nickname"] or "").strip()
-        return nick or None
+        if not nick:
+            return None
+        gender = str(row["gender"] or "").strip()
+        step = str(row["step"] or "").strip() or ("faction" if gender else "gender")
+        result = {"nickname": nick, "step": step}
+        if gender:
+            result["gender"] = gender
+        return result
 
     def clear_pending_registration(self, telegram_id: int) -> None:
         with self._connect() as conn:
+            self._ensure_pending_registrations_schema(conn)
             conn.execute(
                 "DELETE FROM pending_registrations WHERE telegram_id = ?",
                 (telegram_id,),
@@ -1941,9 +2043,6 @@ class Storage:
         if "sleeping_bag_owned" not in column_names:
             conn.execute("ALTER TABLE characters ADD COLUMN sleeping_bag_owned INTEGER NOT NULL DEFAULT 0")
 
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_player_uid ON characters(player_uid)"
-        )
         # Backfill ID-address for old rows created before this column existed.
         rows = conn.execute(
             "SELECT telegram_id FROM characters WHERE player_uid IS NULL OR TRIM(player_uid) = ''"
@@ -1953,6 +2052,49 @@ class Storage:
                 "UPDATE characters SET player_uid = ? WHERE telegram_id = ?",
                 (build_player_uid(int(row["telegram_id"])), int(row["telegram_id"])),
             )
+        # Снимаем дубли player_uid перед уникальным индексом, иначе CREATE INDEX
+        # валит всю транзакцию create_character на Postgres.
+        dup_rows = conn.execute(
+            """
+            SELECT player_uid
+            FROM characters
+            WHERE player_uid IS NOT NULL AND TRIM(player_uid) <> ''
+            GROUP BY player_uid
+            HAVING COUNT(*) > 1
+            """
+        ).fetchall()
+        for dup in dup_rows:
+            uid = dup["player_uid"]
+            owners = conn.execute(
+                """
+                SELECT telegram_id
+                FROM characters
+                WHERE player_uid = ?
+                ORDER BY telegram_id
+                """,
+                (uid,),
+            ).fetchall()
+            for owner in owners[1:]:
+                tid = int(owner["telegram_id"])
+                conn.execute(
+                    "UPDATE characters SET player_uid = ? WHERE telegram_id = ?",
+                    (build_player_uid(tid), tid),
+                )
+        try:
+            if conn.backend == "postgres":
+                conn.execute("SAVEPOINT sp_uid_index")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_characters_player_uid ON characters(player_uid)"
+            )
+            if conn.backend == "postgres":
+                conn.execute("RELEASE SAVEPOINT sp_uid_index")
+        except Exception:
+            if conn.backend == "postgres":
+                try:
+                    conn.execute("ROLLBACK TO SAVEPOINT sp_uid_index")
+                except Exception:
+                    pass
+            # Не блокируем создание персонажа из-за индекса.
         conn.execute(
             """
             UPDATE characters
@@ -2007,9 +2149,20 @@ class Storage:
                 )
 
     @staticmethod
+    def _row_get(row: Any, key: str, default: Any = None) -> Any:
+        try:
+            keys = row.keys() if hasattr(row, "keys") else None
+            if keys is not None and key not in keys:
+                return default
+            value = row[key]
+            return default if value is None else value
+        except (KeyError, IndexError, TypeError):
+            return default
+
+    @staticmethod
     def _row_to_character(row: Any) -> Character:
-        inventory_raw = row["inventory_json"] if "inventory_json" in row.keys() else "{}"
-        equipment_raw = row["equipment_json"] if "equipment_json" in row.keys() else "{}"
+        inventory_raw = Storage._row_get(row, "inventory_json", "{}")
+        equipment_raw = Storage._row_get(row, "equipment_json", "{}")
         try:
             inventory = json.loads(inventory_raw or "{}")
         except (TypeError, json.JSONDecodeError):
@@ -2055,28 +2208,32 @@ class Storage:
             except ValueError:
                 return utc_now()
 
+        telegram_id = _as_int(Storage._row_get(row, "telegram_id", 0))
         return Character(
-            telegram_id=_as_int(row["telegram_id"]),
-            player_uid=(row["player_uid"] or build_player_uid(_as_int(row["telegram_id"]))),
-            avatar_style=(row["avatar_style"] or "classic"),
-            nickname=row["nickname"],
-            gender=row["gender"],
-            faction=row["faction"],
-            money=_as_int(row["money"], 1000),
-            energy=_as_int(row["energy"], 100),
-            max_energy=_as_int(row["max_energy"], 100),
-            health=_as_int(row["health"], 100),
-            gear_power=_as_int(row["gear_power"], 2),
-            location=row["location"] or "База новичков",
+            telegram_id=telegram_id,
+            player_uid=(
+                Storage._row_get(row, "player_uid")
+                or build_player_uid(telegram_id)
+            ),
+            avatar_style=(Storage._row_get(row, "avatar_style") or "classic"),
+            nickname=str(Storage._row_get(row, "nickname") or "Сталкер"),
+            gender=str(Storage._row_get(row, "gender") or "Мужской"),
+            faction=Storage._row_get(row, "faction"),
+            money=_as_int(Storage._row_get(row, "money"), 1000),
+            energy=_as_int(Storage._row_get(row, "energy"), 100),
+            max_energy=_as_int(Storage._row_get(row, "max_energy"), 100),
+            health=_as_int(Storage._row_get(row, "health"), 100),
+            gear_power=_as_int(Storage._row_get(row, "gear_power"), 2),
+            location=Storage._row_get(row, "location") or "База новичков",
             inventory=inventory,
             equipment=equipment,
-            truck_owned=bool(row["truck_owned"]),
-            sleeping_bag_owned=bool(row["sleeping_bag_owned"]),
-            fuel=_as_int(row["fuel"], 0),
-            energy_updated_at=_as_dt(row["energy_updated_at"]),
-            radiation=max(0, min(200, _as_int(row["radiation"], 0))),
-            hunger=max(0, min(200, _as_int(row["hunger"], 0))),
-            thirst=max(0, min(200, _as_int(row["thirst"], 0))),
-            needs_updated_at=_as_dt(row["needs_updated_at"]),
-            survival_damage_at=_as_dt(row["survival_damage_at"]),
+            truck_owned=bool(Storage._row_get(row, "truck_owned", 0)),
+            sleeping_bag_owned=bool(Storage._row_get(row, "sleeping_bag_owned", 0)),
+            fuel=_as_int(Storage._row_get(row, "fuel"), 0),
+            energy_updated_at=_as_dt(Storage._row_get(row, "energy_updated_at")),
+            radiation=max(0, min(200, _as_int(Storage._row_get(row, "radiation"), 0))),
+            hunger=max(0, min(200, _as_int(Storage._row_get(row, "hunger"), 0))),
+            thirst=max(0, min(200, _as_int(Storage._row_get(row, "thirst"), 0))),
+            needs_updated_at=_as_dt(Storage._row_get(row, "needs_updated_at")),
+            survival_damage_at=_as_dt(Storage._row_get(row, "survival_damage_at")),
         )

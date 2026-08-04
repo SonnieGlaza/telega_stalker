@@ -229,13 +229,36 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     # No account for this Telegram ID yet -> normal registration flow.
     player = db.get_character(telegram_id)
     if player is None:
-        pending_nick = db.get_pending_registration(telegram_id)
+        pending = db.get_pending_registration(telegram_id)
         current_state = await state.get_state()
-        if pending_nick:
-            await state.update_data(nickname=pending_nick)
+        if pending:
+            nickname = pending["nickname"]
+            gender = pending.get("gender")
+            await state.update_data(nickname=nickname, gender=gender)
+            if gender:
+                # Ник+пол уже сохранены — добиваем создание персонажа после редеплоя.
+                try:
+                    db.create_character(telegram_id, nickname=nickname, gender=gender)
+                    saved = db.get_character(telegram_id, refresh_energy=False)
+                except Exception:
+                    logger.exception("Failed to resume character create for user %s", telegram_id)
+                    await state.set_state(Registration.gender)
+                    await message.answer(
+                        f"Нашёл черновик: {nickname} ({gender}).\n"
+                        "Не удалось завершить создание автоматически. Нажми пол ещё раз:",
+                        reply_markup=gender_keyboard(),
+                    )
+                    return
+                await state.clear()
+                uid_line = f"\nТвой ID в Зоне: {saved.player_uid}" if saved else ""
+                await message.answer(
+                    f"Персонаж восстановлен: {nickname} ({gender}).{uid_line}\nВыбери сторону:",
+                    reply_markup=faction_keyboard(),
+                )
+                return
             await state.set_state(Registration.gender)
             await message.answer(
-                f"Нашёл сохранённое прозвище: {pending_nick}.\nВыбери пол персонажа:",
+                f"Нашёл сохранённое прозвище: {nickname}.\nВыбери пол персонажа:",
                 reply_markup=gender_keyboard(),
             )
             return
@@ -619,7 +642,7 @@ async def process_nickname(message: Message, state: FSMContext) -> None:
 
     db = get_storage()
     try:
-        db.save_pending_registration(message.from_user.id, nickname)
+        db.save_pending_registration(message.from_user.id, nickname, step="gender")
     except Exception:
         logger.exception("Failed to persist pending nickname for user %s", message.from_user.id)
         await message.answer("Не удалось сохранить прозвище. Попробуй ещё раз.")
@@ -643,12 +666,13 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
         return
     gender = "Мужской" if gender_code == "male" else "Женский"
 
-    # Ник сначала из FSM, при редеплое — из БД (pending_registrations).
+    # Ник/пол: FSM → черновик в БД (переживает редеплой).
     db = get_storage()
     data = await state.get_data()
     nickname = str(data.get("nickname") or "").strip()
-    if not nickname:
-        nickname = db.get_pending_registration(callback.from_user.id) or ""
+    pending = db.get_pending_registration(callback.from_user.id)
+    if not nickname and pending:
+        nickname = pending.get("nickname", "")
     if not nickname:
         await state.set_state(Registration.nickname)
         await callback.message.answer(
@@ -658,9 +682,26 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
         await safe_callback_answer(callback)
         return
 
+    # Сразу пишем пол в черновик — даже если create_character упадёт, /start добьёт аккаунт.
+    try:
+        db.save_pending_registration(
+            callback.from_user.id,
+            nickname=nickname,
+            gender=gender,
+            step="faction",
+        )
+    except Exception:
+        logger.exception("Failed to persist pending gender for user %s", callback.from_user.id)
+
+    await state.update_data(nickname=nickname, gender=gender)
+
     existing = db.get_character(callback.from_user.id, refresh_energy=False)
     if existing is not None:
         await state.clear()
+        try:
+            db.create_character(callback.from_user.id, nickname=nickname, gender=gender)
+        except Exception:
+            logger.exception("Failed to update existing character gender for %s", callback.from_user.id)
         db.clear_pending_registration(callback.from_user.id)
         if player_ready(existing):
             await callback.message.answer(
@@ -678,9 +719,17 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
     try:
         db.create_character(callback.from_user.id, nickname=nickname, gender=gender)
         saved = db.get_character(callback.from_user.id, refresh_energy=False)
+        if saved is None:
+            raise RuntimeError("character row missing after create_character")
     except Exception:
         logger.exception("Failed to create character for user %s", callback.from_user.id)
-        await safe_callback_answer(callback, "Ошибка создания персонажа. Попробуй /start ещё раз.", show_alert=True)
+        await state.set_state(Registration.gender)
+        await callback.message.answer(
+            "Не удалось создать персонажа в базе.\n"
+            "Черновик (ник и пол) сохранён — нажми /start или выбери пол ещё раз.",
+            reply_markup=gender_keyboard(),
+        )
+        await safe_callback_answer(callback, "Ошибка БД, черновик сохранён", show_alert=True)
         return
 
     await state.clear()
