@@ -23,7 +23,7 @@ class QuestType:
 
 
 QUESTS: dict[str, QuestType] = {
-    "easy": QuestType("easy", "Легко", 96, 10, 270, 410, 0, 0),
+    "easy": QuestType("easy", "Легко", 50, 10, 270, 410, 0, 0),
     "hard": QuestType("hard", "Сложно", 80, 16, 350, 1200, 0, 0),
     "heavy": QuestType("heavy", "Тяжело", 70, 22, 500, 750, 2, 1),
     "impossible": QuestType("impossible", "Невозможно", 60, 28, 700, 1500, 3, 1),
@@ -740,6 +740,33 @@ def calculate_quest_success(
     )
 
 
+def calculate_quest_success_for_quest(
+    character: Character,
+    quest: QuestType,
+) -> QuestChanceBreakdown:
+    """Шанс успеха по заданию. «Легко» — фиксированные 50%."""
+    if quest.key == "easy":
+        return QuestChanceBreakdown(
+            chance=50,
+            base_chance=50,
+            gear_bonus=0,
+            ammo_bonus=0,
+            medkit_bonus=0,
+        )
+    ammo_stock = int(character.inventory.get("ammo_pack", 0))
+    medkit_stock = int(character.inventory.get("medkit", 0))
+    gear_bonus = calculate_equipment_bonus(character)
+    return calculate_quest_success(
+        gear_power=compute_total_gear_power(character),
+        gear_bonus=gear_bonus,
+        max_success=quest.max_success,
+        ammo_stock=ammo_stock,
+        medkit_stock=medkit_stock,
+        ammo_required=quest.ammo_required,
+        medkit_required=quest.medkit_required,
+    )
+
+
 def build_quest_overview(character: Character) -> str:
     ammo_stock = int(character.inventory.get("ammo_pack", 0))
     medkit_stock = int(character.inventory.get("medkit", 0))
@@ -750,6 +777,9 @@ def build_quest_overview(character: Character) -> str:
         "",
     ]
     for quest in QUESTS.values():
+        if quest.key == "easy":
+            lines.append(f"• {quest.title}: шанс победы 50%, без обязательного расхода расходников")
+            continue
         if quest.ammo_required == 0 and quest.medkit_required == 0:
             lines.append(f"• {quest.title}: без обязательного расхода расходников")
             continue
@@ -768,19 +798,7 @@ def calculate_quest_success_by_key(character: Character, quest_key: str) -> int:
     quest = QUESTS.get(quest_key)
     if quest is None:
         return 0
-    ammo_stock = int(character.inventory.get("ammo_pack", 0))
-    medkit_stock = int(character.inventory.get("medkit", 0))
-    gear_bonus = calculate_equipment_bonus(character)
-    breakdown = calculate_quest_success(
-        gear_power=compute_total_gear_power(character),
-        gear_bonus=gear_bonus,
-        max_success=quest.max_success,
-        ammo_stock=ammo_stock,
-        medkit_stock=medkit_stock,
-        ammo_required=quest.ammo_required,
-        medkit_required=quest.medkit_required,
-    )
-    return breakdown.chance
+    return calculate_quest_success_for_quest(character, quest).chance
 
 
 def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResult:
@@ -826,18 +844,7 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
     if updated is None:
         return ActionResult(False, "Персонаж не найден.")
 
-    ammo_after = int(updated.inventory.get("ammo_pack", 0))
-    medkit_after = int(updated.inventory.get("medkit", 0))
-    gear_bonus = calculate_equipment_bonus(updated)
-    breakdown = calculate_quest_success(
-        gear_power=compute_total_gear_power(updated),
-        gear_bonus=gear_bonus,
-        max_success=quest.max_success,
-        ammo_stock=ammo_after,
-        medkit_stock=medkit_after,
-        ammo_required=quest.ammo_required,
-        medkit_required=quest.medkit_required,
-    )
+    breakdown = calculate_quest_success_for_quest(updated, quest)
     roll = random.randint(1, 100)
     success = roll <= breakdown.chance
 
@@ -858,11 +865,18 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
             extra = ""
         stash_text = _maybe_drop_stash(storage, telegram_id)
         achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+        formula_line = (
+            "Шанс фиксированный: 50%."
+            if quest.key == "easy"
+            else (
+                f"Формула: база {breakdown.base_chance}% (включая снарягу +{breakdown.gear_bonus}%) "
+                f"+ патроны {breakdown.ammo_bonus}% + аптечки {breakdown.medkit_bonus}%."
+            )
+        )
         return ActionResult(
             True,
             f"Задание «{quest.title}» выполнено! Шанс {breakdown.chance}% (бросок {roll}).\n"
-            f"Формула: база {breakdown.base_chance}% (включая снарягу +{breakdown.gear_bonus}%) "
-            f"+ патроны {breakdown.ammo_bonus}% + аптечки {breakdown.medkit_bonus}%.\n"
+            f"{formula_line}\n"
             f"Расход: патроны {quest.ammo_required}, аптечки {quest.medkit_required}.\n"
             f"Награда: {reward} RU.{extra}{stash_text}{durability_text}{achievements_text}",
         )
