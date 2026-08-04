@@ -590,12 +590,12 @@ def _achievement_rules() -> tuple[AchievementRule, ...]:
             check=lambda stats, _: stats["money_earned"] >= 20_000,
         ),
         AchievementRule(
-            key="rating_3000",
+            key="rating_5000",
             title="Легенда Зоны",
-            description="Достигни 3000 рейтинга",
+            description="Достигни 5000 рейтинга",
             reward_ru=1500,
             reward_rating=100,
-            check=lambda stats, _: stats["rating_points"] >= 3000,
+            check=lambda stats, _: stats["rating_points"] >= 5000,
         ),
     )
 
