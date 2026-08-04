@@ -668,6 +668,24 @@ def build_achievements_overview(storage: Storage, telegram_id: int) -> str:
     )
 
 
+def build_character_stats_overview(storage: Storage, telegram_id: int) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return "Сначала создай персонажа через /start."
+    stats = storage.get_player_stats(telegram_id)
+    return (
+        f"📊 Статистика персонажа — {player.nickname}\n\n"
+        f"📋 Заданий выполнено: {stats['quests_completed']}\n"
+        f"🪖 Успешных рейдов: {stats['raids_completed']}\n"
+        f"⚔️ Захватов точек: {stats['wars_won']}\n"
+        f"💰 Денег накоплено: {stats['money_earned']} RU\n"
+        f"🔮 Артефактов найдено: {stats['artifacts_found']}\n"
+        f"☠️ Смертей: {stats['deaths']}\n\n"
+        f"⭐ Рейтинг: {stats['rating_points']}\n"
+        f"🏅 Достижений: {stats['achievements_unlocked']}"
+    )
+
+
 def build_rating_overview(storage: Storage, requester_id: int, limit: int = 10) -> str:
     top = storage.get_rating_leaderboard(limit=limit)
     if not top:
@@ -2736,12 +2754,22 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
     if success:
         storage.set_location_control(location_name, winner)
         storage.finish_war_lobby(war_id, "success", f"Победа: {winner}")
+        achievement_notes: list[str] = []
+        for member in active:
+            if str(member.faction) != winner:
+                continue
+            storage.add_player_stat(member.telegram_id, "wars_won", 1)
+            _add_rating(storage, member.telegram_id, RATING_REWARD["war_success"])
+            note = _progress_and_unlock_achievements(storage, member.telegram_id)
+            if note and member.telegram_id == telegram_id:
+                achievement_notes.append(note)
         breakdown = ", ".join(f"{f}:{faction_counts[f]}" for f in sorted(faction_counts))
         return ActionResult(
             True,
             f"Штурм лобби #{war_id} успешен (шанс {chance}%).\n"
             f"Локация «{location_name}» перешла под контроль: {winner}.\n"
-            f"Распределение бойцов: {breakdown}.",
+            f"Распределение бойцов: {breakdown}."
+            f"{''.join(achievement_notes)}",
         )
     storage.finish_war_lobby(war_id, "failed", "Поражение штурма")
     return ActionResult(False, f"Штурм лобби #{war_id} провален (шанс {chance}%).")

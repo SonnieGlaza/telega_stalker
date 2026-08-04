@@ -109,6 +109,27 @@ def run_smoke_check() -> None:
         assert not solo_assault.ok, solo_assault.text
         assert attempt_smuggling(storage, 111).text
 
+        # Character career stats.
+        from app.game_logic import build_character_stats_overview
+
+        storage.add_player_stat(111, "quests_completed", 3)
+        storage.add_player_stat(111, "artifacts_found", 2)
+        storage.add_player_stat(111, "wars_won", 1)
+        storage.add_player_stat(111, "money_earned", 500)
+        storage.change_health(111, -10_000)
+        stats = storage.get_player_stats(111)
+        assert stats["quests_completed"] >= 3
+        assert stats["artifacts_found"] >= 2
+        assert stats["wars_won"] >= 1
+        assert stats["money_earned"] >= 500
+        assert stats["deaths"] >= 1
+        assert stats["raids_completed"] >= 0
+        stats_text = build_character_stats_overview(storage, 111)
+        assert "Заданий выполнено" in stats_text
+        assert "Артефактов найдено" in stats_text
+        assert "Смертей" in stats_text
+        storage.change_health(111, 100)
+
         # Market + lots.
         # ensure one equipment exists in inventory
         buy_weapon = buy_item(storage, 111, "weapon_pm")

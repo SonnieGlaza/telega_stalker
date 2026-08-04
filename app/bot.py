@@ -22,6 +22,7 @@ from app.game_logic import (
     attack_location,
     attempt_smuggling,
     build_achievements_overview,
+    build_character_stats_overview,
     build_economy_overview,
     build_events_overview,
     build_raids_overview,
@@ -1456,6 +1457,16 @@ async def show_achievements(message: Message) -> None:
     await message.answer(text)
 
 
+@router.message(F.text == "📊 Статистика")
+async def show_character_stats(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    text = build_character_stats_overview(get_storage(), player.telegram_id)
+    await message.answer(text, reply_markup=ratings_keyboard())
+
+
 @router.message(F.text == "🏆 Рейтинг")
 async def show_rating(message: Message) -> None:
     player = ensure_character(message)
@@ -1587,6 +1598,16 @@ async def players_faction_page_callback(callback: CallbackQuery) -> None:
         text,
         players_faction_page_keyboard(safe_key, page=safe_page, total_pages=total_pages),
     )
+
+
+@router.callback_query(F.data == "ratings:stats")
+async def show_character_stats_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    text = build_character_stats_overview(get_storage(), player.telegram_id)
+    await edit_menu_message(callback, text, ratings_keyboard())
 
 
 @router.callback_query(F.data == "ratings:achievements")

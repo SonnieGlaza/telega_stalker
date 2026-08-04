@@ -472,9 +472,9 @@ class Storage:
                 """
                 INSERT OR REPLACE INTO player_stats(
                     telegram_id, quests_completed, quests_failed, raids_completed, raids_failed,
-                    wars_won, smuggling_success, trades_done, money_earned, rating_points,
-                    achievements_unlocked
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    wars_won, smuggling_success, trades_done, money_earned, artifacts_found,
+                    deaths, rating_points, achievements_unlocked
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(row.get("telegram_id")),
@@ -486,6 +486,8 @@ class Storage:
                     int(row.get("smuggling_success", 0)),
                     int(row.get("trades_done", 0)),
                     int(row.get("money_earned", 0)),
+                    int(row.get("artifacts_found", 0)),
+                    int(row.get("deaths", 0)),
                     int(row.get("rating_points", 0)),
                     int(row.get("achievements_unlocked", 0)),
                 ),
@@ -743,6 +745,8 @@ class Storage:
                     smuggling_success INTEGER NOT NULL DEFAULT 0,
                     trades_done INTEGER NOT NULL DEFAULT 0,
                     money_earned INTEGER NOT NULL DEFAULT 0,
+                    artifacts_found INTEGER NOT NULL DEFAULT 0,
+                    deaths INTEGER NOT NULL DEFAULT 0,
                     rating_points INTEGER NOT NULL DEFAULT 0,
                     achievements_unlocked INTEGER NOT NULL DEFAULT 0
                 )
@@ -803,6 +807,7 @@ class Storage:
             )
             self._restore_from_snapshot_if_needed(conn)
             self._ensure_characters_schema(conn)
+            self._ensure_player_stats_schema(conn)
             self._sync_serial_sequences(conn)
             self._enforce_location_power_baseline(conn)
             self._ensure_player_stats_rows(conn)
@@ -1313,6 +1318,7 @@ class Storage:
             hunger = _as_int(row["hunger"], 0)
             thirst = _as_int(row["thirst"], 0)
             health = _as_int(row["health"], 100)
+            was_alive = health > 0
             orig_hunger = hunger
             orig_thirst = thirst
             changed = False
@@ -1341,6 +1347,7 @@ class Storage:
             if not changed:
                 return
 
+            final_health = max(0, min(100, health))
             conn.execute(
                 """
                 UPDATE characters
@@ -1351,13 +1358,15 @@ class Storage:
                     max(0, min(200, radiation)),
                     max(0, min(200, hunger)),
                     max(0, min(200, thirst)),
-                    max(0, min(100, health)),
+                    final_health,
                     needs_updated_at.isoformat(),
                     survival_damage_at.isoformat(),
                     telegram_id,
                 ),
             )
         self.save_snapshot()
+        if was_alive and final_health <= 0:
+            self.add_player_stat(telegram_id, "deaths", 1)
 
     def adjust_survival(
         self,
@@ -1381,6 +1390,7 @@ class Storage:
         except Exception:
             max_hp = 100
         new_health = max(0, min(max_hp, character.health + health_delta))
+        died = character.health > 0 and new_health <= 0
         with self._connect() as conn:
             conn.execute(
                 """
@@ -1399,6 +1409,8 @@ class Storage:
                 ),
             )
         self.save_snapshot()
+        if died:
+            self.add_player_stat(telegram_id, "deaths", 1)
         return True
 
     def recover_energy(self, telegram_id: int) -> None:
@@ -1701,6 +1713,8 @@ class Storage:
             "smuggling_success": "smuggling_success",
             "trades_done": "trades_done",
             "money_earned": "money_earned",
+            "artifacts_found": "artifacts_found",
+            "deaths": "deaths",
             "rating_points": "rating_points",
             "achievements_unlocked": "achievements_unlocked",
         }
@@ -1722,7 +1736,8 @@ class Storage:
             row = conn.execute(
                 """
                 SELECT quests_completed, quests_failed, raids_completed, raids_failed, wars_won,
-                       smuggling_success, trades_done, money_earned, rating_points, achievements_unlocked
+                       smuggling_success, trades_done, money_earned, artifacts_found, deaths,
+                       rating_points, achievements_unlocked
                 FROM player_stats
                 WHERE telegram_id = ?
                 """,
@@ -1738,6 +1753,8 @@ class Storage:
                 "smuggling_success": 0,
                 "trades_done": 0,
                 "money_earned": 0,
+                "artifacts_found": 0,
+                "deaths": 0,
                 "rating_points": 0,
                 "achievements_unlocked": 0,
             }
@@ -1750,6 +1767,8 @@ class Storage:
             "smuggling_success": int(row["smuggling_success"]),
             "trades_done": int(row["trades_done"]),
             "money_earned": int(row["money_earned"]),
+            "artifacts_found": int(row["artifacts_found"]),
+            "deaths": int(row["deaths"]),
             "rating_points": int(row["rating_points"]),
             "achievements_unlocked": int(row["achievements_unlocked"]),
         }
@@ -1893,12 +1912,15 @@ class Storage:
             except Exception:
                 cap = 100
         new_health = max(0, min(cap, character.health + delta))
+        died = character.health > 0 and new_health <= 0
         with self._connect() as conn:
             conn.execute(
                 "UPDATE characters SET health = ? WHERE telegram_id = ?",
                 (new_health, telegram_id),
             )
         self.save_snapshot()
+        if died:
+            self.add_player_stat(telegram_id, "deaths", 1)
         return True
 
     def get_faction_power(self, faction: str) -> int:
@@ -2717,6 +2739,33 @@ class Storage:
             SELECT telegram_id FROM characters
             """
         )
+
+    def _ensure_player_stats_schema(self, conn: DbConnection) -> None:
+        column_names = self._table_columns(conn, "player_stats")
+        add_columns = [
+            (
+                "artifacts_found",
+                "ALTER TABLE player_stats ADD COLUMN artifacts_found INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "deaths",
+                "ALTER TABLE player_stats ADD COLUMN deaths INTEGER NOT NULL DEFAULT 0",
+            ),
+        ]
+        for col_name, ddl in add_columns:
+            if col_name in column_names:
+                continue
+            sp = f"sp_stats_add_{col_name}"
+            try:
+                conn.savepoint(sp)
+                conn.execute(ddl)
+                conn.release_savepoint(sp)
+                column_names.add(col_name)
+            except Exception:
+                try:
+                    conn.rollback_to_savepoint(sp)
+                except Exception:
+                    pass
 
     def _ensure_player_stats_row(self, conn: DbConnection, telegram_id: int) -> None:
         conn.execute(

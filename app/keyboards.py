@@ -35,9 +35,10 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="⚔️ Война"), KeyboardButton(text="🗺 Переход")],
             [KeyboardButton(text="🗺 Карта"), KeyboardButton(text="🪖 Рейды")],
             [KeyboardButton(text="🛰 События"), KeyboardButton(text="🏦 Экономика")],
-            [KeyboardButton(text="🎖 Достижения"), KeyboardButton(text="🏆 Рейтинг")],
-            [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="📣 Сбор")],
-            [KeyboardButton(text="ℹ️ Информация"), KeyboardButton(text="⭐ Пополнить")],
+            [KeyboardButton(text="🎖 Достижения"), KeyboardButton(text="📊 Статистика")],
+            [KeyboardButton(text="🏆 Рейтинг"), KeyboardButton(text="👥 Игроки")],
+            [KeyboardButton(text="📣 Сбор"), KeyboardButton(text="ℹ️ Информация")],
+            [KeyboardButton(text="⭐ Пополнить")],
             [KeyboardButton(text="⚡ Выпить энергетик")],
         ],
         resize_keyboard=True,
@@ -517,6 +518,7 @@ def market_create_select_keyboard(items: list[dict[str, str | int]]) -> InlineKe
 def ratings_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Моя статистика", callback_data="ratings:stats")],
             [InlineKeyboardButton(text="🎖 Мои достижения", callback_data="ratings:achievements")],
             [InlineKeyboardButton(text="🏆 Топ сталкеров", callback_data="ratings:leaderboard")],
         ]
