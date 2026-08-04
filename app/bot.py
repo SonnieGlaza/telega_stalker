@@ -93,6 +93,7 @@ from app.game_logic import (
     withdraw_from_faction_warehouse,
     withdraw_from_faction_treasury,
     deposit_to_faction_treasury,
+    can_withdraw_faction_treasury,
     assign_faction_rank,
     build_faction_ranks_overview,
     build_faction_member_rank_pick_text,
@@ -2462,7 +2463,8 @@ def _faction_group_keyboard_for(telegram_id: int):
         and player.faction
         and storage.get_faction_leader_id(player.faction) == telegram_id
     )
-    return faction_group_keyboard(is_leader=is_leader)
+    can_withdraw = bool(player and can_withdraw_faction_treasury(storage, player))
+    return faction_group_keyboard(is_leader=is_leader, can_withdraw_treasury=can_withdraw)
 
 
 @router.message(F.text == "🛰 События")
@@ -2564,8 +2566,11 @@ async def treasury_withdraw_callback(callback: CallbackQuery, state: FSMContext)
         if player is None or player.faction is None:
             await callback.answer("Сначала выбери группировку.", show_alert=True)
             return
-        if storage.get_faction_leader_id(player.faction) != player.telegram_id:
-            await callback.answer("Снимать своё количество может только лидер.", show_alert=True)
+        if not can_withdraw_faction_treasury(storage, player):
+            await callback.answer(
+                "Снимать из казны можно с 5 ранга (или лидеру).",
+                show_alert=True,
+            )
             return
         await state.set_state(Registration.treasury_withdraw_custom)
         if callback.message is not None:
@@ -2625,9 +2630,9 @@ async def process_treasury_withdraw_custom(message: Message, state: FSMContext) 
         await message.answer("Сначала создай персонажа через /start.")
         return
     storage = get_storage()
-    if player.faction is None or storage.get_faction_leader_id(player.faction) != player.telegram_id:
+    if player.faction is None or not can_withdraw_faction_treasury(storage, player):
         await state.clear()
-        await message.answer("Снимать своё количество может только лидер группировки.")
+        await message.answer("Снимать из казны можно с 5 ранга (или лидеру группировки).")
         return
     amount = _parse_treasury_custom_amount(message.text or "")
     if amount is None:
