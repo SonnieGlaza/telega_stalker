@@ -221,7 +221,17 @@ ARTIFACT_INVENTORY_TO_NAME: dict[str, str] = {
     "artifact_power": "Арт «Сила»",
     "artifact_vitality": "Арт «Живучесть»",
 }
+ARTIFACT_NAME_TO_INVENTORY: dict[str, str] = {
+    **{name: key for key, name in ARTIFACT_INVENTORY_TO_NAME.items()},
+    "Артефакт": "artifact",  # старые сейвы
+}
 ARTIFACT_DROP_KEYS = ("artifact", "artifact_power", "artifact_vitality")
+EQUIP_PAGE_SIZE = 8
+EQUIP_SLOT_LABELS = {
+    "weapon": "Оружие",
+    "armor": "Броня",
+    "artifact": "Артефакты",
+}
 
 WAREHOUSE_ITEM_KEYS = ("ammo_pack", "medkit", "energy_drink", "artifact")
 
@@ -1328,6 +1338,144 @@ def list_equippable_armor(character: Character) -> list[tuple[str, str, int]]:
     return options
 
 
+def list_equippable_artifacts(character: Character) -> list[tuple[str, str, int]]:
+    options: list[tuple[str, str, int]] = []
+    for key in ARTIFACT_DROP_KEYS:
+        amount = int(character.inventory.get(key, 0))
+        if amount > 0:
+            title = ARTIFACT_INVENTORY_TO_NAME.get(key, ITEM_LABELS.get(key, key))
+            options.append((key, title, amount))
+    return options
+
+
+def list_equippable_for_slot(character: Character, slot: str) -> list[tuple[str, str, int]]:
+    if slot == "weapon":
+        return list_equippable_weapons(character)
+    if slot == "armor":
+        return list_equippable_armor(character)
+    if slot == "artifact":
+        return list_equippable_artifacts(character)
+    return []
+
+
+def _artifact_bonus_short(artifact_name: str) -> str:
+    if artifact_name in ARTIFACT_ENERGY_REGEN_NAMES:
+        power = int(ARTIFACT_EQUIP_BONUSES.get(artifact_name, {}).get("power", 2))
+        return f"+{power} сила, +5% энергия"
+    bonus = ARTIFACT_EQUIP_BONUSES.get(artifact_name, {})
+    power = int(bonus.get("power", 0))
+    hp = int(bonus.get("hp", 0))
+    parts: list[str] = []
+    if power:
+        parts.append(f"+{power} сила")
+    if hp:
+        parts.append(f"+{hp} HP")
+    return ", ".join(parts) if parts else "без бонуса"
+
+
+def build_equip_root_text(character: Character) -> tuple[str, list[tuple[str, str, int]]]:
+    """Корневое меню экипировки: текущая снаряга + категории."""
+    weapon = str(character.equipment.get("weapon", "Нож"))
+    armor = str(character.equipment.get("armor", "Куртка новичка"))
+    artifact = str(character.equipment.get("artifact", "Нет") or "Нет")
+    w_count = len(list_equippable_weapons(character))
+    a_count = len(list_equippable_armor(character))
+    art_count = len(list_equippable_artifacts(character))
+    menu_items = [
+        ("weapon", EQUIP_SLOT_LABELS["weapon"], w_count),
+        ("armor", EQUIP_SLOT_LABELS["armor"], a_count),
+        ("artifact", EQUIP_SLOT_LABELS["artifact"], art_count),
+    ]
+    art_note = ""
+    if artifact and artifact != "Нет":
+        art_note = f" ({_artifact_bonus_short(artifact)})"
+    text = (
+        "⚙️ Экипировка\n"
+        "Выбери категорию, затем предмет из инвентаря.\n"
+        f"Сила снаряги: {equipment_power(character)}\n\n"
+        f"🔫 Оружие: {weapon}\n"
+        f"🦺 Броня: {armor}\n"
+        f"💎 Артефакт: {artifact}{art_note}\n\n"
+        f"В инвентаре: оружие {w_count}, броня {a_count}, арты {art_count}."
+    )
+    return text, menu_items
+
+
+def build_equip_slot_page(
+    character: Character,
+    slot: str,
+    page: int = 0,
+) -> tuple[str, str, int, int, list[tuple[str, str, int]]]:
+    """Возвращает (text, slot, page, total_pages, page_options)."""
+    if slot not in EQUIP_SLOT_LABELS:
+        return ("Неизвестная категория экипировки.", "weapon", 0, 1, [])
+
+    options = list_equippable_for_slot(character, slot)
+    label = EQUIP_SLOT_LABELS[slot]
+    current = str(character.equipment.get(slot, "Нет") or "Нет")
+    if slot == "weapon" and not current:
+        current = "Нож"
+    if slot == "armor" and not current:
+        current = "Куртка новичка"
+
+    if not options:
+        empty = (
+            f"⚙️ {label}\n"
+            f"Сейчас надето: {current}\n\n"
+            f"В инвентаре нет предметов этой категории."
+        )
+        return empty, slot, 0, 1, []
+
+    total = len(options)
+    total_pages = max(1, (total + EQUIP_PAGE_SIZE - 1) // EQUIP_PAGE_SIZE)
+    safe_page = max(0, min(int(page), total_pages - 1))
+    start = safe_page * EQUIP_PAGE_SIZE
+    chunk = options[start : start + EQUIP_PAGE_SIZE]
+
+    lines = [
+        f"⚙️ {label}",
+        f"Сейчас надето: {current}",
+        f"Страница {safe_page + 1}/{total_pages} • доступно: {total}",
+        "",
+        "Выбери предмет:",
+    ]
+    for key, title, amount in chunk:
+        mark = " ✅" if title == current else ""
+        bonus = ""
+        if slot == "artifact":
+            bonus = f" [{_artifact_bonus_short(title)}]"
+        lines.append(f"• {title} x{amount}{bonus}{mark}")
+    return ("\n".join(lines), slot, safe_page, total_pages, chunk)
+
+
+def _unequip_artifact_to_inventory(storage: Storage, telegram_id: int, equipped_name: str) -> None:
+    """Вернуть экипированный арт в инвентарь и снять бонус HP при необходимости."""
+    if not equipped_name or equipped_name == "Нет":
+        return
+    inv_key = ARTIFACT_NAME_TO_INVENTORY.get(equipped_name)
+    if inv_key is not None:
+        storage.add_item(telegram_id, inv_key, 1)
+    storage.set_equipment_item(telegram_id, "artifact", "Нет")
+    # После снятия «Живучести» HP не выше базовых 100.
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is not None and player.health > 100:
+        storage.change_health(telegram_id, 100 - player.health, max_health=100)
+    storage.sync_gear_power(telegram_id)
+
+
+def unequip_artifact(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    equipped = str(player.equipment.get("artifact", "Нет") or "Нет")
+    if not equipped or equipped == "Нет":
+        return ActionResult(False, "Артефакт не экипирован.")
+    _unequip_artifact_to_inventory(storage, telegram_id, equipped)
+    return ActionResult(True, f"Снят артефакт: {equipped}. Он вернулся в инвентарь.")
+
+
 def equip_weapon(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
@@ -1412,21 +1560,25 @@ def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = No
 
     chosen_key = item_key
     if chosen_key is None or chosen_key not in ARTIFACT_INVENTORY_TO_NAME:
-        # Автовыбор: сила → живучесть → обычный.
-        for candidate in ("artifact_power", "artifact_vitality", "artifact"):
-            if int(player.inventory.get(candidate, 0)) > 0:
-                chosen_key = candidate
-                break
-        else:
-            return ActionResult(False, "У тебя нет артефакта в инвентаре.")
+        return ActionResult(False, "Выбери артефакт в меню экипировки.")
 
-    equipped_artifact = str(player.equipment.get("artifact", "Нет"))
-    if equipped_artifact and equipped_artifact != "Нет":
-        return ActionResult(False, "Артефакт уже экипирован. Сначала продай текущий у торговца.")
-    if not storage.remove_item(telegram_id, chosen_key, 1):
-        return ActionResult(False, "У тебя нет артефакта в инвентаре.")
+    if int(player.inventory.get(chosen_key, 0)) <= 0:
+        return ActionResult(False, "У тебя нет этого артефакта в инвентаре.")
 
     artifact_name = ARTIFACT_INVENTORY_TO_NAME[chosen_key]
+    equipped_artifact = str(player.equipment.get("artifact", "Нет") or "Нет")
+    if equipped_artifact == artifact_name:
+        return ActionResult(False, f"{artifact_name} уже экипирован.")
+
+    if not storage.remove_item(telegram_id, chosen_key, 1):
+        return ActionResult(False, "У тебя нет этого артефакта в инвентаре.")
+
+    # Смена арта: старый возвращается в инвентарь (как оружие/броня).
+    if equipped_artifact and equipped_artifact != "Нет":
+        old_key = ARTIFACT_NAME_TO_INVENTORY.get(equipped_artifact)
+        if old_key is not None:
+            storage.add_item(telegram_id, old_key, 1)
+
     storage.set_equipment_item(telegram_id, "artifact", artifact_name)
     storage.sync_gear_power(telegram_id)
 
@@ -1435,10 +1587,17 @@ def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = No
     if bonus.get("power"):
         bonus_parts.append(f"+{bonus['power']} к силе")
     hp_bonus = int(bonus.get("hp") or 0)
+    max_hp = 100 + hp_bonus
+    current = storage.get_character(telegram_id, refresh_energy=False)
+    if current is not None:
+        if current.health > max_hp:
+            storage.change_health(telegram_id, max_hp - current.health, max_health=max_hp)
+        elif hp_bonus > 0 and current.health < max_hp:
+            heal = min(hp_bonus, max_hp - current.health)
+            if heal > 0:
+                storage.change_health(telegram_id, heal, max_health=max_hp)
     if hp_bonus:
         bonus_parts.append(f"+{hp_bonus} к запасу HP")
-        max_hp = 100 + hp_bonus
-        storage.change_health(telegram_id, hp_bonus, max_health=max_hp)
     if chosen_key == "artifact":
         bonus_parts.append("+5% реген энергии")
     if not bonus_parts:

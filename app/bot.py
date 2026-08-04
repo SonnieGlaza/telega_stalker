@@ -83,8 +83,9 @@ from app.game_logic import (
     equip_artifact,
     equip_armor,
     equip_weapon,
-    list_equippable_armor,
-    list_equippable_weapons,
+    unequip_artifact,
+    build_equip_root_text,
+    build_equip_slot_page,
 )
 from app.keyboards import (
     economy_keyboard,
@@ -109,8 +110,8 @@ from app.keyboards import (
     trader_sell_consumables_keyboard,
     trader_sell_gear_keyboard,
     trader_sell_weapons_keyboard,
-    equip_armor_keyboard,
-    equip_weapon_keyboard,
+    equip_root_keyboard,
+    equip_slot_page_keyboard,
     alliance_keyboard,
     alliance_target_keyboard,
     alliance_pending_keyboard,
@@ -413,7 +414,9 @@ def _build_info_text(player: Character) -> str:
         "• 💎 Артефакты:\n"
         "  — Артефакт Зоны: +2 силы, +5% реген энергии\n"
         "  — Арт «Сила»: +1 к силе\n"
-        "  — Арт «Живучесть»: +10 к запасу HP\n\n"
+        "  — Арт «Живучесть»: +10 к запасу HP\n"
+        "• ⚙️ Экипировка в инвентаре: сам выбираешь оружие, броню и арты\n"
+        "  (меню по категориям, как список игроков).\n\n"
         f"{chats_block}"
     )
 
@@ -1162,10 +1165,143 @@ async def repair_armor_callback(callback: CallbackQuery) -> None:
     await reply_action_result(callback, result.text)
 
 
-@router.callback_query(F.data == "equip:artifact")
-async def equip_artifact_callback(callback: CallbackQuery) -> None:
-    result = equip_artifact(get_storage(), callback.from_user.id)
+@router.callback_query(F.data == "equip:root")
+async def equip_root_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    if player.health <= 0:
+        await edit_menu_message(
+            callback,
+            build_dead_character_text(player),
+            dead_character_keyboard(),
+        )
+        return
+    text, items = build_equip_root_text(player)
+    await edit_menu_message(callback, text, equip_root_keyboard(items))
+
+
+@router.callback_query(F.data.startswith("equip:slot:"))
+async def equip_slot_page_callback(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":")
+    # equip:slot:<slot>:<page>
+    if len(parts) < 4:
+        await callback.answer("Некорректная категория.", show_alert=True)
+        return
+    slot = parts[2]
+    try:
+        page = int(parts[3])
+    except ValueError:
+        page = 0
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    text, safe_slot, safe_page, total_pages, options = build_equip_slot_page(player, slot, page)
+    equipped_art = str(player.equipment.get("artifact", "Нет") or "Нет")
+    await edit_menu_message(
+        callback,
+        text,
+        equip_slot_page_keyboard(
+            safe_slot,
+            page=safe_page,
+            total_pages=total_pages,
+            options=options,
+            can_unequip_artifact=safe_slot == "artifact" and equipped_art not in ("", "Нет"),
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("equip:put:"))
+async def equip_put_callback(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":")
+    # equip:put:<slot>:<item_key>
+    if len(parts) < 4:
+        await callback.answer("Некорректный предмет.", show_alert=True)
+        return
+    slot = parts[2]
+    item_key = parts[3]
+    db = get_storage()
+    if slot == "weapon":
+        result = equip_weapon(db, callback.from_user.id, item_key)
+    elif slot == "armor":
+        result = equip_armor(db, callback.from_user.id, item_key)
+    elif slot == "artifact":
+        result = equip_artifact(db, callback.from_user.id, item_key)
+    else:
+        await callback.answer("Неизвестная категория.", show_alert=True)
+        return
+
     await reply_action_result(callback, result.text)
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        return
+    text, safe_slot, safe_page, total_pages, options = build_equip_slot_page(player, slot, 0)
+    equipped_art = str(player.equipment.get("artifact", "Нет") or "Нет")
+    if callback.message is not None:
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup=equip_slot_page_keyboard(
+                    safe_slot,
+                    page=safe_page,
+                    total_pages=total_pages,
+                    options=options,
+                    can_unequip_artifact=safe_slot == "artifact" and equipped_art not in ("", "Нет"),
+                ),
+            )
+        except TelegramBadRequest:
+            pass
+    if result.ok:
+        await send_profile_snapshot(callback.message, player)
+
+
+@router.callback_query(F.data == "equip:unequip:artifact")
+async def unequip_artifact_callback(callback: CallbackQuery) -> None:
+    db = get_storage()
+    result = unequip_artifact(db, callback.from_user.id)
+    await reply_action_result(callback, result.text)
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        return
+    text, safe_slot, safe_page, total_pages, options = build_equip_slot_page(player, "artifact", 0)
+    if callback.message is not None:
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup=equip_slot_page_keyboard(
+                    safe_slot,
+                    page=safe_page,
+                    total_pages=total_pages,
+                    options=options,
+                    can_unequip_artifact=False,
+                ),
+            )
+        except TelegramBadRequest:
+            pass
+
+
+@router.callback_query(F.data == "equip:artifact")
+async def equip_artifact_legacy_callback(callback: CallbackQuery) -> None:
+    # Старый callback → меню выбора артефактов.
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    text, safe_slot, safe_page, total_pages, options = build_equip_slot_page(player, "artifact", 0)
+    equipped_art = str(player.equipment.get("artifact", "Нет") or "Нет")
+    await edit_menu_message(
+        callback,
+        text,
+        equip_slot_page_keyboard(
+            safe_slot,
+            page=safe_page,
+            total_pages=total_pages,
+            options=options,
+            can_unequip_artifact=equipped_art not in ("", "Нет"),
+        ),
+    )
 
 
 @router.callback_query(F.data == "equip:menu:weapon")
@@ -1174,14 +1310,16 @@ async def equip_weapon_menu_callback(callback: CallbackQuery) -> None:
     if player is None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
-    options = list_equippable_weapons(player)
-    if not options:
-        await callback.answer("В инвентаре нет оружия для экипировки.", show_alert=True)
-        return
+    text, safe_slot, safe_page, total_pages, options = build_equip_slot_page(player, "weapon", 0)
     await edit_menu_message(
         callback,
-        "Выбери оружие для экипировки:",
-        equip_weapon_keyboard(options),
+        text,
+        equip_slot_page_keyboard(
+            safe_slot,
+            page=safe_page,
+            total_pages=total_pages,
+            options=options,
+        ),
     )
 
 
@@ -1191,14 +1329,16 @@ async def equip_armor_menu_callback(callback: CallbackQuery) -> None:
     if player is None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
-    options = list_equippable_armor(player)
-    if not options:
-        await callback.answer("В инвентаре нет брони для экипировки.", show_alert=True)
-        return
+    text, safe_slot, safe_page, total_pages, options = build_equip_slot_page(player, "armor", 0)
     await edit_menu_message(
         callback,
-        "Выбери броню для экипировки:",
-        equip_armor_keyboard(options),
+        text,
+        equip_slot_page_keyboard(
+            safe_slot,
+            page=safe_page,
+            total_pages=total_pages,
+            options=options,
+        ),
     )
 
 
@@ -1208,10 +1348,25 @@ async def equip_weapon_callback(callback: CallbackQuery) -> None:
     db = get_storage()
     result = equip_weapon(db, callback.from_user.id, item_key)
     await reply_action_result(callback, result.text)
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        return
+    text, safe_slot, safe_page, total_pages, options = build_equip_slot_page(player, "weapon", 0)
+    if callback.message is not None:
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup=equip_slot_page_keyboard(
+                    safe_slot,
+                    page=safe_page,
+                    total_pages=total_pages,
+                    options=options,
+                ),
+            )
+        except TelegramBadRequest:
+            pass
     if result.ok:
-        player = db.get_character(callback.from_user.id, refresh_energy=False)
-        if player is not None:
-            await send_profile_snapshot(callback.message, player)
+        await send_profile_snapshot(callback.message, player)
 
 
 @router.callback_query(F.data.startswith("equip:armor:"))
@@ -1220,10 +1375,25 @@ async def equip_armor_callback(callback: CallbackQuery) -> None:
     db = get_storage()
     result = equip_armor(db, callback.from_user.id, item_key)
     await reply_action_result(callback, result.text)
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        return
+    text, safe_slot, safe_page, total_pages, options = build_equip_slot_page(player, "armor", 0)
+    if callback.message is not None:
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup=equip_slot_page_keyboard(
+                    safe_slot,
+                    page=safe_page,
+                    total_pages=total_pages,
+                    options=options,
+                ),
+            )
+        except TelegramBadRequest:
+            pass
     if result.ok:
-        player = db.get_character(callback.from_user.id, refresh_energy=False)
-        if player is not None:
-            await send_profile_snapshot(callback.message, player)
+        await send_profile_snapshot(callback.message, player)
 
 
 @router.message(F.text == "📋 Задания")

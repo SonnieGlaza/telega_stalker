@@ -127,9 +127,7 @@ def inventory_equipment_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="💧 Выпить воду (+10 жажды)", callback_data="use:water_bottle")],
             [InlineKeyboardButton(text="🧴 Выпить минералку (+20 жажды)", callback_data="use:mineral_water")],
             [InlineKeyboardButton(text="🍵 Выпить чай Бороды (+50 жажды)", callback_data="use:beard_tea")],
-            [InlineKeyboardButton(text="Экипировать оружие", callback_data="equip:menu:weapon")],
-            [InlineKeyboardButton(text="Экипировать броню", callback_data="equip:menu:armor")],
-            [InlineKeyboardButton(text="Экипировать артефакт", callback_data="equip:artifact")],
+            [InlineKeyboardButton(text="⚙️ Экипировка", callback_data="equip:root")],
             [InlineKeyboardButton(text="☠️ Респавн (если HP=0)", callback_data="player:respawn")],
         ]
     )
@@ -147,34 +145,80 @@ def dead_character_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def equip_weapon_keyboard(available_weapons: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:
+def equip_root_keyboard(items: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    for weapon_key, title, amount in available_weapons:
+    for slot_key, title, count in items:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"Надеть: {title} (x{amount})",
-                    callback_data=f"equip:weapon:{weapon_key}",
+                    text=f"{title} ({count})",
+                    callback_data=f"equip:slot:{slot_key}:0",
                 )
             ]
         )
     rows.append([InlineKeyboardButton(text="⬅️ Назад в инвентарь", callback_data="inventory:open")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def equip_slot_page_keyboard(
+    slot: str,
+    *,
+    page: int,
+    total_pages: int,
+    options: list[tuple[str, str, int]],
+    can_unequip_artifact: bool = False,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for item_key, title, amount in options:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"Надеть: {title} (x{amount})",
+                    callback_data=f"equip:put:{slot}:{item_key}",
+                )
+            ]
+        )
+    if not options:
+        rows.append([InlineKeyboardButton(text="Пусто", callback_data=f"equip:slot:{slot}:{page}")])
+    if slot == "artifact" and can_unequip_artifact:
+        rows.append(
+            [InlineKeyboardButton(text="Снять артефакт", callback_data="equip:unequip:artifact")]
+        )
+
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(
+                text="⬅️",
+                callback_data=f"equip:slot:{slot}:{page - 1}",
+            )
+        )
+    nav.append(
+        InlineKeyboardButton(
+            text=f"{page + 1}/{total_pages}",
+            callback_data=f"equip:slot:{slot}:{page}",
+        )
+    )
+    if page + 1 < total_pages:
+        nav.append(
+            InlineKeyboardButton(
+                text="➡️",
+                callback_data=f"equip:slot:{slot}:{page + 1}",
+            )
+        )
+    rows.append(nav)
+    rows.append([InlineKeyboardButton(text="⬅️ К категориям", callback_data="equip:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def equip_weapon_keyboard(available_weapons: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:
+    """Совместимость: старое прямое меню оружия → страница экипировки."""
+    return equip_slot_page_keyboard("weapon", page=0, total_pages=1, options=available_weapons)
 
 
 def equip_armor_keyboard(available_armor: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for armor_key, title, amount in available_armor:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"Надеть: {title} (x{amount})",
-                    callback_data=f"equip:armor:{armor_key}",
-                )
-            ]
-        )
-    rows.append([InlineKeyboardButton(text="⬅️ Назад в инвентарь", callback_data="inventory:open")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    """Совместимость: старое прямое меню брони → страница экипировки."""
+    return equip_slot_page_keyboard("armor", page=0, total_pages=1, options=available_armor)
 
 
 def trader_buy_armor_keyboard() -> InlineKeyboardMarkup:
