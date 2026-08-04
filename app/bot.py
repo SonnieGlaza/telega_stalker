@@ -18,6 +18,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, LabeledPrice, Messag
 
 from app.config import load_settings
 from app.game_logic import (
+    append_survival_craving_notice,
     apply_dynamic_zone_event,
     attack_location,
     attempt_smuggling,
@@ -194,7 +195,11 @@ async def edit_menu_message(
 
 async def reply_action_result(callback: CallbackQuery, text: str) -> None:
     """Короткий итог — всплывающее окно, длинный — одно сообщение (без спама меню)."""
-    clean = (text or "").strip()
+    clean = append_survival_craving_notice(
+        get_storage(),
+        callback.from_user.id,
+        (text or "").strip(),
+    )
     if not clean:
         await safe_callback_answer(callback)
         return
@@ -954,6 +959,10 @@ def ensure_character(message: Message) -> Character | None:
     return player
 
 
+def action_result_text(telegram_id: int, text: str) -> str:
+    return append_survival_craving_notice(get_storage(), telegram_id, (text or "").strip())
+
+
 async def send_profile_snapshot(message: Message, player: Character) -> None:
     caption = (
         f"Профиль сталкера {player.nickname}\n"
@@ -1637,7 +1646,7 @@ async def drink_energy(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     result = use_energy_drink(get_storage(), message.from_user.id)
-    await message.answer(result.text)
+    await message.answer(action_result_text(message.from_user.id, result.text))
 
 
 @router.callback_query(F.data == "use:medkit")
@@ -1720,7 +1729,7 @@ async def pay_command(message: Message) -> None:
         await message.answer("Telegram ID и сумма должны быть целыми числами.")
         return
     result = transfer_money_with_fee(get_storage(), sender_id, target_telegram_id, amount)
-    await message.answer(result.text)
+    await message.answer(action_result_text(sender_id, result.text))
 
 
 @router.message(F.text == "🗺 Переход")
@@ -2264,7 +2273,7 @@ async def process_market_lot_price(message: Message, state: FSMContext) -> None:
 
     result = create_market_lot(get_storage(), message.from_user.id, item_key, 1, price=lot_price)
     await state.clear()
-    await message.answer(result.text)
+    await message.answer(action_result_text(message.from_user.id, result.text))
 
 
 @router.callback_query(F.data == "eco:market:buy:first")

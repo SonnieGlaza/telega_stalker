@@ -360,6 +360,47 @@ SURVIVAL_TICK_MINUTES = 30
 SURVIVAL_OVERLIMIT_HP_DRAIN = 10
 TRANSFER_FEE_PERCENT = 30
 
+SURVIVAL_CRAVING_THRESHOLD = 40
+SURVIVAL_URGENT_THRESHOLD = 75
+SURVIVAL_CRITICAL_THRESHOLD = 100
+
+HUNGER_CRAVING_PHRASES: tuple[str, ...] = (
+    "Как же есть хочется...",
+    "Живот уже урчит.",
+    "Был бы сейчас хлеб с колбасой...",
+    "Зона кормит радиациями, а не обедом.",
+    "Пора бы перекусить, брат.",
+)
+HUNGER_URGENT_PHRASES: tuple[str, ...] = (
+    "Голод давит сильнее, чем отклик детектора.",
+    "Есть хочется так, что готов сухарик у бандитов купить.",
+    "Без еды далеко не уйду.",
+    "Сил мало — нужно поесть.",
+)
+HUNGER_CRITICAL_PHRASES: tuple[str, ...] = (
+    "Голод уже бьёт по здоровью — срочно ешь!",
+    "Сил почти нет. Ищи еду в инвентаре!",
+    "Так голоден, что Зона кажется пирожком.",
+)
+THIRST_CRAVING_PHRASES: tuple[str, ...] = (
+    "Как же пить хочется...",
+    "Горло пересохло.",
+    "Вода бы сейчас — хоть глоток.",
+    "Жажда напоминает о себе.",
+    "Минералку бы... или хотя бы водички.",
+)
+THIRST_URGENT_PHRASES: tuple[str, ...] = (
+    "Жажда мешает сосредоточиться.",
+    "Язык прилип к небу.",
+    "Без воды далеко не уйду.",
+    "Пить хочется сильнее, чем артефакты искать.",
+)
+THIRST_CRITICAL_PHRASES: tuple[str, ...] = (
+    "Жажда уже опасная — пей, пока не поздно!",
+    "Горло сохнет. Срочно нужна вода!",
+    "Обезвоживание бьёт по силам.",
+)
+
 
 @dataclass(frozen=True)
 class AchievementRule:
@@ -487,6 +528,41 @@ RESPAWN_BASE_LOCATION = "Росток"
 
 def _is_dead(character: Character) -> bool:
     return character.health <= 0
+
+
+def _pick_survival_phrase(phrases: tuple[str, ...]) -> str:
+    return random.choice(phrases)
+
+
+def build_survival_craving_notice(character: Character) -> str:
+    if _is_dead(character):
+        return ""
+    lines: list[str] = []
+    if character.hunger >= SURVIVAL_CRITICAL_THRESHOLD:
+        lines.append(_pick_survival_phrase(HUNGER_CRITICAL_PHRASES))
+    elif character.hunger >= SURVIVAL_URGENT_THRESHOLD:
+        lines.append(_pick_survival_phrase(HUNGER_URGENT_PHRASES))
+    elif character.hunger >= SURVIVAL_CRAVING_THRESHOLD:
+        lines.append(_pick_survival_phrase(HUNGER_CRAVING_PHRASES))
+    if character.thirst >= SURVIVAL_CRITICAL_THRESHOLD:
+        lines.append(_pick_survival_phrase(THIRST_CRITICAL_PHRASES))
+    elif character.thirst >= SURVIVAL_URGENT_THRESHOLD:
+        lines.append(_pick_survival_phrase(THIRST_URGENT_PHRASES))
+    elif character.thirst >= SURVIVAL_CRAVING_THRESHOLD:
+        lines.append(_pick_survival_phrase(THIRST_CRAVING_PHRASES))
+    if not lines:
+        return ""
+    return "💬 " + "\n💬 ".join(lines) + "\n\n"
+
+
+def append_survival_craving_notice(storage: Storage, telegram_id: int, text: str) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return text
+    notice = build_survival_craving_notice(player)
+    if not notice:
+        return text
+    return notice + text
 
 
 def _dead_block_text() -> str:
@@ -1861,7 +1937,9 @@ def format_inventory(character: Character, *, rating_points: int = 0) -> str:
         f"🍗 Голод: {character.hunger} | "
         f"💧 Жажда: {character.thirst}"
     )
+    craving_notice = build_survival_craving_notice(character)
     return (
+        f"{craving_notice}"
         f"👤 {character.nickname} ({character.gender})\n"
         f"ID-адрес: {character.player_uid}\n"
         f"Telegram ID: {character.telegram_id}\n"
