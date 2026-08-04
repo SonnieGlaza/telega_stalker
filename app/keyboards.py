@@ -117,6 +117,7 @@ def inventory_equipment_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🧰 Расходники", callback_data="inventory:consumables")],
+            [InlineKeyboardButton(text="📦 Открыть тайник", callback_data="use:stash_case")],
             [InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")],
             [InlineKeyboardButton(text="⚙️ Экипировка", callback_data="equip:root")],
             [InlineKeyboardButton(text="☠️ Респавн (если HP=0)", callback_data="player:respawn")],
@@ -128,7 +129,6 @@ def inventory_consumables_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🩹 Использовать аптечку", callback_data="use:medkit")],
-            [InlineKeyboardButton(text="📦 Открыть тайник", callback_data="use:stash_case")],
             [InlineKeyboardButton(text="🍸 Выпить водку (-20 рад.)", callback_data="use:vodka")],
             [InlineKeyboardButton(text="💉 Использовать антирад (-50 рад.)", callback_data="use:antirad")],
             [InlineKeyboardButton(text="🍞 Поесть хлеб (+10 сытости)", callback_data="use:bread")],
