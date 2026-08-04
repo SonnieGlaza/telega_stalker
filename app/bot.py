@@ -114,6 +114,7 @@ from app.keyboards import (
     gender_keyboard,
     locations_keyboard,
     main_menu_keyboard,
+    pda_keyboard,
     quests_keyboard,
     raid_keyboard,
     ratings_keyboard,
@@ -448,24 +449,40 @@ def _normalize_info_trigger(value: str | None) -> str:
     return " ".join(normalized.split())
 
 
+FACTION_CHATS = {
+    "Свобода": "https://t.me/+kAvQ4NyrKndlNmI6",
+    "Долг": "https://t.me/+IbIz9zSoruY0OTMy",
+    "Нейтралы": "https://t.me/+IHxjjCKSFJQwOTky",
+    "Бандиты": "https://t.me/+cP-Eihx_QFo0MTAy",
+}
+COMMON_CHAT = "https://t.me/+R0mfqDJ_HCUyOTI6"
+
+
+def _build_pda_chats_text(player: Character) -> str:
+    faction_chat = FACTION_CHATS.get(player.faction or "")
+    lines = [
+        "📟 КПК — связь",
+        "",
+        f"🌐 Общий чат Зоны:\n{COMMON_CHAT}",
+    ]
+    if faction_chat:
+        lines.extend(
+            [
+                "",
+                f"🛡️ Чат группировки «{player.faction}»:\n{faction_chat}",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "🛡️ Чат группировки появится после выбора фракции.",
+            ]
+        )
+    return "\n".join(lines)
+
+
 def _build_info_text(player: Character, *, referral_link: str | None = None) -> str:
-    faction_chats = {
-        "Свобода": "https://t.me/+kAvQ4NyrKndlNmI6",
-        "Долг": "https://t.me/+IbIz9zSoruY0OTMy",
-        "Нейтралы": "https://t.me/+IHxjjCKSFJQwOTky",
-        "Бандиты": "https://t.me/+cP-Eihx_QFo0MTAy",
-    }
-    common_chat = "https://t.me/+R0mfqDJ_HCUyOTI6"
-    faction_chat = faction_chats.get(player.faction or "")
-    chats_block = (
-        f"Чаты:\n"
-        f"• 🌐 Общий: {common_chat}\n"
-        f"• 🛡️ {player.faction}: {faction_chat}"
-        if faction_chat
-        else f"Чаты:\n"
-        f"• 🌐 Общий: {common_chat}\n"
-        f"• Выбери группировку, чтобы увидеть чат своей фракции."
-    )
     pack = ", ".join(
         f"{ITEM_LABELS.get(key, key)} x{amount}" for key, amount in REFERRAL_STARTER_PACK
     )
@@ -501,7 +518,7 @@ def _build_info_text(player: Character, *, referral_link: str | None = None) -> 
         "• 🎖 Скин персонажа повышается от рейтинга:\n"
         "  — Новичек: 0–499, Опытный: 500–1999,\n"
         "    Ветеран: 2000–4999, Легенда: 5000+.\n\n"
-        f"{chats_block}"
+        "📟 Чаты, рейтинг и карта — в разделе «КПК»."
     )
 
 
@@ -1606,6 +1623,39 @@ async def show_character_stats(message: Message) -> None:
     await message.answer(text, reply_markup=ratings_keyboard())
 
 
+@router.message(F.text == "📟 КПК")
+async def show_pda(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    await message.answer(
+        "📟 КПК сталкера\n\n"
+        "• 💬 Чаты — общий и чат твоей группировки\n"
+        "• 🏆 Рейтинг — топ и личные достижения\n"
+        "• 🗺 Карта — точки Зоны и контроль",
+        reply_markup=pda_keyboard(),
+    )
+
+
+@router.message(F.text == "💬 Чаты")
+async def show_pda_chats(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    await message.answer(_build_pda_chats_text(player), reply_markup=pda_keyboard())
+
+
+@router.message(F.text == "⬅️ В меню")
+async def pda_back_to_menu(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    await message.answer("Главное меню.", reply_markup=main_menu_keyboard())
+
+
 @router.message(F.text == "🏆 Рейтинг")
 async def show_rating(message: Message) -> None:
     player = ensure_character(message)
@@ -1614,6 +1664,22 @@ async def show_rating(message: Message) -> None:
         return
     text = build_rating_overview(get_storage(), player.telegram_id, limit=10)
     await message.answer(text, reply_markup=ratings_keyboard())
+
+
+@router.message(F.text == "🗺 Карта")
+async def show_zone_map(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    locations = get_storage().get_locations()
+    image_bytes = build_zone_map_image(locations, current_location=player.location, player_faction=player.faction)
+    image = BufferedInputFile(image_bytes, filename="zone_map.png")
+    await message.answer_photo(
+        photo=image,
+        caption="Карта Зоны: точки, типы и текущий контроль.",
+        reply_markup=pda_keyboard(),
+    )
 
 
 @router.message(F.text == "👥 Игроки")
@@ -1873,21 +1939,6 @@ async def show_travel(message: Message) -> None:
         "Выбирай локацию для перехода. Переходы расходуют энергию, "
         "грузовик ускоряет путь, но тратит топливо.",
         reply_markup=locations_keyboard(locations, mode="travel"),
-    )
-
-
-@router.message(F.text == "🗺 Карта")
-async def show_zone_map(message: Message) -> None:
-    player = ensure_character(message)
-    if player is None:
-        await message.answer("Сначала создай персонажа через /start.")
-        return
-    locations = get_storage().get_locations()
-    image_bytes = build_zone_map_image(locations, current_location=player.location, player_faction=player.faction)
-    image = BufferedInputFile(image_bytes, filename="zone_map.png")
-    await message.answer_photo(
-        photo=image,
-        caption="Карта Зоны: точки, типы и текущий контроль.",
     )
 
 
