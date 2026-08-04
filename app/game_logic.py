@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from app.skins import resolve_skin
+from app.skins import next_skin_progress, resolve_skin
 from app.storage import Character, Storage
 
 
@@ -590,12 +590,12 @@ def _achievement_rules() -> tuple[AchievementRule, ...]:
             check=lambda stats, _: stats["money_earned"] >= 20_000,
         ),
         AchievementRule(
-            key="gear_14",
+            key="rating_200",
             title="Экзоветеран",
-            description="Достигни силы снаряги 14+",
+            description="Достигни 200 рейтинга",
             reward_ru=1000,
             reward_rating=70,
-            check=lambda _stats, character: compute_total_gear_power(character) >= 14,
+            check=lambda stats, _: stats["rating_points"] >= 200,
         ),
     )
 
@@ -1624,8 +1624,16 @@ def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = No
     )
 
 
-def format_inventory(character: Character) -> str:
-    skin = resolve_skin(character)
+def format_inventory(character: Character, *, rating_points: int = 0) -> str:
+    rating = max(0, int(rating_points))
+    skin = resolve_skin(rating)
+    _, next_skin, rating_left = next_skin_progress(rating)
+    skin_progress = (
+        f"Рейтинг: {rating} | Скин: {skin.title}\n"
+        f"До «{next_skin.title}»: ещё {rating_left} рейтинга.\n"
+        if next_skin is not None
+        else f"Рейтинг: {rating} | Скин: {skin.title} (максимум)\n"
+    )
     if character.inventory:
         items = "\n".join(
             f"• {ITEM_LABELS.get(key, key)} x{amount}"
@@ -1668,7 +1676,7 @@ def format_inventory(character: Character) -> str:
         f"Здоровье: {character.health}/{effective_max_health(character)}\n"
         f"Энергия: {character.energy}/{character.max_energy}\n"
         f"Сила снаряги: {current_gear_power}\n"
-        f"Скин: {skin.title}\n"
+        f"{skin_progress}"
         f"Баланс: {character.money} RU\n"
         f"Транспорт: {vehicle}\n"
         f"Спальник: {sleeping_bag}\n"

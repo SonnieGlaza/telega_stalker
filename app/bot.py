@@ -415,7 +415,8 @@ def _build_info_text(player: Character) -> str:
         "  — Арт «Сила»: +1 к силе\n"
         "  — Арт «Живучесть»: +10 к запасу HP\n"
         "• ⚙️ Экипировка в инвентаре: сам выбираешь оружие, броню и арты\n"
-        "  (меню по категориям, как список игроков).\n\n"
+        "  (меню по категориям, как список игроков).\n"
+        "• 🎖 Скин персонажа повышается от рейтинга (0 / 60 / 120 / 200).\n\n"
         f"{chats_block}"
     )
 
@@ -956,7 +957,9 @@ async def send_profile_snapshot(message: Message, player: Character) -> None:
         f"ID: {player.player_uid}\n"
         f"Фракция: {player.faction or 'не выбрана'}"
     )
-    image_bytes = build_character_card(player)
+    stats = get_storage().get_player_stats(player.telegram_id)
+    rating = int(stats.get("rating_points", 0))
+    image_bytes = build_character_card(player, rating_points=rating)
     image = BufferedInputFile(image_bytes, filename=f"{player.player_uid}.png")
     await message.answer_photo(photo=image, caption=caption)
 
@@ -971,7 +974,7 @@ async def show_inventory(message: Message) -> None:
         await message.answer(build_dead_character_text(player), reply_markup=dead_character_keyboard())
         return
     await message.answer(
-        format_inventory(player),
+        format_inventory(player, rating_points=int(get_storage().get_player_stats(player.telegram_id).get("rating_points", 0))),
         reply_markup=inventory_equipment_keyboard(),
     )
 
@@ -991,7 +994,7 @@ async def open_inventory_callback(callback: CallbackQuery) -> None:
         return
     await edit_menu_message(
         callback,
-        format_inventory(player),
+        format_inventory(player, rating_points=int(get_storage().get_player_stats(player.telegram_id).get("rating_points", 0))),
         inventory_equipment_keyboard(),
     )
 

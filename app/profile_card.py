@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.avatar_render import render_avatar
 from app.game_logic import ITEM_LABELS, effective_max_health, equipment_power
-from app.skins import resolve_skin
+from app.skins import next_skin_progress, resolve_skin
 from app.storage import Character
 
 
@@ -221,7 +221,7 @@ def _ellipsize_text(
     return (current + suffix) if current else suffix
 
 
-def build_character_card(character: Character) -> bytes:
+def build_character_card(character: Character, *, rating_points: int = 0) -> bytes:
     width, height = 1180, 700
     img = Image.new("RGB", (width, height), color=(21, 21, 26))
     draw = ImageDraw.Draw(img)
@@ -233,7 +233,14 @@ def build_character_card(character: Character) -> bytes:
 
     faction_color = _faction_color(character.faction)
     location_color = _location_color(character.location)
-    skin = resolve_skin(character)
+    rating = max(0, int(rating_points))
+    skin = resolve_skin(rating)
+    _, next_skin, rating_left = next_skin_progress(rating)
+    skin_line = (
+        f"Скин: {skin.title} (рейтинг {rating})"
+        if next_skin is None
+        else f"Скин: {skin.title} (рейтинг {rating}, до «{next_skin.title}»: {rating_left})"
+    )
 
     draw.rectangle((0, 0, width, 90), fill=(28, 31, 40))
     draw.text((24, 16), "Карточка персонажа", fill=(235, 235, 235), font=title_font)
@@ -255,9 +262,9 @@ def build_character_card(character: Character) -> bytes:
     draw.rounded_rectangle((46, 204, 408, 346), radius=12, fill=location_color, outline=(210, 210, 210), width=2)
     draw.text((62, 236), f"Локация: {character.location}", fill=(248, 248, 248), font=small_font)
     draw.text((62, 266), f"Группировка: {character.faction or 'не выбрана'}", fill=(248, 248, 248), font=small_font)
-    draw.text((62, 296), f"Скин персонажа: {skin.title}", fill=(248, 248, 248), font=small_font)
+    draw.text((62, 296), skin_line, fill=(248, 248, 248), font=small_font)
 
-    avatar = render_avatar(character, width=248, height=320)
+    avatar = render_avatar(character, rating_points=rating, width=248, height=320)
     panel_left = 46
     panel_right = 408
     panel_bottom = 676

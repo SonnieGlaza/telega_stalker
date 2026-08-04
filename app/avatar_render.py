@@ -4,6 +4,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from app.skins import skin_tier_for_rating
 from app.storage import Character
 
 
@@ -11,14 +12,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AVATAR_DIR = PROJECT_ROOT / "assets" / "avatars"
 
 
-def _tier(character: Character) -> int:
-    if character.gear_power >= 13:
-        return 4
-    if character.gear_power >= 8:
-        return 3
-    if character.gear_power >= 4:
-        return 2
-    return 1
+def _tier(rating_points: int) -> int:
+    return skin_tier_for_rating(rating_points)
 
 
 def _palette(tier: int) -> dict[str, tuple[int, int, int]]:
@@ -82,8 +77,14 @@ def _load_avatar_asset(tier: int, width: int, height: int) -> Image.Image | None
     return None
 
 
-def _render_stalker_avatar_fallback(character: Character, width: int = 260, height: int = 360) -> Image.Image:
-    tier = _tier(character)
+def _render_stalker_avatar_fallback(
+    character: Character,
+    *,
+    rating_points: int = 0,
+    width: int = 260,
+    height: int = 360,
+) -> Image.Image:
+    tier = _tier(rating_points)
     p = _palette(tier)
 
     image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -138,9 +139,15 @@ def _render_stalker_avatar_fallback(character: Character, width: int = 260, heig
     return image
 
 
-def render_avatar(character: Character, width: int = 260, height: int = 360) -> Image.Image:
-    tier = _tier(character)
+def render_avatar(
+    character: Character,
+    *,
+    rating_points: int = 0,
+    width: int = 260,
+    height: int = 360,
+) -> Image.Image:
+    tier = _tier(rating_points)
     asset_avatar = _load_avatar_asset(tier, width=width, height=height)
     if asset_avatar is not None:
         return asset_avatar
-    return _render_stalker_avatar_fallback(character, width=width, height=height)
+    return _render_stalker_avatar_fallback(character, rating_points=rating_points, width=width, height=height)
