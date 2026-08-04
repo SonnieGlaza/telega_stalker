@@ -176,6 +176,20 @@ async def edit_menu_message(
     await safe_callback_answer(callback)
 
 
+async def reply_action_result(callback: CallbackQuery, text: str) -> None:
+    """Короткий итог — всплывающее окно, длинный — одно сообщение (без спама меню)."""
+    clean = (text or "").strip()
+    if not clean:
+        await safe_callback_answer(callback)
+        return
+    if len(clean) <= 180:
+        await safe_callback_answer(callback, clean, show_alert=True)
+        return
+    if callback.message is not None:
+        await callback.message.answer(clean)
+    await safe_callback_answer(callback)
+
+
 @router.error()
 async def ignore_stale_callback_query_error(event: Any) -> bool:
     exc = getattr(event, "exception", None)
@@ -894,25 +908,27 @@ async def open_inventory_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     if player.health <= 0:
-        await callback.message.answer(build_dead_character_text(player), reply_markup=dead_character_keyboard())
-        await callback.answer()
+        await edit_menu_message(
+            callback,
+            build_dead_character_text(player),
+            dead_character_keyboard(),
+        )
         return
-    await callback.message.answer(
+    await edit_menu_message(
+        callback,
         format_inventory(player),
-        reply_markup=inventory_equipment_keyboard(),
+        inventory_equipment_keyboard(),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data == "respawn:base")
 async def respawn_base_callback(callback: CallbackQuery) -> None:
     result = respawn_character(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
+    await reply_action_result(callback, result.text)
     if result.ok:
         player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
         if player is not None:
             await send_profile_snapshot(callback.message, player)
-    await callback.answer()
 
 
 @router.callback_query(F.data == "player:respawn")
@@ -924,8 +940,11 @@ async def show_respawn_menu_callback(callback: CallbackQuery) -> None:
     if player.health > 0:
         await callback.answer("Респавн доступен только при HP=0.", show_alert=True)
         return
-    await callback.message.answer(build_dead_character_text(player), reply_markup=dead_character_keyboard())
-    await callback.answer()
+    await edit_menu_message(
+        callback,
+        build_dead_character_text(player),
+        dead_character_keyboard(),
+    )
 
 
 @router.message(F.text == "🧾 Профиль")
@@ -1044,41 +1063,36 @@ async def handle_buy(callback: CallbackQuery) -> None:
     item_key = (callback.data or "").split(":", maxsplit=1)[1]
     db = get_storage()
     result = buy_item(db, callback.from_user.id, item_key)
-    await callback.message.answer(result.text)
+    await reply_action_result(callback, result.text)
     if result.ok and item_key == "truck":
         player = db.get_character(callback.from_user.id, refresh_energy=False)
         if player is not None:
             await send_profile_snapshot(callback.message, player)
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("sell:"))
 async def handle_sell(callback: CallbackQuery) -> None:
     item_key = (callback.data or "").split(":", maxsplit=1)[1]
     result = sell_item(get_storage(), callback.from_user.id, item_key)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "repair:weapon")
 async def repair_weapon_callback(callback: CallbackQuery) -> None:
     result = repair_gear(get_storage(), callback.from_user.id, "weapon")
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "repair:armor")
 async def repair_armor_callback(callback: CallbackQuery) -> None:
     result = repair_gear(get_storage(), callback.from_user.id, "armor")
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "equip:artifact")
 async def equip_artifact_callback(callback: CallbackQuery) -> None:
     result = equip_artifact(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "equip:menu:weapon")
@@ -1091,11 +1105,11 @@ async def equip_weapon_menu_callback(callback: CallbackQuery) -> None:
     if not options:
         await callback.answer("В инвентаре нет оружия для экипировки.", show_alert=True)
         return
-    await callback.message.answer(
+    await edit_menu_message(
+        callback,
         "Выбери оружие для экипировки:",
-        reply_markup=equip_weapon_keyboard(options),
+        equip_weapon_keyboard(options),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data == "equip:menu:armor")
@@ -1108,11 +1122,11 @@ async def equip_armor_menu_callback(callback: CallbackQuery) -> None:
     if not options:
         await callback.answer("В инвентаре нет брони для экипировки.", show_alert=True)
         return
-    await callback.message.answer(
+    await edit_menu_message(
+        callback,
         "Выбери броню для экипировки:",
-        reply_markup=equip_armor_keyboard(options),
+        equip_armor_keyboard(options),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("equip:weapon:"))
@@ -1120,12 +1134,11 @@ async def equip_weapon_callback(callback: CallbackQuery) -> None:
     item_key = (callback.data or "").split(":", maxsplit=2)[2]
     db = get_storage()
     result = equip_weapon(db, callback.from_user.id, item_key)
-    await callback.message.answer(result.text)
+    await reply_action_result(callback, result.text)
     if result.ok:
         player = db.get_character(callback.from_user.id, refresh_energy=False)
         if player is not None:
             await send_profile_snapshot(callback.message, player)
-    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("equip:armor:"))
@@ -1133,12 +1146,11 @@ async def equip_armor_callback(callback: CallbackQuery) -> None:
     item_key = (callback.data or "").split(":", maxsplit=2)[2]
     db = get_storage()
     result = equip_armor(db, callback.from_user.id, item_key)
-    await callback.message.answer(result.text)
+    await reply_action_result(callback, result.text)
     if result.ok:
         player = db.get_character(callback.from_user.id, refresh_energy=False)
         if player is not None:
             await send_profile_snapshot(callback.message, player)
-    await callback.answer()
 
 
 @router.message(F.text == "📋 Задания")
@@ -1164,8 +1176,7 @@ async def show_quests(message: Message) -> None:
 async def handle_quest(callback: CallbackQuery) -> None:
     quest_key = (callback.data or "").split(":", maxsplit=1)[1]
     result = run_quest(get_storage(), callback.from_user.id, quest_key)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.message(F.text == "🎖 Достижения")
@@ -1195,8 +1206,7 @@ async def show_achievements_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     text = build_achievements_overview(get_storage(), player.telegram_id)
-    await callback.message.answer(text)
-    await callback.answer()
+    await edit_menu_message(callback, text, ratings_keyboard())
 
 
 @router.callback_query(F.data == "ratings:leaderboard")
@@ -1206,8 +1216,7 @@ async def show_rating_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     text = build_rating_overview(get_storage(), player.telegram_id, limit=10)
-    await callback.message.answer(text, reply_markup=ratings_keyboard())
-    await callback.answer()
+    await edit_menu_message(callback, text, ratings_keyboard())
 
 
 @router.message(F.text == "⚡ Выпить энергетик")
@@ -1223,78 +1232,67 @@ async def drink_energy(message: Message) -> None:
 @router.callback_query(F.data == "use:medkit")
 async def use_medkit_callback(callback: CallbackQuery) -> None:
     result = use_medkit(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "use:vodka")
 async def use_vodka_callback(callback: CallbackQuery) -> None:
     result = use_vodka(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "use:antirad")
 async def use_antirad_callback(callback: CallbackQuery) -> None:
     result = use_antirad(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "use:bread")
 async def use_bread_callback(callback: CallbackQuery) -> None:
     result = use_bread(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "use:sausage")
 async def use_sausage_callback(callback: CallbackQuery) -> None:
     result = use_sausage(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "use:stew")
 async def use_stew_callback(callback: CallbackQuery) -> None:
     result = use_stew(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "use:water_bottle")
 async def use_water_callback(callback: CallbackQuery) -> None:
     result = use_water(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "use:mineral_water")
 async def use_mineralka_callback(callback: CallbackQuery) -> None:
     result = use_mineralka(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "use:beard_tea")
 async def use_beard_tea_callback(callback: CallbackQuery) -> None:
     result = use_beard_tea(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "use:stash_case")
 async def use_stash_case_callback(callback: CallbackQuery) -> None:
     result = open_stash(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "artifact:search")
 async def artifact_search_callback(callback: CallbackQuery) -> None:
     result = search_artifacts(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.message(Command("pay"))
@@ -1347,8 +1345,7 @@ async def show_zone_map(message: Message) -> None:
 async def handle_travel(callback: CallbackQuery) -> None:
     destination = (callback.data or "").split(":", maxsplit=1)[1]
     result = travel_to(get_storage(), callback.from_user.id, destination)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.message(F.text == "⚔️ Война")
@@ -1362,6 +1359,15 @@ async def show_war(message: Message) -> None:
         return
 
     await message.answer("Раздел войны: выбери нужный блок.", reply_markup=war_sections_keyboard())
+
+
+@router.callback_query(F.data == "war:section:root")
+async def war_root_section_callback(callback: CallbackQuery) -> None:
+    await edit_menu_message(
+        callback,
+        "Раздел войны: выбери нужный блок.",
+        war_sections_keyboard(),
+    )
 
 
 @router.callback_query(F.data == "war:section:scenario")
@@ -1387,11 +1393,11 @@ async def war_scenario_section_callback(callback: CallbackQuery) -> None:
         "• Точки интереса уменьшают время прибытия.\n"
         "• Шанс боя: сила отряда / (сила отряда + сила NPC).\n"
     )
-    await callback.message.answer(
+    await edit_menu_message(
+        callback,
         explainer + "\nЭкономика твоей группировки:\n" + own_treasury_text + "\n\n" + alliance_overview,
-        reply_markup=alliance_keyboard(),
+        alliance_keyboard(),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data == "war:section:lobby")
@@ -1401,11 +1407,11 @@ async def war_lobby_section_callback(callback: CallbackQuery) -> None:
     if player is None or not player_ready(player):
         await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
         return
-    await callback.message.answer(
+    await edit_menu_message(
+        callback,
         build_war_lobby_overview(db, player.telegram_id),
-        reply_markup=war_lobby_keyboard(db.get_locations()),
+        war_lobby_keyboard(db.get_locations()),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data == "war:section:assault")
@@ -1415,27 +1421,39 @@ async def war_assault_section_callback(callback: CallbackQuery) -> None:
     if player is None or not player_ready(player):
         await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
         return
-    await callback.message.answer(
+    await edit_menu_message(
+        callback,
         "Выбери точку для штурма:",
-        reply_markup=locations_keyboard(db.get_locations(), mode="war"),
+        locations_keyboard(db.get_locations(), mode="war", back_callback="war:section:root"),
     )
-    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("war:transfer:"))
+async def war_transfer_location_callback(callback: CallbackQuery) -> None:
+    ally_faction = (callback.data or "").split(":", maxsplit=2)[2]
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Персонаж не найден.", show_alert=True)
+        return
+    result = transfer_location_to_ally(get_storage(), callback.from_user.id, player.location, ally_faction)
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data.startswith("war:"))
 async def handle_war(callback: CallbackQuery) -> None:
     location = (callback.data or "").split(":", maxsplit=1)[1]
+    if location.startswith("section:") or location.startswith("transfer:"):
+        await safe_callback_answer(callback)
+        return
     result = attack_location(get_storage(), callback.from_user.id, location)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data.startswith("war_lobby:create:"))
 async def war_lobby_create_callback(callback: CallbackQuery) -> None:
     location = (callback.data or "").split(":", maxsplit=2)[2]
     result = create_or_join_war_lobby(get_storage(), callback.from_user.id, location)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "war_lobby:join")
@@ -1449,35 +1467,20 @@ async def war_lobby_join_callback(callback: CallbackQuery) -> None:
         await callback.answer("Открытых лобби войны нет.", show_alert=True)
         return
     result = create_or_join_war_lobby(get_storage(), callback.from_user.id, str(lobby["location"]))
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "war_lobby:launch")
 async def war_lobby_launch_callback(callback: CallbackQuery) -> None:
     result = launch_war_lobby(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("war:transfer:"))
-async def war_transfer_location_callback(callback: CallbackQuery) -> None:
-    ally_faction = (callback.data or "").split(":", maxsplit=2)[2]
-    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
-    if player is None:
-        await callback.answer("Персонаж не найден.", show_alert=True)
-        return
-    result = transfer_location_to_ally(get_storage(), callback.from_user.id, player.location, ally_faction)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data.startswith("alliance:propose:"))
 async def alliance_propose_callback(callback: CallbackQuery) -> None:
     target_faction = (callback.data or "").split(":", maxsplit=2)[2]
     result = propose_alliance(get_storage(), callback.from_user.id, target_faction)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "alliance:menu:propose")
@@ -1487,11 +1490,11 @@ async def alliance_propose_menu_callback(callback: CallbackQuery) -> None:
     if player is None or not player.faction:
         await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
         return
-    await callback.message.answer(
+    await edit_menu_message(
+        callback,
         "Выбери группировку для предложения договора о союзе:",
-        reply_markup=alliance_target_keyboard(db.get_factions(), player.faction, mode="propose"),
+        alliance_target_keyboard(db.get_factions(), player.faction, mode="propose"),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data == "alliance:menu:declare_war")
@@ -1501,11 +1504,11 @@ async def alliance_war_menu_callback(callback: CallbackQuery) -> None:
     if player is None or not player.faction:
         await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
         return
-    await callback.message.answer(
+    await edit_menu_message(
+        callback,
         "Выбери группировку для объявления войны:",
-        reply_markup=alliance_target_keyboard(db.get_factions(), player.faction, mode="declare_war"),
+        alliance_target_keyboard(db.get_factions(), player.faction, mode="declare_war"),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data == "alliance:menu:break")
@@ -1515,11 +1518,11 @@ async def alliance_break_menu_callback(callback: CallbackQuery) -> None:
     if player is None or not player.faction:
         await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
         return
-    await callback.message.answer(
+    await edit_menu_message(
+        callback,
         "Выбери группировку для разрыва союза:",
-        reply_markup=alliance_target_keyboard(db.get_factions(), player.faction, mode="break"),
+        alliance_target_keyboard(db.get_factions(), player.faction, mode="break"),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data == "alliance:menu:confirm")
@@ -1531,17 +1534,16 @@ async def alliance_confirm_menu_callback(callback: CallbackQuery) -> None:
         return
     incoming = db.list_incoming_alliance_requests(player.faction)
     pending_from = [str(row["requester_faction"]) for row in incoming]
-    await callback.message.answer(
+    await edit_menu_message(
+        callback,
         "Входящие предложения на союз:",
-        reply_markup=alliance_pending_keyboard(pending_from),
+        alliance_pending_keyboard(pending_from),
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data == "alliance:menu:back")
 async def alliance_menu_back_callback(callback: CallbackQuery) -> None:
-    await callback.message.answer("Раздел дипломатии:", reply_markup=alliance_keyboard())
-    await callback.answer()
+    await edit_menu_message(callback, "Раздел дипломатии:", alliance_keyboard())
 
 
 @router.callback_query(F.data == "alliance:none")
@@ -1553,24 +1555,21 @@ async def alliance_none_callback(callback: CallbackQuery) -> None:
 async def alliance_confirm_callback(callback: CallbackQuery) -> None:
     source_faction = (callback.data or "").split(":", maxsplit=2)[2]
     result = accept_alliance(get_storage(), callback.from_user.id, source_faction)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data.startswith("alliance:break:"))
 async def alliance_break_callback(callback: CallbackQuery) -> None:
     target_faction = (callback.data or "").split(":", maxsplit=2)[2]
     result = break_alliance(get_storage(), callback.from_user.id, target_faction)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data.startswith("alliance:war:"))
 async def alliance_war_callback(callback: CallbackQuery) -> None:
     target_faction = (callback.data or "").split(":", maxsplit=2)[2]
     result = declare_war(get_storage(), callback.from_user.id, target_faction)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.message(F.text == "🪖 Рейды")
@@ -1595,8 +1594,7 @@ async def show_raids(message: Message) -> None:
 async def create_raid_callback(callback: CallbackQuery) -> None:
     location = (callback.data or "").split(":", maxsplit=2)[2]
     result = create_or_join_faction_raid(get_storage(), callback.from_user.id, location)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "raid:join")
@@ -1610,8 +1608,7 @@ async def join_raid_callback(callback: CallbackQuery) -> None:
         await callback.answer("Открытых рейдов нет.", show_alert=True)
         return
     result = create_or_join_faction_raid(get_storage(), callback.from_user.id, str(open_raid["location"]))
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "raid:ally:join")
@@ -1632,8 +1629,7 @@ async def join_raid_as_ally_callback(callback: CallbackQuery) -> None:
         await callback.answer("Открытых рейдов союзников нет.", show_alert=True)
         return
     result = create_or_join_faction_raid(storage, callback.from_user.id, str(open_raid["location"]))
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "raid:launch")
@@ -1650,8 +1646,9 @@ async def launch_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
             except Exception:
                 logger.exception("Failed to deliver raid result to member %s", member_id)
     if callback.from_user.id not in notified:
-        await callback.message.answer(result.text)
-    await callback.answer()
+        await reply_action_result(callback, result.text)
+    else:
+        await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "raid:cancel:all")
@@ -1675,8 +1672,7 @@ async def cancel_all_raids_callback(callback: CallbackQuery, bot: Bot) -> None:
                 )
             except Exception:
                 logger.exception("Failed to notify raid member %s about cancel-all", member_id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data.startswith("raid:cancel:"))
@@ -1703,8 +1699,7 @@ async def cancel_one_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
                 await bot.send_message(member_id, f"📣 {result.text}")
             except Exception:
                 logger.exception("Failed to notify raid member %s about cancel", member_id)
-    await callback.message.answer(result.text)
-    await safe_callback_answer(callback, "Ок" if result.ok else result.text, show_alert=not result.ok)
+    await reply_action_result(callback, result.text)
 
 
 @router.message(F.text == "🛰 События")
@@ -1735,16 +1730,27 @@ async def show_economy(message: Message) -> None:
 async def warehouse_deposit_callback(callback: CallbackQuery) -> None:
     item_key = (callback.data or "").split(":", maxsplit=3)[3]
     result = deposit_to_faction_warehouse(get_storage(), callback.from_user.id, item_key, 1)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data.startswith("eco:warehouse:withdraw:"))
 async def warehouse_withdraw_callback(callback: CallbackQuery) -> None:
     item_key = (callback.data or "").split(":", maxsplit=3)[3]
     result = withdraw_from_faction_warehouse(get_storage(), callback.from_user.id, item_key, 1)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "eco:menu:root")
+async def economy_root_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Персонаж не найден.", show_alert=True)
+        return
+    if not player_ready(player):
+        await callback.answer("Сначала выбери группировку.", show_alert=True)
+        return
+    text = build_economy_overview(get_storage(), player.telegram_id)
+    await edit_menu_message(callback, text, economy_keyboard())
 
 
 @router.callback_query(F.data == "eco:warehouse:view")
@@ -1754,16 +1760,14 @@ async def warehouse_view_callback(callback: CallbackQuery) -> None:
         await callback.answer("Персонаж не найден.", show_alert=True)
         return
     text = build_economy_overview(get_storage(), player.telegram_id)
-    await callback.message.answer(text)
-    await callback.answer()
+    await edit_menu_message(callback, text, economy_keyboard())
 
 
 @router.callback_query(F.data.startswith("eco:auction:create:"))
 async def auction_create_callback(callback: CallbackQuery) -> None:
     lot_key = (callback.data or "").split(":", maxsplit=3)[3]
     result = create_faction_auction(get_storage(), callback.from_user.id, lot_key)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data.startswith("eco:market:create:"))
@@ -1778,23 +1782,23 @@ async def market_create_callback(callback: CallbackQuery, state: FSMContext) -> 
             return
         options = list_sellable_market_equipment(storage, callback.from_user.id)
         if not options:
-            await callback.message.answer("В инвентаре нет оружия или брони для выставления на рынок.")
-            await callback.answer()
+            await callback.answer("В инвентаре нет оружия или брони для выставления на рынок.", show_alert=True)
             return
-        await callback.message.answer(
+        await edit_menu_message(
+            callback,
             "Выбери предмет из инвентаря для выставления на рынок:",
-            reply_markup=market_create_select_keyboard(options),
+            market_create_select_keyboard(options),
         )
-        await callback.answer()
         return
     await state.set_state(Registration.market_lot_price)
     await state.update_data(market_item_key=item_key)
-    await callback.message.answer(
+    await edit_menu_message(
+        callback,
         "Введи цену лота в RU (целое число больше 0).\n"
         "Пример: 800\n"
-        "Комиссия рынка 30%: покупатель платит цену лота, продавец получает 70%."
+        "Комиссия рынка 30%: покупатель платит цену лота, продавец получает 70%.",
+        economy_keyboard(),
     )
-    await callback.answer()
 
 
 @router.message(Registration.market_lot_price)
@@ -1830,8 +1834,7 @@ async def process_market_lot_price(message: Message, state: FSMContext) -> None:
 @router.callback_query(F.data == "eco:market:buy:first")
 async def market_buy_first_callback(callback: CallbackQuery) -> None:
     result = buy_first_market_lot(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "eco:market:list")
@@ -1842,10 +1845,8 @@ async def market_list_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа.", show_alert=True)
         return
     text, lots = build_market_lots_overview(storage, callback.from_user.id, limit=12)
-    await callback.message.answer(text)
-    if lots:
-        await callback.message.answer("Выбери лот для покупки:", reply_markup=market_lots_keyboard(lots))
-    await callback.answer()
+    menu_text = text if not lots else f"{text}\n\nВыбери лот для покупки:"
+    await edit_menu_message(callback, menu_text, market_lots_keyboard(lots))
 
 
 @router.callback_query(F.data.startswith("eco:market:buy:"))
@@ -1857,36 +1858,31 @@ async def market_buy_by_id_callback(callback: CallbackQuery) -> None:
         await callback.answer("Некорректный ID лота.", show_alert=True)
         return
     result = buy_market_lot(get_storage(), callback.from_user.id, auction_id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "eco:market:cancel:mine")
 async def market_cancel_mine_callback(callback: CallbackQuery) -> None:
     result = cancel_own_first_market_lot(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "eco:auction:buy:first")
 async def auction_buy_first_callback(callback: CallbackQuery) -> None:
     result = buy_first_faction_auction(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "eco:auction:cancel:mine")
 async def auction_cancel_mine_callback(callback: CallbackQuery) -> None:
     result = cancel_own_first_auction(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "eco:smuggle:run")
 async def smuggle_callback(callback: CallbackQuery) -> None:
     result = attempt_smuggling(get_storage(), callback.from_user.id)
-    await callback.message.answer(result.text)
-    await callback.answer()
+    await reply_action_result(callback, result.text)
 
 
 @router.message()

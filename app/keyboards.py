@@ -289,7 +289,12 @@ def trader_sell_weapons_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def locations_keyboard(locations: list[dict[str, str | int | None]], mode: str) -> InlineKeyboardMarkup:
+def locations_keyboard(
+    locations: list[dict[str, str | int | None]],
+    mode: str,
+    *,
+    back_callback: str | None = None,
+) -> InlineKeyboardMarkup:
     rows = []
     for location in locations:
         name = str(location["name"])
@@ -297,6 +302,8 @@ def locations_keyboard(locations: list[dict[str, str | int | None]], mode: str) 
         owner = location["controlled_by"] or "нейтрал"
         text = f"{name} [{ptype}, {owner}]"
         rows.append([InlineKeyboardButton(text=text, callback_data=f"{mode}:{name}")])
+    if back_callback:
+        rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -352,6 +359,7 @@ def war_lobby_keyboard(locations: list[dict[str, str | int | None]]) -> InlineKe
     for location in locations:
         name = str(location["name"])
         rows.append([InlineKeyboardButton(text=f"Создать штурм-лобби: {name}", callback_data=f"war_lobby:create:{name}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="war:section:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -415,6 +423,7 @@ def market_lots_keyboard(lots: list[dict[str, str | int]]) -> InlineKeyboardMark
         )
     if not rows:
         rows.append([InlineKeyboardButton(text="Открытых лотов нет", callback_data="alliance:none")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -438,6 +447,7 @@ def market_create_select_keyboard(items: list[dict[str, str | int]]) -> InlineKe
         )
     if not rows:
         rows.append([InlineKeyboardButton(text="Нет подходящих вещей", callback_data="alliance:none")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -457,6 +467,7 @@ def alliance_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="✅ Подтвердить входящий договор", callback_data="alliance:menu:confirm")],
             [InlineKeyboardButton(text="⚔️ Объявить войну", callback_data="alliance:menu:declare_war")],
             [InlineKeyboardButton(text="💔 Разорвать союз", callback_data="alliance:menu:break")],
+            [InlineKeyboardButton(text="⬅️ К разделам войны", callback_data="war:section:root")],
         ]
     )
 
