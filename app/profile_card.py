@@ -201,6 +201,8 @@ def _wrap_text_lines(
         current = word
         word_idx += 1
     if len(lines) < max_lines:
+        if draw.textlength(current, font=font) > max_width:
+            current = _ellipsize_text(draw, current, font, max_width)
         lines.append(current)
     elif lines:
         lines[-1] = _ellipsize_text(draw, lines[-1], font, max_width)
@@ -217,10 +219,8 @@ def _draw_stalker_quote(
     font: ImageFont.ImageFont,
 ) -> None:
     quote = random.choice(STALKER_QUOTES)
-    padding_x = 8
-    inner_left = left + padding_x
-    inner_right = right - padding_x
-    max_width = max(40, inner_right - inner_left)
+    padding_x = 16
+    max_width = max(40, right - left - padding_x * 2)
     line_height = 23
     max_height = max(1, bottom - top)
     max_lines = max(1, max_height // line_height)
@@ -229,9 +229,12 @@ def _draw_stalker_quote(
         return
     text_block_h = len(lines) * line_height
     start_y = top + max(0, (max_height - text_block_h) // 2)
+    box_width = right - left
     for idx, line in enumerate(lines):
+        line_width = draw.textlength(line, font=font)
+        x = left + max(padding_x, int((box_width - line_width) / 2))
         draw.text(
-            (inner_left, start_y + idx * line_height),
+            (x, start_y + idx * line_height),
             line,
             fill=(232, 235, 245),
             font=font,
@@ -353,8 +356,11 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     draw.text((62, 188), f"Локация: {character.location}", fill=(248, 248, 248), font=small_font)
     draw.text((62, 218), f"Группировка: {character.faction or 'не выбрана'}", fill=(248, 248, 248), font=small_font)
 
-    panel_left = 46
-    panel_right = 408
+    info_box_left = 46
+    info_box_right = 408
+    info_box_bottom = 254
+    panel_left = info_box_left
+    panel_right = info_box_right
     panel_bottom = 676
     avatar_top = 268
 
@@ -371,16 +377,18 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     avatar_x = panel_left + (available_w - avatar.width) // 2
     avatar_y = avatar_top + max(0, (available_h - avatar.height) // 2)
 
-    quote_top = 262
-    quote_bottom = max(quote_top + 24, avatar_y - 6)
-    _draw_stalker_quote(
-        draw,
-        left=panel_left,
-        top=quote_top,
-        right=panel_right,
-        bottom=quote_bottom,
-        font=quote_font,
-    )
+    quote_margin = 8
+    quote_top = info_box_bottom + quote_margin
+    quote_bottom = avatar_y - quote_margin
+    if quote_bottom > quote_top:
+        _draw_stalker_quote(
+            draw,
+            left=info_box_left,
+            top=quote_top,
+            right=info_box_right,
+            bottom=quote_bottom,
+            font=quote_font,
+        )
 
     if avatar.mode in {"RGBA", "LA"}:
         # Сохраняем прозрачность, чтобы не появлялся темный фон вокруг спрайта.
