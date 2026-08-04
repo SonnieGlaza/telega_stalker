@@ -38,12 +38,12 @@ FACTION_RANKS: dict[str, tuple[FactionRank, ...]] = {
         FactionRank("r6", "Смотрящий", 6),
     ),
     "Свобода": (
-        FactionRank("r1", "Бродяга", 1),
-        FactionRank("r2", "Вольный", 2),
-        FactionRank("r3", "Повстанец", 3),
-        FactionRank("r4", "Бунтарь", 4),
-        FactionRank("r5", "Идеолог", 5),
-        FactionRank("r6", "Комиссар", 6),
+        FactionRank("r1", "Ветер", 1),
+        FactionRank("r2", "Дух", 2),
+        FactionRank("r3", "Товарищ", 3),
+        FactionRank("r4", "Свободный", 4),
+        FactionRank("r5", "Командир", 5),
+        FactionRank("r6", "Зам лидера", 6),
     ),
 }
 
@@ -51,7 +51,7 @@ FACTION_LEADER_TITLES: dict[str, str] = {
     "Долг": "Полковник",
     "Нейтралы": "Лидер",
     "Бандиты": "Вор в законе",
-    "Свобода": "Командир",
+    "Свобода": "Лидер",
 }
 
 DEFAULT_RANK_KEY = "r1"
