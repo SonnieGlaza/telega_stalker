@@ -202,7 +202,8 @@ def _clip_callback_alert(text: str, *, limit: int = CALLBACK_ALERT_MAX_LEN) -> s
         return clean
     clipped = clean[: max(1, limit - 1)]
     last_nl = clipped.rfind("\n")
-    if last_nl >= limit // 3:
+    # If the cut lands mid-line with only a short stub, drop that stub.
+    if last_nl >= 0 and (limit - 1 - last_nl) < 24:
         clipped = clipped[:last_nl]
     return clipped.rstrip() + "…"
 
