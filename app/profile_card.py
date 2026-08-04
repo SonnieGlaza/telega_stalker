@@ -236,9 +236,9 @@ STALKER_QUOTES: tuple[str, ...] = (
 
 
 MAX_QUOTE_LINES = 3
-QUOTE_Y_OFFSET = 30
+QUOTE_Y_OFFSET = 10
 # Смещение аватарки вниз внутри левой панели (0 = прижать к низу зоны).
-AVATAR_BOTTOM_PADDING = 8
+AVATAR_BOTTOM_PADDING = 28
 # Ориентир по длине, чтобы фраза уверенно влезала в 3 строки карточки.
 MAX_QUOTE_CHAR_HINT = 130
 
