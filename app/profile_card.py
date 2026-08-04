@@ -173,8 +173,24 @@ STALKER_QUOTES: tuple[str, ...] = (
 
 
 MAX_QUOTE_LINES = 3
-QUOTE_Y_OFFSET = 110
 
+
+def _quote_line_step(font: ImageFont.ImageFont, zone_height: int) -> int:
+    ascent, descent = font.getmetrics()
+    min_step = max(ascent + descent, 14)
+    if zone_height <= min_step:
+        return min_step
+    if MAX_QUOTE_LINES <= 1:
+        return min_step
+    fit_step = (zone_height - min_step) // (MAX_QUOTE_LINES - 1)
+    return max(min_step, min(20, fit_step))
+
+
+def _quote_block_height(lines: list[str], font: ImageFont.ImageFont, line_step: int) -> int:
+    if not lines:
+        return 0
+    ascent, descent = font.getmetrics()
+    return (len(lines) - 1) * line_step + ascent + descent
 
 def _wrap_text_lines(
     draw: ImageDraw.ImageDraw,
@@ -253,16 +269,10 @@ def _draw_stalker_quote(
         )
     if not lines:
         return
-    ascent, descent = font.getmetrics()
-    line_step = min(22, max(16, max_height // MAX_QUOTE_LINES))
-    line_step = max(line_step, ascent + descent)
-    max_block_h = (MAX_QUOTE_LINES - 1) * line_step + ascent + descent
-    text_block_h = (len(lines) - 1) * line_step + ascent + descent
-
-    zone_center_y = (top + bottom) // 2
-    quote_anchor_y = zone_center_y + QUOTE_Y_OFFSET
-    quote_anchor_y = max(top + max_block_h // 2, min(bottom - max_block_h // 2, quote_anchor_y))
-    start_y = quote_anchor_y - text_block_h // 2
+    line_step = _quote_line_step(font, max_height)
+    text_block_h = _quote_block_height(lines, font, line_step)
+    quote_anchor_y = (top + bottom) / 2
+    start_y = int(round(quote_anchor_y - text_block_h / 2))
     box_width = right - left
     for idx, line in enumerate(lines):
         line_width = draw.textlength(line, font=font)
