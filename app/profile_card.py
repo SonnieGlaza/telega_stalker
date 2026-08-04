@@ -227,7 +227,6 @@ def _draw_stalker_quote(
     padding_x = 16
     max_width = max(40, right - left - padding_x * 2)
     max_height = max(1, bottom - top)
-    line_height = min(22, max(16, max_height // MAX_QUOTE_LINES))
 
     lines: list[str] = []
     for _ in range(12):
@@ -253,14 +252,18 @@ def _draw_stalker_quote(
         )
     if not lines:
         return
-    text_block_h = len(lines) * line_height
-    start_y = top + max(0, (max_height - text_block_h) // 2)
+    ascent, descent = font.getmetrics()
+    line_step = min(22, max(16, max_height // MAX_QUOTE_LINES))
+    line_step = max(line_step, ascent + descent)
+    text_block_h = (len(lines) - 1) * line_step + ascent + descent
+    zone_center_y = (top + bottom) // 2
+    start_y = zone_center_y - text_block_h // 2
     box_width = right - left
     for idx, line in enumerate(lines):
         line_width = draw.textlength(line, font=font)
         x = left + max(padding_x, int((box_width - line_width) / 2))
         draw.text(
-            (x, start_y + idx * line_height),
+            (x, start_y + idx * line_step),
             line,
             fill=(232, 235, 245),
             font=font,
@@ -403,16 +406,13 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     avatar_x = panel_left + (available_w - avatar.width) // 2
     avatar_y = avatar_top + max(0, (available_h - avatar.height) // 2)
 
-    quote_margin = 6
-    quote_top = info_box_bottom + quote_margin
-    quote_bottom = avatar_y - quote_margin
-    if quote_bottom > quote_top:
+    if avatar_y > info_box_bottom:
         _draw_stalker_quote(
             draw,
             left=info_box_left,
-            top=quote_top,
+            top=info_box_bottom,
             right=info_box_right,
-            bottom=quote_bottom,
+            bottom=avatar_y,
             font=quote_font,
         )
 
