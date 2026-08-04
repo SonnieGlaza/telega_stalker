@@ -95,6 +95,7 @@ from app.game_logic import (
     withdraw_from_faction_treasury,
     deposit_to_faction_treasury,
     can_withdraw_faction_treasury,
+    upgrade_faction_base,
     assign_faction_rank,
     build_faction_ranks_overview,
     build_faction_member_rank_pick_text,
@@ -2157,7 +2158,8 @@ async def war_scenario_section_callback(callback: CallbackQuery) -> None:
         "• При успехе контроль получает группировка-хост лобби.\n"
         "• Точки ресурсов и базы дают контроль и преимущества на карте.\n"
         "• Точки интереса уменьшают время прибытия.\n"
-        "• Шанс боя: сила отряда / (сила отряда + сила NPC).\n"
+        "• Шанс боя: сила отряда / (сила отряда + сила NPC + укрепление базы).\n"
+        "• Укрепление базы: лидер, 10000 RU из казны, +1 к защите за уровень.\n"
         "• Казна и склад — в разделе «👥 Группировка».\n"
     )
     await edit_menu_message(
@@ -2679,6 +2681,26 @@ async def faction_group_root_callback(callback: CallbackQuery) -> None:
         return
     text = build_faction_group_overview(get_storage(), player.telegram_id)
     await edit_menu_message(callback, text, _faction_group_keyboard_for(player.telegram_id))
+
+
+@router.callback_query(F.data == "faction:base:fortify")
+async def faction_base_fortify_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Персонаж не найден.", show_alert=True)
+        return
+    if not player_ready(player):
+        await callback.answer("Сначала выбери группировку.", show_alert=True)
+        return
+    result = upgrade_faction_base(storage, callback.from_user.id)
+    overview = build_faction_group_overview(storage, player.telegram_id)
+    await edit_menu_message(
+        callback,
+        f"{result.text}\n\n{overview}",
+        _faction_group_keyboard_for(player.telegram_id),
+    )
+    await callback.answer("Готово." if result.ok else result.text[:180], show_alert=not result.ok)
 
 
 @router.callback_query(F.data == "eco:menu:root")

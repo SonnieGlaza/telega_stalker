@@ -271,14 +271,15 @@ class Storage:
         for row in locations:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO locations(name, point_type, controlled_by, npc_power)
-                VALUES(?, ?, ?, ?)
+                INSERT OR REPLACE INTO locations(name, point_type, controlled_by, npc_power, defense_bonus)
+                VALUES(?, ?, ?, ?, ?)
                 """,
                 (
                     row.get("name"),
                     row.get("point_type"),
                     row.get("controlled_by"),
                     int(row.get("npc_power", REGULAR_LOCATION_NPC_POWER)),
+                    int(row.get("defense_bonus", 0)),
                 ),
             )
         for row in alliances:
@@ -616,10 +617,16 @@ class Storage:
                     name TEXT PRIMARY KEY,
                     point_type TEXT NOT NULL,
                     controlled_by TEXT,
-                    npc_power INTEGER NOT NULL DEFAULT 60
+                    npc_power INTEGER NOT NULL DEFAULT 60,
+                    defense_bonus INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
+            location_columns = self._table_columns(conn, "locations")
+            if "defense_bonus" not in location_columns:
+                conn.execute(
+                    "ALTER TABLE locations ADD COLUMN defense_bonus INTEGER NOT NULL DEFAULT 0"
+                )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS alliance_requests (
@@ -2364,7 +2371,7 @@ class Storage:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT name, point_type, controlled_by, npc_power
+                SELECT name, point_type, controlled_by, npc_power, defense_bonus
                 FROM locations
                 ORDER BY name
                 """
@@ -2375,6 +2382,7 @@ class Storage:
                 "point_type": row["point_type"],
                 "controlled_by": row["controlled_by"],
                 "npc_power": row["npc_power"],
+                "defense_bonus": int(row["defense_bonus"] or 0),
             }
             for row in rows
         ]
@@ -2383,7 +2391,7 @@ class Storage:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT name, point_type, controlled_by, npc_power
+                SELECT name, point_type, controlled_by, npc_power, defense_bonus
                 FROM locations
                 WHERE name = ?
                 """,
@@ -2391,7 +2399,9 @@ class Storage:
             ).fetchone()
         if row is None:
             return None
-        return dict(row)
+        data = dict(row)
+        data["defense_bonus"] = int(data.get("defense_bonus") or 0)
+        return data
 
     def set_location_control(self, location_name: str, faction: str | None) -> None:
         with self._connect() as conn:
@@ -2400,6 +2410,23 @@ class Storage:
                 (faction, location_name),
             )
         self.save_snapshot()
+
+    def increment_location_defense_bonus(self, location_name: str, delta: int = 1) -> int | None:
+        """Увеличить пассивную защиту базы. Возвращает новый бонус или None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT defense_bonus FROM locations WHERE name = ?",
+                (location_name,),
+            ).fetchone()
+            if row is None:
+                return None
+            new_bonus = max(0, int(row["defense_bonus"] or 0) + int(delta))
+            conn.execute(
+                "UPDATE locations SET defense_bonus = ? WHERE name = ?",
+                (new_bonus, location_name),
+            )
+        self.save_snapshot()
+        return new_bonus
 
     def set_location_npc_power(self, location_name: str, npc_power: int) -> None:
         with self._connect() as conn:
