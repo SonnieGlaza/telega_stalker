@@ -359,6 +359,8 @@ THIRST_PASSIVE_PER_HOUR = 1
 SURVIVAL_TICK_MINUTES = 30
 SURVIVAL_OVERLIMIT_HP_DRAIN = 10
 TRANSFER_FEE_PERCENT = 30
+TRUCK_WEAR_MIN = 5
+TRUCK_WEAR_MAX = 15
 
 SURVIVAL_CRAVING_THRESHOLD = 40
 SURVIVAL_URGENT_THRESHOLD = 75
@@ -1912,7 +1914,11 @@ def format_inventory(character: Character, *, rating_points: int = 0) -> str:
     else:
         items = "• Пусто"
 
-    vehicle = "Есть грузовик" if character.truck_owned else "Нет транспорта"
+    vehicle = (
+        f"Есть грузовик ({max(0, min(100, int(character.truck_durability)))}%)"
+        if character.truck_owned
+        else "Нет транспорта"
+    )
     sleeping_bag = "Есть спальник (x2 реген энергии)" if character.sleeping_bag_owned else "Спальника нет"
     equipment_labels = {
         "weapon": "Оружие",
@@ -1959,6 +1965,18 @@ def format_inventory(character: Character, *, rating_points: int = 0) -> str:
     )
 
 
+def _compute_truck_wear(distance_px: float | None, travel_minutes: int) -> int:
+    if distance_px is not None:
+        factor = max(0.0, min(1.0, float(distance_px) / 420.0))
+    else:
+        factor = max(0.0, min(1.0, (travel_minutes - 5) / 20))
+    min_wear = TRUCK_WEAR_MIN + int(round(4 * factor))
+    max_wear = TRUCK_WEAR_MIN + int(round(10 * factor))
+    min_wear = max(TRUCK_WEAR_MIN, min(TRUCK_WEAR_MAX, min_wear))
+    max_wear = max(min_wear, min(TRUCK_WEAR_MAX, max_wear))
+    return random.randint(min_wear, max_wear)
+
+
 def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionResult:
     character = storage.get_character(telegram_id)
     if character is None:
@@ -1973,9 +1991,10 @@ def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionRes
         return ActionResult(False, "Такой локации нет.")
     target = locations[destination]
 
-    will_use_truck = character.truck_owned and character.fuel > 0
+    will_use_truck = character.truck_owned and character.truck_durability > 0 and character.fuel > 0
     energy_cost = 8 if will_use_truck else 16
     travel_minutes = 10 if will_use_truck else 30
+    distance_px: float | None = None
     current_point = MAP_TRAVEL_POINTS.get(character.location)
     destination_point = MAP_TRAVEL_POINTS.get(destination)
     if current_point and destination_point:
@@ -1994,12 +2013,24 @@ def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionRes
         storage.restore_energy(telegram_id, energy_cost)
         return ActionResult(False, "Не удалось списать топливо, переход отменен.")
 
+    truck_wear_text = ""
+    if will_use_truck:
+        wear = _compute_truck_wear(distance_px, travel_minutes)
+        durability = storage.apply_truck_wear(telegram_id, wear)
+        if durability is None:
+            durability = max(0, int(character.truck_durability) - wear)
+        if durability <= 0:
+            truck_wear_text = f"\nГрузовик изношен на {wear}% и окончательно сломан."
+        else:
+            truck_wear_text = f"\nИзнос грузовика: -{wear}% (прочность: {durability}%)."
+
     storage.set_location(telegram_id, destination)
     return ActionResult(
         True,
         f"Переход в «{destination}» выполнен.\n"
         f"Затрачено энергии: {energy_cost}.\n"
-        f"Оценка времени пути: ~{travel_minutes} мин.",
+        f"Оценка времени пути: ~{travel_minutes} мин."
+        f"{truck_wear_text}",
     )
 
 

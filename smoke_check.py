@@ -73,12 +73,22 @@ def run_smoke_check() -> None:
 
         # Economy / trader items.
         assert buy_item(storage, 111, "detector_otklik").ok
-        storage.change_money(111, 40000)
+        storage.change_money(111, 100000)
+        assert buy_item(storage, 111, "truck").ok
+        storage.change_fuel(111, 3)
+        before_travel = storage.get_character(111, refresh_energy=False)
+        assert before_travel is not None
+        before_truck_durability = before_travel.truck_durability
         assert buy_item(storage, 111, "sleeping_bag").ok
         assert buy_item(storage, 111, "medkit").ok
         assert use_medkit(storage, 111).ok is False  # hp full
         assert search_artifacts(storage, 111).text
         assert travel_to(storage, 111, "Янтарь").text
+        after_travel = storage.get_character(111, refresh_energy=False)
+        assert after_travel is not None
+        assert after_travel.truck_durability < before_truck_durability
+        assert before_truck_durability - after_travel.truck_durability >= 5
+        assert before_truck_durability - after_travel.truck_durability <= 15
         assert build_alliance_overview(storage, 111)
         assert build_economy_overview(storage, 111)
 

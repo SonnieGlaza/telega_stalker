@@ -575,7 +575,11 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     draw.text((right_x, 184), f"Баланс: {character.money} рублей", fill=(225, 225, 225), font=body_font)
     draw.text(
         (right_x, 210),
-        f"Транспорт: {'Грузовик' if character.truck_owned else 'Отсутствует'}",
+        (
+            f"Транспорт: Грузовик ({max(0, min(100, int(character.truck_durability)))}%)"
+            if character.truck_owned
+            else "Транспорт: Отсутствует"
+        ),
         fill=(225, 225, 225),
         font=body_font,
     )

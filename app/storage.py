@@ -42,6 +42,7 @@ class Character:
     inventory: dict[str, int]
     equipment: dict[str, Any]
     truck_owned: bool
+    truck_durability: int
     sleeping_bag_owned: bool
     fuel: int
     energy_updated_at: datetime
@@ -311,9 +312,9 @@ class Storage:
                 INSERT OR REPLACE INTO characters(
                     telegram_id, player_uid, avatar_style, nickname, gender, faction, money,
                     energy, max_energy, energy_updated_at, health, gear_power, location,
-                    inventory_json, equipment_json, truck_owned, sleeping_bag_owned, fuel,
+                    inventory_json, equipment_json, truck_owned, truck_durability, sleeping_bag_owned, fuel,
                     radiation, hunger, thirst, needs_updated_at, survival_damage_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(row.get("telegram_id")),
@@ -333,6 +334,7 @@ class Storage:
                     row.get("equipment_json")
                     or '{"weapon":"Нож","armor":"Куртка новичка","weapon_durability":100,"armor_durability":100}',
                     int(row.get("truck_owned", 0)),
+                    int(row.get("truck_durability", 100 if int(row.get("truck_owned", 0)) else 0)),
                     int(row.get("sleeping_bag_owned", 0)),
                     int(row.get("fuel", 0)),
                     int(row.get("radiation", 0)),
@@ -580,6 +582,7 @@ class Storage:
                     inventory_json TEXT NOT NULL DEFAULT '{}',
                     equipment_json TEXT NOT NULL DEFAULT '{"weapon":"Нож","armor":"Куртка новичка","weapon_durability":100,"armor_durability":100}',
                     truck_owned INTEGER NOT NULL DEFAULT 0,
+                    truck_durability INTEGER NOT NULL DEFAULT 0,
                     sleeping_bag_owned INTEGER NOT NULL DEFAULT 0,
                     fuel INTEGER NOT NULL DEFAULT 0,
                     radiation INTEGER NOT NULL DEFAULT 0,
@@ -868,12 +871,12 @@ class Storage:
                         INSERT INTO characters(
                             telegram_id, player_uid, avatar_style, nickname, gender,
                             money, energy, max_energy, energy_updated_at, health, gear_power, location,
-                            inventory_json, equipment_json, truck_owned, sleeping_bag_owned, fuel,
+                            inventory_json, equipment_json, truck_owned, truck_durability, sleeping_bag_owned, fuel,
                             radiation, hunger, thirst, needs_updated_at, survival_damage_at
                         ) VALUES(
                             ?, ?, 'classic', ?, ?,
                             1000, 100, 100, ?, 100, 2, 'База новичков',
-                            '{}', ?, 0, 0, 0,
+                            '{}', ?, 0, 0, 0, 0,
                             0, 0, 0, ?, ?
                         )
                         """,
@@ -1589,6 +1592,7 @@ class Storage:
                     inventory_json = ?,
                     equipment_json = ?,
                     truck_owned = ?,
+                    truck_durability = ?,
                     sleeping_bag_owned = ?,
                     fuel = ?,
                     radiation = ?,
@@ -1614,6 +1618,7 @@ class Storage:
                     json.dumps(character.inventory, ensure_ascii=False),
                     json.dumps(character.equipment, ensure_ascii=False),
                     1 if character.truck_owned else 0,
+                    character.truck_durability,
                     1 if character.sleeping_bag_owned else 0,
                     character.fuel,
                     character.radiation,
@@ -1854,7 +1859,7 @@ class Storage:
     def set_truck_owned(self, telegram_id: int) -> None:
         with self._connect() as conn:
             conn.execute(
-                "UPDATE characters SET truck_owned = 1 WHERE telegram_id = ?",
+                "UPDATE characters SET truck_owned = 1, truck_durability = 100 WHERE telegram_id = ?",
                 (telegram_id,),
             )
         self.save_snapshot()
@@ -1878,10 +1883,24 @@ class Storage:
     def clear_truck_owned(self, telegram_id: int) -> None:
         with self._connect() as conn:
             conn.execute(
-                "UPDATE characters SET truck_owned = 0 WHERE telegram_id = ?",
+                "UPDATE characters SET truck_owned = 0, truck_durability = 0 WHERE telegram_id = ?",
                 (telegram_id,),
             )
         self.save_snapshot()
+
+    def apply_truck_wear(self, telegram_id: int, wear_percent: int) -> int | None:
+        character = self.get_character(telegram_id, refresh_energy=False)
+        if character is None or not character.truck_owned:
+            return None
+        wear = max(0, int(wear_percent))
+        new_durability = max(0, min(100, int(character.truck_durability) - wear))
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET truck_durability = ?, truck_owned = ? WHERE telegram_id = ?",
+                (new_durability, 1 if new_durability > 0 else 0, telegram_id),
+            )
+        self.save_snapshot()
+        return new_durability
 
     def change_fuel(self, telegram_id: int, delta: int) -> bool:
         character = self.get_character(telegram_id, refresh_energy=False)
@@ -2784,6 +2803,16 @@ class Storage:
                 except Exception:
                     pass
 
+        # Для старых аккаунтов с уже купленным грузовиком проставляем стартовую прочность.
+        if "truck_durability" in self._table_columns(conn, "characters"):
+            conn.execute(
+                """
+                UPDATE characters
+                SET truck_durability = 100
+                WHERE truck_owned = 1 AND COALESCE(truck_durability, 0) <= 0
+                """
+            )
+
     def _ensure_player_stats_row(self, conn: DbConnection, telegram_id: int) -> None:
         conn.execute(
             "INSERT OR IGNORE INTO player_stats(telegram_id) VALUES (?)",
@@ -2857,6 +2886,10 @@ class Storage:
             (
                 "sleeping_bag_owned",
                 "ALTER TABLE characters ADD COLUMN sleeping_bag_owned INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "truck_durability",
+                "ALTER TABLE characters ADD COLUMN truck_durability INTEGER NOT NULL DEFAULT 0",
             ),
         ]
         for col_name, ddl in add_columns:
@@ -3056,6 +3089,7 @@ class Storage:
             inventory=inventory,
             equipment=equipment,
             truck_owned=bool(Storage._row_get(row, "truck_owned", 0)),
+            truck_durability=max(0, min(100, _as_int(Storage._row_get(row, "truck_durability"), 0))),
             sleeping_bag_owned=bool(Storage._row_get(row, "sleeping_bag_owned", 0)),
             fuel=_as_int(Storage._row_get(row, "fuel"), 0),
             energy_updated_at=_as_dt(Storage._row_get(row, "energy_updated_at")),
