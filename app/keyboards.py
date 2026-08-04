@@ -35,8 +35,6 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="⚔️ Война"), KeyboardButton(text="🗺 Переход")],
             [KeyboardButton(text="🪖 Рейды"), KeyboardButton(text="🛰 События")],
             [KeyboardButton(text="🏦 Экономика"), KeyboardButton(text="📟 КПК")],
-            [KeyboardButton(text="🎖 Достижения"), KeyboardButton(text="📊 Статистика")],
-            [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="📣 Сбор")],
             [KeyboardButton(text="ℹ️ Информация"), KeyboardButton(text="⭐ Пополнить")],
             [KeyboardButton(text="⚡ Выпить энергетик")],
         ],
@@ -48,7 +46,9 @@ def pda_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="💬 Чаты"), KeyboardButton(text="🏆 Рейтинг")],
-            [KeyboardButton(text="🗺 Карта"), KeyboardButton(text="⬅️ В меню")],
+            [KeyboardButton(text="🗺 Карта"), KeyboardButton(text="🎖 Достижения")],
+            [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="👥 Игроки")],
+            [KeyboardButton(text="📣 Сбор"), KeyboardButton(text="⬅️ В меню")],
         ],
         resize_keyboard=True,
     )

@@ -1689,7 +1689,7 @@ async def show_achievements(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     text = build_achievements_overview(get_storage(), player.telegram_id)
-    await message.answer(text)
+    await message.answer(text, reply_markup=pda_keyboard())
 
 
 @router.message(F.text == "📊 Статистика")
@@ -1711,8 +1711,12 @@ async def show_pda(message: Message) -> None:
     await message.answer(
         "📟 КПК сталкера\n\n"
         "• 💬 Чаты — общий и чат твоей группировки\n"
-        "• 🏆 Рейтинг — топ и личные достижения\n"
-        "• 🗺 Карта — точки Зоны и контроль",
+        "• 🏆 Рейтинг — топ сталкеров\n"
+        "• 🗺 Карта — точки Зоны и контроль\n"
+        "• 🎖 Достижения — прогресс и награды\n"
+        "• 📊 Статистика — личные показатели\n"
+        "• 👥 Игроки — список по группировкам\n"
+        "• 📣 Сбор — оповещение бойцов фракции",
         reply_markup=pda_keyboard(),
     )
 
