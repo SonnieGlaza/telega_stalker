@@ -52,6 +52,23 @@ SURVIVAL_HOURLY_GAIN = 1
 SURVIVAL_DAMAGE_PER_TICK = 10
 SURVIVAL_DAMAGE_TICK_MINUTES = 30
 
+# Telegram user id > 2^31-1 → Postgres INTEGER overflow. Everywhere BIGINT.
+TELEGRAM_ID_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("characters", "telegram_id"),
+    ("factions", "leader_id"),
+    ("alliance_requests", "proposed_by"),
+    ("topup_payments", "telegram_id"),
+    ("auctions", "seller_id"),
+    ("auctions", "buyer_id"),
+    ("raids", "leader_id"),
+    ("raid_members", "telegram_id"),
+    ("war_lobbies", "leader_id"),
+    ("war_lobby_members", "telegram_id"),
+    ("player_stats", "telegram_id"),
+    ("player_achievements", "telegram_id"),
+    ("pending_registrations", "telegram_id"),
+)
+
 
 class Storage:
     def __init__(
@@ -541,7 +558,7 @@ class Storage:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS characters (
-                    telegram_id INTEGER PRIMARY KEY,
+                    telegram_id BIGINT PRIMARY KEY,
                     player_uid TEXT UNIQUE,
                     avatar_style TEXT NOT NULL DEFAULT 'classic',
                     nickname TEXT NOT NULL,
@@ -573,13 +590,13 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS factions (
                     name TEXT PRIMARY KEY,
                     treasury INTEGER NOT NULL DEFAULT 20000,
-                    leader_id INTEGER
+                    leader_id BIGINT
                 )
                 """
             )
             columns = self._table_columns(conn, "factions")
             if "leader_id" not in columns:
-                conn.execute("ALTER TABLE factions ADD COLUMN leader_id INTEGER")
+                conn.execute("ALTER TABLE factions ADD COLUMN leader_id BIGINT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS locations (
@@ -595,7 +612,7 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS alliance_requests (
                     requester_faction TEXT NOT NULL,
                     target_faction TEXT NOT NULL,
-                    proposed_by INTEGER NOT NULL,
+                    proposed_by BIGINT NOT NULL,
                     created_at TEXT NOT NULL,
                     PRIMARY KEY(requester_faction, target_faction)
                 )
@@ -615,7 +632,7 @@ class Storage:
                 """
                 CREATE TABLE IF NOT EXISTS topup_payments (
                     payment_charge_id TEXT PRIMARY KEY,
-                    telegram_id INTEGER NOT NULL,
+                    telegram_id BIGINT NOT NULL,
                     stars_amount INTEGER NOT NULL,
                     ru_amount INTEGER NOT NULL,
                     created_at TEXT NOT NULL
@@ -636,13 +653,13 @@ class Storage:
                 """
                 CREATE TABLE IF NOT EXISTS auctions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    seller_id INTEGER NOT NULL,
+                    seller_id BIGINT NOT NULL,
                     faction TEXT NOT NULL,
                     item_key TEXT NOT NULL,
                     amount INTEGER NOT NULL,
                     price INTEGER NOT NULL,
                     status TEXT NOT NULL DEFAULT 'open',
-                    buyer_id INTEGER,
+                    buyer_id BIGINT,
                     created_at TEXT NOT NULL,
                     closed_at TEXT
                 )
@@ -654,7 +671,7 @@ class Storage:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     faction TEXT NOT NULL,
                     location TEXT NOT NULL,
-                    leader_id INTEGER NOT NULL,
+                    leader_id BIGINT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'open',
                     created_at TEXT NOT NULL,
                     started_at TEXT,
@@ -667,7 +684,7 @@ class Storage:
                 """
                 CREATE TABLE IF NOT EXISTS raid_members (
                     raid_id INTEGER NOT NULL,
-                    telegram_id INTEGER NOT NULL,
+                    telegram_id BIGINT NOT NULL,
                     joined_at TEXT NOT NULL,
                     PRIMARY KEY(raid_id, telegram_id)
                 )
@@ -679,7 +696,7 @@ class Storage:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     host_faction TEXT NOT NULL,
                     location TEXT NOT NULL,
-                    leader_id INTEGER NOT NULL,
+                    leader_id BIGINT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'open',
                     created_at TEXT NOT NULL,
                     started_at TEXT,
@@ -692,7 +709,7 @@ class Storage:
                 """
                 CREATE TABLE IF NOT EXISTS war_lobby_members (
                     war_id INTEGER NOT NULL,
-                    telegram_id INTEGER NOT NULL,
+                    telegram_id BIGINT NOT NULL,
                     joined_at TEXT NOT NULL,
                     PRIMARY KEY(war_id, telegram_id)
                 )
@@ -713,7 +730,7 @@ class Storage:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS player_stats (
-                    telegram_id INTEGER PRIMARY KEY,
+                    telegram_id BIGINT PRIMARY KEY,
                     quests_completed INTEGER NOT NULL DEFAULT 0,
                     quests_failed INTEGER NOT NULL DEFAULT 0,
                     raids_completed INTEGER NOT NULL DEFAULT 0,
@@ -730,7 +747,7 @@ class Storage:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS player_achievements (
-                    telegram_id INTEGER NOT NULL,
+                    telegram_id BIGINT NOT NULL,
                     achievement_key TEXT NOT NULL,
                     unlocked_at TEXT NOT NULL,
                     PRIMARY KEY(telegram_id, achievement_key)
@@ -739,6 +756,7 @@ class Storage:
             )
             # Черновик регистрации: ник/пол живут в БД, а не только в MemoryStorage FSM.
             self._ensure_pending_registrations_schema(conn)
+            self._ensure_bigint_telegram_ids(conn)
             conn.executemany(
                 "INSERT OR IGNORE INTO factions(name, treasury, leader_id) VALUES(?, ?, NULL)",
                 [
@@ -794,6 +812,7 @@ class Storage:
             # Отдельная транзакция: падение CREATE INDEX на Postgres
             # не должно abort'ить INSERT персонажа.
             self._ensure_characters_schema(schema_conn)
+            self._ensure_bigint_telegram_ids(schema_conn)
 
         with self._connect() as conn:
             # Убираем коллизии player_uid у других аккаунтов — иначе INSERT падает
@@ -870,7 +889,7 @@ class Storage:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS pending_registrations (
-                telegram_id INTEGER PRIMARY KEY,
+                telegram_id BIGINT PRIMARY KEY,
                 nickname TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )
@@ -2293,24 +2312,71 @@ class Storage:
             ),
         )
 
+    def _ensure_bigint_telegram_ids(self, conn: DbConnection) -> None:
+        """Upgrade telegram id columns to BIGINT on Postgres (INTEGER overflows)."""
+        if conn.backend != "postgres":
+            return
+        for table, column in TELEGRAM_ID_COLUMNS:
+            sp = f"sp_bigint_{table}_{column}"
+            try:
+                conn.savepoint(sp)
+                row = conn.execute(
+                    """
+                    SELECT data_type
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = ?
+                      AND column_name = ?
+                    """,
+                    (table, column),
+                ).fetchone()
+                if row is None:
+                    conn.release_savepoint(sp)
+                    continue
+                data_type = str(row["data_type"] or "").lower()
+                if data_type in {"bigint", "int8"}:
+                    conn.release_savepoint(sp)
+                    continue
+                if data_type in {"integer", "int", "int4", "smallint", "int2"}:
+                    conn.execute(
+                        f"ALTER TABLE {table} ALTER COLUMN {column} TYPE BIGINT"  # noqa: S608
+                    )
+                conn.release_savepoint(sp)
+            except Exception:
+                try:
+                    conn.rollback_to_savepoint(sp)
+                except Exception:
+                    pass
+
     def _ensure_characters_schema(self, conn: DbConnection) -> None:
         column_names = self._table_columns(conn, "characters")
-        if "player_uid" not in column_names:
-            conn.execute("ALTER TABLE characters ADD COLUMN player_uid TEXT")
-        if "avatar_style" not in column_names:
-            conn.execute("ALTER TABLE characters ADD COLUMN avatar_style TEXT")
-        if "radiation" not in column_names:
-            conn.execute("ALTER TABLE characters ADD COLUMN radiation INTEGER NOT NULL DEFAULT 0")
-        if "hunger" not in column_names:
-            conn.execute("ALTER TABLE characters ADD COLUMN hunger INTEGER NOT NULL DEFAULT 0")
-        if "thirst" not in column_names:
-            conn.execute("ALTER TABLE characters ADD COLUMN thirst INTEGER NOT NULL DEFAULT 0")
-        if "needs_updated_at" not in column_names:
-            conn.execute("ALTER TABLE characters ADD COLUMN needs_updated_at TEXT")
-        if "survival_damage_at" not in column_names:
-            conn.execute("ALTER TABLE characters ADD COLUMN survival_damage_at TEXT")
-        if "sleeping_bag_owned" not in column_names:
-            conn.execute("ALTER TABLE characters ADD COLUMN sleeping_bag_owned INTEGER NOT NULL DEFAULT 0")
+        add_columns = [
+            ("player_uid", "ALTER TABLE characters ADD COLUMN player_uid TEXT"),
+            ("avatar_style", "ALTER TABLE characters ADD COLUMN avatar_style TEXT"),
+            ("radiation", "ALTER TABLE characters ADD COLUMN radiation INTEGER NOT NULL DEFAULT 0"),
+            ("hunger", "ALTER TABLE characters ADD COLUMN hunger INTEGER NOT NULL DEFAULT 0"),
+            ("thirst", "ALTER TABLE characters ADD COLUMN thirst INTEGER NOT NULL DEFAULT 0"),
+            ("needs_updated_at", "ALTER TABLE characters ADD COLUMN needs_updated_at TEXT"),
+            ("survival_damage_at", "ALTER TABLE characters ADD COLUMN survival_damage_at TEXT"),
+            (
+                "sleeping_bag_owned",
+                "ALTER TABLE characters ADD COLUMN sleeping_bag_owned INTEGER NOT NULL DEFAULT 0",
+            ),
+        ]
+        for col_name, ddl in add_columns:
+            if col_name in column_names:
+                continue
+            sp = f"sp_char_add_{col_name}"
+            try:
+                conn.savepoint(sp)
+                conn.execute(ddl)
+                conn.release_savepoint(sp)
+                column_names.add(col_name)
+            except Exception:
+                try:
+                    conn.rollback_to_savepoint(sp)
+                except Exception:
+                    pass
 
         # Backfill ID-address for old rows created before this column existed.
         rows = conn.execute(

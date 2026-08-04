@@ -728,13 +728,13 @@ async def process_gender(callback: CallbackQuery, state: FSMContext) -> None:
         saved = db.get_character(callback.from_user.id, refresh_energy=False)
         if saved is None:
             raise RuntimeError("character row missing after create_character")
-    except Exception:
+    except Exception as exc:
         logger.exception("Failed to create character for user %s", callback.from_user.id)
         await state.set_state(Registration.gender)
         await callback.message.answer(
-            "Не удалось создать персонажа в базе.\n"
-            "Черновик (ник и пол) сохранён — нажми /start или выбери пол ещё раз.",
-            reply_markup=gender_keyboard(),
+            "Не удалось создать персонажа в базе (часто из‑за старого типа ID в Postgres).\n"
+            "Черновик сохранён. После обновления бота нажми /start — аккаунт дособерётся сам.\n"
+            f"Технически: {type(exc).__name__}"
         )
         await safe_callback_answer(callback, "Ошибка БД, черновик сохранён", show_alert=True)
         return
