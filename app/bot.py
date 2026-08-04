@@ -2583,10 +2583,9 @@ async def process_treasury_deposit_custom(message: Message, state: FSMContext) -
         await state.clear()
         await message.answer("Сначала создай персонажа через /start.")
         return
-    storage = get_storage()
-    if player.faction is None or storage.get_faction_leader_id(player.faction) != player.telegram_id:
+    if player.faction is None:
         await state.clear()
-        await message.answer("Вносить своё количество может только лидер группировки.")
+        await message.answer("Сначала выбери группировку.")
         return
     amount = _parse_treasury_custom_amount(message.text or "")
     if amount is None:
@@ -2595,7 +2594,7 @@ async def process_treasury_deposit_custom(message: Message, state: FSMContext) -
         )
         return
     await state.clear()
-    result = deposit_to_faction_treasury(storage, message.from_user.id, amount)
+    result = deposit_to_faction_treasury(get_storage(), message.from_user.id, amount)
     await message.answer(action_result_text(message.from_user.id, result.text))
 
 
