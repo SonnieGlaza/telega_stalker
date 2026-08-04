@@ -173,6 +173,7 @@ STALKER_QUOTES: tuple[str, ...] = (
 
 
 MAX_QUOTE_LINES = 3
+QUOTE_Y_OFFSET = 10
 
 
 def _wrap_text_lines(
@@ -257,7 +258,9 @@ def _draw_stalker_quote(
     line_step = max(line_step, ascent + descent)
     text_block_h = (len(lines) - 1) * line_step + ascent + descent
     zone_center_y = (top + bottom) // 2
-    start_y = zone_center_y - text_block_h // 2
+    start_y = zone_center_y - text_block_h // 2 + QUOTE_Y_OFFSET
+    start_y = min(start_y, bottom - text_block_h)
+    start_y = max(top, start_y)
     box_width = right - left
     for idx, line in enumerate(lines):
         line_width = draw.textlength(line, font=font)
