@@ -59,10 +59,10 @@ def pda_keyboard() -> ReplyKeyboardMarkup:
 def quests_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Легко", callback_data="quest:easy")],
-            [InlineKeyboardButton(text="Сложно", callback_data="quest:hard")],
-            [InlineKeyboardButton(text="Тяжело", callback_data="quest:heavy")],
-            [InlineKeyboardButton(text="Невозможно", callback_data="quest:impossible")],
+            [InlineKeyboardButton(text="🟢 Легко", callback_data="quest:easy")],
+            [InlineKeyboardButton(text="🟡 Сложно", callback_data="quest:hard")],
+            [InlineKeyboardButton(text="🟠 Тяжело", callback_data="quest:heavy")],
+            [InlineKeyboardButton(text="🔴 Невозможно", callback_data="quest:impossible")],
             [InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:run")],
         ]
     )
