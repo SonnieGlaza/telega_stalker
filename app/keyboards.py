@@ -397,7 +397,7 @@ def trader_sell_consumables_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
 
 def trader_sell_trophies_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
     items = [
-        ("Продать артефакт Зоны (900)", "sell:artifact"),
+        ("Продать артефакт Зоны (5000)", "sell:artifact"),
         ("Продать Арт «Сила» (1100)", "sell:artifact_power"),
         ("Продать Арт «Живучесть» (1100)", "sell:artifact_vitality"),
     ]
