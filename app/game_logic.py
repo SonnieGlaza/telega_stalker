@@ -2652,7 +2652,7 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
             f"Рейд #{raid_id} завершен успешно на логове «{location_name}».\n"
             f"Бойцов: {len(ready_members)}, критические попадания: {battle['total_crits']}.\n"
             f"Награда каждому: артефакты x{artifacts_reward} "
-            f"(Зона / Сила / Живучесть, макс. {RAID_ARTIFACT_REWARD_CAP}).\n"
+            f"(Зона 0.1% / Сила 5% / Живучесть 5% среди типов, макс. {RAID_ARTIFACT_REWARD_CAP}).\n"
             f"Порог сложности для награды артефактами: от {RAID_ARTIFACT_MIN_ENEMY_POWER} силы.\n"
             f"В казну группировки: {treasury_gain} RU.\n"
             f"Раненых: {len(battle['wounds'])}."
