@@ -233,14 +233,30 @@ def _avatar_candidates(tier: int, faction: str | None = None) -> tuple[Path, ...
 
 
 def _fit_avatar_image(source: Image.Image, width: int, height: int) -> Image.Image:
-    """Вписать картинку в целевой слот (как раньше), чтобы карточка не «поехала»."""
-    fitted = source.convert("RGBA").copy()
-    fitted.thumbnail((width, height), Image.Resampling.LANCZOS)
-    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    offset_x = (width - fitted.width) // 2
-    offset_y = height - fitted.height
-    canvas.paste(fitted, (offset_x, offset_y), fitted)
-    return canvas
+    """Обрезать/масштабировать в точный слот (cover): один размер, без полей по бокам.
+
+    Картинка заполняет width×height целиком; лишнее срезается со всех сторон
+    по центру. Позиция на карточке профиля не меняется.
+    """
+    img = source.convert("RGBA")
+    if img.width <= 0 or img.height <= 0:
+        return Image.new("RGBA", (width, height), (0, 0, 0, 0))
+
+    scale = max(width / img.width, height / img.height)
+    new_w = max(1, int(round(img.width * scale)))
+    new_h = max(1, int(round(img.height * scale)))
+    resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    left = max(0, (new_w - width) // 2)
+    top = max(0, (new_h - height) // 2)
+    right = left + width
+    bottom = top + height
+    cropped = resized.crop((left, top, right, bottom))
+    if cropped.size != (width, height):
+        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        canvas.paste(cropped, (0, 0), cropped)
+        return canvas
+    return cropped
 
 
 def _resolve_existing_image(candidate: Path) -> Path | None:
