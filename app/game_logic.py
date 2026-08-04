@@ -310,6 +310,9 @@ EMISSION_WARN_30_MINUTES = 30
 EMISSION_META_AT = "emission_at"
 EMISSION_META_WARN60 = "emission_warn60_sent"
 EMISSION_META_WARN30 = "emission_warn30_sent"
+ZONE_EVENT_META_NEXT_AT = "zone_event_next_at"
+ZONE_EVENT_INTERVAL_MIN_MINUTES = 30
+ZONE_EVENT_INTERVAL_MAX_MINUTES = 90
 
 ZONE_EVENT_POOL: tuple[tuple[str, int, str], ...] = (
     ("mutant_swarm", 10, "Миграция мутантов: сопротивление на локации выросло."),
@@ -3799,6 +3802,14 @@ def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
     )
 
 
+def _schedule_next_zone_event(storage: Storage, now: datetime | None = None) -> datetime:
+    now = now or datetime.now(timezone.utc)
+    delay = random.randint(ZONE_EVENT_INTERVAL_MIN_MINUTES, ZONE_EVENT_INTERVAL_MAX_MINUTES)
+    next_at = now + timedelta(minutes=delay)
+    storage.set_meta(ZONE_EVENT_META_NEXT_AT, next_at.isoformat())
+    return next_at
+
+
 def apply_dynamic_zone_event(storage: Storage) -> ActionResult:
     storage.delete_expired_map_events()
     locations = storage.get_locations()
@@ -3827,12 +3838,39 @@ def apply_dynamic_zone_event(storage: Storage) -> ActionResult:
     )
 
 
+def process_zone_event_cycle(storage: Storage) -> tuple[str, list[int]]:
+    """Автогенерация событий Зоны в случайный момент (каждые 30–90 мин)."""
+    now = datetime.now(timezone.utc)
+    storage.delete_expired_map_events()
+    raw_at = storage.get_meta(ZONE_EVENT_META_NEXT_AT)
+    if raw_at is None:
+        _schedule_next_zone_event(storage, now)
+        return ("", [])
+
+    next_at = _parse_meta_datetime(
+        raw_at,
+        now + timedelta(minutes=ZONE_EVENT_INTERVAL_MIN_MINUTES),
+    )
+    if next_at > now:
+        return ("", [])
+
+    result = apply_dynamic_zone_event(storage)
+    _schedule_next_zone_event(storage, now)
+    if not result.ok:
+        return ("", [])
+    return (result.text, storage.list_player_ids())
+
+
 def build_events_overview(storage: Storage) -> str:
     storage.delete_expired_map_events()
     events = storage.get_map_events()
     emission_status = build_emission_status(storage)
     if not events:
-        return f"{emission_status}\n\nАктивных событий на карте нет. Зона затихла."
+        return (
+            f"{emission_status}\n\n"
+            "Активных событий на карте нет. Зона затихла.\n"
+            "Новые события появляются сами через некоторое время."
+        )
 
     now = datetime.now(timezone.utc)
     by_location = {loc["name"]: int(loc["npc_power"]) for loc in storage.get_locations()}
