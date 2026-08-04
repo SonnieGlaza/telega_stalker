@@ -232,6 +232,32 @@ ARTIFACT_NAME_TO_INVENTORY: dict[str, str] = {
     "Артефакт": "artifact",  # старые сейвы
 }
 ARTIFACT_DROP_KEYS = ("artifact", "artifact_power", "artifact_vitality")
+# Абсолютные шансы дропа (взаимоисключающие), %:
+ARTIFACT_DROP_RATES_PERCENT: tuple[tuple[str, float], ...] = (
+    ("artifact", 0.1),  # Артефакт Зоны
+    ("artifact_power", 5.0),  # Арт «Сила»
+    ("artifact_vitality", 5.0),  # Арт «Живучесть»
+)
+
+
+def roll_artifact_drop() -> str | None:
+    """Ролл дропа арта по абсолютным шансам. None — ничего не выпало."""
+    roll = random.uniform(0.0, 100.0)
+    cumulative = 0.0
+    for key, chance in ARTIFACT_DROP_RATES_PERCENT:
+        cumulative += float(chance)
+        if roll < cumulative:
+            return key
+    return None
+
+
+def pick_weighted_artifact_key() -> str:
+    """Выбор типа арта по весам (когда награда уже гарантирована)."""
+    keys = [key for key, _ in ARTIFACT_DROP_RATES_PERCENT]
+    weights = [float(chance) for _, chance in ARTIFACT_DROP_RATES_PERCENT]
+    return random.choices(keys, weights=weights, k=1)[0]
+
+
 EQUIP_PAGE_SIZE = 8
 EQUIP_SLOT_LABELS = {
     "weapon": "Оружие",
@@ -1256,8 +1282,8 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
         storage.add_player_stat(telegram_id, "quests_completed", 1)
         storage.add_player_stat(telegram_id, "money_earned", reward)
 
-        if random.random() < 0.18:
-            art_key = random.choice(ARTIFACT_DROP_KEYS)
+        art_key = roll_artifact_drop()
+        if art_key is not None:
             storage.add_item(telegram_id, art_key, 1)
             storage.add_player_stat(telegram_id, "artifacts_found", 1)
             extra = f"\nТы нашел редкий артефакт: {ITEM_LABELS.get(art_key, art_key)}!"
@@ -1537,7 +1563,7 @@ def search_artifacts(storage: Storage, telegram_id: int) -> ActionResult:
     roll = random.randint(1, 100)
     survival_text = _apply_active_survival(storage, telegram_id)
     if roll <= chance:
-        art_key = random.choice(ARTIFACT_DROP_KEYS)
+        art_key = pick_weighted_artifact_key()
         storage.add_item(telegram_id, art_key, 1)
         storage.add_player_stat(telegram_id, "artifacts_found", 1)
         return ActionResult(
@@ -2595,7 +2621,7 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
             )
             if artifacts_reward > 0:
                 for _ in range(artifacts_reward):
-                    art_key = random.choice(ARTIFACT_DROP_KEYS)
+                    art_key = pick_weighted_artifact_key()
                     storage.add_item(member.telegram_id, art_key, 1)
                 storage.add_player_stat(member.telegram_id, "artifacts_found", artifacts_reward)
             if _maybe_drop_stash(storage, member.telegram_id):
