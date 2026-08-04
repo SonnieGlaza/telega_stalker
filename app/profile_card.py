@@ -173,7 +173,7 @@ STALKER_QUOTES: tuple[str, ...] = (
 
 
 MAX_QUOTE_LINES = 3
-QUOTE_Y_OFFSET = 150
+QUOTE_Y_OFFSET = 50
 
 
 def _quote_line_step(font: ImageFont.ImageFont, zone_height: int) -> int:
