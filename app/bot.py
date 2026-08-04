@@ -64,6 +64,8 @@ from app.game_logic import (
     transfer_money_with_fee,
     create_or_join_war_lobby,
     launch_war_lobby,
+    dissolve_war_lobby,
+    can_dissolve_war_lobby,
     build_war_lobby_overview,
     transfer_location_to_ally,
     create_market_lot,
@@ -1801,8 +1803,28 @@ async def war_lobby_section_callback(callback: CallbackQuery) -> None:
     await edit_menu_message(
         callback,
         build_war_lobby_overview(db, player.telegram_id),
-        war_lobby_keyboard(db.get_locations()),
+        war_lobby_keyboard(
+            db.get_locations(),
+            can_dissolve=can_dissolve_war_lobby(db, player.telegram_id),
+        ),
     )
+
+
+async def _refresh_war_lobby_menu(callback: CallbackQuery) -> None:
+    db = get_storage()
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or callback.message is None:
+        return
+    try:
+        await callback.message.edit_text(
+            build_war_lobby_overview(db, player.telegram_id),
+            reply_markup=war_lobby_keyboard(
+                db.get_locations(),
+                can_dissolve=can_dissolve_war_lobby(db, player.telegram_id),
+            ),
+        )
+    except TelegramBadRequest:
+        pass
 
 
 @router.callback_query(F.data.startswith("war:transfer:"))
@@ -1832,6 +1854,8 @@ async def war_lobby_create_callback(callback: CallbackQuery) -> None:
     location = (callback.data or "").split(":", maxsplit=2)[2]
     result = create_or_join_war_lobby(get_storage(), callback.from_user.id, location)
     await reply_action_result(callback, result.text)
+    if result.ok:
+        await _refresh_war_lobby_menu(callback)
 
 
 @router.callback_query(F.data == "war_lobby:join")
@@ -1846,12 +1870,24 @@ async def war_lobby_join_callback(callback: CallbackQuery) -> None:
         return
     result = create_or_join_war_lobby(get_storage(), callback.from_user.id, str(lobby["location"]))
     await reply_action_result(callback, result.text)
+    if result.ok:
+        await _refresh_war_lobby_menu(callback)
 
 
 @router.callback_query(F.data == "war_lobby:launch")
 async def war_lobby_launch_callback(callback: CallbackQuery) -> None:
     result = launch_war_lobby(get_storage(), callback.from_user.id)
     await reply_action_result(callback, result.text)
+    if result.ok:
+        await _refresh_war_lobby_menu(callback)
+
+
+@router.callback_query(F.data == "war_lobby:dissolve")
+async def war_lobby_dissolve_callback(callback: CallbackQuery) -> None:
+    result = dissolve_war_lobby(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+    if result.ok:
+        await _refresh_war_lobby_menu(callback)
 
 
 @router.callback_query(F.data.startswith("alliance:propose:"))

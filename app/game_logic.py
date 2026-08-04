@@ -2565,6 +2565,19 @@ def cancel_own_first_market_lot(storage: Storage, telegram_id: int) -> ActionRes
     return ActionResult(True, f"Рыночный лот #{auction_id} отменен, предметы возвращены.")
 
 
+def find_open_war_lobby_for_character(storage: Storage, player: Character) -> dict[str, Any] | None:
+    if player.faction is None:
+        return None
+    lobby = storage.get_open_war_lobby_for_faction(player.faction)
+    if lobby is not None:
+        return lobby
+    for ally in storage.list_faction_alliances(player.faction):
+        ally_lobby = storage.get_open_war_lobby_for_faction(ally)
+        if ally_lobby is not None:
+            return ally_lobby
+    return None
+
+
 def create_or_join_war_lobby(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
@@ -2576,7 +2589,7 @@ def create_or_join_war_lobby(storage: Storage, telegram_id: int, location_name: 
     location = storage.get_location(location_name)
     if location is None:
         return ActionResult(False, "Локация не найдена.")
-    open_lobby = storage.get_open_war_lobby_for_faction(player.faction)
+    open_lobby = find_open_war_lobby_for_character(storage, player)
     if open_lobby is None:
         for ally in storage.list_faction_alliances(player.faction):
             ally_lobby = storage.get_open_war_lobby_for_faction(ally)
@@ -2600,39 +2613,77 @@ def build_war_lobby_overview(storage: Storage, telegram_id: int) -> str:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction is None:
         return "Военное лобби доступно после выбора группировки."
-    lobby = storage.get_open_war_lobby_for_faction(player.faction)
-    if lobby is None:
-        for ally in storage.list_faction_alliances(player.faction):
-            ally_lobby = storage.get_open_war_lobby_for_faction(ally)
-            if ally_lobby is not None:
-                lobby = ally_lobby
-                break
+    lobby = find_open_war_lobby_for_character(storage, player)
     if lobby is None:
         return (
             "Открытых военных лобби нет. Создай лобби на нужную локацию.\n"
             f"Для захвата точки нужно минимум {WAR_MIN_FACTION_MEMBERS} живых бойцов в лобби."
         )
     war_id = int(lobby["id"])
+    leader_id = int(lobby["leader_id"])
+    creator = storage.get_character(leader_id, refresh_energy=False)
+    creator_label = (
+        f"{creator.nickname} (ID {leader_id})"
+        if creator is not None
+        else f"ID {leader_id}"
+    )
     member_ids = storage.get_war_lobby_member_ids(war_id)
     members = storage.get_characters_by_ids(member_ids)
     by_faction: dict[str, int] = {}
+    member_lines: list[str] = []
     for member in members:
         if member.faction is None:
             continue
         by_faction[member.faction] = by_faction.get(member.faction, 0) + 1
+        mark = " 👑" if member.telegram_id == leader_id else ""
+        member_lines.append(f"• {member.nickname} — {member.faction}{mark}")
     total = sum(by_faction.values())
     share_lines = []
     for faction_name, count in sorted(by_faction.items()):
         percent = int(round((count / total) * 100)) if total > 0 else 0
         share_lines.append(f"• {faction_name}: {count} бойцов ({percent}%)")
     shares_block = "\n".join(share_lines) if share_lines else "• Нет данных"
+    roster_block = "\n".join(member_lines) if member_lines else "• Пока никого"
     return (
         f"Военное лобби #{war_id}\n"
         f"Локация: {lobby['location']}\n"
         f"Хост: {lobby['host_faction']}\n"
-        f"Участников: {len(member_ids)} / мин. {WAR_MIN_FACTION_MEMBERS} для запуска\n"
+        f"Создал: {creator_label}\n"
+        f"Участников: {len(member_ids)} / мин. {WAR_MIN_FACTION_MEMBERS} для запуска\n\n"
+        f"Бойцы в лобби:\n{roster_block}\n\n"
         f"Распределение сил:\n{shares_block}"
     )
+
+
+def can_dissolve_war_lobby(storage: Storage, telegram_id: int) -> bool:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return False
+    lobby = find_open_war_lobby_for_character(storage, player)
+    if lobby is None:
+        return False
+    return int(lobby["leader_id"]) == telegram_id
+
+
+def dissolve_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+    lobby = find_open_war_lobby_for_character(storage, player)
+    if lobby is None:
+        return ActionResult(False, "Открытого военного лобби нет.")
+    war_id = int(lobby["id"])
+    if int(lobby["leader_id"]) != telegram_id:
+        return ActionResult(False, "Распустить лобби может только его создатель.")
+    cancelled = storage.cancel_war_lobby(war_id, telegram_id)
+    if cancelled is None:
+        return ActionResult(False, "Не удалось распустить лобби.")
+    location = str(cancelled.get("location", lobby["location"]))
+    return ActionResult(True, f"Военное лобби #{war_id} на «{location}» распущено.")
 
 
 def launch_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:

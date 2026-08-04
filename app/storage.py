@@ -2366,6 +2366,41 @@ class Storage:
             ).fetchall()
         return [int(row["telegram_id"]) for row in rows]
 
+    def cancel_war_lobby(self, war_id: int, leader_id: int) -> dict[str, Any] | None:
+        """Распустить открытое военное лобби. Только создатель (leader_id)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, host_faction, location, leader_id, status
+                FROM war_lobbies
+                WHERE id = ? AND status = 'open'
+                """,
+                (war_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            if int(row["leader_id"]) != int(leader_id):
+                return None
+            now_iso = utc_now().isoformat()
+            cursor = conn.execute(
+                """
+                UPDATE war_lobbies
+                SET status = 'cancelled', finished_at = ?, result_text = ?
+                WHERE id = ? AND leader_id = ? AND status = 'open'
+                """,
+                (
+                    now_iso,
+                    f"Лобби распущено создателем (telegram_id={leader_id}).",
+                    war_id,
+                    leader_id,
+                ),
+            )
+            if int(cursor.rowcount or 0) <= 0:
+                return None
+            result = dict(row)
+        self.save_snapshot()
+        return result
+
     def finish_war_lobby(self, war_id: int, status: str, result_text: str) -> None:
         with self._connect() as conn:
             conn.execute(

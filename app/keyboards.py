@@ -407,11 +407,19 @@ def raid_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def war_lobby_keyboard(locations: list[dict[str, str | int | None]]) -> InlineKeyboardMarkup:
+def war_lobby_keyboard(
+    locations: list[dict[str, str | int | None]],
+    *,
+    can_dissolve: bool = False,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="➕ Вступить в военное лобби", callback_data="war_lobby:join")],
         [InlineKeyboardButton(text="🚀 Запустить военное лобби", callback_data="war_lobby:launch")],
     ]
+    if can_dissolve:
+        rows.append(
+            [InlineKeyboardButton(text="🛑 Распустить лобби", callback_data="war_lobby:dissolve")]
+        )
     for location in locations:
         name = str(location["name"])
         rows.append([InlineKeyboardButton(text=f"Создать штурм-лобби: {name}", callback_data=f"war_lobby:create:{name}")])

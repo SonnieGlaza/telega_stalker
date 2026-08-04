@@ -99,6 +99,12 @@ def run_smoke_check() -> None:
         war_launch = launch_war_lobby(storage, 111)
         assert war_launch.text
         assert build_war_lobby_overview(storage, 111)
+        assert "Создал:" in build_war_lobby_overview(storage, 111)
+        from app.game_logic import dissolve_war_lobby, can_dissolve_war_lobby
+        assert can_dissolve_war_lobby(storage, 111)
+        dissolved = dissolve_war_lobby(storage, 111)
+        assert dissolved.ok, dissolved.text
+        assert "Открытых военных лобби нет" in build_war_lobby_overview(storage, 111)
         solo_assault = attack_location(storage, 111, "Свалка")
         assert not solo_assault.ok, solo_assault.text
         assert attempt_smuggling(storage, 111).text
