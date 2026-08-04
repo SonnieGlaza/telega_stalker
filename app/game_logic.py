@@ -420,6 +420,20 @@ class AchievementRule:
     check: Callable[[dict[str, int], Character], bool]
 
 
+def _faction_controls_all_contestable_points(storage: Storage, faction: str | None) -> bool:
+    """True, если группировка держит все точки, кроме баз ГП."""
+    if not faction:
+        return False
+    contestable = [
+        loc
+        for loc in storage.get_locations()
+        if str(loc.get("point_type") or "") != "база"
+    ]
+    if not contestable:
+        return False
+    return all(str(loc.get("controlled_by") or "") == faction for loc in contestable)
+
+
 @dataclass(frozen=True)
 class ActionResult:
     ok: bool
@@ -762,6 +776,15 @@ def _achievement_rules() -> tuple[AchievementRule, ...]:
             check=lambda stats, _: stats["enemy_bases_captured"] >= 1,
         ),
         AchievementRule(
+            key="zone_overlord",
+            title="Повелитель Зоны",
+            description="Захвати все точки Зоны (кроме баз группировок)",
+            reward_ru=3000,
+            reward_rating=150,
+            # Проверка идёт через карту в _progress_and_unlock_achievements.
+            check=lambda _stats, _char: False,
+        ),
+        AchievementRule(
             key="smuggle_10",
             title="Контрабандист",
             description="Успешно проведи 10 контрабанд",
@@ -946,7 +969,11 @@ def _progress_and_unlock_achievements(storage: Storage, telegram_id: int) -> str
     for rule in ACHIEVEMENT_RULES:
         if rule.key in already:
             continue
-        if not rule.check(stats, character):
+        if rule.key == "zone_overlord":
+            ok = _faction_controls_all_contestable_points(storage, character.faction)
+        else:
+            ok = rule.check(stats, character)
+        if not ok:
             continue
         if not storage.unlock_player_achievement(telegram_id, rule.key):
             continue
