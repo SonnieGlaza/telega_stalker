@@ -445,6 +445,7 @@ REFERRAL_STARTER_PACK: tuple[tuple[str, int], ...] = (
     ("stew", 2),
     ("antirad", 1),
     ("water_bottle", 1),
+    ("medkit", 1),
     ("weapon_pm", 1),
 )
 
