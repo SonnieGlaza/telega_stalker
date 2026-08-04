@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.avatar_render import render_avatar
 from app.game_logic import ITEM_LABELS, effective_max_health, equipment_power
-from app.skins import next_skin_progress, resolve_skin
+from app.skins import resolve_skin
 from app.storage import Character
 
 
@@ -235,18 +235,12 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     location_color = _location_color(character.location)
     rating = max(0, int(rating_points))
     skin = resolve_skin(rating)
-    _, next_skin, rating_left = next_skin_progress(rating)
-    skin_line = (
-        f"{skin.title} (рейтинг {rating})"
-        if next_skin is None
-        else f"{skin.title} (рейтинг {rating}, до «{next_skin.title}»: {rating_left})"
-    )
 
     draw.rectangle((0, 0, width, 90), fill=(28, 31, 40))
     draw.text((24, 16), "Карточка персонажа", fill=(235, 235, 235), font=title_font)
     draw.text(
         (24, 56),
-        f"ID-адрес: {character.player_uid}    Telegram ID: {character.telegram_id}",
+        f"ID-адрес: {character.player_uid}",
         fill=(208, 208, 208),
         font=small_font,
     )
@@ -258,17 +252,15 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
         fill=(240, 240, 240),
         font=subtitle_font,
     )
-    draw.text((46, 164), "Местоположение", fill=(220, 220, 220), font=subtitle_font)
-    draw.rounded_rectangle((46, 204, 408, 346), radius=12, fill=location_color, outline=(210, 210, 210), width=2)
-    draw.text((62, 236), f"Локация: {character.location}", fill=(248, 248, 248), font=small_font)
-    draw.text((62, 266), f"Группировка: {character.faction or 'не выбрана'}", fill=(248, 248, 248), font=small_font)
-    draw.text((62, 296), skin_line, fill=(248, 248, 248), font=small_font)
+    draw.rounded_rectangle((46, 164, 408, 254), radius=12, fill=location_color, outline=(210, 210, 210), width=2)
+    draw.text((62, 188), f"Локация: {character.location}", fill=(248, 248, 248), font=small_font)
+    draw.text((62, 218), f"Группировка: {character.faction or 'не выбрана'}", fill=(248, 248, 248), font=small_font)
 
     avatar = render_avatar(character, rating_points=rating, width=248, height=320)
     panel_left = 46
     panel_right = 408
     panel_bottom = 676
-    avatar_top = 347
+    avatar_top = 268
 
     available_w = max(1, panel_right - panel_left)
     available_h = max(1, panel_bottom - avatar_top - 2)
