@@ -883,6 +883,7 @@ class Storage:
                 (telegram_id,),
             )
         self.save_snapshot()
+        self.sync_gear_power(telegram_id)
 
     def _ensure_pending_registrations_schema(self, conn: DbConnection) -> None:
         # Базовая таблица совместима со старым деплоем (только nick + created_at).
@@ -1225,20 +1226,33 @@ class Storage:
             hunger = _as_int(row["hunger"], 0)
             thirst = _as_int(row["thirst"], 0)
             health = _as_int(row["health"], 100)
+            orig_hunger = hunger
+            orig_thirst = thirst
+            changed = False
 
             hours_passed = int((now - needs_updated_at).total_seconds() // 3600)
             if hours_passed > 0:
                 hunger = min(200, hunger + hours_passed * SURVIVAL_HOURLY_GAIN)
                 thirst = min(200, thirst + hours_passed * SURVIVAL_HOURLY_GAIN)
                 needs_updated_at = now
+                changed = True
 
-            if hunger >= 100 or thirst >= 100:
-                ticks = int((now - survival_damage_at).total_seconds() // (SURVIVAL_DAMAGE_TICK_MINUTES * 60))
+            was_damaging = orig_hunger >= 100 or orig_thirst >= 100
+            in_damage = hunger >= 100 or thirst >= 100
+            if in_damage:
+                if not was_damaging:
+                    survival_damage_at = now
+                    changed = True
+                ticks = int(
+                    (now - survival_damage_at).total_seconds() // (SURVIVAL_DAMAGE_TICK_MINUTES * 60)
+                )
                 if ticks > 0:
                     health = max(0, health - ticks * SURVIVAL_DAMAGE_PER_TICK)
                     survival_damage_at = now
-            else:
-                survival_damage_at = now
+                    changed = True
+
+            if not changed:
+                return
 
             conn.execute(
                 """
@@ -1256,6 +1270,7 @@ class Storage:
                     telegram_id,
                 ),
             )
+        self.save_snapshot()
 
     def adjust_survival(
         self,
@@ -1347,14 +1362,22 @@ class Storage:
                 regen_multiplier *= 1.05
             gained = int(minutes_passed * ENERGY_REGEN_PER_MINUTE * regen_multiplier)
             new_energy = min(max_energy, energy + gained)
-            conn.execute(
-                """
-                UPDATE characters
-                SET energy = ?, energy_updated_at = ?
-                WHERE telegram_id = ?
-                """,
-                (new_energy, now.isoformat(), telegram_id),
-            )
+            if new_energy == energy and minutes_passed > 0:
+                # Даже без прироста двигаем таймер, чтобы не пересчитывать огромный gap.
+                conn.execute(
+                    "UPDATE characters SET energy_updated_at = ? WHERE telegram_id = ?",
+                    (now.isoformat(), telegram_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE characters
+                    SET energy = ?, energy_updated_at = ?
+                    WHERE telegram_id = ?
+                    """,
+                    (new_energy, now.isoformat(), telegram_id),
+                )
+        self.save_snapshot()
 
     def change_money(self, telegram_id: int, delta: int) -> bool:
         character = self.get_character(telegram_id, refresh_energy=False)
@@ -1382,6 +1405,151 @@ class Storage:
                 (new_power, telegram_id),
             )
         self.save_snapshot()
+
+    def set_gear_power(self, telegram_id: int, power: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET gear_power = ? WHERE telegram_id = ?",
+                (max(1, int(power)), telegram_id),
+            )
+        self.save_snapshot()
+
+    def sync_gear_power(self, telegram_id: int) -> int | None:
+        """Пересчитать gear_power из экипировки и сохранить в БД."""
+        character = self.get_character(telegram_id, refresh_energy=False)
+        if character is None:
+            return None
+        from app.game_logic import compute_total_gear_power
+
+        power = max(1, int(compute_total_gear_power(character)))
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET gear_power = ? WHERE telegram_id = ?",
+                (power, telegram_id),
+            )
+        self.save_snapshot()
+        return power
+
+    def backfill_all_gear_power(self) -> int:
+        """Разовая синхронизация gear_power для всех персонажей."""
+        from app.game_logic import compute_total_gear_power
+
+        updated = 0
+        with self._connect() as conn:
+            rows = conn.execute("SELECT telegram_id FROM characters").fetchall()
+        for row in rows:
+            tid = int(row["telegram_id"])
+            character = self.get_character(tid, refresh_energy=False)
+            if character is None:
+                continue
+            power = max(1, int(compute_total_gear_power(character)))
+            if character.gear_power == power:
+                continue
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE characters SET gear_power = ? WHERE telegram_id = ?",
+                    (power, tid),
+                )
+            updated += 1
+        if updated:
+            self.save_snapshot()
+        return updated
+
+    def persist_character_state(self, telegram_id: int) -> bool:
+        """Принудительно перезаписать все поля персонажа в БД из текущего состояния."""
+        character = self.get_character(telegram_id, refresh_energy=False)
+        if character is None:
+            return False
+        from app.game_logic import compute_total_gear_power
+
+        gear_power = max(1, int(compute_total_gear_power(character)))
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE characters SET
+                    player_uid = ?,
+                    avatar_style = ?,
+                    nickname = ?,
+                    gender = ?,
+                    faction = ?,
+                    money = ?,
+                    energy = ?,
+                    max_energy = ?,
+                    energy_updated_at = ?,
+                    health = ?,
+                    gear_power = ?,
+                    location = ?,
+                    inventory_json = ?,
+                    equipment_json = ?,
+                    truck_owned = ?,
+                    sleeping_bag_owned = ?,
+                    fuel = ?,
+                    radiation = ?,
+                    hunger = ?,
+                    thirst = ?,
+                    needs_updated_at = ?,
+                    survival_damage_at = ?
+                WHERE telegram_id = ?
+                """,
+                (
+                    character.player_uid,
+                    character.avatar_style,
+                    character.nickname,
+                    character.gender,
+                    character.faction,
+                    character.money,
+                    character.energy,
+                    character.max_energy,
+                    character.energy_updated_at.isoformat(),
+                    character.health,
+                    gear_power,
+                    character.location,
+                    json.dumps(character.inventory, ensure_ascii=False),
+                    json.dumps(character.equipment, ensure_ascii=False),
+                    1 if character.truck_owned else 0,
+                    1 if character.sleeping_bag_owned else 0,
+                    character.fuel,
+                    character.radiation,
+                    character.hunger,
+                    character.thirst,
+                    character.needs_updated_at.isoformat(),
+                    character.survival_damage_at.isoformat(),
+                    telegram_id,
+                ),
+            )
+        self.save_snapshot()
+        return True
+
+    def get_db_status(self) -> dict[str, Any]:
+        with self._connect() as conn:
+            characters = int(conn.execute("SELECT COUNT(*) AS cnt FROM characters").fetchone()["cnt"])
+            pending = 0
+            try:
+                pending = int(
+                    conn.execute("SELECT COUNT(*) AS cnt FROM pending_registrations").fetchone()["cnt"]
+                )
+            except Exception:
+                pending = 0
+            sample_type = None
+            if conn.backend == "postgres":
+                row = conn.execute(
+                    """
+                    SELECT data_type
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'characters'
+                      AND column_name = 'telegram_id'
+                    """
+                ).fetchone()
+                sample_type = str(row["data_type"]) if row else None
+        return {
+            "backend": self.backend,
+            "characters": characters,
+            "pending_registrations": pending,
+            "telegram_id_type": sample_type,
+            "snapshot_path": str(self.snapshot_path),
+            "db_path": self.db_path if self.backend == "sqlite" else "(DATABASE_URL)",
+        }
 
     def add_item(self, telegram_id: int, item_key: str, amount: int = 1) -> None:
         character = self.get_character(telegram_id, refresh_energy=False)
@@ -1416,7 +1584,7 @@ class Storage:
         equipment = dict(character.equipment)
         equipment[slot] = value
         self._set_equipment(telegram_id, equipment)
-        self.save_snapshot()
+        self.sync_gear_power(telegram_id)
 
     def update_equipment_fields(self, telegram_id: int, updates: dict[str, Any]) -> bool:
         character = self.get_character(telegram_id, refresh_energy=False)
@@ -1425,7 +1593,7 @@ class Storage:
         equipment = dict(character.equipment)
         equipment.update(updates)
         self._set_equipment(telegram_id, equipment)
-        self.save_snapshot()
+        self.sync_gear_power(telegram_id)
         return True
 
     def add_player_stat(self, telegram_id: int, stat_key: str, delta: int = 1) -> bool:

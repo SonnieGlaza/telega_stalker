@@ -617,6 +617,61 @@ async def cmd_migrate_db(message: Message) -> None:
     )
 
 
+@router.message(Command("dbstatus"))
+async def cmd_dbstatus(message: Message) -> None:
+    if not is_admin_user(message.from_user.id):
+        await message.answer("Команда доступна только администратору.")
+        return
+    db = get_storage()
+    status = db.get_db_status()
+    me = db.get_character(message.from_user.id, refresh_energy=False)
+    me_block = "Твой персонаж в БД: нет"
+    if me is not None:
+        me_block = (
+            f"Твой персонаж в БД:\n"
+            f"• {me.nickname} | {me.gender} | {me.faction or 'без гп'}\n"
+            f"• Локация: {me.location}\n"
+            f"• HP {me.health} | энергия {me.energy}/{me.max_energy} | сила {me.gear_power}\n"
+            f"• RU {me.money} | топливо {me.fuel}\n"
+            f"• Грузовик: {'да' if me.truck_owned else 'нет'} | Спальник: {'да' if me.sleeping_bag_owned else 'нет'}\n"
+            f"• Оружие: {me.equipment.get('weapon')} ({me.equipment.get('weapon_durability')}%)\n"
+            f"• Броня: {me.equipment.get('armor')} ({me.equipment.get('armor_durability')}%)\n"
+            f"• Рад {me.radiation} | голод {me.hunger} | жажда {me.thirst}"
+        )
+    await message.answer(
+        "Статус БД:\n"
+        f"• backend: {status['backend']}\n"
+        f"• source: {status['db_path']}\n"
+        f"• telegram_id type: {status.get('telegram_id_type') or 'n/a (sqlite)'}\n"
+        f"• персонажей: {status['characters']}\n"
+        f"• черновиков регистрации: {status['pending_registrations']}\n"
+        f"• snapshot: {status['snapshot_path']}\n\n"
+        f"{me_block}"
+    )
+
+
+@router.message(Command("dbsave"))
+async def cmd_dbsave(message: Message) -> None:
+    if not is_admin_user(message.from_user.id):
+        await message.answer("Команда доступна только администратору.")
+        return
+    db = get_storage()
+    ok = db.persist_character_state(message.from_user.id)
+    db.save_snapshot()
+    synced = db.backfill_all_gear_power()
+    if not ok:
+        await message.answer(
+            f"Твоего персонажа нет в БД.\nSnapshot сохранён. Синхронизировано gear_power: {synced}."
+        )
+        return
+    player = db.get_character(message.from_user.id, refresh_energy=False)
+    await message.answer(
+        "Полное состояние записано в БД + snapshot.\n"
+        f"Локация: {player.location if player else '?'}\n"
+        f"Синхронизировано gear_power у игроков: {synced}."
+    )
+
+
 @router.message(Registration.nickname)
 async def process_nickname(message: Message, state: FSMContext) -> None:
     existing = get_storage().get_character(message.from_user.id, refresh_energy=False)
@@ -1771,6 +1826,12 @@ async def run_bot() -> None:
     )
     storage.init_db()
     storage.restore_from_snapshot_if_empty()
+    try:
+        synced = storage.backfill_all_gear_power()
+        if synced:
+            logger.info("Backfilled gear_power for %s characters", synced)
+    except Exception:
+        logger.exception("gear_power backfill failed")
 
     async def periodic_snapshot_sync() -> None:
         while True:
