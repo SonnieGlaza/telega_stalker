@@ -237,9 +237,9 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     skin = resolve_skin(rating)
     _, next_skin, rating_left = next_skin_progress(rating)
     skin_line = (
-        f"Скин: {skin.title} (рейтинг {rating})"
+        f"{skin.title} (рейтинг {rating})"
         if next_skin is None
-        else f"Скин: {skin.title} (рейтинг {rating}, до «{next_skin.title}»: {rating_left})"
+        else f"{skin.title} (рейтинг {rating}, до «{next_skin.title}»: {rating_left})"
     )
 
     draw.rectangle((0, 0, width, 90), fill=(28, 31, 40))
@@ -308,7 +308,7 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     draw.text((right_x, 236), f"Топливо: {character.fuel}", fill=(225, 225, 225), font=body_font)
     draw.text(
         (right_x, 262),
-        _ellipsize_text(draw, f"Текущий скин: {skin.title}", body_font, right_max_width),
+        _ellipsize_text(draw, skin.title, body_font, right_max_width),
         fill=skin.accent_color,
         font=body_font,
     )
