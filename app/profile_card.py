@@ -173,6 +173,7 @@ STALKER_QUOTES: tuple[str, ...] = (
 
 
 MAX_QUOTE_LINES = 3
+QUOTE_Y_OFFSET = 150
 
 
 def _quote_line_step(font: ImageFont.ImageFont, zone_height: int) -> int:
@@ -271,7 +272,9 @@ def _draw_stalker_quote(
         return
     line_step = _quote_line_step(font, max_height)
     text_block_h = _quote_block_height(lines, font, line_step)
-    quote_anchor_y = (top + bottom) / 2
+    max_block_h = (MAX_QUOTE_LINES - 1) * line_step + font.getmetrics()[0] + font.getmetrics()[1]
+    quote_anchor_y = (top + bottom) / 2 + QUOTE_Y_OFFSET
+    quote_anchor_y = max(top + max_block_h / 2, min(bottom - max_block_h / 2, quote_anchor_y))
     start_y = int(round(quote_anchor_y - text_block_h / 2))
     box_width = right - left
     for idx, line in enumerate(lines):
