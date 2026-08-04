@@ -177,6 +177,8 @@ TOPUP_PAYLOAD_PREFIX = "topup_stars:"
 TOPUP_ALLOWED_AMOUNTS = {1, 5, 10, 25}
 TOPUP_MIN_STARS = 1
 TOPUP_MAX_STARS = 10000
+# Telegram callback alerts are limited to 200 characters.
+CALLBACK_ALERT_MAX_LEN = 200
 
 
 def _is_stale_callback_error(exc: TelegramBadRequest) -> bool:
@@ -192,6 +194,17 @@ async def safe_callback_answer(callback: CallbackQuery, *args: Any, **kwargs: An
             logger.debug("Ignored stale callback answer for user %s", callback.from_user.id)
             return
         raise
+
+
+def _clip_callback_alert(text: str, *, limit: int = CALLBACK_ALERT_MAX_LEN) -> str:
+    clean = (text or "").strip()
+    if len(clean) <= limit:
+        return clean
+    clipped = clean[: max(1, limit - 1)]
+    last_nl = clipped.rfind("\n")
+    if last_nl >= limit // 3:
+        clipped = clipped[:last_nl]
+    return clipped.rstrip() + "…"
 
 
 async def edit_menu_message(
@@ -221,7 +234,7 @@ async def edit_menu_message(
 
 
 async def reply_action_result(callback: CallbackQuery, text: str) -> None:
-    """Короткий итог — всплывающее окно, длинный — одно сообщение (без спама меню)."""
+    """Итог действия — всегда всплывающее окно, без спама в чат."""
     clean = append_survival_craving_notice(
         get_storage(),
         callback.from_user.id,
@@ -230,12 +243,7 @@ async def reply_action_result(callback: CallbackQuery, text: str) -> None:
     if not clean:
         await safe_callback_answer(callback)
         return
-    if len(clean) <= 180:
-        await safe_callback_answer(callback, clean, show_alert=True)
-        return
-    if callback.message is not None:
-        await callback.message.answer(clean)
-    await safe_callback_answer(callback)
+    await safe_callback_answer(callback, _clip_callback_alert(clean), show_alert=True)
 
 
 @router.error()
