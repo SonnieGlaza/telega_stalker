@@ -31,6 +31,7 @@ from app.game_logic import (
     build_achievements_overview,
     build_character_stats_overview,
     build_economy_overview,
+    build_faction_group_overview,
     build_events_overview,
     build_raids_overview,
     build_rating_overview,
@@ -105,6 +106,7 @@ from app.game_logic import (
 )
 from app.keyboards import (
     economy_keyboard,
+    faction_group_keyboard,
     faction_ranks_members_keyboard,
     faction_rank_pick_keyboard,
     inventory_equipment_keyboard,
@@ -1668,7 +1670,7 @@ async def show_quests(message: Message) -> None:
 
     overview = build_quest_overview(player)
     await message.answer(
-        "Выбери сложность задания.\n"
+        "Выбери сложность задания или контрабанду.\n"
         "Ниже указан обязательный расход амуниции.\n\n"
         f"{overview}",
         reply_markup=quests_keyboard(),
@@ -1926,6 +1928,12 @@ async def drink_energy(message: Message) -> None:
         return
     result = use_energy_drink(get_storage(), message.from_user.id)
     await message.answer(action_result_text(message.from_user.id, result.text))
+
+
+@router.callback_query(F.data == "use:energy_drink")
+async def use_energy_drink_callback(callback: CallbackQuery) -> None:
+    result = use_energy_drink(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data == "use:medkit")
@@ -2422,6 +2430,19 @@ async def show_events(message: Message) -> None:
     await message.answer(result.text + "\n\n" + overview)
 
 
+@router.message(F.text == "👥 Группировка")
+async def show_faction_group(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if not player_ready(player):
+        await message.answer("Сначала выбери группировку.")
+        return
+    text = build_faction_group_overview(get_storage(), player.telegram_id)
+    await message.answer(text, reply_markup=faction_group_keyboard())
+
+
 @router.message(F.text == "🏦 Экономика")
 async def show_economy(message: Message) -> None:
     player = ensure_character(message)
@@ -2459,6 +2480,21 @@ async def treasury_withdraw_callback(callback: CallbackQuery) -> None:
         return
     result = withdraw_from_faction_treasury(get_storage(), callback.from_user.id, amount)
     await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "faction:menu:root")
+@router.callback_query(F.data == "faction:warehouse:view")
+@router.callback_query(F.data == "eco:warehouse:view")
+async def faction_group_root_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Персонаж не найден.", show_alert=True)
+        return
+    if not player_ready(player):
+        await callback.answer("Сначала выбери группировку.", show_alert=True)
+        return
+    text = build_faction_group_overview(get_storage(), player.telegram_id)
+    await edit_menu_message(callback, text, faction_group_keyboard())
 
 
 @router.callback_query(F.data == "eco:menu:root")
@@ -2542,16 +2578,6 @@ async def faction_rank_set_callback(callback: CallbackQuery) -> None:
         f"{result.text}\n\n{overview}",
         faction_ranks_members_keyboard(members, leader_id=player.telegram_id),
     )
-
-
-@router.callback_query(F.data == "eco:warehouse:view")
-async def warehouse_view_callback(callback: CallbackQuery) -> None:
-    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
-    if player is None:
-        await callback.answer("Персонаж не найден.", show_alert=True)
-        return
-    text = build_economy_overview(get_storage(), player.telegram_id)
-    await edit_menu_message(callback, text, economy_keyboard())
 
 
 @router.callback_query(F.data.startswith("eco:auction:create:"))

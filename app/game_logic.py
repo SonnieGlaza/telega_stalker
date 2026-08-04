@@ -3287,10 +3287,10 @@ def transfer_location_to_ally(storage: Storage, telegram_id: int, location_name:
     return ActionResult(True, f"Локация «{location_name}» передана союзнику: {ally_faction}.")
 
 
-def build_economy_overview(storage: Storage, telegram_id: int) -> str:
+def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction is None:
-        return "Экономика доступна только после выбора группировки."
+        return "Группировка доступна только после выбора фракции."
 
     income_result = apply_controlled_points_income(storage)
     income_note = f"\n{income_result.text}\n" if income_result.ok else "\n"
@@ -3299,7 +3299,6 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
     factions = storage.get_factions()
     faction_info = next((f for f in factions if f["name"] == player.faction), None)
     treasury = int(faction_info["treasury"]) if faction_info else 0
-    auctions = storage.list_open_auctions(player.faction)
     warehouse_lines = [
         f"• {ITEM_LABELS.get(k, k)}: {v}"
         for k, v in sorted(warehouse.items())
@@ -3308,6 +3307,30 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
     if not warehouse_lines:
         warehouse_lines = ["• Склад пуст"]
 
+    leader_hint = ""
+    if storage.get_faction_leader_id(player.faction) == telegram_id:
+        leader_hint = (
+            "\nЛидер может выводить RU из казны и назначать звания через кнопки ниже."
+        )
+
+    return (
+        f"Группировка «{player.faction}»\n"
+        f"Казна: {treasury} RU"
+        f"{income_note}"
+        f"Склад:\n{chr(10).join(warehouse_lines)}\n\n"
+        f"Пассивный доход с точек:\n"
+        f"• точка ресурсов: {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч\n"
+        f"• база: {BASE_POINT_INCOME_PER_HOUR} RU/ч"
+        f"{leader_hint}"
+    )
+
+
+def build_economy_overview(storage: Storage, telegram_id: int) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return "Экономика доступна только после выбора группировки."
+
+    auctions = storage.list_open_auctions(player.faction)
     auctions_lines = [
         f"• #{a['id']} {ITEM_LABELS.get(str(a['item_key']), str(a['item_key']))} x{a['amount']} "
         f"за {a['price']} RU (продавец {a['seller_id']})"
@@ -3316,22 +3339,20 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
     if not auctions_lines:
         auctions_lines = ["• Открытых лотов нет"]
 
-    leader_hint = ""
-    if storage.get_faction_leader_id(player.faction) == telegram_id:
-        leader_hint = (
-            "\nЛидер может выводить RU из казны и назначать звания через кнопки экономики."
-        )
+    market_lots = list_market_lots(storage, telegram_id)
+    market_lines = [
+        f"• #{lot['id']} {ITEM_LABELS.get(str(lot['item_key']), str(lot['item_key']))} "
+        f"x{lot['amount']} за {lot['price']} RU (продавец {lot['seller_id']})"
+        for lot in market_lots[:5]
+    ]
+    if not market_lines:
+        market_lines = ["• Открытых лотов нет"]
 
     return (
-        f"Экономика группировки «{player.faction}»\n"
-        f"Казна: {treasury} RU"
-        f"{income_note}"
-        f"Склад:\n{chr(10).join(warehouse_lines)}\n\n"
-        f"Аукцион:\n{chr(10).join(auctions_lines)}\n\n"
-        f"Пассивный доход с точек:\n"
-        f"• точка ресурсов: {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч\n"
-        f"• база: {BASE_POINT_INCOME_PER_HOUR} RU/ч"
-        f"{leader_hint}"
+        f"Экономика — биржа и рынок\n"
+        f"Группировка: «{player.faction}»\n\n"
+        f"Биржа:\n{chr(10).join(auctions_lines)}\n\n"
+        f"Рынок экипировки:\n{chr(10).join(market_lines)}"
     )
 
 
