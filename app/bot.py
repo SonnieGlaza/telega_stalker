@@ -123,6 +123,7 @@ from app.keyboards import (
     trader_buy_armor_keyboard,
     trader_buy_consumables_keyboard,
     trader_buy_gear_keyboard,
+    trader_buy_repair_keyboard,
     trader_buy_weapons_keyboard,
     trader_keyboard,
     trader_sell_categories_keyboard,
@@ -1265,67 +1266,126 @@ async def show_trade_root(callback: CallbackQuery) -> None:
     )
 
 
-@router.callback_query(F.data == "trade:buy:consumables")
+def _trade_category_page(data: str | None, *, prefix: str) -> int:
+    raw = data or ""
+    if not raw.startswith(prefix):
+        return 0
+    tail = raw[len(prefix) :]
+    if not tail:
+        return 0
+    if tail.startswith(":"):
+        tail = tail[1:]
+    try:
+        return max(0, int(tail))
+    except ValueError:
+        return 0
+
+
+@router.callback_query(F.data.startswith("trade:buy:consumables"))
 async def show_buy_consumables(callback: CallbackQuery) -> None:
-    await edit_menu_message(callback, "Покупка расходников:", trader_buy_consumables_keyboard())
-
-
-@router.callback_query(F.data == "trade:buy:gear")
-async def show_buy_gear(callback: CallbackQuery) -> None:
+    page = _trade_category_page(callback.data, prefix="trade:buy:consumables")
     await edit_menu_message(
         callback,
-        "Снаряжение и обслуживание:\n"
-        "• Оружие и броня покупаются отдельно в своих разделах.\n"
-        "• После покупки предмет попадает в инвентарь.\n"
-        "• Экипировка выполняется во вкладке «🎒 Инвентарь».",
-        trader_buy_gear_keyboard(),
+        "Покупка расходников:",
+        trader_buy_consumables_keyboard(page=page),
     )
 
 
-@router.callback_query(F.data == "trade:buy:armor")
+@router.callback_query(F.data.startswith("trade:buy:gear"))
+async def show_buy_gear(callback: CallbackQuery) -> None:
+    page = _trade_category_page(callback.data, prefix="trade:buy:gear")
+    await edit_menu_message(
+        callback,
+        "Снаряжение:\n"
+        "• Оружие и броня покупаются отдельно в своих разделах.\n"
+        "• После покупки предмет попадает в инвентарь.\n"
+        "• Экипировка выполняется во вкладке «🎒 Инвентарь».\n"
+        "• Ремонт — в разделе «🔧 Ремонт».",
+        trader_buy_gear_keyboard(page=page),
+    )
+
+
+@router.callback_query(F.data.startswith("trade:buy:armor"))
 async def show_buy_armor(callback: CallbackQuery) -> None:
+    page = _trade_category_page(callback.data, prefix="trade:buy:armor")
     await edit_menu_message(
         callback,
         "Покупка брони и костюмов.\n"
         "После покупки предмет добавляется в инвентарь.",
-        trader_buy_armor_keyboard(),
+        trader_buy_armor_keyboard(page=page),
     )
 
 
-@router.callback_query(F.data == "trade:buy:weapons")
+@router.callback_query(F.data.startswith("trade:buy:weapons"))
 async def show_buy_weapons(callback: CallbackQuery) -> None:
+    page = _trade_category_page(callback.data, prefix="trade:buy:weapons")
     await edit_menu_message(
         callback,
         "Покупка оружия.\n"
         "После покупки предмет добавляется в инвентарь.",
-        trader_buy_weapons_keyboard(),
+        trader_buy_weapons_keyboard(page=page),
     )
 
 
-@router.callback_query(F.data == "trade:sell:consumables")
+@router.callback_query(F.data == "trade:buy:repair")
+async def show_buy_repair(callback: CallbackQuery) -> None:
+    await edit_menu_message(
+        callback,
+        "Ремонт снаряжения:\n"
+        "• Оружие и броня — по текущей прочности.\n"
+        "• Грузовик — восстановление прочности кузова.",
+        trader_buy_repair_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("trade:sell:consumables"))
 async def show_sell_consumables(callback: CallbackQuery) -> None:
-    await edit_menu_message(callback, "Продажа расходников:", trader_sell_consumables_keyboard())
+    page = _trade_category_page(callback.data, prefix="trade:sell:consumables")
+    await edit_menu_message(
+        callback,
+        "Продажа расходников:",
+        trader_sell_consumables_keyboard(page=page),
+    )
 
 
-@router.callback_query(F.data == "trade:sell:gear")
+@router.callback_query(F.data.startswith("trade:sell:gear"))
 async def show_sell_gear(callback: CallbackQuery) -> None:
-    await edit_menu_message(callback, "Продажа/ремонт снаряжения:", trader_sell_gear_keyboard())
+    # Keep old nested armor alias working: trade:sell:gear:armor
+    raw = callback.data or ""
+    if raw == "trade:sell:gear:armor" or raw.startswith("trade:sell:gear:armor:"):
+        page = _trade_category_page(raw, prefix="trade:sell:gear:armor")
+        await edit_menu_message(
+            callback,
+            "Продажа брони и костюмов:",
+            trader_sell_armor_keyboard(page=page),
+        )
+        return
+    page = _trade_category_page(callback.data, prefix="trade:sell:gear")
+    await edit_menu_message(
+        callback,
+        "Продажа снаряжения:",
+        trader_sell_gear_keyboard(page=page),
+    )
 
 
-@router.callback_query(F.data == "trade:sell:gear:armor")
-async def show_sell_gear_armor(callback: CallbackQuery) -> None:
-    await edit_menu_message(callback, "Продажа брони и костюмов:", trader_sell_armor_keyboard())
-
-
-@router.callback_query(F.data == "trade:sell:armor")
+@router.callback_query(F.data.startswith("trade:sell:armor"))
 async def show_sell_armor_alias_callback(callback: CallbackQuery) -> None:
-    # Backward-compatible alias used by current sell categories keyboard.
-    await edit_menu_message(callback, "Продажа брони и костюмов:", trader_sell_armor_keyboard())
+    page = _trade_category_page(callback.data, prefix="trade:sell:armor")
+    await edit_menu_message(
+        callback,
+        "Продажа брони и костюмов:",
+        trader_sell_armor_keyboard(page=page),
+    )
 
 
-@router.callback_query(F.data == "trade:sell:weapons")
+@router.callback_query(F.data.startswith("trade:sell:weapons"))
 async def show_sell_weapons(callback: CallbackQuery) -> None:
-    await edit_menu_message(callback, "Продажа оружия:", trader_sell_weapons_keyboard())
+    page = _trade_category_page(callback.data, prefix="trade:sell:weapons")
+    await edit_menu_message(
+        callback,
+        "Продажа оружия:",
+        trader_sell_weapons_keyboard(page=page),
+    )
 
 
 @router.callback_query(F.data.startswith("buy:"))
