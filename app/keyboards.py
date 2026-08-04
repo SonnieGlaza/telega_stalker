@@ -319,15 +319,15 @@ def equip_armor_keyboard(available_armor: list[tuple[str, str, int]]) -> InlineK
 
 def trader_buy_armor_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
     items = [
-        ("Купить Кожаную куртку (900)", "buy:armor_leather"),
-        ("Купить Сталкерский бронежилет (1800)", "buy:armor_stalker_vest"),
-        ("Купить Комбинезон «Заря» (2000)", "buy:armor_sunrise"),
-        ("Купить ПСЗ-7 «Долг» (2900)", "buy:armor_psz7d"),
-        ("Купить Берилл-5М (5300)", "buy:armor_berill5m"),
-        ("Купить Костюм СЕВА (5400)", "buy:armor_seva"),
-        ("Купить Научный костюм (9800)", "buy:armor_scientific"),
-        ("Купить Экзоскелет (18000)", "buy:armor_exoskeleton"),
-        ("Купить Носорог (24000)", "buy:armor_nosorog"),
+        ("Купить Кожаную куртку (1470)", "buy:armor_leather"),
+        ("Купить Сталкерский бронежилет (2950)", "buy:armor_stalker_vest"),
+        ("Купить Комбинезон «Заря» (3270)", "buy:armor_sunrise"),
+        ("Купить ПСЗ-7 «Долг» (4750)", "buy:armor_psz7d"),
+        ("Купить Берилл-5М (8670)", "buy:armor_berill5m"),
+        ("Купить Костюм СЕВА (8840)", "buy:armor_seva"),
+        ("Купить Научный костюм (16040)", "buy:armor_scientific"),
+        ("Купить Экзоскелет (29450)", "buy:armor_exoskeleton"),
+        ("Купить Носорог (39270)", "buy:armor_nosorog"),
     ]
     return _trader_page_keyboard(
         items,
@@ -340,22 +340,22 @@ def trader_buy_armor_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
 
 def trader_buy_weapons_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
     items = [
-        ("Купить ПМ (900)", "buy:weapon_pm"),
-        ("Купить Фора-12 (1300)", "buy:weapon_fora12"),
-        ("Купить Обрез (1200)", "buy:weapon_sawedoff"),
-        ("Купить Гадюка-5 (2200)", "buy:weapon_mp5"),
-        ("Купить Chaser-13 (2500)", "buy:weapon_chaser13"),
-        ("Купить АКС-74У (2600)", "buy:weapon_aks74u"),
-        ("Купить АК-74 (3400)", "buy:weapon_ak74"),
-        ("Купить СПАС-12 (3900)", "buy:weapon_spas12"),
-        ("Купить TRs 301 (5000)", "buy:weapon_lr300"),
-        ("Купить ИЛ86 (5200)", "buy:weapon_il86"),
-        ("Купить АН-94 (5200)", "buy:weapon_an94"),
-        ("Купить ГП37 (7900)", "buy:weapon_gp37"),
-        ("Купить Винтарь ВС (8700)", "buy:weapon_vintar"),
-        ("Купить СВДм-2 (8800)", "buy:weapon_svd"),
-        ("Купить РП-74 (9500)", "buy:weapon_rp74"),
-        ("Купить Гаусс-пушку (25000)", "buy:weapon_gauss"),
+        ("Купить ПМ (1470)", "buy:weapon_pm"),
+        ("Купить Фора-12 (2130)", "buy:weapon_fora12"),
+        ("Купить Обрез (1960)", "buy:weapon_sawedoff"),
+        ("Купить Гадюка-5 (3600)", "buy:weapon_mp5"),
+        ("Купить Chaser-13 (4090)", "buy:weapon_chaser13"),
+        ("Купить АКС-74У (4250)", "buy:weapon_aks74u"),
+        ("Купить АК-74 (5560)", "buy:weapon_ak74"),
+        ("Купить СПАС-12 (6380)", "buy:weapon_spas12"),
+        ("Купить TRs 301 (8180)", "buy:weapon_lr300"),
+        ("Купить ИЛ86 (8510)", "buy:weapon_il86"),
+        ("Купить АН-94 (8510)", "buy:weapon_an94"),
+        ("Купить ГП37 (12930)", "buy:weapon_gp37"),
+        ("Купить Винтарь ВС (14240)", "buy:weapon_vintar"),
+        ("Купить СВДм-2 (14400)", "buy:weapon_svd"),
+        ("Купить РП-74 (15550)", "buy:weapon_rp74"),
+        ("Купить Гаусс-пушку (40910)", "buy:weapon_gauss"),
     ]
     return _trader_page_keyboard(
         items,
@@ -426,13 +426,13 @@ def trader_sell_gear_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
 
 def trader_sell_armor_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
     items = [
-        ("Продать Кожаную куртку (420)", "sell:armor_leather"),
-        ("Продать Сталкерский бронежилет (850)", "sell:armor_stalker_vest"),
-        ("Продать Комбинезон «Заря» (1000)", "sell:armor_sunrise"),
-        ("Продать Берилл-5М (2650)", "sell:armor_berill5m"),
-        ("Продать Костюм СЕВА (2700)", "sell:armor_seva"),
-        ("Продать Экзоскелет (9000)", "sell:armor_exoskeleton"),
-        ("Продать Носорог (12000)", "sell:armor_nosorog"),
+        ("Продать Кожаную куртку (690)", "sell:armor_leather"),
+        ("Продать Сталкерский бронежилет (1390)", "sell:armor_stalker_vest"),
+        ("Продать Комбинезон «Заря» (1550)", "sell:armor_sunrise"),
+        ("Продать Берилл-5М (4170)", "sell:armor_berill5m"),
+        ("Продать Костюм СЕВА (4250)", "sell:armor_seva"),
+        ("Продать Экзоскелет (14240)", "sell:armor_exoskeleton"),
+        ("Продать Носорог (18980)", "sell:armor_nosorog"),
     ]
     return _trader_page_keyboard(
         items,
@@ -445,22 +445,22 @@ def trader_sell_armor_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
 
 def trader_sell_weapons_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
     items = [
-        ("Продать ПМ (420)", "sell:weapon_pm"),
-        ("Продать Фора-12 (620)", "sell:weapon_fora12"),
-        ("Продать Обрез (560)", "sell:weapon_sawedoff"),
-        ("Продать Гадюка-5 (1050)", "sell:weapon_mp5"),
-        ("Продать Chaser-13 (1200)", "sell:weapon_chaser13"),
-        ("Продать АКС-74У (1200)", "sell:weapon_aks74u"),
-        ("Продать АК-74 (1600)", "sell:weapon_ak74"),
-        ("Продать СПАС-12 (1900)", "sell:weapon_spas12"),
-        ("Продать TRs 301 (2400)", "sell:weapon_lr300"),
-        ("Продать ИЛ86 (2500)", "sell:weapon_il86"),
-        ("Продать АН-94 (2500)", "sell:weapon_an94"),
-        ("Продать ГП37 (3900)", "sell:weapon_gp37"),
-        ("Продать Винтарь ВС (4300)", "sell:weapon_vintar"),
-        ("Продать СВДм-2 (4400)", "sell:weapon_svd"),
-        ("Продать РП-74 (4750)", "sell:weapon_rp74"),
-        ("Продать Гаусс-пушку (12500)", "sell:weapon_gauss"),
+        ("Продать ПМ (690)", "sell:weapon_pm"),
+        ("Продать Фора-12 (1010)", "sell:weapon_fora12"),
+        ("Продать Обрез (920)", "sell:weapon_sawedoff"),
+        ("Продать Гадюка-5 (1720)", "sell:weapon_mp5"),
+        ("Продать Chaser-13 (1960)", "sell:weapon_chaser13"),
+        ("Продать АКС-74У (1960)", "sell:weapon_aks74u"),
+        ("Продать АК-74 (2620)", "sell:weapon_ak74"),
+        ("Продать СПАС-12 (3110)", "sell:weapon_spas12"),
+        ("Продать TRs 301 (3930)", "sell:weapon_lr300"),
+        ("Продать ИЛ86 (4090)", "sell:weapon_il86"),
+        ("Продать АН-94 (4090)", "sell:weapon_an94"),
+        ("Продать ГП37 (6380)", "sell:weapon_gp37"),
+        ("Продать Винтарь ВС (7040)", "sell:weapon_vintar"),
+        ("Продать СВДм-2 (7040)", "sell:weapon_svd"),
+        ("Продать РП-74 (7530)", "sell:weapon_rp74"),
+        ("Продать Гаусс-пушку (20450)", "sell:weapon_gauss"),
     ]
     return _trader_page_keyboard(
         items,
