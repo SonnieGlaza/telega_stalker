@@ -2749,17 +2749,27 @@ class Storage:
         self.save_snapshot()
         return auction_id
 
-    def list_open_auctions(self, faction: str) -> list[dict[str, Any]]:
+    def list_open_auctions(self, faction: str | None = None) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT id, seller_id, faction, item_key, amount, price, status, buyer_id, created_at, closed_at
-                FROM auctions
-                WHERE status = 'open' AND faction = ?
-                ORDER BY id DESC
-                """,
-                (faction,),
-            ).fetchall()
+            if faction is None:
+                rows = conn.execute(
+                    """
+                    SELECT id, seller_id, faction, item_key, amount, price, status, buyer_id, created_at, closed_at
+                    FROM auctions
+                    WHERE status = 'open'
+                    ORDER BY id DESC
+                    """
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, seller_id, faction, item_key, amount, price, status, buyer_id, created_at, closed_at
+                    FROM auctions
+                    WHERE status = 'open' AND faction = ?
+                    ORDER BY id DESC
+                    """,
+                    (faction,),
+                ).fetchall()
         return [dict(row) for row in rows]
 
     def list_open_equipment_market_lots(self) -> list[dict[str, Any]]:
