@@ -1902,6 +1902,19 @@ class Storage:
         self.save_snapshot()
         return new_durability
 
+    def set_truck_durability(self, telegram_id: int, durability: int) -> bool:
+        character = self.get_character(telegram_id, refresh_energy=False)
+        if character is None:
+            return False
+        value = max(0, min(100, int(durability)))
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET truck_durability = ?, truck_owned = ? WHERE telegram_id = ?",
+                (value, 1 if value > 0 else 0, telegram_id),
+            )
+        self.save_snapshot()
+        return True
+
     def change_fuel(self, telegram_id: int, delta: int) -> bool:
         character = self.get_character(telegram_id, refresh_energy=False)
         if character is None:

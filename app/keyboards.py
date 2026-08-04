@@ -102,6 +102,7 @@ def trader_buy_gear_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="Ремонт оружия", callback_data="repair:weapon")],
             [InlineKeyboardButton(text="Ремонт брони", callback_data="repair:armor")],
+            [InlineKeyboardButton(text="Ремонт грузовика", callback_data="repair:truck")],
             [InlineKeyboardButton(text="Купить детектор «Отклик» (1000)", callback_data="buy:detector_otklik")],
             [InlineKeyboardButton(text="Купить детектор «Медведь» (4000)", callback_data="buy:detector_medved")],
             [InlineKeyboardButton(text="Купить детектор «Велес» (10000)", callback_data="buy:detector_veles")],

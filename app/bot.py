@@ -53,6 +53,7 @@ from app.game_logic import (
     travel_to,
     use_energy_drink,
     use_medkit,
+    repair_truck,
     use_vodka,
     use_antirad,
     use_bread,
@@ -1198,6 +1199,12 @@ async def repair_weapon_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "repair:armor")
 async def repair_armor_callback(callback: CallbackQuery) -> None:
     result = repair_gear(get_storage(), callback.from_user.id, "armor")
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "repair:truck")
+async def repair_truck_callback(callback: CallbackQuery) -> None:
+    result = repair_truck(get_storage(), callback.from_user.id)
     await reply_action_result(callback, result.text)
 
 

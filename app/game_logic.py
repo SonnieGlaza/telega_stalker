@@ -1837,6 +1837,28 @@ def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult
     )
 
 
+def repair_truck(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if not player.truck_owned:
+        return ActionResult(False, "У тебя нет грузовика для ремонта.")
+    current = max(0, min(100, int(player.truck_durability)))
+    if current >= 100:
+        return ActionResult(False, "Грузовик уже в идеальном состоянии.")
+    missing = 100 - current
+    price = max(500, missing * 70)
+    if not storage.change_money(telegram_id, -price):
+        return ActionResult(False, f"Недостаточно денег на ремонт грузовика ({price} RU).")
+    storage.set_truck_durability(telegram_id, 100)
+    storage.add_player_stat(telegram_id, "trades_done", 1)
+    _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    return ActionResult(True, f"Грузовик полностью отремонтирован за {price} RU.{achievements_text}")
+
+
 def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = None) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:

@@ -19,6 +19,7 @@ from app.game_logic import (
     create_or_join_war_lobby,
     launch_open_raid,
     launch_war_lobby,
+    repair_truck,
     search_artifacts,
     travel_to,
     use_medkit,
@@ -89,6 +90,11 @@ def run_smoke_check() -> None:
         assert after_travel.truck_durability < before_truck_durability
         assert before_truck_durability - after_travel.truck_durability >= 5
         assert before_truck_durability - after_travel.truck_durability <= 15
+        repaired = repair_truck(storage, 111)
+        assert repaired.ok, repaired.text
+        after_repair = storage.get_character(111, refresh_energy=False)
+        assert after_repair is not None
+        assert after_repair.truck_durability == 100
         assert build_alliance_overview(storage, 111)
         assert build_economy_overview(storage, 111)
 
