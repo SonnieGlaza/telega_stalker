@@ -62,37 +62,37 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "stash_case": {"name": "Тайник", "buy_price": 1000, "sell_price": 200},
 }
 
-# Сила снаряги: рейтинги и цены оружия/брони масштабированы ×20/11,
-# чтобы топ (Гаусс + Носорог) давал ровно 20 очков.
+# Сила снаряги: рейтинги и цены оружия/брони масштабированы ×18/11,
+# чтобы топ (Гаусс + Носорог + Артефакт Зоны) давал ровно 20 очков.
 ARMOR_CATALOG: dict[str, dict[str, int | str]] = {
-    "armor_leather": {"name": "Кожаная куртка", "buy_price": 1640, "sell_price": 760},
-    "armor_stalker_vest": {"name": "Сталкерский бронежилет", "buy_price": 3270, "sell_price": 1550},
-    "armor_psz7d": {"name": "ПСЗ-7 «Долг»", "buy_price": 5270, "sell_price": 2550},
-    "armor_zarya": {"name": "Комбинезон «Заря»", "buy_price": 3640, "sell_price": 1730},
-    "armor_bulat": {"name": "Берилл-5М «Булат»", "buy_price": 9640, "sell_price": 4640},
-    "armor_seva": {"name": "Костюм СЕВА", "buy_price": 9820, "sell_price": 4730},
-    "armor_scientific": {"name": "Научный костюм", "buy_price": 17820, "sell_price": 8730},
-    "armor_exo": {"name": "Экзоскелет", "buy_price": 32730, "sell_price": 15820},
-    "armor_nosorog": {"name": "Носорог", "buy_price": 43640, "sell_price": 21090},
+    "armor_leather": {"name": "Кожаная куртка", "buy_price": 1470, "sell_price": 690},
+    "armor_stalker_vest": {"name": "Сталкерский бронежилет", "buy_price": 2950, "sell_price": 1390},
+    "armor_psz7d": {"name": "ПСЗ-7 «Долг»", "buy_price": 4750, "sell_price": 2290},
+    "armor_zarya": {"name": "Комбинезон «Заря»", "buy_price": 3270, "sell_price": 1550},
+    "armor_bulat": {"name": "Берилл-5М «Булат»", "buy_price": 8670, "sell_price": 4170},
+    "armor_seva": {"name": "Костюм СЕВА", "buy_price": 8840, "sell_price": 4250},
+    "armor_scientific": {"name": "Научный костюм", "buy_price": 16040, "sell_price": 7850},
+    "armor_exo": {"name": "Экзоскелет", "buy_price": 29450, "sell_price": 14240},
+    "armor_nosorog": {"name": "Носорог", "buy_price": 39270, "sell_price": 18980},
 }
 
 WEAPON_CATALOG: dict[str, dict[str, int | str]] = {
-    "weapon_pm": {"name": "ПМ", "buy_price": 1640, "sell_price": 760},
-    "weapon_fort12": {"name": "Фора-12", "buy_price": 2360, "sell_price": 1130},
-    "weapon_sawedoff": {"name": "Обрез", "buy_price": 2180, "sell_price": 1020},
-    "weapon_chaser13": {"name": "Chaser-13", "buy_price": 4550, "sell_price": 2180},
-    "weapon_spas12": {"name": "СПАС-12", "buy_price": 7090, "sell_price": 3450},
-    "weapon_mp5": {"name": "Гадюка-5", "buy_price": 4000, "sell_price": 1910},
-    "weapon_aks74u": {"name": "АКС-74У", "buy_price": 4730, "sell_price": 2180},
-    "weapon_ak74": {"name": "АК-74", "buy_price": 6180, "sell_price": 2910},
-    "weapon_lr300": {"name": "TRs 301", "buy_price": 9090, "sell_price": 4360},
-    "weapon_il86": {"name": "ИЛ86", "buy_price": 9450, "sell_price": 4550},
-    "weapon_gp37": {"name": "ГП37", "buy_price": 14360, "sell_price": 7090},
-    "weapon_an94": {"name": "АН-94", "buy_price": 9450, "sell_price": 4550},
-    "weapon_vintar": {"name": "Винтарь ВС", "buy_price": 15820, "sell_price": 7820},
-    "weapon_svd": {"name": "СВДм-2", "buy_price": 16000, "sell_price": 7820},
-    "weapon_rp74": {"name": "РП-74", "buy_price": 17270, "sell_price": 8360},
-    "weapon_gauss": {"name": "Гаусс-пушка", "buy_price": 45450, "sell_price": 22730},
+    "weapon_pm": {"name": "ПМ", "buy_price": 1470, "sell_price": 690},
+    "weapon_fort12": {"name": "Фора-12", "buy_price": 2130, "sell_price": 1010},
+    "weapon_sawedoff": {"name": "Обрез", "buy_price": 1960, "sell_price": 920},
+    "weapon_chaser13": {"name": "Chaser-13", "buy_price": 4090, "sell_price": 1960},
+    "weapon_spas12": {"name": "СПАС-12", "buy_price": 6380, "sell_price": 3110},
+    "weapon_mp5": {"name": "Гадюка-5", "buy_price": 3600, "sell_price": 1720},
+    "weapon_aks74u": {"name": "АКС-74У", "buy_price": 4250, "sell_price": 1960},
+    "weapon_ak74": {"name": "АК-74", "buy_price": 5560, "sell_price": 2620},
+    "weapon_lr300": {"name": "TRs 301", "buy_price": 8180, "sell_price": 3930},
+    "weapon_il86": {"name": "ИЛ86", "buy_price": 8510, "sell_price": 4090},
+    "weapon_gp37": {"name": "ГП37", "buy_price": 12930, "sell_price": 6380},
+    "weapon_an94": {"name": "АН-94", "buy_price": 8510, "sell_price": 4090},
+    "weapon_vintar": {"name": "Винтарь ВС", "buy_price": 14240, "sell_price": 7040},
+    "weapon_svd": {"name": "СВДм-2", "buy_price": 14400, "sell_price": 7040},
+    "weapon_rp74": {"name": "РП-74", "buy_price": 15550, "sell_price": 7530},
+    "weapon_gauss": {"name": "Гаусс-пушка", "buy_price": 40910, "sell_price": 20450},
 }
 
 # Legacy callback alias used in keyboards.
@@ -124,32 +124,32 @@ WEAPON_RATING_BY_NAME: dict[str, int] = {
     "ПМ": 2,
     "Фора-12": 2,
     "Обрез": 2,
-    "Гадюка-5": 4,
-    "Chaser-13": 4,
-    "АКС-74У": 4,
+    "Гадюка-5": 3,
+    "Chaser-13": 3,
+    "АКС-74У": 3,
     "АК-74": 5,
     "СПАС-12": 5,
     "TRs 301": 7,
     "ИЛ86": 7,
     "АН-94": 7,
-    "ГП37": 9,
-    "Винтарь ВС": 9,
-    "СВДм-2": 9,
-    "РП-74": 9,
-    "Гаусс-пушка": 11,
+    "ГП37": 8,
+    "Винтарь ВС": 8,
+    "СВДм-2": 8,
+    "РП-74": 8,
+    "Гаусс-пушка": 10,
 }
 
 ARMOR_RATING_BY_NAME: dict[str, int] = {
     "Куртка новичка": 2,
     "Кожаная куртка": 2,
-    "Сталкерский бронежилет": 4,
-    "Комбинезон «Заря»": 4,
-    "ПСЗ-7 «Долг»": 4,  # legacy item in old inventories
+    "Сталкерский бронежилет": 3,
+    "Комбинезон «Заря»": 3,
+    "ПСЗ-7 «Долг»": 3,  # legacy item in old inventories
     "Берилл-5М «Булат»": 5,
     "Костюм СЕВА": 5,
     "Научный костюм": 5,
     "Экзоскелет": 7,
-    "Носорог": 9,
+    "Носорог": 8,
 }
 # Совместимость с историческими названиями экипировки из старых сохранений.
 ARMOR_RATING_BY_NAME.setdefault("Бронежилет сталкера", ARMOR_RATING_BY_NAME["Сталкерский бронежилет"])
@@ -365,7 +365,7 @@ ZONE_EVENT_POOL: tuple[tuple[str, int, str], ...] = (
 GEAR_PROGRESS: tuple[tuple[int, str, str], ...] = (
     (0, "Куртка новичка", "Нож"),
     (7, "Бронежилет сталкера", "ПМ"),
-    (15, "Усиленный бронекостюм", "АКС-74У"),
+    (13, "Усиленный бронекостюм", "АКС-74У"),
     (20, "Штурмовой экзоскелет", "АН-94"),
 )
 
@@ -610,7 +610,8 @@ def equipment_power(character: Character) -> int:
     else:
         artifact_bonus = 0
     durability_penalty = _durability_penalty(weapon_durability, 6) + _durability_penalty(armor_durability, 6)
-    return max(1, weapon_level + armor_level + artifact_bonus - durability_penalty)
+    # Жёсткий потолок шкалы профиля: топ оружие+броня+арт = 20.
+    return max(1, min(20, weapon_level + armor_level + artifact_bonus - durability_penalty))
 
 
 def _artifact_hp_bonus(character: Character) -> int:
