@@ -142,8 +142,6 @@ def import_skins(source: Path, *, dry_run: bool = False) -> int:
         slug = CANONICAL_SLUG[faction]
         out_dir = FACTION_AVATAR_DIR / slug
         out_path = out_dir / f"{tier}.png"
-        # Дополнительная копия с понятным именем (Долг1.png) для совместимости.
-        named_copy = out_dir / f"{slug}{tier}.png"
         print(f"{path.name} → {faction} / этап {tier} → {out_path.relative_to(PROJECT_ROOT)}")
         if dry_run:
             imported += 1
@@ -156,7 +154,6 @@ def import_skins(source: Path, *, dry_run: bool = False) -> int:
             continue
         fitted = _fit_avatar_image(source_img, TARGET_WIDTH, TARGET_HEIGHT)
         fitted.save(out_path, format="PNG")
-        fitted.save(named_copy, format="PNG")
         imported += 1
     return imported
 
