@@ -207,7 +207,6 @@ def inventory_equipment_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📦 Открыть тайник", callback_data="use:stash_case")],
             [InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")],
             [InlineKeyboardButton(text="⚙️ Экипировка", callback_data="equip:root")],
-            [InlineKeyboardButton(text="☠️ Респавн (если HP=0)", callback_data="player:respawn")],
         ]
     )
 
@@ -323,8 +322,10 @@ def trader_buy_armor_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
         ("Купить Кожаную куртку (900)", "buy:armor_leather"),
         ("Купить Сталкерский бронежилет (1800)", "buy:armor_stalker_vest"),
         ("Купить Комбинезон «Заря» (2000)", "buy:armor_sunrise"),
+        ("Купить ПСЗ-7 «Долг» (2900)", "buy:armor_psz7d"),
         ("Купить Берилл-5М (5300)", "buy:armor_berill5m"),
         ("Купить Костюм СЕВА (5400)", "buy:armor_seva"),
+        ("Купить Научный костюм (9800)", "buy:armor_scientific"),
         ("Купить Экзоскелет (18000)", "buy:armor_exoskeleton"),
         ("Купить Носорог (24000)", "buy:armor_nosorog"),
     ]
@@ -527,6 +528,8 @@ def raid_keyboard(
             [InlineKeyboardButton(text="🗑 Отменить все мои рейды", callback_data="raid:cancel:all")]
         )
     for location in locations:
+        if str(location.get("point_type") or "") == "база":
+            continue
         name = str(location["name"])
         rows.append([InlineKeyboardButton(text=f"Создать рейд на логово: {name}", callback_data=f"raid:create:{name}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -604,13 +607,15 @@ def economy_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот артефакт", callback_data="eco:auction:create:artifact")],
+            [InlineKeyboardButton(text="⚖️ Биржа: создать лот арт «Сила»", callback_data="eco:auction:create:artifact_power")],
+            [InlineKeyboardButton(text="⚖️ Биржа: создать лот арт «Живучесть»", callback_data="eco:auction:create:artifact_vitality")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот патроны", callback_data="eco:auction:create:ammo_pack")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот аптечки", callback_data="eco:auction:create:medkit")],
             [InlineKeyboardButton(text="🛒 Рынок: выставить экипировку", callback_data="eco:market:create:choose")],
             [InlineKeyboardButton(text="🛒 Рынок: список лотов экипировки", callback_data="eco:market:list")],
             [InlineKeyboardButton(text="🛑 Рынок: отменить мой лот", callback_data="eco:market:cancel:mine")],
-            [InlineKeyboardButton(text="⚖️ Биржа: купить первый лот", callback_data="eco:auction:buy:first")],
-            [InlineKeyboardButton(text="🛑 Биржа: отменить мой первый лот", callback_data="eco:auction:cancel:mine")],
+            [InlineKeyboardButton(text="⚖️ Биржа: купить старейший лот", callback_data="eco:auction:buy:first")],
+            [InlineKeyboardButton(text="🛑 Биржа: отменить мой старейший лот", callback_data="eco:auction:cancel:mine")],
         ]
     )
 

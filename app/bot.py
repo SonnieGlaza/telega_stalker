@@ -80,6 +80,7 @@ from app.game_logic import (
     transfer_money_with_fee,
     create_or_join_war_lobby,
     launch_war_lobby,
+    list_assaultable_locations,
     dissolve_war_lobby,
     can_dissolve_war_lobby,
     build_war_lobby_overview,
@@ -1086,7 +1087,16 @@ async def process_gender(callback: CallbackQuery, state: FSMContext, bot: Bot) -
     await safe_callback_answer(callback)
 
 
-@router.callback_query(F.data.startswith("faction:"))
+@router.callback_query(
+    F.data.in_(
+        {
+            "faction:Долг",
+            "faction:Свобода",
+            "faction:Нейтралы",
+            "faction:Бандиты",
+        }
+    )
+)
 async def process_faction(callback: CallbackQuery, state: FSMContext) -> None:
     faction = (callback.data or "").split(":", maxsplit=1)[1]
     db = get_storage()
@@ -1095,8 +1105,11 @@ async def process_faction(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Сначала введи /start", show_alert=True)
         return
 
-    if faction not in {"Долг", "Свобода", "Нейтралы", "Бандиты"}:
-        await callback.answer("Неизвестная группировка", show_alert=True)
+    if player.faction is not None:
+        await callback.answer(
+            f"Ты уже в группировке «{player.faction}». Смена недоступна.",
+            show_alert=True,
+        )
         return
 
     db.set_faction(callback.from_user.id, faction)
@@ -2118,7 +2131,10 @@ async def war_scenario_section_callback(callback: CallbackQuery) -> None:
     explainer = (
         "Сценарий войны:\n"
         "• Захват точек — только через военное лобби (минимум 5 бойцов).\n"
+        "• Базы штурмуются только лобби; рейды — на логова (не базы).\n"
         "• Соло-штурм одним игроком отключён.\n"
+        "• Нельзя штурмовать свои и союзнические точки.\n"
+        "• При успехе контроль получает группировка-хост лобби.\n"
         "• Точки ресурсов и базы дают контроль и преимущества на карте.\n"
         "• Точки интереса уменьшают время прибытия.\n"
         "• Шанс боя: сила отряда / (сила отряда + сила NPC).\n"
@@ -2142,7 +2158,7 @@ async def war_lobby_section_callback(callback: CallbackQuery) -> None:
         callback,
         build_war_lobby_overview(db, player.telegram_id),
         war_lobby_keyboard(
-            db.get_locations(),
+            list_assaultable_locations(db, player.faction),
             can_dissolve=can_dissolve_war_lobby(db, player.telegram_id),
         ),
     )
@@ -2157,7 +2173,7 @@ async def _refresh_war_lobby_menu(callback: CallbackQuery) -> None:
         await callback.message.edit_text(
             build_war_lobby_overview(db, player.telegram_id),
             reply_markup=war_lobby_keyboard(
-                db.get_locations(),
+                list_assaultable_locations(db, player.faction or ""),
                 can_dissolve=can_dissolve_war_lobby(db, player.telegram_id),
             ),
         )

@@ -38,6 +38,9 @@ def _callback_handler_coverage() -> tuple[set[str], set[str], list[str]]:
     bot_source = (PROJECT_ROOT / "app" / "bot.py").read_text(encoding="utf-8")
     exact_handlers = set(re.findall(r'@router\.callback_query\(F\.data == "([^"]+)"\)', bot_source))
     prefix_handlers = set(re.findall(r'@router\.callback_query\(F\.data\.startswith\("([^"]+)"\)\)', bot_source))
+    # Exact multi-value filters: F.data.in_({...})
+    for block in re.findall(r"@router\.callback_query\(\s*F\.data\.in_\(\s*\{([^}]+)\}\s*\)", bot_source, flags=re.S):
+        exact_handlers.update(re.findall(r'"([^"]+)"', block))
 
     missing: list[str] = []
     for callback_data in sorted(_all_callback_data()):
@@ -106,6 +109,7 @@ def run_smoke_check() -> None:
         assert newbie.inventory.get("antirad") == 1
         assert newbie.inventory.get("water_bottle") == 1
         assert newbie.inventory.get("weapon_pm") == 1
+        assert newbie.inventory.get("medkit") == 1
         after_money = storage.get_character(111, refresh_energy=False).money
         assert after_money == before_money + REFERRAL_INVITER_BONUS_RU
         again = apply_referral_rewards(storage, 444, 111)
