@@ -35,8 +35,11 @@ from app.game_logic import (
     create_or_join_faction_raid,
     launch_open_raid,
     build_quest_overview,
+    apply_controlled_points_income,
     deposit_to_faction_warehouse,
     format_inventory,
+    RESOURCE_POINT_INCOME_PER_HOUR,
+    BASE_POINT_INCOME_PER_HOUR,
     repair_gear,
     run_quest,
     sell_item,
@@ -128,6 +131,7 @@ router = Router()
 storage: Storage | None = None
 admin_ids: tuple[int, ...] = ()
 SNAPSHOT_SYNC_SECONDS = 300
+POINTS_INCOME_TICK_SECONDS = 60
 TOPUP_RATE_RU_PER_STAR = 150
 TOPUP_PAYLOAD_PREFIX = "topup_stars:"
 TOPUP_ALLOWED_AMOUNTS = {1, 5, 10, 25}
@@ -1392,6 +1396,8 @@ async def war_scenario_section_callback(callback: CallbackQuery) -> None:
         "• Базы дают безопасную точку и сервис.\n"
         "• Точки интереса уменьшают время прибытия.\n"
         "• Шанс боя: сила отряда / (сила отряда + сила NPC).\n"
+        f"• Пассивный доход в казну: ресурсы {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч, "
+        f"базы {BASE_POINT_INCOME_PER_HOUR} RU/ч.\n"
     )
     await edit_menu_message(
         callback,
@@ -1933,7 +1939,16 @@ async def run_bot() -> None:
             except Exception:
                 logger.exception("Periodic snapshot sync failed")
 
+    async def periodic_points_income() -> None:
+        while True:
+            await asyncio.sleep(POINTS_INCOME_TICK_SECONDS)
+            try:
+                apply_controlled_points_income(get_storage())
+            except Exception:
+                logger.exception("Points income tick failed")
+
     sync_task = asyncio.create_task(periodic_snapshot_sync())
+    income_task = asyncio.create_task(periodic_points_income())
 
     bot = Bot(
         token=settings.bot_token,
@@ -1945,12 +1960,14 @@ async def run_bot() -> None:
         await dp.start_polling(bot)
     finally:
         sync_task.cancel()
-        try:
-            await sync_task
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("Snapshot sync task finished with error")
+        income_task.cancel()
+        for task in (sync_task, income_task):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("Background task finished with error")
         try:
             get_storage().save_snapshot()
         except Exception:

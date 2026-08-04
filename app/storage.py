@@ -754,6 +754,14 @@ class Storage:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS meta_kv (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
             # Черновик регистрации: ник/пол живут в БД, а не только в MemoryStorage FSM.
             self._ensure_pending_registrations_schema(conn)
             self._ensure_bigint_telegram_ids(conn)
@@ -1826,6 +1834,40 @@ class Storage:
             conn.execute(
                 "UPDATE factions SET treasury = treasury + ? WHERE name = ?",
                 (delta, faction),
+            )
+        self.save_snapshot()
+
+    def get_meta(self, key: str) -> str | None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS meta_kv (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+            row = conn.execute("SELECT value FROM meta_kv WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            return None
+        return str(row["value"])
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS meta_kv (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO meta_kv(key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value),
             )
         self.save_snapshot()
 

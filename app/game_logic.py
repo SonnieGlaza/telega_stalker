@@ -265,6 +265,10 @@ AUCTION_DEFAULT_LOTS: dict[str, tuple[str, int, int]] = {
 
 MARKET_SELL_FEE_PERCENT = 30
 TRADER_EQUIPMENT_SELL_RATE = 1 / 3
+RESOURCE_POINT_INCOME_PER_HOUR = 100
+BASE_POINT_INCOME_PER_HOUR = 50
+POINTS_INCOME_META_KEY = "points_income_last_at"
+POINTS_INCOME_MAX_HOURS = 24
 
 ZONE_EVENT_POOL: tuple[tuple[str, int, str], ...] = (
     ("mutant_swarm", 10, "Миграция мутантов: сопротивление на локации выросло."),
@@ -2518,6 +2522,9 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
     if player is None or player.faction is None:
         return "Экономика доступна только после выбора группировки."
 
+    income_result = apply_controlled_points_income(storage)
+    income_note = f"\n{income_result.text}\n" if income_result.ok else "\n"
+
     warehouse = storage.get_faction_warehouse(player.faction)
     factions = storage.get_factions()
     faction_info = next((f for f in factions if f["name"] == player.faction), None)
@@ -2541,10 +2548,59 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
 
     return (
         f"Экономика группировки «{player.faction}»\n"
-        f"Казна: {treasury} RU\n\n"
+        f"Казна: {treasury} RU"
+        f"{income_note}"
         f"Склад:\n{chr(10).join(warehouse_lines)}\n\n"
-        f"Аукцион:\n{chr(10).join(auctions_lines)}"
+        f"Аукцион:\n{chr(10).join(auctions_lines)}\n\n"
+        f"Пассивный доход с точек:\n"
+        f"• точка ресурсов: {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч\n"
+        f"• база: {BASE_POINT_INCOME_PER_HOUR} RU/ч"
     )
+
+
+def apply_controlled_points_income(storage: Storage) -> ActionResult:
+    """Начисляет доход с контролируемых точек в казну группировок."""
+    raw_last = storage.get_meta(POINTS_INCOME_META_KEY)
+    now = datetime.now(timezone.utc)
+    if raw_last:
+        try:
+            last = datetime.fromisoformat(raw_last)
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+        except ValueError:
+            last = now - timedelta(hours=1)
+    else:
+        last = now - timedelta(hours=1)
+
+    hours = int((now - last).total_seconds() // 3600)
+    if hours <= 0:
+        return ActionResult(False, "Приток с точек пока не начислен (меньше часа).")
+    hours = min(hours, POINTS_INCOME_MAX_HOURS)
+
+    totals: dict[str, int] = {}
+    for location in storage.get_locations():
+        owner = location.get("controlled_by")
+        if not owner:
+            continue
+        point_type = str(location.get("point_type") or "")
+        if point_type == "точка ресурсов":
+            income = RESOURCE_POINT_INCOME_PER_HOUR * hours
+        elif point_type == "база":
+            income = BASE_POINT_INCOME_PER_HOUR * hours
+        else:
+            continue
+        storage.change_faction_treasury(str(owner), income)
+        totals[str(owner)] = totals.get(str(owner), 0) + income
+
+    paid_until = last + timedelta(hours=hours)
+    storage.set_meta(POINTS_INCOME_META_KEY, paid_until.isoformat())
+
+    if not totals:
+        return ActionResult(True, f"Прошло {hours} ч., но контролируемых ресурсных точек/баз нет.")
+    lines = [f"Приток за {hours} ч.:"]
+    for faction, amount in sorted(totals.items()):
+        lines.append(f"• {faction}: +{amount} RU в казну")
+    return ActionResult(True, "\n".join(lines))
 
 
 def _roll_smuggling_loot(storage: Storage, telegram_id: int) -> list[str]:
