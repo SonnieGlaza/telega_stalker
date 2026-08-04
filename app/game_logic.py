@@ -204,6 +204,17 @@ ARTIFACT_DETECTORS: tuple[tuple[str, str, int], ...] = (
 
 WAREHOUSE_ITEM_KEYS = ("ammo_pack", "medkit", "energy_drink", "artifact")
 
+# Дроп контрабанды (независимые роллы при успехе).
+SMUGGLING_CONSUMABLE_CHANCE = 20  # аптечка / еда / вода — каждый тип отдельно
+SMUGGLING_ARMOR_T2_CHANCE = 3
+SMUGGLING_WEAPON_T1_CHANCE = 3
+SMUGGLING_OTKLIK_CHANCE = 7
+
+SMUGGLING_FOOD_DROP_KEYS = ("bread", "sausage", "stew")
+SMUGGLING_WATER_DROP_KEYS = ("water_bottle", "mineral_water")
+SMUGGLING_ARMOR_T2_KEYS = ("armor_stalker_vest", "armor_zarya")
+SMUGGLING_WEAPON_T1_KEYS = ("weapon_pm", "weapon_sawedoff", "weapon_fort12")
+
 AUCTION_DEFAULT_LOTS: dict[str, tuple[str, int, int]] = {
     "artifact": ("artifact", 1, 900),
     "ammo_pack": ("ammo_pack", 5, 520),
@@ -2412,6 +2423,44 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
     )
 
 
+def _roll_smuggling_loot(storage: Storage, telegram_id: int) -> list[str]:
+    """Независимые роллы дропа контрабанды. Возвращает строки для отчёта."""
+    drops: list[str] = []
+
+    if random.randint(1, 100) <= SMUGGLING_CONSUMABLE_CHANCE:
+        amount = random.randint(1, 2)
+        storage.add_item(telegram_id, "medkit", amount)
+        drops.append(f"{ITEM_LABELS['medkit']} x{amount}")
+
+    if random.randint(1, 100) <= SMUGGLING_CONSUMABLE_CHANCE:
+        food_key = random.choice(SMUGGLING_FOOD_DROP_KEYS)
+        amount = random.randint(1, 2)
+        storage.add_item(telegram_id, food_key, amount)
+        drops.append(f"{ITEM_LABELS.get(food_key, food_key)} x{amount}")
+
+    if random.randint(1, 100) <= SMUGGLING_CONSUMABLE_CHANCE:
+        water_key = random.choice(SMUGGLING_WATER_DROP_KEYS)
+        amount = random.randint(1, 2)
+        storage.add_item(telegram_id, water_key, amount)
+        drops.append(f"{ITEM_LABELS.get(water_key, water_key)} x{amount}")
+
+    if random.randint(1, 100) <= SMUGGLING_ARMOR_T2_CHANCE:
+        armor_key = random.choice(SMUGGLING_ARMOR_T2_KEYS)
+        storage.add_item(telegram_id, armor_key, 1)
+        drops.append(ITEM_LABELS.get(armor_key, armor_key))
+
+    if random.randint(1, 100) <= SMUGGLING_WEAPON_T1_CHANCE:
+        weapon_key = random.choice(SMUGGLING_WEAPON_T1_KEYS)
+        storage.add_item(telegram_id, weapon_key, 1)
+        drops.append(ITEM_LABELS.get(weapon_key, weapon_key))
+
+    if random.randint(1, 100) <= SMUGGLING_OTKLIK_CHANCE:
+        storage.add_item(telegram_id, "detector_otklik", 1)
+        drops.append(ITEM_LABELS["detector_otklik"])
+
+    return drops
+
+
 def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
@@ -2440,6 +2489,12 @@ def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
         storage.change_money(telegram_id, reward)
         storage.change_faction_treasury(player.faction, reward // 3)
         storage.change_faction_warehouse_item(player.faction, "ammo_pack", warehouse_bonus)
+        loot_lines = _roll_smuggling_loot(storage, telegram_id)
+        loot_text = (
+            "\nДроп:\n" + "\n".join(f"• {line}" for line in loot_lines)
+            if loot_lines
+            else "\nДроп: пусто (не повезло с доп. находками)."
+        )
         _add_rating(storage, telegram_id, RATING_REWARD["smuggle_success"])
         storage.add_player_stat(telegram_id, "smuggling_success", 1)
         storage.add_player_stat(telegram_id, "money_earned", reward)
@@ -2448,7 +2503,8 @@ def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
             True,
             f"Контрабанда удалась! Шанс {chance}% (бросок {roll}).\n"
             f"Ты получил {reward} RU, в казну ушло {reward // 3} RU.\n"
-            f"На склад добавлено патронов: +{warehouse_bonus}.{durability_text}{achievements_text}",
+            f"На склад добавлено патронов: +{warehouse_bonus}."
+            f"{loot_text}{durability_text}{achievements_text}",
         )
 
     penalty = random.randint(120, 240)
