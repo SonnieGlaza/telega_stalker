@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
@@ -142,6 +143,111 @@ def _location_color(location: str) -> tuple[int, int, int]:
     return mapping.get(location, (95, 95, 95))
 
 
+STALKER_QUOTES: tuple[str, ...] = (
+    "Зона — это не место, это состояние души.",
+    "Сидорович, где мой детектор?!",
+    "А ну, стоять! Документы... а, свой.",
+    "Выброс через час. Шучу. Или нет.",
+    "Артефакт в карман, радиацию — в другое место.",
+    "Где-то в тумане хрустит сухарик...",
+    "Долг — долг, но обед важнее.",
+    "Свобода! ...от аптечки, пожалуйста.",
+    "Тихо! Слышишь? Это твой инвентарь ломается.",
+    "Бандюган, отдай ботинки!",
+    "Новичок — не приговор. Приговор — Выброс вне базы.",
+    "«Отклик» нашёл, а артефакт — нет. Классика.",
+    "Пусть придёт выброс... и принесёт патроны.",
+    "Сахарный деньок? Нет, сегодня солёный.",
+    "Я не боюсь кровососов. Я боюсь лагов.",
+    "КПК молчит — значит, всё по плану.",
+    "Третий день без сна. Зона красивая.",
+    "Проводник сказал «прямо». Я пошёл налево.",
+    "Монолит звал... я не взял трубку.",
+    "Хлеб, колбаса, водка — три столпа выживания.",
+    "Брат, ты артефакт нашёл или просто гуляешь?",
+    "Сталкер идёт туда, где карта уже не помогает.",
+    "Где-то рядом хрустит куст. Это не куст.",
+    "Радиация в норме. Норма — понятие растяжимое.",
+    "Один в поле — сталкер, если есть аптечка.",
+)
+
+
+def _wrap_text_lines(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.ImageFont,
+    max_width: int,
+    max_lines: int,
+) -> list[str]:
+    if max_lines <= 0:
+        return []
+    words = text.split()
+    if not words:
+        return []
+    lines: list[str] = []
+    current = words[0]
+    word_idx = 1
+    while word_idx < len(words):
+        word = words[word_idx]
+        test = f"{current} {word}"
+        if draw.textlength(test, font=font) <= max_width:
+            current = test
+            word_idx += 1
+            continue
+        lines.append(current)
+        if len(lines) >= max_lines:
+            lines[-1] = _ellipsize_text(draw, lines[-1], font, max_width)
+            return lines
+        current = word
+        word_idx += 1
+    if len(lines) < max_lines:
+        lines.append(current)
+    elif lines:
+        lines[-1] = _ellipsize_text(draw, lines[-1], font, max_width)
+    return lines[:max_lines]
+
+
+def _draw_stalker_quote(
+    draw: ImageDraw.ImageDraw,
+    *,
+    left: int,
+    top: int,
+    right: int,
+    bottom: int,
+    font: ImageFont.ImageFont,
+) -> None:
+    quote = random.choice(STALKER_QUOTES)
+    padding_x = 12
+    padding_y = 10
+    inner_left = left + padding_x
+    inner_top = top + padding_y
+    inner_right = right - padding_x
+    inner_bottom = bottom - padding_y
+    max_width = max(40, inner_right - inner_left)
+    line_height = 19
+    max_height = max(1, inner_bottom - inner_top)
+    max_lines = max(1, max_height // line_height)
+    lines = _wrap_text_lines(draw, f"«{quote}»", font, max_width, max_lines)
+    if not lines:
+        return
+    text_block_h = len(lines) * line_height
+    start_y = inner_top + max(0, (max_height - text_block_h) // 2)
+    draw.rounded_rectangle(
+        (left, top, right, bottom),
+        radius=10,
+        fill=(42, 44, 56),
+        outline=(72, 74, 88),
+        width=1,
+    )
+    for idx, line in enumerate(lines):
+        draw.text(
+            (inner_left, start_y + idx * line_height),
+            line,
+            fill=(175, 180, 195),
+            font=font,
+        )
+
+
 def _draw_power_bar(
     draw: ImageDraw.ImageDraw,
     x: int,
@@ -230,6 +336,7 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     subtitle_font = _load_font(22)
     body_font = _load_font(18)
     small_font = _load_font(16)
+    quote_font = _load_font(14)
 
     faction_color = _faction_color(character.faction)
     location_color = _location_color(character.location)
@@ -256,11 +363,23 @@ def build_character_card(character: Character, *, rating_points: int = 0) -> byt
     draw.text((62, 188), f"Локация: {character.location}", fill=(248, 248, 248), font=small_font)
     draw.text((62, 218), f"Группировка: {character.faction or 'не выбрана'}", fill=(248, 248, 248), font=small_font)
 
-    avatar = render_avatar(character, rating_points=rating, width=248, height=320)
     panel_left = 46
     panel_right = 408
     panel_bottom = 676
-    avatar_top = 268
+    quote_top = 262
+    quote_bottom = 398
+    avatar_top = 408
+
+    _draw_stalker_quote(
+        draw,
+        left=panel_left,
+        top=quote_top,
+        right=panel_right,
+        bottom=quote_bottom,
+        font=quote_font,
+    )
+
+    avatar = render_avatar(character, rating_points=rating, width=248, height=320)
 
     available_w = max(1, panel_right - panel_left)
     available_h = max(1, panel_bottom - avatar_top - 2)
