@@ -483,32 +483,51 @@ def _build_pda_chats_text(player: Character) -> str:
 
 
 def _build_info_text(player: Character, *, referral_link: str | None = None) -> str:
+    faction_chat = FACTION_CHATS.get(player.faction or "")
+    if faction_chat:
+        chats_block = (
+            "Чаты:\n"
+            f"• 🌐 Общий: {COMMON_CHAT}\n"
+            f"• 🛡 {player.faction}: {faction_chat}"
+        )
+    else:
+        chats_block = (
+            "Чаты:\n"
+            f"• 🌐 Общий: {COMMON_CHAT}\n"
+            "• 🛡 Выбери группировку, чтобы увидеть чат своей фракции."
+        )
+
     pack = ", ".join(
         f"{ITEM_LABELS.get(key, key)} x{amount}" for key, amount in REFERRAL_STARTER_PACK
     )
-    referral_block = (
-        f"Рефералка:\n"
-        f"• Твоя ссылка: {referral_link}\n"
-        f"• За друга: +{REFERRAL_INVITER_BONUS_RU} RU тебе.\n"
-        f"• Другу при вступлении: {pack}.\n\n"
-        if referral_link
-        else ""
-    )
+    if referral_link:
+        referral_block = (
+            "Рефералка:\n"
+            f"• Твоя ссылка: {referral_link}\n"
+            f"• За друга: +{REFERRAL_INVITER_BONUS_RU} RU тебе.\n"
+            f"• Другу при вступлении: {pack}."
+        )
+    else:
+        referral_block = (
+            "Рефералка:\n"
+            "• Ссылка появится после запуска бота с username.\n"
+            f"• За друга: +{REFERRAL_INVITER_BONUS_RU} RU тебе.\n"
+            f"• Другу при вступлении: {pack}."
+        )
+
     return (
         "ℹ️ Информация по игре\n\n"
-        f"{referral_block}"
+        f"{chats_block}\n\n"
         "Команды:\n"
         "• /start — создать персонажа или войти в существующего.\n"
         "• /menu — открыть главное меню.\n"
         "• /info — открыть эту справку.\n"
         "• /pay [telegram_id] [сумма] — перевод игроку (комиссия 30%).\n"
-        "  ID смотри в разделе «👥 Игроки».\n"
-        "• /сбор [текст] — рассылка бойцам своей группировки (только командир).\n"
-        "  Без текста отправит: «Бойцы, общий сбор!».\n\n"
+        "  ID смотри в разделе «👥 Игроки».\n\n"
         "Механики:\n"
         "• 🚚 Грузовик ускоряет переходы и снижает расход энергии на поездку,\n"
         "  но тратит 1 топливо за каждый переход.\n"
-        "• 🛏️ Спальник пассивно ускоряет восстановление энергии в 2 раза.\n"
+        "• 🛏 Спальник пассивно ускоряет восстановление энергии в 2 раза.\n"
         "• 💎 Артефакты:\n"
         "  — Артефакт Зоны: +2 силы, +5% реген энергии\n"
         "  — Арт «Сила»: +1 к силе\n"
@@ -518,7 +537,7 @@ def _build_info_text(player: Character, *, referral_link: str | None = None) -> 
         "• 🎖 Скин персонажа повышается от рейтинга:\n"
         "  — Новичек: 0–499, Опытный: 500–1999,\n"
         "    Ветеран: 2000–4999, Легенда: 5000+.\n\n"
-        "📟 Чаты, рейтинг и карта — в разделе «КПК»."
+        f"{referral_block}"
     )
 
 
