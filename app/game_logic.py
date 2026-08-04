@@ -295,11 +295,14 @@ STASH_CONSUMABLE_DROP_CHANCE = 40  # % на каждый тип расходни
 
 AUCTION_DEFAULT_LOTS: dict[str, tuple[str, int, int]] = {
     "artifact": ("artifact", 1, 900),
+    "artifact_power": ("artifact_power", 1, 1100),
+    "artifact_vitality": ("artifact_vitality", 1, 1100),
     "ammo_pack": ("ammo_pack", 5, 520),
     "medkit": ("medkit", 2, 420),
 }
 
 MARKET_SELL_FEE_PERCENT = 30
+EXCHANGE_SELL_FEE_PERCENT = 30
 TRADER_EQUIPMENT_SELL_RATE = 1 / 3
 RESOURCE_POINT_INCOME_PER_HOUR = 100
 BASE_POINT_INCOME_PER_HOUR = 50
@@ -314,6 +317,13 @@ EMISSION_META_WARN30 = "emission_warn30_sent"
 ZONE_EVENT_META_NEXT_AT = "zone_event_next_at"
 ZONE_EVENT_INTERVAL_MIN_MINUTES = 30
 ZONE_EVENT_INTERVAL_MAX_MINUTES = 90
+
+FACTION_HOME_BASE: dict[str, str] = {
+    "Долг": "Росток",
+    "Свобода": "Армейские склады",
+    "Нейтралы": "Кордон",
+    "Бандиты": "Свалка",
+}
 
 ZONE_EVENT_POOL: tuple[tuple[str, int, str], ...] = (
     ("mutant_swarm", 10, "Миграция мутантов: сопротивление на локации выросло."),
@@ -614,7 +624,12 @@ def _apply_durability_decay(storage: Storage, telegram_id: int, weapon_loss: int
 RESPAWN_HEALTH = 60
 RESPAWN_ENERGY = 60
 RESPAWN_COST_RU = 500
-RESPAWN_BASE_LOCATION = "Росток"
+
+
+def faction_home_base(faction: str | None) -> str:
+    if not faction:
+        return FACTION_HOME_BASE["Долг"]
+    return FACTION_HOME_BASE.get(faction, FACTION_HOME_BASE["Долг"])
 
 
 def _is_dead(character: Character) -> bool:
@@ -683,10 +698,11 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
     current_energy = player.energy
     storage.change_health(telegram_id, RESPAWN_HEALTH - current_health)
     storage.restore_energy(telegram_id, RESPAWN_ENERGY - current_energy)
-    storage.set_location(telegram_id, RESPAWN_BASE_LOCATION)
+    home = faction_home_base(player.faction)
+    storage.set_location(telegram_id, home)
     return ActionResult(
         True,
-        f"Ты был эвакуирован в «{RESPAWN_BASE_LOCATION}».\n"
+        f"Ты был эвакуирован в «{home}».\n"
         f"HP восстановлено до {RESPAWN_HEALTH}, энергия до {RESPAWN_ENERGY}.\n"
         f"Списано за респавн: {RESPAWN_COST_RU} RU.",
     )
@@ -1100,24 +1116,24 @@ def calculate_equipment_bonus(character: Character) -> int:
 
 def calculate_quest_success(
     gear_power: int,
-    gear_bonus: int,
     max_success: int,
     ammo_stock: int,
     medkit_stock: int,
     ammo_required: int,
     medkit_required: int,
 ) -> QuestChanceBreakdown:
-    """Шанс = база от снаряги/пушек + бонусы запасов, потолок по сложности."""
-    base_chance = 18 + gear_power * 4 + gear_bonus
+    """Шанс = база 18% + вклад снаряги/пушек + бонусы запасов, потолок по сложности."""
+    gear_contrib = max(0, gear_power) * 4
+    base_chance = 18
     extra_ammo = max(0, ammo_stock - ammo_required)
     extra_medkits = max(0, medkit_stock - medkit_required)
     ammo_bonus = min(18, extra_ammo * 2)
     medkit_bonus = min(12, extra_medkits * 4)
-    chance = max(10, min(max_success, base_chance + ammo_bonus + medkit_bonus))
+    chance = max(10, min(max_success, base_chance + gear_contrib + ammo_bonus + medkit_bonus))
     return QuestChanceBreakdown(
         chance=chance,
         base_chance=base_chance,
-        gear_bonus=gear_bonus,
+        gear_bonus=gear_contrib,
         ammo_bonus=ammo_bonus,
         medkit_bonus=medkit_bonus,
     )
@@ -1132,7 +1148,6 @@ def calculate_quest_success_for_quest(
     medkit_stock = int(character.inventory.get("medkit", 0))
     return calculate_quest_success(
         gear_power=compute_total_gear_power(character),
-        gear_bonus=calculate_equipment_bonus(character),
         max_success=quest.max_success,
         ammo_stock=ammo_stock,
         medkit_stock=medkit_stock,
@@ -1579,11 +1594,11 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
         return ActionResult(False, "У тебя уже есть грузовик.")
     if item_key == "sleeping_bag" and character.sleeping_bag_owned:
         return ActionResult(False, "У тебя уже есть спальник.")
+    if item_key == "gear_upgrade":
+        return ActionResult(False, "Улучшение снаряги отключено. Сила теперь зависит от оружия и брони.")
     if not storage.change_money(telegram_id, -price):
         return ActionResult(False, f"Недостаточно денег для покупки: {title}.")
 
-    if item_key == "gear_upgrade":
-        return ActionResult(False, "Улучшение снаряги отключено. Сила теперь зависит от оружия и брони.")
     if item_key == "truck":
         storage.set_truck_owned(telegram_id)
         return ActionResult(True, "Покупка оформлена: грузовик теперь в твоем распоряжении.")
@@ -2414,6 +2429,32 @@ def _simulate_raid_battle(
     }
 
 
+def _location_is_friendly_to_faction(
+    storage: Storage,
+    location: dict[str, Any],
+    faction: str,
+) -> bool:
+    owner = str(location.get("controlled_by") or "")
+    if not owner:
+        return False
+    if owner == faction:
+        return True
+    return storage.are_factions_allied(faction, owner)
+
+
+def list_assaultable_locations(storage: Storage, faction: str) -> list[dict[str, Any]]:
+    return [
+        loc
+        for loc in storage.get_locations()
+        if not _location_is_friendly_to_faction(storage, loc, faction)
+    ]
+
+
+def _refund_spent_energy(storage: Storage, telegram_ids: list[int], amount: int) -> None:
+    for telegram_id in telegram_ids:
+        storage.restore_energy(telegram_id, amount)
+
+
 def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
@@ -2426,6 +2467,13 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
     location = storage.get_location(location_name)
     if location is None:
         return ActionResult(False, "Локация для рейда не найдена.")
+    if str(location.get("point_type") or "") == "база":
+        return ActionResult(
+            False,
+            "Базы штурмуются только через военное лобби (раздел «⚔️ Война»).",
+        )
+    if _location_is_friendly_to_faction(storage, location, player.faction):
+        return ActionResult(False, "Нельзя рейдить свою или союзническую точку.")
 
     open_raid = storage.get_open_raid_for_faction(player.faction)
     if open_raid is None:
@@ -2492,10 +2540,13 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
 
     raid_energy_cost = 18
     ready_members: list[Character] = []
+    spent_ids: list[int] = []
     for member in members:
         if storage.spend_energy(member.telegram_id, raid_energy_cost):
             ready_members.append(member)
+            spent_ids.append(member.telegram_id)
     if len(ready_members) < 2:
+        _refund_spent_energy(storage, spent_ids, raid_energy_cost)
         return RaidLaunchResult(
             False,
             "У бойцов не хватает энергии для начала рейда. Нужно минимум 2 подготовленных сталкера.",
@@ -2505,7 +2556,18 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
     location_name = str(open_raid["location"])
     location = storage.get_location(location_name)
     if location is None:
+        _refund_spent_energy(storage, spent_ids, raid_energy_cost)
         return RaidLaunchResult(False, "Локация рейда недоступна.", ())
+    if str(location.get("point_type") or "") == "база":
+        _refund_spent_energy(storage, spent_ids, raid_energy_cost)
+        return RaidLaunchResult(
+            False,
+            "Базы штурмуются только через военное лобби.",
+            (),
+        )
+    if _location_is_friendly_to_faction(storage, location, leader.faction):
+        _refund_spent_energy(storage, spent_ids, raid_energy_cost)
+        return RaidLaunchResult(False, "Нельзя рейдить свою или союзническую точку.", ())
 
     event_modifier = _active_location_event_modifier(storage, location_name)
     enemy_power = max(10, int(location["npc_power"]) + event_modifier)
@@ -2513,11 +2575,7 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
 
     if battle["success"]:
         previous_owner = str(location.get("controlled_by") or "")
-        captured_enemy_base = (
-            str(location.get("point_type") or "") == "база"
-            and bool(previous_owner)
-            and previous_owner != leader.faction
-        )
+        captured_enemy_base = False
         storage.set_location_control(location_name, leader.faction)
         treasury_gain = 1400 + len(ready_members) * 180
         storage.change_faction_treasury(leader.faction, treasury_gain)
@@ -2902,7 +2960,8 @@ def create_faction_auction(storage: Storage, telegram_id: int, lot_key: str) -> 
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     return ActionResult(
         True,
-        f"Лот #{auction_id} создан: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.{achievements_text}",
+        f"Лот #{auction_id} создан: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.\n"
+        f"Комиссия при продаже: {EXCHANGE_SELL_FEE_PERCENT}%.{achievements_text}",
     )
 
 
@@ -2912,7 +2971,7 @@ def buy_first_faction_auction(storage: Storage, telegram_id: int) -> ActionResul
         return ActionResult(False, "Покупка на аукционе доступна только бойцам группировки.")
     if _is_dead(buyer):
         return ActionResult(False, _dead_block_text())
-    auctions = _list_open_exchange_lots(storage)
+    auctions = sorted(_list_open_exchange_lots(storage), key=lambda a: int(a["id"]))
     target = next((a for a in auctions if int(a["seller_id"]) != telegram_id), None)
     if target is None:
         return ActionResult(False, "Подходящих открытых лотов нет.")
@@ -2928,19 +2987,22 @@ def buy_first_faction_auction(storage: Storage, telegram_id: int) -> ActionResul
     if not storage.close_auction(auction_id, buyer_id=telegram_id, status="sold"):
         storage.change_money(telegram_id, price)
         return ActionResult(False, "Лот уже недоступен.")
-    storage.change_money(seller_id, price)
+    fee = max(1, int(round(price * (EXCHANGE_SELL_FEE_PERCENT / 100))))
+    seller_income = max(0, price - fee)
+    storage.change_money(seller_id, seller_income)
     storage.add_item(telegram_id, item_key, amount)
     storage.add_player_stat(telegram_id, "trades_done", 1)
     storage.add_player_stat(seller_id, "trades_done", 1)
     _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
     _add_rating(storage, seller_id, RATING_REWARD["trade_action"])
-    storage.add_player_stat(seller_id, "money_earned", price)
+    storage.add_player_stat(seller_id, "money_earned", seller_income)
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     seller_achievements = _progress_and_unlock_achievements(storage, seller_id)
     suffix = achievements_text + seller_achievements
     return ActionResult(
         True,
-        f"Куплен лот #{auction_id}: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.{suffix}",
+        f"Куплен лот #{auction_id}: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.\n"
+        f"Продавец получил {seller_income} RU (комиссия {fee} RU).{suffix}",
     )
 
 
@@ -2950,7 +3012,7 @@ def cancel_own_first_auction(storage: Storage, telegram_id: int) -> ActionResult
         return ActionResult(False, "Сначала создай персонажа и выбери группировку.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
-    auctions = _list_open_exchange_lots(storage)
+    auctions = sorted(_list_open_exchange_lots(storage), key=lambda a: int(a["id"]))
     target = next((a for a in auctions if int(a["seller_id"]) == telegram_id), None)
     if target is None:
         return ActionResult(False, "У тебя нет открытых лотов для отмены.")
@@ -3209,6 +3271,8 @@ def create_or_join_war_lobby(storage: Storage, telegram_id: int, location_name: 
     location = storage.get_location(location_name)
     if location is None:
         return ActionResult(False, "Локация не найдена.")
+    if _location_is_friendly_to_faction(storage, location, player.faction):
+        return ActionResult(False, "Нельзя штурмовать свою или союзническую точку.")
     open_lobby = find_open_war_lobby_for_character(storage, player)
     if open_lobby is None:
         for ally in storage.list_faction_alliances(player.faction):
@@ -3321,25 +3385,28 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Запускать лобби может только лидер, который его создал.")
     war_id = int(lobby["id"])
     location_name = str(lobby["location"])
+    host_faction = str(lobby.get("host_faction") or leader.faction)
     member_ids = storage.get_war_lobby_member_ids(war_id)
     members = [m for m in storage.get_characters_by_ids(member_ids) if m.health > 0 and m.faction]
     if len(members) < WAR_MIN_FACTION_MEMBERS:
         return ActionResult(False, f"Для запуска нужно минимум {WAR_MIN_FACTION_MEMBERS} живых бойцов.")
     active: list[Character] = []
+    spent_ids: list[int] = []
     for member in members:
         if storage.spend_energy(member.telegram_id, 24):
             active.append(member)
+            spent_ids.append(member.telegram_id)
     if len(active) < WAR_MIN_FACTION_MEMBERS:
+        _refund_spent_energy(storage, spent_ids, 24)
         return ActionResult(False, "Недостаточно энергии у бойцов лобби.")
-    faction_counts: dict[str, int] = {}
-    for member in active:
-        faction_counts[str(member.faction)] = faction_counts.get(str(member.faction), 0) + 1
-    factions = list(faction_counts.keys())
-    weights = [faction_counts[f] for f in factions]
-    winner = random.choices(factions, weights=weights, k=1)[0]
+    winner = host_faction
     target = storage.get_location(location_name)
     if target is None:
+        _refund_spent_energy(storage, spent_ids, 24)
         return ActionResult(False, "Локация лобби не найдена.")
+    if _location_is_friendly_to_faction(storage, target, host_faction):
+        _refund_spent_energy(storage, spent_ids, 24)
+        return ActionResult(False, "Нельзя штурмовать свою или союзническую точку.")
     enemy_power = int(target["npc_power"])
     total_power = sum(equipment_power(member) for member in active)
     chance = int(round((total_power / (total_power + enemy_power + 10)) * 100))
