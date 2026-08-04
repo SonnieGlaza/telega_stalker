@@ -23,7 +23,7 @@ FACTION_SLUGS: dict[str, tuple[str, ...]] = {
     "Бандиты": ("бандиты", "бандит", "bandity", "bandits", "bandit"),
 }
 
-_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+FACTION_AVATAR_SIZE = 250
 _TIER_IN_NAME = re.compile(r"(\d+)$")
 
 
@@ -232,18 +232,20 @@ def _avatar_candidates(tier: int, faction: str | None = None) -> tuple[Path, ...
     return tuple(unique)
 
 
-def _native_avatar_image(source: Image.Image) -> Image.Image:
-    """Вернуть скин группировки в исходном 1:1 размере без масштабирования."""
+def _square_avatar_image(source: Image.Image, size: int = FACTION_AVATAR_SIZE) -> Image.Image:
+    """Привести скин группировки к квадрату size×size (1:1)."""
     img = source.convert("RGBA")
     width, height = img.size
     if width <= 0 or height <= 0:
-        return img
-    if width == height:
-        return img
-    side = min(width, height)
-    left = (width - side) // 2
-    top = (height - side) // 2
-    return img.crop((left, top, left + side, top + side))
+        return Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    if width != height:
+        side = min(width, height)
+        left = (width - side) // 2
+        top = (height - side) // 2
+        img = img.crop((left, top, left + side, top + side))
+    if img.size != (size, size):
+        img = img.resize((size, size), Image.Resampling.LANCZOS)
+    return img
 
 
 def _fit_avatar_image(source: Image.Image, width: int, height: int) -> Image.Image:
@@ -299,7 +301,7 @@ def _load_avatar_asset(
         except OSError:
             continue
         if faction:
-            return _native_avatar_image(source)
+            return _square_avatar_image(source)
         return _fit_avatar_image(source, width, height)
     return None
 

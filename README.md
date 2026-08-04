@@ -16,7 +16,7 @@
   - используется классический стиль аватара (без переключения)
   - PNG-аватары подхватываются автоматически:
     - общие: `assets/avatars/stalker_t1..t4.png`
-    - по группировке + званию: `assets/avatars/factions/<faction>/1..4.png` (исходный 1:1 размер)
+    - по группировке + званию: `assets/avatars/factions/<faction>/1..4.png` (**250×250**, 1:1)
       (например `Долг1` = Новичек Долга, `Свобода3` = Ветеран Свободы)
     - можно положить исходную папку в `assets/avatars/скины/` или импортировать:
       `python3 scripts/import_faction_skins.py "/path/to/скины"`
@@ -121,7 +121,7 @@ chmod +x start.sh
 - `app/avatar_render.py` — аватар по группировке + званию (рейтингу)
 - `assets/avatars/stalker_t1..t4.png` — общие шаблоны аватаров (fallback)
 - `assets/avatars/factions/` — скины по группировкам (`dolg`, `svoboda`, `neutraly`, `bandity`)
-- `scripts/import_faction_skins.py` — импорт папки «скины» в исходном 1:1 размере
+- `scripts/import_faction_skins.py` — импорт папки «скины» с ресайзом до 250×250
 - `run.py` — точка входа
 
 ## Важно для Railway (сохранение персонажа)

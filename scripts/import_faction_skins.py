@@ -8,7 +8,7 @@
 Цифра = звание:
   1 Новичек, 2 Опытный, 3 Ветеран, 4 Легенда
 
-Скины сохраняются в исходном 1:1 размере без принудительного ресайза.
+Скины сохраняются как квадрат **250×250** (1:1).
 
 Пример:
   python3 scripts/import_faction_skins.py "/path/to/скины"
@@ -28,9 +28,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.avatar_render import (  # noqa: E402
     FACTION_AVATAR_DIR,
+    FACTION_AVATAR_SIZE,
     FACTION_SLUGS,
-    _native_avatar_image,
     _normalize_token,
+    _square_avatar_image,
 )
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -143,9 +144,9 @@ def import_skins(source: Path, *, dry_run: bool = False) -> int:
         except OSError as exc:
             print(f"  пропуск (не открылось): {exc}")
             continue
-        native = _native_avatar_image(source_img)
-        print(f"  размер: {native.width}×{native.height}")
-        native.save(out_path, format="PNG")
+        square = _square_avatar_image(source_img, FACTION_AVATAR_SIZE)
+        print(f"  размер: {square.width}×{square.height}")
+        square.save(out_path, format="PNG")
         imported += 1
     return imported
 
@@ -164,7 +165,7 @@ def main() -> int:
         print(f"Путь не найден: {source}")
         return 1
     count = import_skins(source, dry_run=args.dry_run)
-    print(f"Готово: {count} скин(ов). Сохранены в исходном 1:1 размере.")
+    print(f"Готово: {count} скин(ов). Размер: {FACTION_AVATAR_SIZE}×{FACTION_AVATAR_SIZE}.")
     return 0 if count else 2
 
 
