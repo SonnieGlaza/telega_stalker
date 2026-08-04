@@ -33,7 +33,6 @@ from app.game_logic import (
     REFERRAL_STARTER_PACK,
     ITEM_LABELS,
     append_survival_craving_notice,
-    apply_dynamic_zone_event,
     attack_location,
     attempt_smuggling,
     build_achievements_overview,
@@ -54,6 +53,7 @@ from app.game_logic import (
     build_quest_overview,
     apply_controlled_points_income,
     process_emission_cycle,
+    process_zone_event_cycle,
     build_players_root_text,
     build_players_faction_page_text,
     build_faction_broadcast_text,
@@ -126,7 +126,6 @@ from app.keyboards import (
     pda_keyboard,
     sortie_keyboard,
     quests_keyboard,
-    events_keyboard,
     raid_keyboard,
     topup_keyboard,
     trader_buy_categories_keyboard,
@@ -2472,21 +2471,7 @@ async def show_events(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     overview = build_events_overview(get_storage())
-    await message.answer(
-        overview + "\n\nНажми «🎲 Случайное событие», чтобы сгенерировать новое.",
-        reply_markup=events_keyboard(),
-    )
-
-
-@router.callback_query(F.data == "events:roll")
-async def roll_events_callback(callback: CallbackQuery) -> None:
-    result = apply_dynamic_zone_event(get_storage())
-    overview = build_events_overview(get_storage())
-    await edit_menu_message(
-        callback,
-        f"{result.text}\n\n{overview}",
-        events_keyboard(),
-    )
+    await message.answer(overview)
 
 
 @router.message(F.text == "👥 Группировка")
@@ -2930,6 +2915,16 @@ async def run_bot() -> None:
                             logger.debug("Failed emission notify to %s", user_id)
             except Exception:
                 logger.exception("Emission cycle tick failed")
+            try:
+                message_text, notify_ids = process_zone_event_cycle(get_storage())
+                if message_text:
+                    for user_id in notify_ids:
+                        try:
+                            await bot.send_message(user_id, message_text)
+                        except Exception:
+                            logger.debug("Failed zone event notify to %s", user_id)
+            except Exception:
+                logger.exception("Zone event cycle tick failed")
 
     sync_task = asyncio.create_task(periodic_snapshot_sync())
     zone_task = asyncio.create_task(periodic_zone_systems())

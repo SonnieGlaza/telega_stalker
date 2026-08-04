@@ -77,14 +77,6 @@ def quests_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def events_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🎲 Случайное событие", callback_data="events:roll")],
-        ]
-    )
-
-
 def trader_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
