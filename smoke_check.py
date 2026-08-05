@@ -75,6 +75,10 @@ def run_smoke_check() -> None:
         assert storage.character_exists(111)
         assert storage.character_exists(222)
         assert storage.character_exists(333)
+        from app.game_logic import faction_home_base
+
+        assert storage.get_character(111, refresh_energy=False).location == faction_home_base("Долг")
+        assert storage.get_character(333, refresh_energy=False).location == faction_home_base("Бандиты")
         assert storage.set_faction_leader("Долг", 111)
         assert storage.set_faction_leader("Бандиты", 333)
 
@@ -92,7 +96,7 @@ def run_smoke_check() -> None:
         assert not bandit_rank.ok
 
         # Faction base fortification (+1 defense per 10000 RU from treasury).
-        from app.game_logic import upgrade_faction_base, faction_home_base, BASE_FORTIFY_COST_RU
+        from app.game_logic import upgrade_faction_base, BASE_FORTIFY_COST_RU
 
         duty_base = faction_home_base("Долг")
         assert int(storage.get_location(duty_base).get("defense_bonus") or 0) == 0
@@ -158,6 +162,7 @@ def run_smoke_check() -> None:
             )
         storage.resolve_travel_if_due(333)
         assert storage.get_character(333, refresh_energy=False).location == "Янтарь"
+        assert storage.get_last_arrival_transport(333) == "bicycle"
         storage.change_diesel(111, 3)
         storage.change_gasoline(222, 5)
         assert buy_item(storage, 222, "gasoline_can").ok
@@ -223,6 +228,43 @@ def run_smoke_check() -> None:
         work = run_contract_work(storage, 111)
         assert work.text
 
+        # Bicycle quest mult only after bike arrival (and then consumed).
+        from app.game_logic import BICYCLE_QUEST_REWARD_MULT, build_players_faction_page_text
+        from app.keyboards import players_faction_page_keyboard
+
+        bandit_home = faction_home_base("Бандиты")
+        storage.set_location(333, bandit_home)
+        storage.set_last_arrival_transport(333, "bicycle")
+        storage.restore_energy(333, 100)
+        storage.add_item(333, "ammo_pack", 5)
+        storage.add_item(333, "medkit", 5)
+        bike_contract = accept_quest_contract(storage, 333, "easy_boloto")
+        assert bike_contract.ok, bike_contract.text
+        storage.set_location(333, "Болото")
+        bike_work = run_contract_work(storage, 333)
+        assert bike_work.text
+        if bike_work.ok:
+            assert f"×{BICYCLE_QUEST_REWARD_MULT:g}" in bike_work.text or "велосипед" in bike_work.text.lower()
+            assert storage.get_last_arrival_transport(333) is None
+        storage.set_last_arrival_transport(333, "bicycle")
+        assert storage.consume_last_arrival_transport(333) == "bicycle"
+        assert storage.get_last_arrival_transport(333) is None
+
+        page_text, key, page, pages, page_players = build_players_faction_page_text(
+            storage, "Долг", 0
+        )
+        assert "Дуэль" in page_text
+        kb = players_faction_page_keyboard(
+            key, page=page, total_pages=pages, players=page_players, self_id=111
+        )
+        duel_cbs = [
+            btn.callback_data
+            for row in kb.inline_keyboard
+            for btn in row
+            if (btn.callback_data or "").startswith("duel:challenge:")
+        ]
+        assert any(cb.endswith(":222") for cb in duel_cbs)
+
         assert build_alliance_overview(storage, 111)
         assert build_economy_overview(storage, 111)
 
@@ -273,7 +315,19 @@ def run_smoke_check() -> None:
             resolve_smuggling_if_pending,
             get_active_smuggling,
             abandon_smuggling_run,
+            build_smuggling_overview,
+            SMUGGLING_REWARD_MIN,
+            SMUGGLING_REWARD_MAX,
+            roll_arrival_encounter,
         )
+
+        overview = build_smuggling_overview(storage, 111)
+        assert str(SMUGGLING_REWARD_MIN) in overview and str(SMUGGLING_REWARD_MAX) in overview
+        assert "лут" in overview.lower() or "курьер" in overview.lower()
+
+        # Arrival encounter is optional (~35%); just ensure it doesn't crash.
+        storage.set_location(111, "Росток")
+        _ = roll_arrival_encounter(storage, 111, "Росток")
 
         storage.restore_energy(111, 100)
         storage.set_location(111, "Росток")

@@ -525,9 +525,9 @@ TREASURY_WITHDRAW_MIN_RANK = 5
 
 # Дроп контрабанды (независимые роллы при успехе).
 SMUGGLING_CONSUMABLE_CHANCE = 20  # аптечка / еда / вода — каждый тип отдельно
-SMUGGLING_ARMOR_T2_CHANCE = 3
-SMUGGLING_WEAPON_T1_CHANCE = 3
-SMUGGLING_OTKLIK_CHANCE = 3
+SMUGGLING_ARMOR_T2_CHANCE = 4
+SMUGGLING_WEAPON_T1_CHANCE = 4
+SMUGGLING_OTKLIK_CHANCE = 5
 SMUGGLING_META_PREFIX = "smuggle:active:"
 SMUGGLING_BASE_CHANCE = 42
 SMUGGLING_TRANSPORT_BONUS: dict[str, int] = {
@@ -536,8 +536,8 @@ SMUGGLING_TRANSPORT_BONUS: dict[str, int] = {
     "bicycle": 3,
     "foot": 0,
 }
-SMUGGLING_REWARD_MIN = 180
-SMUGGLING_REWARD_MAX = 350
+SMUGGLING_REWARD_MIN = 280
+SMUGGLING_REWARD_MAX = 450
 SMUGGLING_FAIL_PENALTY_MIN = 150
 SMUGGLING_FAIL_PENALTY_MAX = 300
 
@@ -1012,12 +1012,6 @@ def _apply_durability_decay(storage: Storage, telegram_id: int, weapon_loss: int
 RESPAWN_HEALTH = 60
 RESPAWN_ENERGY = 60
 RESPAWN_COST_RU = 500
-
-
-def faction_home_base(faction: str | None) -> str:
-    if not faction:
-        return FACTION_HOME_BASE["Долг"]
-    return FACTION_HOME_BASE.get(faction, FACTION_HOME_BASE["Долг"])
 
 
 def _is_dead(character: Character) -> bool:
@@ -1657,7 +1651,7 @@ def describe_travel_fuel_status(character: Character) -> str:
     if can_travel_by_bicycle(character):
         lines.append(
             f"Велосипед готов (×{TRAVEL_SPEED_BICYCLE:g}, без топлива; "
-            f"награда за задания ×{BICYCLE_QUEST_REWARD_MULT:g})."
+            f"награда ×{BICYCLE_QUEST_REWARD_MULT:g} только если доехал на нём)."
         )
     if (
         not can_travel_by_truck(character)
@@ -1708,7 +1702,7 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
         "",
         "Транспорт ускоряет переход:",
         "• пешком — ×1",
-        f"• велосипед — ×{TRAVEL_SPEED_BICYCLE:g} (без топлива, награда за задания ×{BICYCLE_QUEST_REWARD_MULT:g})",
+        f"• велосипед — ×{TRAVEL_SPEED_BICYCLE:g} (без топлива; награда ×{BICYCLE_QUEST_REWARD_MULT:g}, если доехал на нём)",
         "• Нива — ×2 (нужен бензин), грузовик — ×5 (нужен дизель)",
         f"1 игровая минута пути ≈ {TRAVEL_REAL_SECONDS_PER_GAME_MINUTE} сек реального времени.",
         "",
@@ -1888,9 +1882,11 @@ def _execute_quest_roll(
         base_reward = random.randint(quest.reward_min, quest.reward_max)
         ru_mult = _location_contract_ru_mult(storage, work_location, updated.faction)
         bicycle_note = ""
-        if updated.bicycle_owned:
+        arrived_transport = storage.get_last_arrival_transport(telegram_id)
+        if arrived_transport == "bicycle" and updated.bicycle_owned:
             ru_mult *= BICYCLE_QUEST_REWARD_MULT
             bicycle_note = f" ×{BICYCLE_QUEST_REWARD_MULT:g} велосипед"
+            storage.consume_last_arrival_transport(telegram_id)
         reward = max(1, int(round(base_reward * ru_mult)))
         storage.change_money(telegram_id, reward)
         _add_rating(storage, telegram_id, rating_success)
@@ -2696,7 +2692,7 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
         return ActionResult(
             True,
             f"Велосипед куплен: переходы ×{TRAVEL_SPEED_BICYCLE:g}, "
-            f"награда за задания ×{BICYCLE_QUEST_REWARD_MULT:g}.",
+            f"награда ×{BICYCLE_QUEST_REWARD_MULT:g} если доехал на велосипеде.",
         )
     if item_key == "sleeping_bag":
         storage.set_sleeping_bag_owned(telegram_id)
@@ -2790,10 +2786,15 @@ TRADER_SELL_CATALOG: dict[str, tuple[str, ...]] = {
     "armor": (
         "armor_leather",
         "armor_stalker_vest",
+        "armor_psz7d",
         "armor_sunrise",
+        "armor_zarya",
         "armor_berill5m",
+        "armor_bulat",
         "armor_seva",
+        "armor_scientific",
         "armor_exoskeleton",
+        "armor_exo",
         "armor_nosorog",
     ),
     "weapons": (
@@ -3509,6 +3510,31 @@ def _compute_base_travel_minutes(
     if target.get("point_type") == "точка интереса" and target.get("controlled_by") == faction:
         travel_minutes = max(5, int(travel_minutes * 0.7))
     return travel_minutes, distance_px
+
+
+def roll_arrival_encounter(storage: Storage, telegram_id: int, destination: str) -> str | None:
+    """Мелкий энкаунтер по прибытии (~35% шанс чего-то случиться)."""
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or _is_dead(player):
+        return None
+    roll = random.randint(1, 100)
+    if roll <= 65:
+        return None
+    if roll <= 78:
+        amount = random.randint(40, 90)
+        storage.change_money(telegram_id, amount)
+        storage.add_player_stat(telegram_id, "money_earned", amount)
+        return f"📦 По дороге нашёл хабар: +{amount} RU."
+    if roll <= 88:
+        storage.add_item(telegram_id, "bread", 1)
+        return "🍞 Нашёл чёрствый хлеб у дороги."
+    if roll <= 94:
+        loss = random.randint(1, 3)
+        storage.change_health(telegram_id, -loss)
+        return f"⚠️ Лёгкая засада мутантов: −{loss} HP."
+    rad = random.randint(1, 2)
+    storage.adjust_survival(telegram_id, radiation_delta=rad)
+    return f"☢️ Аномальный фон на подходе к «{destination}»: +{rad} рад."
 
 
 def travel_status_text(character: Character) -> str | None:
@@ -5249,16 +5275,16 @@ def build_players_faction_page_text(
     storage: Storage,
     faction_key: str,
     page: int = 0,
-) -> tuple[str, str, int, int]:
-    """Возвращает (text, faction_key, page, total_pages)."""
+) -> tuple[str, str, int, int, list[dict[str, Any]]]:
+    """Возвращает (text, faction_key, page, total_pages, page_players)."""
     groups = {key: (title, players) for key, title, players in group_players_by_faction(storage)}
     if faction_key not in groups:
-        return ("Группировка не найдена. Вернись к списку группировок.", faction_key, 0, 1)
+        return ("Группировка не найдена. Вернись к списку группировок.", faction_key, 0, 1, [])
 
     title, players = groups[faction_key]
     total = len(players)
     if total == 0:
-        return (f"👥 {title}\nПока никого нет.", faction_key, 0, 1)
+        return (f"👥 {title}\nПока никого нет.", faction_key, 0, 1, [])
 
     total_pages = max(1, (total + PLAYERS_PAGE_SIZE - 1) // PLAYERS_PAGE_SIZE)
     safe_page = max(0, min(int(page), total_pages - 1))
@@ -5268,6 +5294,7 @@ def build_players_faction_page_text(
     lines = [
         f"👥 {title}",
         f"Страница {safe_page + 1}/{total_pages} • игроков: {total}",
+        "Нажми «⚔️ Дуэль», чтобы вызвать игрока.",
         "",
     ]
     for row in chunk:
@@ -5275,7 +5302,7 @@ def build_players_faction_page_text(
         rank = character_rank_title(storage, member) if member else None
         rank_part = f" [{rank}]" if rank else ""
         lines.append(f"• {row['nickname']}{rank_part} — {row['telegram_id']}")
-    return ("\n".join(lines), faction_key, safe_page, total_pages)
+    return ("\n".join(lines), faction_key, safe_page, total_pages, chunk)
 
 
 def build_players_directory(storage: Storage, limit: int = 50) -> str:
@@ -5527,9 +5554,11 @@ def build_smuggling_overview(storage: Storage, telegram_id: int) -> str:
     active = get_active_smuggling(storage, telegram_id)
     lines = [
         "🚚 Перевозка контрабанды",
-        "Бери груз → едь до точки сдачи → по прибытии ролл: доставка или ограбление в пути.",
-        "Шанс доставки растёт от силы снаряги и транспорта; длинный путь повышает риск.",
-        "Бонусы транспорта: пешком 0, велосипед +3, Нива +6, грузовик +12.",
+        "Рисковый курьерский рейс: главное — лут и казна фракции, не «фарм RU».",
+        f"Награда за доставку: {SMUGGLING_REWARD_MIN}–{SMUGGLING_REWARD_MAX} RU + дроп (еда/аптечки/шмот).",
+        "Провал = ограбили в пути (−RU, −HP).",
+        "Шанс растёт от силы и транспорта; длинный путь повышает риск.",
+        "Бонусы: пешком 0, велосипед +3, Нива +6, грузовик +12.",
         "",
     ]
     if active:

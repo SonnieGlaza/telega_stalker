@@ -42,6 +42,17 @@ from app.game_logic import (
     build_smuggling_overview,
     list_smuggling_destinations,
     get_active_smuggling,
+    roll_arrival_encounter,
+    faction_home_base,
+    DUEL_LOSER_MONEY_PERCENT,
+    DUEL_LOSER_MONEY_CAP,
+    DUEL_LOSER_HP_REMAINING,
+    TRANSFER_FEE_PERCENT,
+    TRAVEL_SPEED_BICYCLE,
+    BICYCLE_QUEST_REWARD_MULT,
+    QUESTS,
+    RESOURCE_POINT_INCOME_PER_HOUR,
+    BASE_POINT_INCOME_PER_HOUR,
     build_achievements_overview,
     build_character_stats_overview,
     build_economy_overview,
@@ -64,7 +75,6 @@ from app.game_logic import (
     cancel_quest_contract,
     turn_in_quest_contract,
     run_contract_work,
-    faction_home_base,
     is_traveling,
     travel_status_text,
     travel_status_with_smuggle,
@@ -578,7 +588,7 @@ async def show_topup(message: Message, state: FSMContext) -> None:
         return
     await state.clear()
     await message.answer(
-        "Выбери пакет пополнения.\nКурс: 1 звезда = 150 RU.",
+        f"Выбери пакет пополнения.\nКурс: 1 звезда = {TOPUP_RATE_RU_PER_STAR} RU.",
         reply_markup=topup_keyboard(),
     )
 
@@ -638,38 +648,41 @@ def _build_referral_system_text(*, referral_link: str | None = None) -> str:
 
 
 def _build_info_text(player: Character) -> str:
+    easy = QUESTS["easy"]
+    hard = QUESTS["hard"]
+    heavy = QUESTS["heavy"]
+    impossible = QUESTS["impossible"]
     return (
         "ℹ️ Информация по игре\n\n"
         "Разделы меню:\n"
         "• 📟 КПК — профиль, чаты, рейтинг, карта, игроки, рефералка.\n"
         "• 🏕 Вылазка — война, переходы и рейды.\n"
-        "• 👥 Группировка — склад, казна, звания; склад с 5 ранга, казна только лидер.\n"
-        "• 🏦 Экономика — биржа и рынок экипировки.\n"
-        "• 📋 Задания — сложности; контрабанда — перевозка с риском ограбления.\n\n"
+        "• 👥 Группировка — склад (с 5 ранга), казна (вывод только лидер).\n"
+        "• 🏦 Экономика — биржа, рынок, перевозка контрабанды.\n"
+        "• 📋 Задания — контракты с переездом; контрабанда — рисковый курьерский рейс.\n\n"
         "Команды:\n"
-        "• /start — создать персонажа или войти в существующего.\n"
-        "• /menu — открыть главное меню.\n"
-        "• /info — открыть эту справку.\n"
-        "• /pay [telegram_id] [сумма] — перевод игроку (комиссия 20%).\n"
-        "• /дуэль [telegram_id] — вызвать игрока на дуэль (принять/отклонить).\n"
-        "  Шанс от разницы силы снаряги, бросок 1–100;\n"
-        "  проигравший: HP снижается до 20 (можно лечиться аптечками), −10% денег (победителю).\n"
-        "  ID смотри в КПК → «👥 Игроки».\n\n"
+        "• /start — создать персонажа или войти.\n"
+        "• /menu — главное меню.\n"
+        "• /info — эта справка.\n"
+        f"• /pay [id] [сумма] — перевод (комиссия {TRANSFER_FEE_PERCENT}%).\n"
+        "• /дуэль [id] — вызвать на дуэль (или кнопка в КПК → Игроки).\n"
+        f"  Проигравший: HP до {DUEL_LOSER_HP_REMAINING}, "
+        f"−{DUEL_LOSER_MONEY_PERCENT}% денег (макс. {DUEL_LOSER_MONEY_CAP} RU).\n\n"
         "Механики:\n"
-        "• 🗺 Переходы занимают реальное время (1 игр. мин ≈ 10 сек).\n"
-        "  Пешком ×1, велосипед ×1.5 (награда заданий ×1.5), Нива ×2 + бензин, грузовик ×5 + дизель.\n"
-        "• 📋 Задания — контракты: прими на базе, доедь, выполни на точке.\n"
-        "• 🛏 Спальник пассивно ускоряет восстановление энергии в 2 раза.\n"
-        "• 💎 Артефакты (поиск детектором по локациям):\n"
-        "  — Артефакт Зоны: 0.1% на любой локации; +2 силы, +5% реген энергии\n"
-        "  — Арт «Сила» / «Живучесть»: спавн на Болотах; бонусы к силе / HP\n"
-        "  — Арт «Антирад»: +2 силы, −1 рад. каждые 10 мин\n"
-        "  — Мусорные арты: без статов, продажа 300–600 RU\n"
-        "• ⚙️ Экипировка в инвентаре: оружие, броня и арты по категориям.\n"
-        "• 🎖 Повышение от рейтинга:\n"
-        "  — Новичок: 0–499, Опытный: 500–1999,\n"
-        "    Ветеран: 2000–4999, Легенда: 5000+.\n\n"
-        "Чаты и рефералка: смотри в 📟 КПК."
+        "• 🗺 Переходы: 1 игр. мин ≈ 10 сек реального\n"
+        f"  пешком ×1, велосипед ×{TRAVEL_SPEED_BICYCLE:g} "
+        f"(награда ×{BICYCLE_QUEST_REWARD_MULT:g} если доехал на нём), "
+        "Нива ×2 + бензин, грузовик ×5 + дизель.\n"
+        f"• 📋 Контракты: Легко до {easy.max_success}% / {easy.reward_min}–{easy.reward_max} RU; "
+        f"Средне до {hard.max_success}%; Опасно до {heavy.max_success}%; "
+        f"Невозможно до {impossible.max_success}% / {impossible.reward_min}–{impossible.reward_max} RU.\n"
+        f"• 🚚 Контрабанда: перевозка, ограбление в пути = провал; лут важнее чистого RU.\n"
+        f"• 💰 Пассив казны: ресурсы {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч, база {BASE_POINT_INCOME_PER_HOUR} RU/ч.\n"
+        f"• 🔗 Реферал: пригласившему +{REFERRAL_INVITER_BONUS_RU} RU.\n"
+        "• 🛏 Спальник — ×2 реген энергии.\n"
+        "• 💎 Артефакты — поиск детектором по таблицам локаций (Зона 0.1% везде).\n"
+        "• 🎖 Скины по рейтингу: 0 / 500 / 2000 / 5000.\n\n"
+        "Чаты и рефералка: 📟 КПК."
     )
 
 
@@ -1232,8 +1245,15 @@ async def process_faction(callback: CallbackQuery, state: FSMContext) -> None:
 
     db.set_faction(callback.from_user.id, faction)
     await state.clear()
+    home = faction_home_base(faction)
     await callback.message.answer(
-        f"Принято. Теперь ты в группировке «{faction}».\nОткрываю меню персонажа.",
+        f"Принято. Теперь ты в группировке «{faction}».\n"
+        f"Тебя перебросили на домашнюю базу «{home}».\n\n"
+        "С чего начать:\n"
+        "1) 📋 Задания → лёгкий контракт на базе\n"
+        "2) 🛒 Торговец → велосипед или детектор «Отклик»\n"
+        "3) 🗺 Переход / Вылазка — исследуй Зону\n\n"
+        "Открываю меню персонажа.",
         reply_markup=main_menu_keyboard(),
     )
     await callback.answer()
@@ -1249,11 +1269,14 @@ def ensure_character(message: Message) -> Character | None:
 def action_result_text(telegram_id: int, text: str) -> str:
     storage = get_storage()
     arrival = storage.pop_arrival_notice(telegram_id)
+    encounter = roll_arrival_encounter(storage, telegram_id, arrival) if arrival else None
     smuggle_text = resolve_smuggling_if_pending(storage, telegram_id)
     body = (text or "").strip()
     parts: list[str] = []
     if arrival:
         parts.append(f"🚐 Прибыл в «{h(arrival)}».")
+    if encounter:
+        parts.append(encounter)
     if smuggle_text:
         parts.append(smuggle_text.strip())
     if body:
@@ -1293,10 +1316,13 @@ async def show_inventory(message: Message) -> None:
         await message.answer(build_dead_character_text(player), reply_markup=dead_character_keyboard())
         return
     await message.answer(
-        format_inventory(
-            player,
-            rating_points=int(get_storage().get_player_stats(player.telegram_id).get("rating_points", 0)),
-            storage=get_storage(),
+        action_result_text(
+            player.telegram_id,
+            format_inventory(
+                player,
+                rating_points=int(get_storage().get_player_stats(player.telegram_id).get("rating_points", 0)),
+                storage=get_storage(),
+            ),
         ),
         reply_markup=inventory_equipment_keyboard(),
     )
@@ -2212,7 +2238,7 @@ async def players_faction_page_callback(callback: CallbackQuery) -> None:
     except ValueError:
         await callback.answer("Некорректный номер страницы.", show_alert=True)
         return
-    text, safe_key, safe_page, total_pages = build_players_faction_page_text(
+    text, safe_key, safe_page, total_pages, page_players = build_players_faction_page_text(
         get_storage(),
         faction_key,
         page,
@@ -2220,7 +2246,13 @@ async def players_faction_page_callback(callback: CallbackQuery) -> None:
     await edit_menu_message(
         callback,
         text,
-        players_faction_page_keyboard(safe_key, page=safe_page, total_pages=total_pages),
+        players_faction_page_keyboard(
+            safe_key,
+            page=safe_page,
+            total_pages=total_pages,
+            players=page_players,
+            self_id=callback.from_user.id,
+        ),
     )
 
 
@@ -2382,6 +2414,25 @@ async def pay_command(message: Message, bot: Bot) -> None:
     await apply_action_notifies(bot, result)
 
 
+async def _send_duel_challenge(bot: Bot, sender_id: int, target_telegram_id: int) -> str:
+    result, target_text = create_duel_challenge(get_storage(), sender_id, target_telegram_id)
+    reply = action_result_text(sender_id, result.text)
+    if result.ok and target_text:
+        try:
+            await bot.send_message(
+                target_telegram_id,
+                target_text,
+                reply_markup=duel_challenge_keyboard(sender_id),
+            )
+        except Exception:
+            logger.exception("Failed to deliver duel challenge to %s", target_telegram_id)
+            reply = (
+                f"{reply}\n\nВызов сохранён, но не удалось доставить сообщение сопернику "
+                "(он должен написать боту /start)."
+            )
+    return reply
+
+
 @router.message(Command("дуэль"))
 @router.message(Command("duel"))
 async def duel_command(message: Message, bot: Bot) -> None:
@@ -2398,21 +2449,19 @@ async def duel_command(message: Message, bot: Bot) -> None:
     except ValueError:
         await message.answer("Telegram ID должен быть целым числом.")
         return
-    result, target_text = create_duel_challenge(get_storage(), sender_id, target_telegram_id)
-    await message.answer(action_result_text(sender_id, result.text))
-    if result.ok and target_text:
-        try:
-            await bot.send_message(
-                target_telegram_id,
-                target_text,
-                reply_markup=duel_challenge_keyboard(sender_id),
-            )
-        except Exception:
-            logger.exception("Failed to deliver duel challenge to %s", target_telegram_id)
-            await message.answer(
-                "Вызов сохранён, но не удалось доставить сообщение сопернику "
-                "(он должен написать боту /start)."
-            )
+    await message.answer(await _send_duel_challenge(bot, sender_id, target_telegram_id))
+
+
+@router.callback_query(F.data.startswith("duel:challenge:"))
+async def duel_challenge_callback(callback: CallbackQuery, bot: Bot) -> None:
+    assert callback.data and callback.from_user
+    try:
+        target_telegram_id = int(callback.data.rsplit(":", 1)[1])
+    except ValueError:
+        await reply_action_result(callback, "Некорректный вызов.")
+        return
+    text = await _send_duel_challenge(bot, callback.from_user.id, target_telegram_id)
+    await reply_action_result(callback, text)
 
 
 @router.callback_query(F.data.startswith("duel:accept:"))

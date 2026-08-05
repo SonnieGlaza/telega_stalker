@@ -600,12 +600,14 @@ def locations_keyboard(
 
 
 def topup_keyboard() -> InlineKeyboardMarkup:
+    # Курс должен совпадать с TOPUP_RATE_RU_PER_STAR в app/bot.py (100 RU/звезда).
+    rate = 100
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="⭐ 1 звезда (150 RU)", callback_data="topup:1")],
-            [InlineKeyboardButton(text="⭐ 5 звезд (750 RU)", callback_data="topup:5")],
-            [InlineKeyboardButton(text="⭐ 10 звезд (1500 RU)", callback_data="topup:10")],
-            [InlineKeyboardButton(text="⭐ 25 звезд (3750 RU)", callback_data="topup:25")],
+            [InlineKeyboardButton(text=f"⭐ 1 звезда ({rate} RU)", callback_data="topup:1")],
+            [InlineKeyboardButton(text=f"⭐ 5 звезд ({5 * rate} RU)", callback_data="topup:5")],
+            [InlineKeyboardButton(text=f"⭐ 10 звезд ({10 * rate} RU)", callback_data="topup:10")],
+            [InlineKeyboardButton(text=f"⭐ 25 звезд ({25 * rate} RU)", callback_data="topup:25")],
             [InlineKeyboardButton(text="⭐ Другое количество", callback_data="topup:custom")],
         ]
     )
@@ -933,8 +935,29 @@ def players_factions_keyboard(items: list[tuple[str, str, int]]) -> InlineKeyboa
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def players_faction_page_keyboard(faction_key: str, *, page: int, total_pages: int) -> InlineKeyboardMarkup:
+def players_faction_page_keyboard(
+    faction_key: str,
+    *,
+    page: int,
+    total_pages: int,
+    players: list[dict[str, Any]] | None = None,
+    self_id: int | None = None,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    for row in players or []:
+        tid = int(row.get("telegram_id") or 0)
+        nick = str(row.get("nickname") or tid)
+        if self_id is not None and tid == self_id:
+            continue
+        label = nick if len(nick) <= 18 else nick[:17] + "…"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"⚔️ Дуэль: {label}",
+                    callback_data=f"duel:challenge:{tid}",
+                )
+            ]
+        )
     nav: list[InlineKeyboardButton] = []
     if page > 0:
         nav.append(

@@ -1358,14 +1358,37 @@ class Storage:
 
     def set_faction(self, telegram_id: int, faction: str) -> None:
         from app.faction_ranks import default_rank_key
+        from app.game_logic import faction_home_base
 
         rank_key = default_rank_key(faction)
+        home = faction_home_base(faction)
         with self._connect() as conn:
             conn.execute(
-                "UPDATE characters SET faction = ?, faction_rank = ? WHERE telegram_id = ?",
-                (faction, rank_key, telegram_id),
+                """
+                UPDATE characters
+                SET faction = ?, faction_rank = ?, location = ?
+                WHERE telegram_id = ?
+                """,
+                (faction, rank_key, home, telegram_id),
             )
         self.save_snapshot()
+
+    def set_last_arrival_transport(self, telegram_id: int, transport: str | None) -> None:
+        key = f"last_arrival_transport:{int(telegram_id)}"
+        if transport:
+            self.set_meta(key, str(transport))
+        else:
+            self.delete_meta(key)
+
+    def get_last_arrival_transport(self, telegram_id: int) -> str | None:
+        return self.get_meta(f"last_arrival_transport:{int(telegram_id)}")
+
+    def consume_last_arrival_transport(self, telegram_id: int) -> str | None:
+        key = f"last_arrival_transport:{int(telegram_id)}"
+        value = self.get_meta(key)
+        if value is not None:
+            self.delete_meta(key)
+        return value
 
     def set_faction_rank(self, telegram_id: int, rank_key: str | None) -> bool:
         character = self.get_character(telegram_id, refresh_energy=False)
@@ -1408,7 +1431,7 @@ class Storage:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT travel_destination, travel_arrives_at
+                SELECT travel_destination, travel_arrives_at, travel_transport
                 FROM characters
                 WHERE telegram_id = ?
                 """,
@@ -1418,6 +1441,7 @@ class Storage:
                 return None
             destination = row["travel_destination"]
             raw_arrives = row["travel_arrives_at"]
+            transport = row["travel_transport"]
             if destination is None or str(destination).strip() == "":
                 return None
             if raw_arrives is None or str(raw_arrives).strip() == "":
@@ -1444,6 +1468,8 @@ class Storage:
             )
         self.save_snapshot()
         self._pending_arrival_notices[int(telegram_id)] = dest
+        if transport:
+            self.set_last_arrival_transport(telegram_id, str(transport))
         return dest
 
     def pop_due_travels(self) -> list[tuple[int, str]]:
@@ -1453,7 +1479,7 @@ class Storage:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT telegram_id, travel_destination, travel_arrives_at
+                SELECT telegram_id, travel_destination, travel_arrives_at, travel_transport
                 FROM characters
                 WHERE travel_destination IS NOT NULL
                   AND TRIM(travel_destination) != ''
@@ -1464,6 +1490,7 @@ class Storage:
             for row in rows:
                 destination = str(row["travel_destination"])
                 raw_arrives = row["travel_arrives_at"]
+                transport = row["travel_transport"]
                 try:
                     arrives_at = datetime.fromisoformat(str(raw_arrives))
                 except ValueError:
@@ -1486,8 +1513,16 @@ class Storage:
                 )
                 completed.append((telegram_id, destination))
                 self._pending_arrival_notices.pop(telegram_id, None)
+                if transport:
+                    # set_meta открывает своё соединение — после цикла ок
+                    self._pending_arrival_transports = getattr(self, "_pending_arrival_transports", {})
+                    self._pending_arrival_transports[telegram_id] = str(transport)
         if completed:
             self.save_snapshot()
+            pending_t = getattr(self, "_pending_arrival_transports", {})
+            for tid, mode in list(pending_t.items()):
+                self.set_last_arrival_transport(tid, mode)
+                pending_t.pop(tid, None)
         return completed
 
     def start_travel(
