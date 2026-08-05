@@ -589,7 +589,7 @@ GEAR_PROGRESS: tuple[tuple[int, str, str], ...] = (
 MAX_DURABILITY = 100
 MIN_EFFECTIVE_DURABILITY = 15
 RATING_REWARD = {
-    "quest_success": 12,
+    "quest_success": 12,  # fallback; см. QUEST_RATING_BY_DIFFICULTY
     "quest_fail": 2,
     "war_success": 22,
     "war_fail": 6,
@@ -600,6 +600,14 @@ RATING_REWARD = {
     "trade_action": 4,
     "duel_win": 8,
     "duel_lose": 2,
+}
+
+# Рейтинг за задания по сложности (успех / штраф за провал).
+QUEST_RATING_BY_DIFFICULTY: dict[str, tuple[int, int]] = {
+    "easy": (8, 1),
+    "hard": (14, 2),
+    "heavy": (22, 3),
+    "impossible": (32, 5),
 }
 
 DUEL_ENERGY_COST = 10
@@ -1456,14 +1464,17 @@ def build_quest_overview(character: Character) -> str:
     ]
     for quest in QUESTS.values():
         chance = calculate_quest_success_for_quest(character, quest).chance
+        rating_gain = QUEST_RATING_BY_DIFFICULTY.get(quest.key, (12, 2))[0]
         if quest.ammo_required <= 0 and quest.medkit_required <= 0:
             lines.append(
-                f"• {quest.title}: шанс ~{chance}%, энергия {quest.energy_cost}, без обязательного расхода"
+                f"• {quest.title}: шанс ~{chance}%, энергия {quest.energy_cost}, "
+                f"рейтинг +{rating_gain}, без обязательного расхода"
             )
             continue
         lines.append(
             f"• {quest.title}: шанс ~{chance}%, энергия {quest.energy_cost}, "
-            f"патроны {quest.ammo_required}, аптечки {quest.medkit_required} (любые)"
+            f"патроны {quest.ammo_required}, аптечки {quest.medkit_required} (любые), "
+            f"рейтинг +{rating_gain}"
         )
     lines.extend(
         [
@@ -1537,10 +1548,14 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
     success = roll <= breakdown.chance
 
     durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=3, armor_loss=2)
+    rating_success, rating_fail = QUEST_RATING_BY_DIFFICULTY.get(
+        quest.key,
+        (RATING_REWARD["quest_success"], RATING_REWARD["quest_fail"]),
+    )
     if success:
         reward = random.randint(quest.reward_min, quest.reward_max)
         storage.change_money(telegram_id, reward)
-        _add_rating(storage, telegram_id, RATING_REWARD["quest_success"])
+        _add_rating(storage, telegram_id, rating_success)
         storage.add_player_stat(telegram_id, "quests_completed", 1)
         storage.add_player_stat(telegram_id, "money_earned", reward)
 
@@ -1563,19 +1578,20 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
             f"«{quest.title}» выполнено! Шанс {breakdown.chance}% (бросок {roll}).\n"
             f"{formula_line}\n"
             f"Расход: патр {quest.ammo_required}, апт {quest.medkit_required}. "
-            f"Награда: {reward} RU.{extra}{stash_text}{durability_text}{achievements_text}",
+            f"Награда: {reward} RU, рейтинг +{rating_success}."
+            f"{extra}{stash_text}{durability_text}{achievements_text}",
         )
 
     min_penalty, max_penalty = QUEST_FAIL_PENALTY_RANGE.get(quest.key, (50, 120))
     penalty = random.randint(min_penalty, max_penalty)
     storage.change_money(telegram_id, -penalty)
-    _add_rating(storage, telegram_id, -RATING_REWARD["quest_fail"])
+    _add_rating(storage, telegram_id, -rating_fail)
     storage.add_player_stat(telegram_id, "quests_failed", 1)
     return ActionResult(
         False,
         f"Провал задания «{quest.title}».\n"
         f"Расход: патроны {quest.ammo_required}, аптечки {quest.medkit_required}.\n"
-        f"Потери на расходники: {penalty} RU.{durability_text}",
+        f"Потери на расходники: {penalty} RU, рейтинг −{rating_fail}.{durability_text}",
     )
 
 
