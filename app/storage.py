@@ -2198,6 +2198,19 @@ class Storage:
             )
         self.save_snapshot()
 
+    def delete_meta(self, key: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS meta_kv (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute("DELETE FROM meta_kv WHERE key = ?", (key,))
+        self.save_snapshot()
+
     def list_player_ids(self) -> list[int]:
         with self._connect() as conn:
             rows = conn.execute("SELECT telegram_id FROM characters").fetchall()

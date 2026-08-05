@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import random
 from math import dist
 from dataclasses import dataclass
@@ -539,7 +540,18 @@ RATING_REWARD = {
     "smuggle_success": 10,
     "smuggle_fail": 3,
     "trade_action": 4,
+    "duel_win": 8,
+    "duel_lose": 2,
 }
+
+DUEL_ENERGY_COST = 10
+DUEL_PENDING_TTL_SECONDS = 10 * 60
+DUEL_CHANCE_MIN = 15
+DUEL_CHANCE_MAX = 85
+DUEL_WINNER_WOUND_MIN = 5
+DUEL_WINNER_WOUND_MAX = 12
+DUEL_META_IN_PREFIX = "duel:pending_in:"
+DUEL_META_OUT_PREFIX = "duel:pending_out:"
 
 QUEST_FAIL_PENALTY_RANGE: dict[str, tuple[int, int]] = {
     "easy": (30, 80),
@@ -1793,6 +1805,215 @@ def transfer_money_with_fee(storage: Storage, sender_id: int, target_id: int, am
         True,
         f"Перевод выполнен: {amount} RU игроку {target.nickname}.\nКомиссия: {fee} RU.\nСписано: {total} RU.",
     )
+
+
+def _duel_in_key(target_id: int) -> str:
+    return f"{DUEL_META_IN_PREFIX}{int(target_id)}"
+
+
+def _duel_out_key(challenger_id: int) -> str:
+    return f"{DUEL_META_OUT_PREFIX}{int(challenger_id)}"
+
+
+def _clear_duel_meta(storage: Storage, challenger_id: int, target_id: int) -> None:
+    storage.delete_meta(_duel_in_key(target_id))
+    storage.delete_meta(_duel_out_key(challenger_id))
+
+
+def _parse_pending_duel_payload(raw: str | None) -> tuple[int, datetime] | None:
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+        challenger_id = int(payload["challenger_id"])
+        created_at = datetime.fromisoformat(str(payload["created_at"]))
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        return challenger_id, created_at
+    except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+        return None
+
+
+def get_pending_duel_challenger(storage: Storage, target_id: int) -> int | None:
+    parsed = _parse_pending_duel_payload(storage.get_meta(_duel_in_key(target_id)))
+    if parsed is None:
+        return None
+    challenger_id, created_at = parsed
+    age = (datetime.now(timezone.utc) - created_at).total_seconds()
+    if age > DUEL_PENDING_TTL_SECONDS:
+        storage.delete_meta(_duel_in_key(target_id))
+        storage.delete_meta(_duel_out_key(challenger_id))
+        return None
+    return challenger_id
+
+
+def calculate_duel_challenger_chance(challenger_power: int, target_power: int) -> int:
+    """Шанс победы вызывающего: база 50% + разница силы×4, как вклад снаряги в заданиях."""
+    diff = int(challenger_power) - int(target_power)
+    return max(DUEL_CHANCE_MIN, min(DUEL_CHANCE_MAX, 50 + diff * 4))
+
+
+def create_duel_challenge(
+    storage: Storage,
+    challenger_id: int,
+    target_id: int,
+) -> tuple[ActionResult, str | None]:
+    """Вызов на дуэль. Возвращает (ответ вызывающему, текст для цели или None)."""
+    if challenger_id == target_id:
+        return ActionResult(False, "Нельзя вызвать на дуэль самого себя."), None
+    challenger = storage.get_character(challenger_id, refresh_energy=False)
+    target = storage.get_character(target_id, refresh_energy=False)
+    if challenger is None:
+        return ActionResult(False, "Сначала создай персонажа через /start."), None
+    if target is None:
+        return ActionResult(False, "Игрок с таким telegram_id не найден."), None
+    if _is_dead(challenger):
+        return ActionResult(False, _dead_block_text()), None
+    if _is_dead(target):
+        return ActionResult(False, f"{target.nickname} сейчас мёртв и не может драться."), None
+    if challenger.energy < DUEL_ENERGY_COST:
+        return (
+            ActionResult(False, f"Нужно минимум {DUEL_ENERGY_COST} энергии для дуэли."),
+            None,
+        )
+    if target.energy < DUEL_ENERGY_COST:
+        return (
+            ActionResult(False, f"У {target.nickname} недостаточно энергии для дуэли."),
+            None,
+        )
+
+    existing_out = storage.get_meta(_duel_out_key(challenger_id))
+    if existing_out:
+        try:
+            old_target = int(json.loads(existing_out).get("target_id", 0))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            old_target = 0
+        if old_target:
+            storage.delete_meta(_duel_in_key(old_target))
+        storage.delete_meta(_duel_out_key(challenger_id))
+
+    pending_for_target = get_pending_duel_challenger(storage, target_id)
+    if pending_for_target is not None:
+        return (
+            ActionResult(False, f"У {target.nickname} уже есть активный вызов на дуэль."),
+            None,
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    storage.set_meta(
+        _duel_in_key(target_id),
+        json.dumps({"challenger_id": challenger_id, "created_at": now}, ensure_ascii=False),
+    )
+    storage.set_meta(
+        _duel_out_key(challenger_id),
+        json.dumps({"target_id": target_id, "created_at": now}, ensure_ascii=False),
+    )
+
+    my_power = equipment_power(challenger)
+    their_power = equipment_power(target)
+    chance = calculate_duel_challenger_chance(my_power, their_power)
+    challenger_msg = (
+        f"Вызов на дуэль отправлен: {target.nickname} ({target_id}).\n"
+        f"Сила: ты {my_power} vs {their_power}.\n"
+        f"Твой шанс победы ~{chance}% (если примут).\n"
+        f"Ожидание ответа до {DUEL_PENDING_TTL_SECONDS // 60} мин."
+    )
+    target_msg = (
+        f"⚔️ Тебя вызвал на дуэль {challenger.nickname} (id {challenger_id}).\n"
+        f"Сила снаряги: {challenger.nickname} {my_power} vs ты {their_power}.\n"
+        f"Шанс победы вызывающего ~{chance}%.\n"
+        f"Стоимость при согласии: {DUEL_ENERGY_COST} энергии у каждого.\n"
+        f"Проигравший падает (0 HP), победитель получает лёгкое ранение."
+    )
+    return ActionResult(True, challenger_msg), target_msg
+
+
+def decline_duel(
+    storage: Storage,
+    target_id: int,
+    challenger_id: int,
+) -> tuple[ActionResult, str | None]:
+    pending = get_pending_duel_challenger(storage, target_id)
+    if pending is None or pending != challenger_id:
+        return ActionResult(False, "Этот вызов на дуэль уже неактивен."), None
+    challenger = storage.get_character(challenger_id, refresh_energy=False)
+    target = storage.get_character(target_id, refresh_energy=False)
+    _clear_duel_meta(storage, challenger_id, target_id)
+    target_name = target.nickname if target else str(target_id)
+    challenger_name = challenger.nickname if challenger else str(challenger_id)
+    notify = f"{target_name} отклонил(а) твой вызов на дуэль."
+    return ActionResult(True, f"Ты отклонил(а) дуэль с {challenger_name}."), notify
+
+
+def accept_duel(
+    storage: Storage,
+    target_id: int,
+    challenger_id: int,
+) -> tuple[ActionResult, str | None]:
+    """Принятие дуэли: ролл шанса, урон/смерть, уведомление вызывающему."""
+    pending = get_pending_duel_challenger(storage, target_id)
+    if pending is None or pending != challenger_id:
+        return ActionResult(False, "Этот вызов на дуэль уже неактивен."), None
+
+    challenger = storage.get_character(challenger_id, refresh_energy=False)
+    target = storage.get_character(target_id, refresh_energy=False)
+    if challenger is None or target is None:
+        _clear_duel_meta(storage, challenger_id, target_id)
+        return ActionResult(False, "Один из бойцов не найден."), None
+    if _is_dead(challenger) or _is_dead(target):
+        _clear_duel_meta(storage, challenger_id, target_id)
+        return ActionResult(False, "Дуэль невозможна: один из бойцов мёртв."), None
+    if challenger.energy < DUEL_ENERGY_COST or target.energy < DUEL_ENERGY_COST:
+        _clear_duel_meta(storage, challenger_id, target_id)
+        return ActionResult(False, f"Не хватает энергии (нужно {DUEL_ENERGY_COST} у каждого)."), None
+
+    if not storage.spend_energy(challenger_id, DUEL_ENERGY_COST):
+        _clear_duel_meta(storage, challenger_id, target_id)
+        return ActionResult(False, "Не удалось списать энергию у вызывающего."), None
+    if not storage.spend_energy(target_id, DUEL_ENERGY_COST):
+        storage.restore_energy(challenger_id, DUEL_ENERGY_COST)
+        _clear_duel_meta(storage, challenger_id, target_id)
+        return ActionResult(False, "Не удалось списать энергию у тебя."), None
+
+    _clear_duel_meta(storage, challenger_id, target_id)
+
+    c_power = equipment_power(challenger)
+    t_power = equipment_power(target)
+    chance = calculate_duel_challenger_chance(c_power, t_power)
+    roll = random.randint(1, 100)
+    challenger_wins = roll <= chance
+
+    winner = challenger if challenger_wins else target
+    loser = target if challenger_wins else challenger
+    winner_id = winner.telegram_id
+    loser_id = loser.telegram_id
+
+    winner_max_hp = effective_max_health(winner)
+    wound = random.randint(DUEL_WINNER_WOUND_MIN, DUEL_WINNER_WOUND_MAX)
+    storage.change_health(winner_id, -wound, max_health=winner_max_hp)
+    storage.change_health(loser_id, -max(1, loser.health), max_health=effective_max_health(loser))
+
+    _add_rating(storage, winner_id, RATING_REWARD["duel_win"])
+    _add_rating(storage, loser_id, -RATING_REWARD["duel_lose"])
+
+    winner_after = storage.get_character(winner_id, refresh_energy=False)
+    loser_after = storage.get_character(loser_id, refresh_energy=False)
+    winner_hp = winner_after.health if winner_after else 0
+    loser_hp = loser_after.health if loser_after else 0
+
+    common = (
+        f"⚔️ Дуэль: {challenger.nickname} ({c_power}) vs {target.nickname} ({t_power})\n"
+        f"Шанс победы {challenger.nickname}: {chance}% (бросок {roll}).\n"
+        f"Победитель: {winner.nickname} (HP {winner_hp}, ранение −{wound}).\n"
+        f"Проигравший: {loser.nickname} пал (HP {loser_hp}). Респавн — 500 RU."
+    )
+    if target_id == winner_id:
+        target_text = f"Ты победил(а) в дуэли!\n{common}"
+        challenger_text = f"Ты проиграл(а) дуэль.\n{common}"
+    else:
+        target_text = f"Ты проиграл(а) дуэль.\n{common}"
+        challenger_text = f"Ты победил(а) в дуэли!\n{common}"
+    return ActionResult(True, target_text), challenger_text
 
 
 def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:

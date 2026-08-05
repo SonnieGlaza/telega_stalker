@@ -78,6 +78,9 @@ from app.game_logic import (
     open_stash,
     search_artifacts,
     transfer_money_with_fee,
+    create_duel_challenge,
+    accept_duel,
+    decline_duel,
     create_or_join_war_lobby,
     launch_war_lobby,
     list_assaultable_locations,
@@ -150,6 +153,7 @@ from app.keyboards import (
     alliance_keyboard,
     alliance_target_keyboard,
     alliance_pending_keyboard,
+    duel_challenge_keyboard,
     war_lobby_keyboard,
     war_transfer_keyboard,
     market_lots_keyboard,
@@ -543,6 +547,7 @@ def _build_info_text(player: Character) -> str:
         "• /menu — открыть главное меню.\n"
         "• /info — открыть эту справку.\n"
         "• /pay [telegram_id] [сумма] — перевод игроку (комиссия 30%).\n"
+        "• /дуэль [telegram_id] — вызвать игрока на дуэль (принять/отклонить).\n"
         "  ID смотри в КПК → «👥 Игроки».\n\n"
         "Механики:\n"
         "• 🚚 Грузовик ускоряет переходы и снижает расход энергии на поездку,\n"
@@ -2085,6 +2090,77 @@ async def pay_command(message: Message) -> None:
         return
     result = transfer_money_with_fee(get_storage(), sender_id, target_telegram_id, amount)
     await message.answer(action_result_text(sender_id, result.text))
+
+
+@router.message(Command("дуэль"))
+@router.message(Command("duel"))
+async def duel_command(message: Message, bot: Bot) -> None:
+    sender_id = message.from_user.id
+    parts = (message.text or "").strip().split()
+    if len(parts) != 2:
+        await message.answer(
+            "Использование: /дуэль [telegram_id]\n"
+            "ID смотри в КПК → «👥 Игроки»."
+        )
+        return
+    try:
+        target_telegram_id = int(parts[1])
+    except ValueError:
+        await message.answer("Telegram ID должен быть целым числом.")
+        return
+    result, target_text = create_duel_challenge(get_storage(), sender_id, target_telegram_id)
+    await message.answer(action_result_text(sender_id, result.text))
+    if result.ok and target_text:
+        try:
+            await bot.send_message(
+                target_telegram_id,
+                target_text,
+                reply_markup=duel_challenge_keyboard(sender_id),
+            )
+        except Exception:
+            logger.exception("Failed to deliver duel challenge to %s", target_telegram_id)
+            await message.answer(
+                "Вызов сохранён, но не удалось доставить сообщение сопернику "
+                "(он должен написать боту /start)."
+            )
+
+
+@router.callback_query(F.data.startswith("duel:accept:"))
+async def duel_accept_callback(callback: CallbackQuery, bot: Bot) -> None:
+    assert callback.data and callback.from_user
+    await callback.answer()
+    try:
+        challenger_id = int(callback.data.rsplit(":", 1)[1])
+    except ValueError:
+        await callback.message.answer("Некорректный вызов.")  # type: ignore[union-attr]
+        return
+    target_id = callback.from_user.id
+    result, challenger_text = accept_duel(get_storage(), target_id, challenger_id)
+    await reply_action_result(callback, result.text)
+    if result.ok and challenger_text:
+        try:
+            await bot.send_message(challenger_id, action_result_text(challenger_id, challenger_text))
+        except Exception:
+            logger.exception("Failed to notify duel challenger %s", challenger_id)
+
+
+@router.callback_query(F.data.startswith("duel:decline:"))
+async def duel_decline_callback(callback: CallbackQuery, bot: Bot) -> None:
+    assert callback.data and callback.from_user
+    await callback.answer()
+    try:
+        challenger_id = int(callback.data.rsplit(":", 1)[1])
+    except ValueError:
+        await callback.message.answer("Некорректный вызов.")  # type: ignore[union-attr]
+        return
+    target_id = callback.from_user.id
+    result, challenger_text = decline_duel(get_storage(), target_id, challenger_id)
+    await reply_action_result(callback, result.text)
+    if result.ok and challenger_text:
+        try:
+            await bot.send_message(challenger_id, action_result_text(challenger_id, challenger_text))
+        except Exception:
+            logger.exception("Failed to notify duel decline to %s", challenger_id)
 
 
 @router.message(F.text == "🏕 Вылазка")

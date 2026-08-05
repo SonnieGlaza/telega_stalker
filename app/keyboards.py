@@ -775,6 +775,25 @@ def alliance_pending_keyboard(pending_from: list[str]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def duel_challenge_keyboard(challenger_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Принять дуэль",
+                    callback_data=f"duel:accept:{challenger_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"duel:decline:{challenger_id}",
+                )
+            ],
+        ]
+    )
+
+
 def players_factions_keyboard(items: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for faction_key, title, count in items:
