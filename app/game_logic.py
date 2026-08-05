@@ -2141,11 +2141,34 @@ def accept_duel(
     return ActionResult(True, target_text), challenger_text
 
 
-def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
+# Расходники/топливо, которые можно брать пачкой у торговца.
+BULK_BUY_ITEM_KEYS: frozenset[str] = frozenset(
+    {
+        "energy_drink",
+        "medkit",
+        "medkit_army",
+        "medkit_science",
+        "ammo_pack",
+        "vodka",
+        "antirad",
+        "bread",
+        "sausage",
+        "stew",
+        "water_bottle",
+        "mineral_water",
+        "beard_tea",
+        "fuel_can",
+    }
+)
+BULK_BUY_MAX_QTY = 25
+
+
+def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1) -> ActionResult:
     item = SHOP_ITEMS.get(item_key)
     if item is None:
         return ActionResult(False, "Такого товара нет у торговца.")
-    price = int(item["buy_price"])
+    qty = max(1, int(amount))
+    unit_price = int(item["buy_price"])
     title = str(item["name"])
 
     character = storage.get_character(telegram_id)
@@ -2160,8 +2183,18 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
         return ActionResult(False, "У тебя уже есть спальник.")
     if item_key == "gear_upgrade":
         return ActionResult(False, "Улучшение снаряги отключено. Сила теперь зависит от оружия и брони.")
-    if not storage.change_money(telegram_id, -price):
-        return ActionResult(False, f"Недостаточно денег для покупки: {title}.")
+
+    # Пачкой — только расходники, и не больше ×25.
+    if qty > 1:
+        if item_key not in BULK_BUY_ITEM_KEYS:
+            return ActionResult(False, f"{title} покупается по одной штуке.")
+        if qty > BULK_BUY_MAX_QTY:
+            return ActionResult(False, f"За раз можно купить не больше {BULK_BUY_MAX_QTY} шт.")
+
+    total_price = unit_price * qty
+    if not storage.change_money(telegram_id, -total_price):
+        need_txt = f"{total_price} RU" if qty > 1 else f"покупки: {title}"
+        return ActionResult(False, f"Недостаточно денег для {need_txt}.")
 
     if item_key == "truck":
         storage.set_truck_owned(telegram_id)
@@ -2170,13 +2203,18 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
         storage.set_sleeping_bag_owned(telegram_id)
         return ActionResult(True, "Спальник куплен. Энергия теперь восстанавливается в 2 раза быстрее.")
     if item_key == "fuel_can":
-        storage.change_fuel(telegram_id, 5)
-        return ActionResult(True, f"Куплена канистра топлива. Топливо +5 (стоимость {price} RU).")
+        storage.change_fuel(telegram_id, 5 * qty)
+        if qty == 1:
+            return ActionResult(True, f"Куплена канистра топлива. Топливо +5 (стоимость {total_price} RU).")
+        return ActionResult(
+            True,
+            f"Куплено канистр: {qty}. Топливо +{5 * qty} (стоимость {total_price} RU).",
+        )
     if item_key in WEAPON_CATALOG:
         storage.add_item(telegram_id, item_key, 1)
         return ActionResult(
             True,
-            f"Куплено оружие: {title} (стоимость {price} RU).\n"
+            f"Куплено оружие: {title} (стоимость {total_price} RU).\n"
             "Предмет добавлен в инвентарь, экипируй его вручную в разделе Инвентарь.",
         )
     if item_key in ARMOR_CATALOG:
@@ -2187,8 +2225,10 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
             "Предмет добавлен в инвентарь, экипируй его вручную в разделе Инвентарь.",
         )
 
-    storage.add_item(telegram_id, item_key, 1)
-    return ActionResult(True, f"Куплено: {title}.")
+    storage.add_item(telegram_id, item_key, qty)
+    if qty == 1:
+        return ActionResult(True, f"Куплено: {title} за {total_price} RU.")
+    return ActionResult(True, f"Куплено: {title} ×{qty} за {total_price} RU.")
 
 
 # Каталог продажи торговцу по категориям (ключи sell:…).

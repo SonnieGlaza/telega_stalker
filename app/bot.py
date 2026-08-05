@@ -42,6 +42,8 @@ from app.game_logic import (
     build_events_overview,
     build_raids_overview,
     build_rating_overview,
+    BULK_BUY_ITEM_KEYS,
+    SHOP_ITEMS,
     buy_item,
     buy_first_faction_auction,
     cancel_own_first_auction,
@@ -142,6 +144,7 @@ from app.keyboards import (
     trader_buy_categories_keyboard,
     trader_buy_armor_keyboard,
     trader_buy_consumables_keyboard,
+    trader_buy_consumable_qty_keyboard,
     trader_buy_gear_keyboard,
     trader_buy_repair_keyboard,
     trader_buy_weapons_keyboard,
@@ -1347,7 +1350,7 @@ async def show_buy_consumables(callback: CallbackQuery) -> None:
     page = _trade_category_page(callback.data, prefix="trade:buy:consumables")
     await edit_menu_message(
         callback,
-        "Покупка расходников:",
+        "Покупка расходников:\nВыбери товар, затем количество (×1 / ×5 / ×10 / ×25).",
         trader_buy_consumables_keyboard(page=page),
     )
 
@@ -1465,11 +1468,39 @@ async def show_sell_weapons(callback: CallbackQuery) -> None:
     )
 
 
+@router.callback_query(F.data.startswith("buyqty:"))
+async def show_buy_consumable_qty(callback: CallbackQuery) -> None:
+    item_key = (callback.data or "").split(":", maxsplit=1)[1]
+    item = SHOP_ITEMS.get(item_key)
+    if item is None or item_key not in BULK_BUY_ITEM_KEYS or int(item.get("buy_price", 0)) <= 0:
+        await reply_action_result(callback, "Такого расходника нет у торговца.")
+        return
+    title = str(item["name"])
+    unit_price = int(item["buy_price"])
+    await edit_menu_message(
+        callback,
+        f"Покупка: {title}\nЦена за 1 шт.: {unit_price} RU\nВыбери количество:",
+        trader_buy_consumable_qty_keyboard(item_key, unit_price=unit_price, title=title),
+    )
+
+
 @router.callback_query(F.data.startswith("buy:"))
 async def handle_buy(callback: CallbackQuery) -> None:
-    item_key = (callback.data or "").split(":", maxsplit=1)[1]
+    raw = (callback.data or "").split(":")
+    # buy:<item> или buy:<item>:<amount>
+    if len(raw) < 2 or not raw[1]:
+        await reply_action_result(callback, "Некорректная покупка.")
+        return
+    item_key = raw[1]
+    amount = 1
+    if len(raw) >= 3:
+        try:
+            amount = max(1, int(raw[2]))
+        except ValueError:
+            await reply_action_result(callback, "Некорректное количество.")
+            return
     db = get_storage()
-    result = buy_item(db, callback.from_user.id, item_key)
+    result = buy_item(db, callback.from_user.id, item_key, amount=amount)
     await reply_action_result(callback, result.text)
     if result.ok and item_key == "truck":
         player = db.get_character(callback.from_user.id, refresh_energy=False)

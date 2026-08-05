@@ -142,6 +142,11 @@ def run_smoke_check() -> None:
         before_truck_durability = before_travel.truck_durability
         assert buy_item(storage, 111, "sleeping_bag").ok
         assert buy_item(storage, 111, "medkit").ok
+        storage.change_money(111, 100000)
+        bulk = buy_item(storage, 111, "medkit", amount=10)
+        assert bulk.ok, bulk.text
+        assert "×10" in bulk.text
+        assert not buy_item(storage, 111, "detector_otklik", amount=5).ok
         assert use_medkit(storage, 111).ok is False  # hp full
         assert search_artifacts(storage, 111).text
         assert travel_to(storage, 111, "Янтарь").text

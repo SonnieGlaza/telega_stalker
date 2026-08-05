@@ -146,22 +146,25 @@ def trader_buy_categories_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+BUY_CONSUMABLE_AMOUNTS: tuple[int, ...] = (1, 5, 10, 25)
+
+
 def trader_buy_consumables_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
     items = [
-        ("Купить энергетик (250)", "buy:energy_drink"),
-        ("Купить аптечку (260)", "buy:medkit"),
-        ("Купить армейскую аптечку (450)", "buy:medkit_army"),
-        ("Купить научную аптечку (600)", "buy:medkit_science"),
-        ("Купить патроны (120)", "buy:ammo_pack"),
-        ("Купить водку (150)", "buy:vodka"),
-        ("Купить антирад (400)", "buy:antirad"),
-        ("Купить хлеб (50)", "buy:bread"),
-        ("Купить колбасу (100)", "buy:sausage"),
-        ("Купить тушёнку (250)", "buy:stew"),
-        ("Купить воду (50)", "buy:water_bottle"),
-        ("Купить минералку (100)", "buy:mineral_water"),
-        ("Купить чай Бороды (250)", "buy:beard_tea"),
-        ("Купить топливо +5 (450)", "buy:fuel_can"),
+        ("Энергетик (от 250)", "buyqty:energy_drink"),
+        ("Аптечка (от 260)", "buyqty:medkit"),
+        ("Армейская аптечка (от 450)", "buyqty:medkit_army"),
+        ("Научная аптечка (от 600)", "buyqty:medkit_science"),
+        ("Патроны (от 120)", "buyqty:ammo_pack"),
+        ("Водка (от 150)", "buyqty:vodka"),
+        ("Антирад (от 400)", "buyqty:antirad"),
+        ("Хлеб (от 50)", "buyqty:bread"),
+        ("Колбаса (от 100)", "buyqty:sausage"),
+        ("Тушёнка (от 250)", "buyqty:stew"),
+        ("Вода (от 50)", "buyqty:water_bottle"),
+        ("Минералка (от 100)", "buyqty:mineral_water"),
+        ("Чай Бороды (от 250)", "buyqty:beard_tea"),
+        ("Топливо +5 (от 450)", "buyqty:fuel_can"),
     ]
     return _trader_page_keyboard(
         items,
@@ -170,6 +173,24 @@ def trader_buy_consumables_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
         back_callback="trade:menu:buy",
         back_text="⬅️ Назад к категориям покупки",
     )
+
+
+def trader_buy_consumable_qty_keyboard(item_key: str, *, unit_price: int, title: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for amount in BUY_CONSUMABLE_AMOUNTS:
+        total = unit_price * amount
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"×{amount} — {total} RU",
+                    callback_data=f"buy:{item_key}:{amount}",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="⬅️ Назад к расходникам", callback_data="trade:buy:consumables:0")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def trader_buy_gear_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
