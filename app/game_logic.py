@@ -494,6 +494,46 @@ MEDKIT_EFFECTS: dict[str, dict[str, int]] = {
     "medkit_army": {"heal": 50, "radiation": 0},
     "medkit_science": {"heal": 75, "radiation": -15},
 }
+# Для заданий «Опасно»/«Невозможно» подходит любая аптечка (сначала обычная).
+MEDKIT_QUEST_KEYS: tuple[str, ...] = ("medkit", "medkit_army", "medkit_science")
+
+
+def _total_medkit_stock(character: Character) -> int:
+    return sum(int(character.inventory.get(key, 0)) for key in MEDKIT_QUEST_KEYS)
+
+
+def _consume_quest_medkits(storage: Storage, telegram_id: int, amount: int) -> bool:
+    """Списывает аптечки любого типа, начиная с обычной."""
+    if amount <= 0:
+        return True
+    remaining = amount
+    consumed: list[tuple[str, int]] = []
+    character = storage.get_character(telegram_id, refresh_energy=False)
+    if character is None:
+        return False
+    for key in MEDKIT_QUEST_KEYS:
+        if remaining <= 0:
+            break
+        have = int(character.inventory.get(key, 0))
+        take = min(have, remaining)
+        if take <= 0:
+            continue
+        if not storage.remove_item(telegram_id, key, take):
+            for undone_key, undone_qty in consumed:
+                storage.add_item(telegram_id, undone_key, undone_qty)
+            return False
+        consumed.append((key, take))
+        remaining -= take
+        character = storage.get_character(telegram_id, refresh_energy=False)
+        if character is None:
+            for undone_key, undone_qty in consumed:
+                storage.add_item(telegram_id, undone_key, undone_qty)
+            return False
+    if remaining > 0:
+        for undone_key, undone_qty in consumed:
+            storage.add_item(telegram_id, undone_key, undone_qty)
+        return False
+    return True
 
 AUCTION_DEFAULT_LOTS: dict[str, tuple[str, int, int]] = {
     "artifact": ("artifact", 1, 5000),
@@ -1392,7 +1432,7 @@ def calculate_quest_success_for_quest(
 ) -> QuestChanceBreakdown:
     """Шанс успеха по заданию: снаряга и оружие влияют, потолок — max_success сложности."""
     ammo_stock = int(character.inventory.get("ammo_pack", 0))
-    medkit_stock = int(character.inventory.get("medkit", 0))
+    medkit_stock = _total_medkit_stock(character)
     return calculate_quest_success(
         gear_power=compute_total_gear_power(character),
         max_success=quest.max_success,
@@ -1405,11 +1445,11 @@ def calculate_quest_success_for_quest(
 
 def build_quest_overview(character: Character) -> str:
     ammo_stock = int(character.inventory.get("ammo_pack", 0))
-    medkit_stock = int(character.inventory.get("medkit", 0))
+    medkit_stock = _total_medkit_stock(character)
     lines = [
         "Текущие запасы:",
         f"• Патроны: {ammo_stock}",
-        f"• Аптечки: {medkit_stock}",
+        f"• Аптечки (любые): {medkit_stock}",
         f"• Энергия: {character.energy}/{character.max_energy}",
         "",
         "Сложности заданий (шанс растёт со снарягой, потолок по сложности):",
@@ -1423,7 +1463,7 @@ def build_quest_overview(character: Character) -> str:
             continue
         lines.append(
             f"• {quest.title}: шанс ~{chance}%, энергия {quest.energy_cost}, "
-            f"патроны {quest.ammo_required}, аптечки {quest.medkit_required}"
+            f"патроны {quest.ammo_required}, аптечки {quest.medkit_required} (любые)"
         )
     lines.extend(
         [
@@ -1462,7 +1502,7 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
         return ActionResult(False, "Неизвестный тип задания.")
 
     ammo_stock = int(character.inventory.get("ammo_pack", 0))
-    medkit_stock = int(character.inventory.get("medkit", 0))
+    medkit_stock = _total_medkit_stock(character)
     if ammo_stock < quest.ammo_required:
         return ActionResult(
             False,
@@ -1471,7 +1511,8 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
     if medkit_stock < quest.medkit_required:
         return ActionResult(
             False,
-            f"Недостаточно аптечек. Для задания нужно {quest.medkit_required}, у тебя {medkit_stock}.",
+            f"Недостаточно аптечек. Для задания нужно {quest.medkit_required} "
+            f"(подойдёт обычная / армейская / научная), у тебя {medkit_stock}.",
         )
 
     if not storage.spend_energy(telegram_id, quest.energy_cost):
@@ -1482,7 +1523,7 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
     if not storage.remove_item(telegram_id, "ammo_pack", quest.ammo_required):
         storage.restore_energy(telegram_id, quest.energy_cost)
         return ActionResult(False, "Ошибка расхода патронов, задание отменено.")
-    if quest.medkit_required > 0 and not storage.remove_item(telegram_id, "medkit", quest.medkit_required):
+    if quest.medkit_required > 0 and not _consume_quest_medkits(storage, telegram_id, quest.medkit_required):
         storage.add_item(telegram_id, "ammo_pack", quest.ammo_required)
         storage.restore_energy(telegram_id, quest.energy_cost)
         return ActionResult(False, "Ошибка расхода аптечек, задание отменено.")
