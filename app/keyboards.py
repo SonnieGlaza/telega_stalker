@@ -100,10 +100,36 @@ def travel_keyboard(
             name = str(location["name"])
             ptype = str(location["point_type"])
             owner = location["controlled_by"] or "нейтрал"
-            text = f"{name} [{ptype}, {owner}]"
-            rows.append([InlineKeyboardButton(text=text, callback_data=f"travel:{name}")])
+            label = f"{name} [{ptype}, {owner}]"
+            rows.append([InlineKeyboardButton(text=label, callback_data=f"travel:to:{name}")])
     if back_callback:
         rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def travel_transport_keyboard(
+    destination: str,
+    modes: list[tuple[str, str]],
+    *,
+    back_callback: str = "travel:back",
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text=label, callback_data=f"travel:go:{mode}:{destination}")]
+        for mode, label in modes
+    ]
+    rows.append([InlineKeyboardButton(text="⬅️ К локациям", callback_data=back_callback)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def smuggle_transport_keyboard(
+    destination: str,
+    modes: list[tuple[str, str]],
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text=label, callback_data=f"eco:smuggle:go:{mode}:{destination}")]
+        for mode, label in modes
+    ]
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="eco:smuggle:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -600,8 +626,8 @@ def locations_keyboard(
 
 
 def topup_keyboard() -> InlineKeyboardMarkup:
-    # Курс должен совпадать с TOPUP_RATE_RU_PER_STAR в app/bot.py (100 RU/звезда).
-    rate = 100
+    # Курс должен совпадать с TOPUP_RATE_RU_PER_STAR в app/bot.py (75 RU/звезда).
+    rate = 75
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=f"⭐ 1 звезда ({rate} RU)", callback_data="topup:1")],
@@ -943,21 +969,8 @@ def players_faction_page_keyboard(
     players: list[dict[str, Any]] | None = None,
     self_id: int | None = None,
 ) -> InlineKeyboardMarkup:
+    _ = (players, self_id)  # список ников/ID в тексте сообщения
     rows: list[list[InlineKeyboardButton]] = []
-    for row in players or []:
-        tid = int(row.get("telegram_id") or 0)
-        nick = str(row.get("nickname") or tid)
-        if self_id is not None and tid == self_id:
-            continue
-        label = nick if len(nick) <= 18 else nick[:17] + "…"
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"⚔️ Дуэль: {label}",
-                    callback_data=f"duel:challenge:{tid}",
-                )
-            ]
-        )
     nav: list[InlineKeyboardButton] = []
     if page > 0:
         nav.append(

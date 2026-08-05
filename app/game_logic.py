@@ -536,8 +536,8 @@ SMUGGLING_TRANSPORT_BONUS: dict[str, int] = {
     "bicycle": 3,
     "foot": 0,
 }
-SMUGGLING_REWARD_MIN = 280
-SMUGGLING_REWARD_MAX = 450
+SMUGGLING_REWARD_MIN = 220
+SMUGGLING_REWARD_MAX = 320
 SMUGGLING_FAIL_PENALTY_MIN = 150
 SMUGGLING_FAIL_PENALTY_MAX = 300
 
@@ -681,6 +681,14 @@ TRAVEL_SPEED_BICYCLE = 1.5
 TRAVEL_SPEED_NIVA = 2
 TRAVEL_SPEED_TRUCK = 5
 BICYCLE_QUEST_REWARD_MULT = 1.5
+TRAVEL_ENERGY_FOOT = 16
+TRAVEL_ENERGY_BICYCLE = 11
+TRAVEL_ENERGY_NIVA = 12
+TRAVEL_ENERGY_TRUCK = 8
+STARTING_MONEY_RU = 1400
+CONTRACT_CANCEL_PENALTY_RU = 50
+CONTRACT_CANCEL_RATING_PENALTY = 1
+WAR_SUCCESS_PAY_RU = 120
 # 1 игровая минута пути = 10 реальных секунд (отсчёт в КПК).
 TRAVEL_REAL_SECONDS_PER_GAME_MINUTE = 10
 ZONE_EVENT_POOL: tuple[tuple[str, int, str], ...] = (
@@ -744,6 +752,7 @@ QUEST_FAIL_PENALTY_RANGE: dict[str, tuple[int, int]] = {
 
 RAID_ARTIFACT_REWARD_CAP = 1
 RAID_ARTIFACT_MIN_ENEMY_POWER = 35
+RAID_ARTIFACT_DROP_CHANCE = 5  # % шанс арта участнику при успехе (NPC ≥ порога)
 WAR_MIN_FACTION_MEMBERS = 5
 MAX_FACTION_ALLIANCES = 2
 
@@ -1681,7 +1690,13 @@ def _transport_requirement_text(min_transport: str | None) -> str:
 
 
 def list_quest_contracts_for_character(character: Character) -> list[QuestContractTemplate]:
-    return list(QUEST_CONTRACTS.values())
+    """Контракты, у которых точка работы не совпадает с домашней базой."""
+    home = faction_home_base(character.faction)
+    return [
+        template
+        for template in QUEST_CONTRACTS.values()
+        if template.work_location != home
+    ]
 
 
 def get_active_contract_template(storage: Storage, telegram_id: int) -> QuestContractTemplate | None:
@@ -1799,6 +1814,10 @@ def accept_quest_contract(storage: Storage, telegram_id: int, contract_key: str)
         return ActionResult(False, "Такого контракта нет.")
 
     home = faction_home_base(character.faction)
+    if template.work_location == home:
+        return ActionResult(False, "Этот контракт недоступен: точка работы совпадает с твоей базой.")
+    if get_active_smuggling(storage, telegram_id):
+        return ActionResult(False, "Сначала заверши или брось рейс контрабанды.")
     if character.location != home:
         return ActionResult(
             False,
@@ -1820,10 +1839,23 @@ def accept_quest_contract(storage: Storage, telegram_id: int, contract_key: str)
 
 
 def cancel_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
+    character = storage.get_character(telegram_id, refresh_energy=False)
+    if character is None:
+        return ActionResult(False, "Сначала создай персонажа.")
     if not storage.get_active_contract(telegram_id):
         return ActionResult(False, "Нет активного контракта.")
+    home = faction_home_base(character.faction)
+    left_base = is_traveling(character) or character.location != home
     storage.set_active_contract(telegram_id, None)
-    return ActionResult(True, "Контракт отменён.")
+    if not left_base:
+        return ActionResult(True, "Контракт отменён.")
+    storage.change_money(telegram_id, -CONTRACT_CANCEL_PENALTY_RU)
+    _add_rating(storage, telegram_id, -CONTRACT_CANCEL_RATING_PENALTY)
+    return ActionResult(
+        True,
+        f"Контракт отменён после выезда с базы.\n"
+        f"Штраф: −{CONTRACT_CANCEL_PENALTY_RU} RU, −{CONTRACT_CANCEL_RATING_PENALTY} рейтинга.",
+    )
 
 
 def _execute_quest_roll(
@@ -3468,29 +3500,69 @@ def _compute_truck_wear(distance_px: float | None, travel_minutes: int) -> int:
     return random.randint(min_wear, max_wear)
 
 
-def _pick_travel_transport(character: Character) -> tuple[str, float, int, str | None]:
-    """Режим, множитель скорости, стоимость энергии, примечание при откате на пеший ход."""
-    foot_note: str | None = None
-    if character.truck_owned and character.truck_durability > 0 and character.diesel > 0:
-        return "truck", float(TRAVEL_SPEED_TRUCK), 8, None
+def list_available_travel_modes(character: Character) -> list[tuple[str, str, float, int]]:
+    """Доступные режимы: (mode, label, speed_mult, energy_cost). Всегда можно пешком; велик не прячется за Нивой."""
+    options: list[tuple[str, str, float, int]] = [
+        ("foot", "Пешком ×1", float(TRAVEL_SPEED_FOOT), TRAVEL_ENERGY_FOOT),
+    ]
+    if can_travel_by_bicycle(character):
+        options.append(
+            (
+                "bicycle",
+                f"Велосипед ×{TRAVEL_SPEED_BICYCLE:g}",
+                float(TRAVEL_SPEED_BICYCLE),
+                TRAVEL_ENERGY_BICYCLE,
+            )
+        )
+    if can_travel_by_niva(character):
+        options.append(
+            ("niva", f"Нива ×{TRAVEL_SPEED_NIVA:g}", float(TRAVEL_SPEED_NIVA), TRAVEL_ENERGY_NIVA)
+        )
+    if can_travel_by_truck(character):
+        options.append(
+            (
+                "truck",
+                f"Грузовик ×{TRAVEL_SPEED_TRUCK:g}",
+                float(TRAVEL_SPEED_TRUCK),
+                TRAVEL_ENERGY_TRUCK,
+            )
+        )
+    return options
+
+
+def _resolve_travel_transport(
+    character: Character,
+    preferred_mode: str | None = None,
+) -> tuple[str, float, int, str | None]:
+    """Выбрать режим: preferred если доступен, иначе самый быстрый из доступных."""
+    options = list_available_travel_modes(character)
+    by_mode = {mode: (mode, speed, energy) for mode, _label, speed, energy in options}
+    notes: list[str] = []
     if character.truck_owned and character.truck_durability > 0 and character.diesel <= 0:
-        foot_note = "Нет дизеля — грузовик не поедет, идёшь пешком."
+        notes.append("Нет дизеля — грузовик недоступен.")
     elif character.truck_owned and character.truck_durability <= 0:
-        foot_note = "Грузовик сломан — идёшь пешком."
-
-    if character.niva_owned and character.gasoline > 0:
-        return "niva", float(TRAVEL_SPEED_NIVA), 12, foot_note
-
+        notes.append("Грузовик сломан.")
     if character.niva_owned and character.gasoline <= 0:
-        if foot_note:
-            foot_note = f"{foot_note} Нет бензина — Нива не поедет."
-        else:
-            foot_note = "Нет бензина — Нива не поедет, идёшь пешком."
+        notes.append("Нет бензина — Нива недоступна.")
+    foot_note = " ".join(notes) if notes else None
 
-    if character.bicycle_owned:
-        return "bicycle", float(TRAVEL_SPEED_BICYCLE), 14, foot_note
+    if preferred_mode:
+        picked = by_mode.get(preferred_mode)
+        if picked is None:
+            return "foot", float(TRAVEL_SPEED_FOOT), TRAVEL_ENERGY_FOOT, (
+                f"Режим «{preferred_mode}» недоступен."
+            )
+        mode, speed, energy = picked
+        return mode, speed, energy, foot_note
 
-    return "foot", float(TRAVEL_SPEED_FOOT), 16, foot_note
+    # Автовыбор: самый быстрый (для смоков/фолбэка).
+    mode, _label, speed, energy = max(options, key=lambda row: row[2])
+    return mode, speed, energy, foot_note
+
+
+def _pick_travel_transport(character: Character) -> tuple[str, float, int, str | None]:
+    """Совместимость: автовыбор самого быстрого доступного транспорта."""
+    return _resolve_travel_transport(character, preferred_mode=None)
 
 
 def _compute_base_travel_minutes(
@@ -3513,22 +3585,22 @@ def _compute_base_travel_minutes(
 
 
 def roll_arrival_encounter(storage: Storage, telegram_id: int, destination: str) -> str | None:
-    """Мелкий энкаунтер по прибытии (~35% шанс чего-то случиться)."""
+    """Мелкий энкаунтер по прибытии (~20% шанс чего-то случиться)."""
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or _is_dead(player):
         return None
     roll = random.randint(1, 100)
-    if roll <= 65:
+    if roll <= 80:
         return None
-    if roll <= 78:
-        amount = random.randint(40, 90)
+    if roll <= 88:
+        amount = random.randint(20, 40)
         storage.change_money(telegram_id, amount)
         storage.add_player_stat(telegram_id, "money_earned", amount)
         return f"📦 По дороге нашёл хабар: +{amount} RU."
-    if roll <= 88:
+    if roll <= 93:
         storage.add_item(telegram_id, "bread", 1)
         return "🍞 Нашёл чёрствый хлеб у дороги."
-    if roll <= 94:
+    if roll <= 97:
         loss = random.randint(1, 3)
         storage.change_health(telegram_id, -loss)
         return f"⚠️ Лёгкая засада мутантов: −{loss} HP."
@@ -3565,7 +3637,13 @@ def travel_status_with_smuggle(storage: Storage, telegram_id: int) -> str | None
     return "\n".join(parts) if parts else None
 
 
-def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionResult:
+def travel_to(
+    storage: Storage,
+    telegram_id: int,
+    destination: str,
+    *,
+    transport_mode: str | None = None,
+) -> ActionResult:
     character = storage.get_character(telegram_id)
     if character is None:
         return ActionResult(False, "Сначала создай персонажа.")
@@ -3580,7 +3658,22 @@ def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionRes
     if destination not in locations:
         return ActionResult(False, "Такой локации нет.")
 
-    transport_mode, speed_mult, energy_cost, foot_note = _pick_travel_transport(character)
+    if transport_mode is not None:
+        available = {mode for mode, *_rest in list_available_travel_modes(character)}
+        if transport_mode not in available:
+            labels = {
+                "truck": "Недостаточно дизеля или грузовик недоступен.",
+                "niva": "Недостаточно бензина или Нива недоступна.",
+                "bicycle": "У тебя нет велосипеда.",
+                "foot": "Пеший переход недоступен.",
+            }
+            return ActionResult(False, labels.get(transport_mode, "Этот транспорт недоступен."))
+
+    picked_mode, speed_mult, energy_cost, foot_note = _resolve_travel_transport(
+        character,
+        preferred_mode=transport_mode,
+    )
+    transport_mode = picked_mode
     if transport_mode == "truck" and not can_travel_by_truck(character):
         return ActionResult(False, "Недостаточно дизеля для поездки на грузовике.")
     if transport_mode == "niva" and not can_travel_by_niva(character):
@@ -4068,11 +4161,9 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
         storage.set_location_control(location_name, leader.faction)
         treasury_gain = 1400 + len(ready_members) * 180
         storage.change_faction_treasury(leader.faction, treasury_gain)
-        artifacts_reward = 0
-        if enemy_power >= RAID_ARTIFACT_MIN_ENEMY_POWER:
-            artifacts_reward = RAID_ARTIFACT_REWARD_CAP
         notes: list[str] = []
         stash_finds = 0
+        artifacts_given = 0
         for member in ready_members:
             durability_text = _apply_durability_decay(
                 storage,
@@ -4080,10 +4171,14 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
                 weapon_loss=6,
                 armor_loss=5,
             )
-            if artifacts_reward > 0:
+            if (
+                enemy_power >= RAID_ARTIFACT_MIN_ENEMY_POWER
+                and random.randint(1, 100) <= RAID_ARTIFACT_DROP_CHANCE
+            ):
                 art_key = pick_weighted_raid_artifact_key()
                 storage.add_item(member.telegram_id, art_key, 1)
                 storage.add_player_stat(member.telegram_id, "artifacts_found", 1)
+                artifacts_given += 1
             if _maybe_drop_stash(storage, member.telegram_id):
                 stash_finds += 1
             _add_rating(storage, member.telegram_id, RATING_REWARD["raid_success"])
@@ -4111,8 +4206,8 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
             True,
             f"Рейд #{raid_id} завершен успешно на логове «{location_name}».\n"
             f"Бойцов: {len(ready_members)}, критические попадания: {battle['total_crits']}.\n"
-            f"Награда каждому: артефакт x{artifacts_reward} "
-            f"(Сила 3% / Живучесть 3% среди типов, при силе NPC ≥ {RAID_ARTIFACT_MIN_ENEMY_POWER}).\n"
+            f"Артефакты выпали: {artifacts_given}/{len(ready_members)} "
+            f"(шанс {RAID_ARTIFACT_DROP_CHANCE}% при NPC ≥ {RAID_ARTIFACT_MIN_ENEMY_POWER}).\n"
             f"В казну группировки: {treasury_gain} RU.\n"
             f"Раненых: {len(battle['wounds'])}."
             f"{stash_line}{''.join(notes)}",
@@ -4973,6 +5068,8 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
             storage.add_player_stat(member.telegram_id, "wars_won", 1)
             if captured_enemy_base:
                 storage.add_player_stat(member.telegram_id, "enemy_bases_captured", 1)
+            storage.change_money(member.telegram_id, WAR_SUCCESS_PAY_RU)
+            storage.add_player_stat(member.telegram_id, "money_earned", WAR_SUCCESS_PAY_RU)
             _add_rating(storage, member.telegram_id, RATING_REWARD["war_success"])
             note = _progress_and_unlock_achievements(storage, member.telegram_id)
             if note and member.telegram_id == telegram_id:
@@ -4983,14 +5080,18 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
             True,
             f"Штурм лобби #{war_id} успешен (шанс {chance}%).\n"
             f"Локация «{location_name}» перешла под контроль: {winner}.{base_note}\n"
+            f"Награда бойцам: +{WAR_SUCCESS_PAY_RU} RU и +{RATING_REWARD['war_success']} рейтинга.\n"
             f"Распределение бойцов: {breakdown}."
             f"{''.join(achievement_notes)}",
             member_ids,
         )
     storage.finish_war_lobby(war_id, "failed", "Поражение штурма")
+    for member in active:
+        _add_rating(storage, member.telegram_id, -RATING_REWARD["war_fail"])
     return WarLobbyResult(
         False,
-        f"Штурм лобби #{war_id} провален (шанс {chance}%).",
+        f"Штурм лобби #{war_id} провален (шанс {chance}%).\n"
+        f"Потери: −{RATING_REWARD['war_fail']} рейтинга каждому участнику.",
         member_ids,
     )
 
@@ -5555,7 +5656,8 @@ def build_smuggling_overview(storage: Storage, telegram_id: int) -> str:
     lines = [
         "🚚 Перевозка контрабанды",
         "Рисковый курьерский рейс: главное — лут и казна фракции, не «фарм RU».",
-        f"Награда за доставку: {SMUGGLING_REWARD_MIN}–{SMUGGLING_REWARD_MAX} RU + дроп (еда/аптечки/шмот).",
+        f"Награда за доставку: {SMUGGLING_REWARD_MIN}–{SMUGGLING_REWARD_MAX} RU gross "
+        f"(⅓ в казну из награды) + дроп (еда/аптечки/шмот).",
         "Провал = ограбили в пути (−RU, −HP).",
         "Шанс растёт от силы и транспорта; длинный путь повышает риск.",
         "Бонусы: пешком 0, велосипед +3, Нива +6, грузовик +12.",
@@ -5582,7 +5684,13 @@ def build_smuggling_overview(storage: Storage, telegram_id: int) -> str:
     return "\n".join(lines)
 
 
-def start_smuggling_run(storage: Storage, telegram_id: int, destination: str) -> ActionResult:
+def start_smuggling_run(
+    storage: Storage,
+    telegram_id: int,
+    destination: str,
+    *,
+    transport_mode: str | None = None,
+) -> ActionResult:
     """Начать перевозку контрабанды: старт перехода до точки сдачи."""
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
@@ -5591,6 +5699,8 @@ def start_smuggling_run(storage: Storage, telegram_id: int, destination: str) ->
         return ActionResult(False, _dead_block_text())
     if player.faction is None:
         return ActionResult(False, "Сначала выбери группировку.")
+    if storage.get_active_contract(telegram_id):
+        return ActionResult(False, "Сначала заверши или отмени активный контракт.")
     if get_active_smuggling(storage, telegram_id):
         return ActionResult(False, "У тебя уже есть активный рейс контрабанды.")
     if is_traveling(player):
@@ -5601,7 +5711,7 @@ def start_smuggling_run(storage: Storage, telegram_id: int, destination: str) ->
     if destination not in locations:
         return ActionResult(False, "Такой локации нет.")
 
-    preview_mode, _, _, _ = _pick_travel_transport(player)
+    preview_mode, _, _, _ = _resolve_travel_transport(player, preferred_mode=transport_mode)
     base_minutes, _ = _compute_base_travel_minutes(
         player.location,
         destination,
@@ -5616,15 +5726,20 @@ def start_smuggling_run(storage: Storage, telegram_id: int, destination: str) ->
         event_modifier=event_modifier,
     )
 
-    travel_result = travel_to(storage, telegram_id, destination)
+    travel_result = travel_to(
+        storage,
+        telegram_id,
+        destination,
+        transport_mode=transport_mode,
+    )
     if not travel_result.ok:
         return travel_result
 
     after = storage.get_character(telegram_id, refresh_energy=False)
-    transport_mode = (after.travel_transport if after else None) or preview_mode
+    used_mode = (after.travel_transport if after else None) or preview_mode
     success_chance = _smuggling_success_chance(
         after or player,
-        transport_mode=str(transport_mode),
+        transport_mode=str(used_mode),
         base_minutes=base_minutes,
         event_modifier=event_modifier,
     )
@@ -5635,7 +5750,7 @@ def start_smuggling_run(storage: Storage, telegram_id: int, destination: str) ->
                 "destination": destination,
                 "origin": player.location,
                 "success_chance": success_chance,
-                "transport": transport_mode,
+                "transport": used_mode,
                 "started_at": _utc_now().isoformat(),
             },
             ensure_ascii=False,
@@ -5685,15 +5800,22 @@ def resolve_smuggling_if_pending(storage: Storage, telegram_id: int) -> str | No
     success = roll <= chance
 
     if success:
-        reward = random.randint(SMUGGLING_REWARD_MIN, SMUGGLING_REWARD_MAX)
+        gross = random.randint(SMUGGLING_REWARD_MIN, SMUGGLING_REWARD_MAX)
+        treasury_cut = gross // 3 if player.faction else 0
+        reward = gross - treasury_cut
         warehouse_bonus = random.randint(1, 3)
         durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=4, armor_loss=2)
         storage.change_money(telegram_id, reward)
         treasury_line = ""
         if player.faction:
-            storage.change_faction_treasury(player.faction, reward // 3)
+            storage.change_faction_treasury(player.faction, treasury_cut)
             storage.change_faction_warehouse_item(player.faction, "ammo_pack", warehouse_bonus)
-            treasury_line = f"В казну ушло {reward // 3} RU, на склад патронов +{warehouse_bonus}."
+            treasury_line = (
+                f"Тебе {reward} RU, в казну {treasury_cut} RU (из {gross}), "
+                f"на склад патронов +{warehouse_bonus}."
+            )
+        else:
+            treasury_line = f"Награда: {reward} RU."
         loot_lines = _roll_smuggling_loot(storage, telegram_id)
         loot_text = (
             "\nДроп:\n" + "\n".join(f"• {line}" for line in loot_lines)
@@ -5707,7 +5829,7 @@ def resolve_smuggling_if_pending(storage: Storage, telegram_id: int) -> str | No
         return (
             f"🚚 Контрабанда доставлена на «{destination}»!\n"
             f"Шанс {chance}% (бросок {roll}) — путь прошёл без ограбления.\n"
-            f"Награда: {reward} RU. {treasury_line}"
+            f"{treasury_line}"
             f"{loot_text}{durability_text}{achievements_text}"
         )
 

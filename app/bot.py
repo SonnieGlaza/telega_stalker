@@ -94,6 +94,7 @@ from app.game_logic import (
     list_owned_trader_sell_buttons,
     trader_sell_categories_with_stock,
     travel_to,
+    list_available_travel_modes,
     describe_travel_fuel_status,
     can_travel_by_truck,
     use_energy_drink,
@@ -169,6 +170,8 @@ from app.keyboards import (
     sortie_keyboard,
     quests_keyboard,
     travel_keyboard,
+    travel_transport_keyboard,
+    smuggle_transport_keyboard,
     raid_keyboard,
     topup_keyboard,
     trader_buy_categories_keyboard,
@@ -218,7 +221,7 @@ storage: Storage | None = None
 admin_ids: tuple[int, ...] = ()
 SNAPSHOT_SYNC_SECONDS = 300
 POINTS_INCOME_TICK_SECONDS = 60
-TOPUP_RATE_RU_PER_STAR = 100
+TOPUP_RATE_RU_PER_STAR = 75
 TOPUP_PAYLOAD_PREFIX = "topup_stars:"
 TOPUP_ALLOWED_AMOUNTS = {1, 5, 10, 25}
 TOPUP_MIN_STARS = 1
@@ -656,7 +659,7 @@ def _build_info_text(player: Character) -> str:
         "Разделы меню:\n"
         "• 📟 КПК — профиль, чаты, рейтинг, карта, игроки, рефералка.\n"
         "• 🏕 Вылазка — война, переходы и рейды.\n"
-        "• 👥 Группировка — склад (с 5 ранга), казна (вывод только лидер).\n"
+        "• 👥 Группировка — склад/казна: сдать может любой; забрать склад с 5 ранга, казна — только лидер.\n"
         "• 🏦 Экономика — биржа, рынок, перевозка контрабанды.\n"
         "• 📋 Задания — контракты с переездом; контрабанда — рисковый курьерский рейс.\n\n"
         "Команды:\n"
@@ -664,7 +667,7 @@ def _build_info_text(player: Character) -> str:
         "• /menu — главное меню.\n"
         "• /info — эта справка.\n"
         f"• /pay [id] [сумма] — перевод (комиссия {TRANSFER_FEE_PERCENT}%).\n"
-        "• /дуэль [id] — вызвать на дуэль (или кнопка в КПК → Игроки).\n"
+        "• /дуэль [id] — вызвать на дуэль (ID в КПК → Игроки).\n"
         f"  Проигравший: HP опускается до {DUEL_LOSER_HP_REMAINING}, "
         f"−{DUEL_LOSER_MONEY_PERCENT}% денег (макс. {DUEL_LOSER_MONEY_CAP} RU).\n\n"
         "Механики:\n"
@@ -1248,9 +1251,9 @@ async def process_faction(callback: CallbackQuery, state: FSMContext) -> None:
         f"Принято. Теперь ты в группировке «{faction}».\n"
         f"Тебя перебросили на домашнюю базу «{home}».\n\n"
         "С чего начать:\n"
-        "1) 📋 Задания → лёгкий контракт на базе\n"
-        "2) 🛒 Торговец → велосипед или детектор «Отклик»\n"
-        "3) 🗺 Переход / Вылазка — исследуй Зону\n\n"
+        "1) 📋 Задания → 1–2 лёгких контракта на базе\n"
+        "2) 🛒 Торговец → «Отклик» (1000) или еда/аптечки\n"
+        "3) Накопи на велосипед (3500) — ускорит переходы\n\n"
         "Открываю меню персонажа.",
         reply_markup=main_menu_keyboard(),
     )
@@ -1928,7 +1931,11 @@ def _quests_menu_payload(storage, player):
         if stage == "return":
             show_turnin = player.location == home and not traveling
     elif at_home:
-        for template in QUEST_CONTRACTS.values():
+        from app.game_logic import list_quest_contracts_for_character, _has_transport
+
+        for template in list_quest_contracts_for_character(player):
+            if not _has_transport(player, template.min_transport):
+                continue
             emoji = QUEST_DIFFICULTY_EMOJI.get(template.difficulty, "📋")
             contract_buttons.append(
                 (f"{emoji} {template.title}", f"contract:accept:{template.key}")
@@ -2547,9 +2554,8 @@ async def show_travel(message: Message) -> None:
         )
     else:
         text = (
-            "Выбирай локацию для перехода.\n"
-            "Пешком — ×1, велосипед — ×1.5 (награда заданий ×1.5), Нива — ×2 (бензин), грузовик — ×5 (дизель).\n"
-            "Без топлива Нива/грузовик не едут — велосипед топлива не требует.\n"
+            "Выбери локацию, затем транспорт (велик доступен даже если есть Нива/грузовик).\n"
+            "Пешком ×1, велосипед ×1.5 (+награда контракта ×1.5 если доехал на нём), Нива ×2, грузовик ×5.\n"
             "Переход занимает реальное время (1 игровая мин ≈ 10 сек).\n\n"
             f"{describe_travel_fuel_status(player)}"
         )
@@ -2572,16 +2578,74 @@ async def travel_status_callback(callback: CallbackQuery) -> None:
     await callback.answer(status, show_alert=True)
 
 
+@router.callback_query(F.data == "travel:back")
+async def travel_back_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    locations = get_storage().get_locations()
+    traveling = bool(player.travel_destination)
+    text = (
+        "Выбери локацию, затем транспорт.\n\n"
+        f"{describe_travel_fuel_status(player)}"
+    )
+    await edit_menu_message(
+        callback,
+        text,
+        travel_keyboard(locations, traveling=traveling),
+    )
+
+
+@router.callback_query(F.data.startswith("travel:to:"))
+async def travel_pick_destination(callback: CallbackQuery) -> None:
+    destination = (callback.data or "").removeprefix("travel:to:").strip()
+    player = get_storage().get_character(callback.from_user.id)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    if not destination:
+        await callback.answer("Некорректная локация.", show_alert=True)
+        return
+    modes = [
+        (mode, f"{label} (−{energy} эн.)")
+        for mode, label, _speed, energy in list_available_travel_modes(player)
+    ]
+    await edit_menu_message(
+        callback,
+        f"Куда: «{destination}».\nВыбери транспорт:",
+        travel_transport_keyboard(destination, modes),
+    )
+
+
+@router.callback_query(F.data.startswith("travel:go:"))
+async def travel_go_callback(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":", maxsplit=3)
+    if len(parts) < 4:
+        await callback.answer("Некорректный переход.", show_alert=True)
+        return
+    mode = parts[2]
+    destination = parts[3]
+    result = travel_to(
+        get_storage(),
+        callback.from_user.id,
+        destination,
+        transport_mode=mode,
+    )
+    await reply_action_result(callback, result.text)
+
+
 @router.callback_query(F.data.startswith("travel:"))
-async def handle_travel(callback: CallbackQuery) -> None:
+async def handle_travel_legacy(callback: CallbackQuery) -> None:
+    """Совместимость: travel:<destination> → выбор транспорта."""
     raw = (callback.data or "").split(":", maxsplit=1)
     if len(raw) < 2:
         return
     destination = raw[1]
-    if destination == "status":
+    if destination in {"status", "back"} or destination.startswith(("to:", "go:")):
         return
-    result = travel_to(get_storage(), callback.from_user.id, destination)
-    await reply_action_result(callback, result.text)
+    callback.data = f"travel:to:{destination}"
+    await travel_pick_destination(callback)
 
 
 @router.message(F.text == "⚔️ Война")
@@ -3396,7 +3460,35 @@ async def smuggle_to_callback(callback: CallbackQuery, bot: Bot) -> None:
     if not destination:
         await callback.answer("Некорректная точка", show_alert=True)
         return
-    result = start_smuggling_run(get_storage(), callback.from_user.id, destination)
+    player = get_storage().get_character(callback.from_user.id)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    modes = [
+        (mode, f"{label} (−{energy} эн.)")
+        for mode, label, _speed, energy in list_available_travel_modes(player)
+    ]
+    await edit_menu_message(
+        callback,
+        f"Контрабанда → «{destination}».\nВыбери транспорт:",
+        smuggle_transport_keyboard(destination, modes),
+    )
+
+
+@router.callback_query(F.data.startswith("eco:smuggle:go:"))
+async def smuggle_go_callback(callback: CallbackQuery, bot: Bot) -> None:
+    parts = (callback.data or "").split(":", maxsplit=4)
+    if len(parts) < 5:
+        await callback.answer("Некорректный рейс.", show_alert=True)
+        return
+    mode = parts[3]
+    destination = parts[4]
+    result = start_smuggling_run(
+        get_storage(),
+        callback.from_user.id,
+        destination,
+        transport_mode=mode,
+    )
     await reply_action_result(callback, result.text, bot=bot)
 
 

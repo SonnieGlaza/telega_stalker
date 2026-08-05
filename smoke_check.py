@@ -253,7 +253,7 @@ def run_smoke_check() -> None:
         page_text, key, page, pages, page_players = build_players_faction_page_text(
             storage, "Долг", 0
         )
-        assert "Дуэль" in page_text
+        assert "/дуэль" in page_text.lower() or "дуэль" in page_text.lower()
         kb = players_faction_page_keyboard(
             key, page=page, total_pages=pages, players=page_players, self_id=111
         )
@@ -263,7 +263,15 @@ def run_smoke_check() -> None:
             for btn in row
             if (btn.callback_data or "").startswith("duel:challenge:")
         ]
-        assert any(cb.endswith(":222") for cb in duel_cbs)
+        assert not duel_cbs
+
+        # Bandits cannot take home-location easy dump contract.
+        from app.game_logic import list_quest_contracts_for_character, list_available_travel_modes
+
+        bandit = storage.get_character(333, refresh_energy=False)
+        assert all(t.work_location != "Свалка" for t in list_quest_contracts_for_character(bandit))
+        modes = {m for m, *_ in list_available_travel_modes(bandit)}
+        assert "bicycle" in modes and "foot" in modes
 
         assert build_alliance_overview(storage, 111)
         assert build_economy_overview(storage, 111)
@@ -325,13 +333,14 @@ def run_smoke_check() -> None:
         assert str(SMUGGLING_REWARD_MIN) in overview and str(SMUGGLING_REWARD_MAX) in overview
         assert "лут" in overview.lower() or "курьер" in overview.lower()
 
-        # Arrival encounter is optional (~35%); just ensure it doesn't crash.
+        # Arrival encounter is optional; just ensure it doesn't crash.
         storage.set_location(111, "Росток")
         _ = roll_arrival_encounter(storage, 111, "Росток")
 
+        storage.set_active_contract(111, None)
         storage.restore_energy(111, 100)
         storage.set_location(111, "Росток")
-        smuggle_start = start_smuggling_run(storage, 111, "Болото")
+        smuggle_start = start_smuggling_run(storage, 111, "Болото", transport_mode="foot")
         assert smuggle_start.ok, smuggle_start.text
         assert get_active_smuggling(storage, 111)
         assert "ограб" in smuggle_start.text.lower() or "контрабанд" in smuggle_start.text.lower()
