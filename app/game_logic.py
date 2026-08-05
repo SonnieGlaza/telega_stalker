@@ -687,7 +687,7 @@ DUEL_CHANCE_MIN = 15
 DUEL_CHANCE_MAX = 85
 DUEL_WINNER_WOUND_MIN = 5
 DUEL_WINNER_WOUND_MAX = 12
-DUEL_LOSER_HP_LOSS = 20
+DUEL_LOSER_HP_REMAINING = 20
 DUEL_LOSER_MONEY_PERCENT = 10
 DUEL_META_IN_PREFIX = "duel:pending_in:"
 DUEL_META_OUT_PREFIX = "duel:pending_out:"
@@ -2417,7 +2417,7 @@ def create_duel_challenge(
         f"Сила снаряги: {challenger.nickname} {my_power} vs ты {their_power}.\n"
         f"Шанс победы вызывающего ~{chance}%.\n"
         f"Стоимость при согласии: {DUEL_ENERGY_COST} энергии у каждого.\n"
-        f"Проигравший: −{DUEL_LOSER_HP_LOSS} HP и −{DUEL_LOSER_MONEY_PERCENT}% денег (победителю)."
+        f"Проигравший: остаётся {DUEL_LOSER_HP_REMAINING} HP и −{DUEL_LOSER_MONEY_PERCENT}% денег (победителю)."
     )
     return ActionResult(True, challenger_msg), target_msg
 
@@ -2486,10 +2486,10 @@ def accept_duel(
     loser_max_hp = effective_max_health(loser)
     wound = random.randint(DUEL_WINNER_WOUND_MIN, DUEL_WINNER_WOUND_MAX)
     storage.change_health(winner_id, -wound, max_health=winner_max_hp)
-    # Проигравший не падает: −20 HP, но не ниже 1.
-    loser_hp_loss = min(DUEL_LOSER_HP_LOSS, max(0, int(loser.health) - 1))
-    if loser_hp_loss > 0:
-        storage.change_health(loser_id, -loser_hp_loss, max_health=loser_max_hp)
+    loser_hp_target = min(DUEL_LOSER_HP_REMAINING, loser_max_hp)
+    loser_hp_delta = loser_hp_target - int(loser.health)
+    if loser_hp_delta != 0:
+        storage.change_health(loser_id, loser_hp_delta, max_health=loser_max_hp)
 
     money_taken = max(0, int(loser.money * DUEL_LOSER_MONEY_PERCENT // 100))
     if money_taken > 0:
@@ -2511,7 +2511,7 @@ def accept_duel(
         f"Шанс победы {challenger.nickname}: {chance}% (бросок {roll}).\n"
         f"Победитель: {winner.nickname} (HP {winner_hp}, ранение −{wound}"
         f"{f', +{money_taken} RU' if money_taken else ''}).\n"
-        f"Проигравший: {loser.nickname} (HP {loser_hp}, −{loser_hp_loss} HP"
+        f"Проигравший: {loser.nickname} (остаётся {loser_hp} HP"
         f"{f', −{money_taken} RU' if money_taken else ''})."
     )
     if target_id == winner_id:
