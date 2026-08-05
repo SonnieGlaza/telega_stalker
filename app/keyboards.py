@@ -65,16 +65,46 @@ def sortie_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def quests_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🟢 Легко", callback_data="quest:easy")],
-            [InlineKeyboardButton(text="🟡 Средне", callback_data="quest:hard")],
-            [InlineKeyboardButton(text="🟠 Опасно", callback_data="quest:heavy")],
-            [InlineKeyboardButton(text="🔴 Невозможно", callback_data="quest:impossible")],
-            [InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:run")],
-        ]
-    )
+def quests_keyboard(
+    *,
+    contract_buttons: list[tuple[str, str]] | None = None,
+    show_work: bool = False,
+    show_turnin: bool = False,
+    show_cancel: bool = False,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if show_work:
+        rows.append([InlineKeyboardButton(text="⚙️ Выполнить работу", callback_data="contract:work")])
+    if show_turnin:
+        rows.append([InlineKeyboardButton(text="📦 Сдать отчёт на базе", callback_data="contract:turnin")])
+    for label, callback_data in contract_buttons or []:
+        rows.append([InlineKeyboardButton(text=label, callback_data=callback_data)])
+    if show_cancel:
+        rows.append([InlineKeyboardButton(text="❌ Отменить контракт", callback_data="contract:cancel")])
+    rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="contract:refresh")])
+    rows.append([InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:run")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def travel_keyboard(
+    locations: list[dict[str, str | int | None]],
+    *,
+    traveling: bool = False,
+    back_callback: str | None = None,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if traveling:
+        rows.append([InlineKeyboardButton(text="⏱ Статус перехода", callback_data="travel:status")])
+    else:
+        for location in locations:
+            name = str(location["name"])
+            ptype = str(location["point_type"])
+            owner = location["controlled_by"] or "нейтрал"
+            text = f"{name} [{ptype}, {owner}]"
+            rows.append([InlineKeyboardButton(text=text, callback_data=f"travel:{name}")])
+    if back_callback:
+        rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def trader_keyboard() -> InlineKeyboardMarkup:
@@ -199,6 +229,7 @@ def trader_buy_gear_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
         ("Купить детектор «Медведь» (4000)", "buy:detector_medved"),
         ("Купить детектор «Велес» (10000)", "buy:detector_veles"),
         ("Купить детектор «Сварог» (30000)", "buy:detector_svarog"),
+        ("Купить Ниву (10000)", "buy:niva"),
         ("Купить грузовик (50000)", "buy:truck"),
         ("Купить спальник (30000)", "buy:sleeping_bag"),
         ("Купить тайник (3000)", "buy:stash_case"),
@@ -494,6 +525,7 @@ def trader_sell_gear_keyboard(
             ("Продать детектор «Велес» (3330)", "sell:detector_veles"),
             ("Продать детектор «Сварог» (10000)", "sell:detector_svarog"),
             ("Продать спальник (10000)", "sell:sleeping_bag"),
+            ("Продать Ниву (2000)", "sell:niva"),
             ("Продать грузовик (3500)", "sell:truck"),
             ("Продать тайник (500)", "sell:stash_case"),
         ]

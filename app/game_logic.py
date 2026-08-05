@@ -37,6 +37,56 @@ QUESTS: dict[str, QuestType] = {
 }
 
 
+@dataclass(frozen=True)
+class QuestContractTemplate:
+    key: str
+    difficulty: str
+    title: str
+    work_location: str
+    min_transport: str | None = None  # "niva" | "truck"
+    return_home: bool = True
+
+
+QUEST_CONTRACTS: dict[str, QuestContractTemplate] = {
+    "easy_boloto": QuestContractTemplate("easy_boloto", "easy", "Сбор образцов на Болоте", "Болото"),
+    "easy_agroprom": QuestContractTemplate(
+        "easy_agroprom", "easy", "Разведка у Агропрома", "НИИ Агропром"
+    ),
+    "easy_dump": QuestContractTemplate("easy_dump", "easy", "Поиск хабара на Свалке", "Свалка"),
+    "hard_yantar": QuestContractTemplate(
+        "hard_yantar", "hard", "Снять показания на Янтаре", "Янтарь", min_transport="niva"
+    ),
+    "hard_forest": QuestContractTemplate(
+        "hard_forest", "hard", "Зачистка Рыжего леса", "Рыжий лес", min_transport="niva"
+    ),
+    "hard_valley": QuestContractTemplate(
+        "hard_valley", "hard", "Рейд в Тёмную долину", "Темная долина", min_transport="niva"
+    ),
+    "heavy_boloto": QuestContractTemplate(
+        "heavy_boloto", "heavy", "Опасный сбор на Болоте", "Болото"
+    ),
+    "heavy_yantar": QuestContractTemplate(
+        "heavy_yantar", "heavy", "Экспедиция на Янтарь", "Янтарь", min_transport="niva"
+    ),
+    "heavy_valley": QuestContractTemplate(
+        "heavy_valley", "heavy", "Зачистка в Тёмной долине", "Темная долина", min_transport="niva"
+    ),
+    "impossible_radar": QuestContractTemplate(
+        "impossible_radar", "impossible", "Зачистка Радара", "Радар", min_transport="truck"
+    ),
+    "impossible_forest": QuestContractTemplate(
+        "impossible_forest", "impossible", "Аномалии Рыжего леса", "Рыжий лес", min_transport="truck"
+    ),
+}
+
+CONTRACT_TURN_IN_BONUS_PERCENT = 10
+LOCATION_TYPE_RU_MULT: dict[str, float] = {
+    "точка ресурсов": 1.1,
+    "точка интереса": 1.2,
+    "база": 1.0,
+}
+CONTROLLED_LOCATION_RU_BONUS = 1.1
+
 SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "energy_drink": {"name": "Энергетик", "buy_price": 250, "sell_price": 170},
     "medkit": {"name": "Аптечка", "buy_price": 260, "sell_price": 120},
@@ -68,6 +118,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "detector_svarog": {"name": "Детектор «Сварог»", "buy_price": 30000, "sell_price": 10000},
     "gear_upgrade": {"name": "Улучшение снаряги", "buy_price": 1200, "sell_price": 0},
     "truck": {"name": "Грузовик", "buy_price": 50000, "sell_price": 3500},
+    "niva": {"name": "Нива", "buy_price": 10000, "sell_price": 2000},
     "sleeping_bag": {"name": "Спальник", "buy_price": 30000, "sell_price": 10000},
     "fuel_can": {"name": "Канистра топлива (+5)", "buy_price": 450, "sell_price": 200},
     "stash_case": {"name": "Тайник", "buy_price": 3000, "sell_price": 500},
@@ -570,6 +621,12 @@ FACTION_HOME_BASE: dict[str, str] = {
     "Бандиты": "Свалка",
 }
 
+# Скорость перехода: пешком ×1, Нива ×2, грузовик ×5.
+TRAVEL_SPEED_FOOT = 1
+TRAVEL_SPEED_NIVA = 2
+TRAVEL_SPEED_TRUCK = 5
+# 1 игровая минута пути = 10 реальных секунд (отсчёт в КПК).
+TRAVEL_REAL_SECONDS_PER_GAME_MINUTE = 10
 ZONE_EVENT_POOL: tuple[tuple[str, int, str], ...] = (
     ("mutant_swarm", 10, "Миграция мутантов: сопротивление на локации выросло."),
     ("bandit_ambush", 7, "Бандитские засады усилили гарнизон противника."),
@@ -718,6 +775,7 @@ def _faction_controls_all_contestable_points(storage: Storage, faction: str | No
 class ActionResult:
     ok: bool
     text: str
+    payload: dict[str, Any] | None = None
 
 
 REFERRAL_INVITER_BONUS_RU = 2000
@@ -1451,37 +1509,155 @@ def calculate_quest_success_for_quest(
     )
 
 
-def build_quest_overview(character: Character) -> str:
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def is_traveling(character: Character) -> bool:
+    if not character.travel_destination or character.travel_arrives_at is None:
+        return False
+    return _as_utc(character.travel_arrives_at) > _utc_now()
+
+
+def travel_block_text(character: Character) -> str | None:
+    if not is_traveling(character):
+        return None
+    eta = format_travel_eta(character)
+    return f"Ты в пути → «{character.travel_destination}». Прибытие {eta}."
+
+
+def format_travel_eta(character: Character) -> str:
+    if character.travel_arrives_at is None:
+        return "скоро"
+    return format_arrival_eta(character.travel_arrives_at)
+
+
+def format_arrival_eta(arrives_at: datetime) -> str:
+    remaining = _as_utc(arrives_at) - _utc_now()
+    total_sec = max(0, int(remaining.total_seconds()))
+    minutes, seconds = divmod(total_sec, 60)
+    if minutes > 0:
+        return f"через {minutes} мин {seconds} сек"
+    return f"через {seconds} сек"
+
+
+def format_location_display(character: Character) -> str:
+    if is_traveling(character):
+        transport = character.travel_transport or "пешком"
+        labels = {"foot": "пешком", "niva": "на Ниве", "truck": "на грузовике"}
+        return (
+            f"В пути → «{character.travel_destination}» ({labels.get(transport, transport)}), "
+            f"{format_travel_eta(character)}"
+        )
+    return character.location
+
+
+def faction_home_base(faction: str | None) -> str:
+    if faction is None:
+        return "Кордон"
+    return FACTION_HOME_BASE.get(faction, "Кордон")
+
+
+def _has_transport(character: Character, min_transport: str | None) -> bool:
+    if min_transport is None:
+        return True
+    if min_transport == "niva":
+        return bool(character.niva_owned or character.truck_owned)
+    if min_transport == "truck":
+        return bool(
+            character.truck_owned
+            and character.truck_durability > 0
+            and character.fuel > 0
+        )
+    return True
+
+
+def _transport_requirement_text(min_transport: str | None) -> str:
+    if min_transport == "niva":
+        return " (нужна Нива или грузовик)"
+    if min_transport == "truck":
+        return " (нужен грузовик с топливом)"
+    return ""
+
+
+def list_quest_contracts_for_character(character: Character) -> list[QuestContractTemplate]:
+    return list(QUEST_CONTRACTS.values())
+
+
+def get_active_contract_template(storage: Storage, telegram_id: int) -> QuestContractTemplate | None:
+    active = storage.get_active_contract(telegram_id)
+    if not active:
+        return None
+    template = QUEST_CONTRACTS.get(str(active.get("template_key", "")))
+    return template
+
+
+def build_quest_overview(storage: Storage, character: Character) -> str:
     ammo_stock = int(character.inventory.get("ammo_pack", 0))
     medkit_stock = _total_medkit_stock(character)
+    home = faction_home_base(character.faction)
     lines = [
+        "Контракты: бери на домашней базе, едь на точку, выполняй работу.",
+        f"Домашняя база ({character.faction or '?'}): «{home}»",
+        "",
+        "Транспорт ускоряет переход:",
+        "• пешком — ×1",
+        "• Нива (10 000 RU) — ×2",
+        "• грузовик — ×5 (нужно топливо)",
+        f"1 игровая минута пути ≈ {TRAVEL_REAL_SECONDS_PER_GAME_MINUTE} сек реального времени.",
+        "",
         "Текущие запасы:",
         f"• Патроны: {ammo_stock}",
         f"• Аптечки (любые): {medkit_stock}",
         f"• Энергия: {character.energy}/{character.max_energy}",
+        f"• Локация: {format_location_display(character)}",
         "",
-        "Сложности заданий (шанс растёт со снарягой, потолок по сложности):",
     ]
-    for quest in QUESTS.values():
-        chance = calculate_quest_success_for_quest(character, quest).chance
-        rating_gain = QUEST_RATING_BY_DIFFICULTY.get(quest.key, (12, 2))[0]
-        if quest.ammo_required <= 0 and quest.medkit_required <= 0:
-            lines.append(
-                f"• {quest.title}: шанс ~{chance}%, энергия {quest.energy_cost}, "
-                f"рейтинг +{rating_gain}, без обязательного расхода"
-            )
+    active = storage.get_active_contract(character.telegram_id)
+    if active:
+        template = QUEST_CONTRACTS.get(str(active.get("template_key", "")))
+        stage = str(active.get("stage", "work"))
+        if template:
+            quest = QUESTS.get(template.difficulty)
+            chance = calculate_quest_success_for_quest(character, quest).chance if quest else 0
+            lines.append(f"📌 Активный контракт: {template.title}")
+            lines.append(f"   Точка работы: «{template.work_location}» | этап: {stage}")
+            if quest:
+                lines.append(
+                    f"   Сложность {quest.title}: шанс ~{chance}%, "
+                    f"энергия {quest.energy_cost}, патр {quest.ammo_required}, "
+                    f"апт {quest.medkit_required}"
+                )
+            if stage == "work":
+                if character.location == template.work_location and not is_traveling(character):
+                    lines.append("   ✅ Ты на месте — жми «Выполнить работу».")
+                else:
+                    lines.append(f"   🗺 Доберись до «{template.work_location}».")
+            elif stage == "return":
+                lines.append(f"   🗺 Вернись на базу «{home}» и сдай отчёт (+{CONTRACT_TURN_IN_BONUS_PERCENT}% RU).")
+        lines.append("")
+    else:
+        lines.append("Нет активного контракта — выбери ниже (только на домашней базе).")
+        lines.append("")
+
+    lines.append("Доступные контракты:")
+    for template in list_quest_contracts_for_character(character):
+        quest = QUESTS.get(template.difficulty)
+        if quest is None:
             continue
+        chance = calculate_quest_success_for_quest(character, quest).chance
+        rating_gain = QUEST_RATING_BY_DIFFICULTY.get(template.difficulty, (12, 2))[0]
+        transport_note = _transport_requirement_text(template.min_transport)
         lines.append(
-            f"• {quest.title}: шанс ~{chance}%, энергия {quest.energy_cost}, "
-            f"патроны {quest.ammo_required}, аптечки {quest.medkit_required} (любые), "
-            f"рейтинг +{rating_gain}"
+            f"• {template.title}{transport_note}\n"
+            f"  {quest.title} → «{template.work_location}» | шанс ~{chance}% | "
+            f"RU {quest.reward_min}–{quest.reward_max} | рейтинг +{rating_gain}"
         )
-    lines.extend(
-        [
-            "",
-            "🚚 Контрабанда — отдельная активность (не сложность задания).",
-        ]
-    )
+    lines.extend(["", "🚚 Контрабанда — отдельная активность."])
     return "\n".join(lines)
 
 
@@ -1499,7 +1675,17 @@ def calculate_quest_success_by_key(character: Character, quest_key: str) -> int:
     return calculate_quest_success_for_quest(character, quest).chance
 
 
-def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResult:
+def _location_contract_ru_mult(storage: Storage, location_name: str, faction: str | None) -> float:
+    location = storage.get_location(location_name)
+    if location is None:
+        return 1.0
+    mult = LOCATION_TYPE_RU_MULT.get(str(location.get("point_type") or ""), 1.0)
+    if faction and str(location.get("controlled_by") or "") == faction:
+        mult *= CONTROLLED_LOCATION_RU_BONUS
+    return mult
+
+
+def accept_quest_contract(storage: Storage, telegram_id: int, contract_key: str) -> ActionResult:
     character = storage.get_character(telegram_id)
     if character is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
@@ -1507,37 +1693,79 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
         return ActionResult(False, _dead_block_text())
     if character.faction is None:
         return ActionResult(False, "Сначала выбери группировку.")
+    if is_traveling(character):
+        return ActionResult(False, travel_block_text(character) or "Ты в пути.")
+    if storage.get_active_contract(telegram_id):
+        return ActionResult(False, "Сначала заверши или отмени текущий контракт.")
 
-    quest = QUESTS.get(quest_key)
-    if quest is None:
-        return ActionResult(False, "Неизвестный тип задания.")
+    template = QUEST_CONTRACTS.get(contract_key)
+    if template is None:
+        return ActionResult(False, "Такого контракта нет.")
+
+    home = faction_home_base(character.faction)
+    if character.location != home:
+        return ActionResult(
+            False,
+            f"Контракты выдают только на домашней базе «{home}». Сейчас ты в «{character.location}».",
+        )
+    if not _has_transport(character, template.min_transport):
+        need = _transport_requirement_text(template.min_transport).strip(" ()")
+        return ActionResult(False, f"Для этого контракта {need or 'нужен транспорт'}.")
+
+    storage.set_active_contract(
+        telegram_id,
+        {"template_key": template.key, "stage": "work", "pending_reward": 0},
+    )
+    return ActionResult(
+        True,
+        f"Контракт принят: «{template.title}».\n"
+        f"Доберись до «{template.work_location}» и выполни работу на месте.",
+    )
+
+
+def cancel_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
+    if not storage.get_active_contract(telegram_id):
+        return ActionResult(False, "Нет активного контракта.")
+    storage.set_active_contract(telegram_id, None)
+    return ActionResult(True, "Контракт отменён.")
+
+
+def _execute_quest_roll(
+    storage: Storage,
+    telegram_id: int,
+    quest: QuestType,
+    *,
+    work_location: str,
+    title_override: str | None = None,
+) -> ActionResult:
+    character = storage.get_character(telegram_id, refresh_energy=False)
+    if character is None:
+        return ActionResult(False, "Персонаж не найден.")
 
     ammo_stock = int(character.inventory.get("ammo_pack", 0))
     medkit_stock = _total_medkit_stock(character)
     if ammo_stock < quest.ammo_required:
         return ActionResult(
             False,
-            f"Недостаточно патронов. Для задания нужно {quest.ammo_required}, у тебя {ammo_stock}.",
+            f"Недостаточно патронов. Нужно {quest.ammo_required}, у тебя {ammo_stock}.",
         )
     if medkit_stock < quest.medkit_required:
         return ActionResult(
             False,
-            f"Недостаточно аптечек. Для задания нужно {quest.medkit_required} "
-            f"(подойдёт обычная / армейская / научная), у тебя {medkit_stock}.",
+            f"Недостаточно аптечек. Нужно {quest.medkit_required}, у тебя {medkit_stock}.",
         )
-
     if not storage.spend_energy(telegram_id, quest.energy_cost):
         return ActionResult(
             False,
-            f"Не хватает энергии. Нужно {quest.energy_cost} ед., восстанови её или купи энергетик.",
+            f"Не хватает энергии. Нужно {quest.energy_cost} ед.",
         )
     if not storage.remove_item(telegram_id, "ammo_pack", quest.ammo_required):
         storage.restore_energy(telegram_id, quest.energy_cost)
-        return ActionResult(False, "Ошибка расхода патронов, задание отменено.")
+        return ActionResult(False, "Ошибка расхода патронов.")
     if quest.medkit_required > 0 and not _consume_quest_medkits(storage, telegram_id, quest.medkit_required):
         storage.add_item(telegram_id, "ammo_pack", quest.ammo_required)
         storage.restore_energy(telegram_id, quest.energy_cost)
-        return ActionResult(False, "Ошибка расхода аптечек, задание отменено.")
+        return ActionResult(False, "Ошибка расхода аптечек.")
 
     updated = storage.get_character(telegram_id, refresh_energy=False)
     if updated is None:
@@ -1546,28 +1774,33 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
     breakdown = calculate_quest_success_for_quest(updated, quest)
     roll = random.randint(1, 100)
     success = roll <= breakdown.chance
+    display_title = title_override or quest.title
 
     durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=3, armor_loss=2)
     rating_success, rating_fail = QUEST_RATING_BY_DIFFICULTY.get(
         quest.key,
         (RATING_REWARD["quest_success"], RATING_REWARD["quest_fail"]),
     )
+
     if success:
-        reward = random.randint(quest.reward_min, quest.reward_max)
+        base_reward = random.randint(quest.reward_min, quest.reward_max)
+        ru_mult = _location_contract_ru_mult(storage, work_location, updated.faction)
+        reward = max(1, int(round(base_reward * ru_mult)))
         storage.change_money(telegram_id, reward)
         _add_rating(storage, telegram_id, rating_success)
         storage.add_player_stat(telegram_id, "quests_completed", 1)
         storage.add_player_stat(telegram_id, "money_earned", reward)
 
-        art_key = roll_artifact_drop()
+        art_key = roll_location_artifact_drop(work_location, 12)
         if art_key is not None:
             storage.add_item(telegram_id, art_key, 1)
             storage.add_player_stat(telegram_id, "artifacts_found", 1)
-            extra = f"\nТы нашел редкий артефакт: {ITEM_LABELS.get(art_key, art_key)}!"
+            extra = f"\nНаходка на «{work_location}»: {ITEM_LABELS.get(art_key, art_key)}!"
         else:
             extra = ""
         stash_text = _maybe_drop_stash(storage, telegram_id)
         achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+        mult_note = f" (×{ru_mult:.2f} за локацию)" if ru_mult > 1.0 else ""
         formula_line = (
             f"База {breakdown.base_chance}% (+снар {breakdown.gear_bonus}%) "
             f"+патр {breakdown.ammo_bonus}% +апт {breakdown.medkit_bonus}% "
@@ -1575,11 +1808,12 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
         )
         return ActionResult(
             True,
-            f"«{quest.title}» выполнено! Шанс {breakdown.chance}% (бросок {roll}).\n"
+            f"«{display_title}» выполнено на «{work_location}»! "
+            f"Шанс {breakdown.chance}% (бросок {roll}).\n"
             f"{formula_line}\n"
-            f"Расход: патр {quest.ammo_required}, апт {quest.medkit_required}. "
-            f"Награда: {reward} RU, рейтинг +{rating_success}."
+            f"Награда: {reward} RU{mult_note}, рейтинг +{rating_success}."
             f"{extra}{stash_text}{durability_text}{achievements_text}",
+            payload={"reward": reward},
         )
 
     min_penalty, max_penalty = QUEST_FAIL_PENALTY_RANGE.get(quest.key, (50, 120))
@@ -1589,9 +1823,115 @@ def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResul
     storage.add_player_stat(telegram_id, "quests_failed", 1)
     return ActionResult(
         False,
-        f"Провал задания «{quest.title}».\n"
-        f"Расход: патроны {quest.ammo_required}, аптечки {quest.medkit_required}.\n"
-        f"Потери на расходники: {penalty} RU, рейтинг −{rating_fail}.{durability_text}",
+        f"Провал «{display_title}» на «{work_location}».\n"
+        f"Потери: {penalty} RU, рейтинг −{rating_fail}.{durability_text}",
+    )
+
+
+def run_contract_work(storage: Storage, telegram_id: int) -> ActionResult:
+    character = storage.get_character(telegram_id)
+    if character is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(character):
+        return ActionResult(False, _dead_block_text())
+    blocked = travel_block_text(character)
+    if blocked:
+        return ActionResult(False, blocked)
+
+    active = storage.get_active_contract(telegram_id)
+    if not active or str(active.get("stage", "")) != "work":
+        return ActionResult(False, "Сейчас нечего выполнять на месте.")
+
+    template = QUEST_CONTRACTS.get(str(active.get("template_key", "")))
+    if template is None:
+        storage.set_active_contract(telegram_id, None)
+        return ActionResult(False, "Контракт повреждён — выбери новый.")
+
+    if character.location != template.work_location:
+        return ActionResult(
+            False,
+            f"Работа выполняется на «{template.work_location}». Ты сейчас: «{character.location}».",
+        )
+
+    quest = QUESTS.get(template.difficulty)
+    if quest is None:
+        return ActionResult(False, "Неизвестная сложность контракта.")
+
+    result = _execute_quest_roll(
+        storage,
+        telegram_id,
+        quest,
+        work_location=template.work_location,
+        title_override=template.title,
+    )
+    if not result.ok:
+        storage.set_active_contract(telegram_id, None)
+        return result
+
+    reward = int((result.payload or {}).get("reward", 0))
+    if template.return_home:
+        storage.set_active_contract(
+            telegram_id,
+            {
+                "template_key": template.key,
+                "stage": "return",
+                "pending_reward": reward,
+            },
+        )
+        home = faction_home_base(character.faction)
+        return ActionResult(
+            True,
+            result.text
+            + f"\n\nВернись на «{home}» и сдай отчёт (+{CONTRACT_TURN_IN_BONUS_PERCENT}% RU).",
+        )
+
+    storage.set_active_contract(telegram_id, None)
+    return result
+
+
+def turn_in_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
+    character = storage.get_character(telegram_id)
+    if character is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    blocked = travel_block_text(character)
+    if blocked:
+        return ActionResult(False, blocked)
+
+    active = storage.get_active_contract(telegram_id)
+    if not active or str(active.get("stage", "")) != "return":
+        return ActionResult(False, "Нечего сдавать — сначала выполни работу на точке.")
+
+    template = QUEST_CONTRACTS.get(str(active.get("template_key", "")))
+    if template is None:
+        storage.set_active_contract(telegram_id, None)
+        return ActionResult(False, "Контракт не найден.")
+
+    home = faction_home_base(character.faction)
+    if character.location != home:
+        return ActionResult(
+            False,
+            f"Сдать отчёт можно только на базе «{home}».",
+        )
+
+    pending = int(active.get("pending_reward", 0))
+    bonus = max(0, int(round(pending * CONTRACT_TURN_IN_BONUS_PERCENT / 100)))
+    if bonus > 0:
+        storage.change_money(telegram_id, bonus)
+        storage.add_player_stat(telegram_id, "money_earned", bonus)
+    storage.set_active_contract(telegram_id, None)
+    return ActionResult(
+        True,
+        f"Отчёт по «{template.title}» сдан на «{home}».\n"
+        f"Бонус за доставку данных: +{bonus} RU.",
+    )
+
+
+def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResult:
+    """Legacy: мгновенные задания заменены контрактами с переходами."""
+    _ = quest_key
+    return ActionResult(
+        False,
+        "Задания теперь контракты с переходами: открой «📋 Задания», прими контракт на базе и доберись до точки.",
     )
 
 
@@ -1855,6 +2195,9 @@ def search_artifacts(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = travel_block_text(player)
+    if blocked:
+        return ActionResult(False, blocked)
     chosen: tuple[str, str, int] | None = None
     for detector in reversed(ARTIFACT_DETECTORS):
         key, _, _ = detector
@@ -2179,6 +2522,8 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
 
     if item_key == "truck" and character.truck_owned:
         return ActionResult(False, "У тебя уже есть грузовик.")
+    if item_key == "niva" and character.niva_owned:
+        return ActionResult(False, "У тебя уже есть Нива.")
     if item_key == "sleeping_bag" and character.sleeping_bag_owned:
         return ActionResult(False, "У тебя уже есть спальник.")
     if item_key == "gear_upgrade":
@@ -2186,6 +2531,8 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
 
     # Пачкой — только расходники, и не больше ×25.
     if qty > 1:
+        if item_key in {"truck", "niva", "sleeping_bag"}:
+            return ActionResult(False, f"{title} можно купить только по одной штуке.")
         if item_key not in BULK_BUY_ITEM_KEYS:
             return ActionResult(False, f"{title} покупается по одной штуке.")
         if qty > BULK_BUY_MAX_QTY:
@@ -2198,7 +2545,10 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
 
     if item_key == "truck":
         storage.set_truck_owned(telegram_id)
-        return ActionResult(True, "Покупка оформлена: грузовик теперь в твоем распоряжении.")
+        return ActionResult(True, "Покупка оформлена: грузовик (×5 к скорости перехода) в твоём распоряжении.")
+    if item_key == "niva":
+        storage.set_niva_owned(telegram_id)
+        return ActionResult(True, "Нива куплена: переходы ускоряются в 2 раза.")
     if item_key == "sleeping_bag":
         storage.set_sleeping_bag_owned(telegram_id)
         return ActionResult(True, "Спальник куплен. Энергия теперь восстанавливается в 2 раза быстрее.")
@@ -2268,6 +2618,7 @@ TRADER_SELL_CATALOG: dict[str, tuple[str, ...]] = {
         "detector_veles",
         "detector_svarog",
         "sleeping_bag",
+        "niva",
         "truck",
         "stash_case",
     ),
@@ -2327,6 +2678,8 @@ def player_owns_sellable_item(character: Character, item_key: str) -> bool:
         return False
     if item_key == "truck":
         return bool(character.truck_owned)
+    if item_key == "niva":
+        return bool(character.niva_owned)
     if item_key == "sleeping_bag":
         return bool(character.sleeping_bag_owned)
     if item_key == "fuel_can":
@@ -2413,6 +2766,12 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
         if not character.truck_owned:
             return ActionResult(False, "У тебя нет грузовика для продажи.")
         storage.clear_truck_owned(telegram_id)
+        storage.change_money(telegram_id, sell_price)
+        return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
+    if item_key == "niva":
+        if not character.niva_owned:
+            return ActionResult(False, "У тебя нет Нивы для продажи.")
+        storage.clear_niva_owned(telegram_id)
         storage.change_money(telegram_id, sell_price)
         return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
     if item_key == "sleeping_bag":
@@ -2849,10 +3208,18 @@ def format_inventory(
         items = "• Пусто"
 
     vehicle = (
-        f"Есть грузовик ({max(0, min(100, int(character.truck_durability)))}%)"
+        f"Грузовик ({max(0, min(100, int(character.truck_durability)))}%)"
         if character.truck_owned
-        else "Нет транспорта"
+        else (
+            "Нива"
+            if character.niva_owned
+            else "Нет транспорта"
+        )
     )
+    if character.truck_owned and character.niva_owned:
+        vehicle = (
+            f"Грузовик ({max(0, min(100, int(character.truck_durability)))}%) + Нива"
+        )
     sleeping_bag = "Есть спальник (x2 реген энергии)" if character.sleeping_bag_owned else "Спальника нет"
     equipment_labels = {
         "weapon": "Оружие",
@@ -2922,44 +3289,79 @@ def _compute_truck_wear(distance_px: float | None, travel_minutes: int) -> int:
     return random.randint(min_wear, max_wear)
 
 
+def _pick_travel_transport(character: Character) -> tuple[str, int, int]:
+    """Режим, множитель скорости, стоимость энергии."""
+    if character.truck_owned and character.truck_durability > 0 and character.fuel > 0:
+        return "truck", TRAVEL_SPEED_TRUCK, 8
+    if character.niva_owned:
+        return "niva", TRAVEL_SPEED_NIVA, 12
+    return "foot", TRAVEL_SPEED_FOOT, 16
+
+
+def _compute_base_travel_minutes(
+    origin: str,
+    destination: str,
+    locations: dict[str, dict[str, Any]],
+    faction: str | None,
+) -> tuple[int, float | None]:
+    travel_minutes = 30
+    distance_px: float | None = None
+    current_point = MAP_TRAVEL_POINTS.get(origin)
+    destination_point = MAP_TRAVEL_POINTS.get(destination)
+    if current_point and destination_point:
+        distance_px = dist(current_point, destination_point)
+        travel_minutes = max(10, round(distance_px / 8))
+    target = locations.get(destination) or {}
+    if target.get("point_type") == "точка интереса" and target.get("controlled_by") == faction:
+        travel_minutes = max(5, int(travel_minutes * 0.7))
+    return travel_minutes, distance_px
+
+
+def travel_status_text(character: Character) -> str | None:
+    if not is_traveling(character):
+        return None
+    transport = character.travel_transport or "foot"
+    labels = {"foot": "пешком", "niva": "на Ниве", "truck": "на грузовике"}
+    return (
+        f"🚐 В пути → «{character.travel_destination}» ({labels.get(transport, transport)})\n"
+        f"Прибытие: {format_travel_eta(character)}"
+    )
+
+
 def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionResult:
     character = storage.get_character(telegram_id)
     if character is None:
         return ActionResult(False, "Сначала создай персонажа.")
     if _is_dead(character):
         return ActionResult(False, _dead_block_text())
+    if is_traveling(character):
+        return ActionResult(False, travel_block_text(character) or "Ты уже в пути.")
     if character.location == destination:
         return ActionResult(False, f"Ты уже находишься в локации «{destination}».")
 
     locations = {loc["name"]: loc for loc in storage.get_locations()}
     if destination not in locations:
         return ActionResult(False, "Такой локации нет.")
-    target = locations[destination]
 
-    will_use_truck = character.truck_owned and character.truck_durability > 0 and character.fuel > 0
-    energy_cost = 8 if will_use_truck else 16
-    travel_minutes = 10 if will_use_truck else 30
-    distance_px: float | None = None
-    current_point = MAP_TRAVEL_POINTS.get(character.location)
-    destination_point = MAP_TRAVEL_POINTS.get(destination)
-    if current_point and destination_point:
-        distance_px = dist(current_point, destination_point)
-        if will_use_truck:
-            travel_minutes = max(5, round(distance_px / 24))
-        else:
-            travel_minutes = max(10, round(distance_px / 8))
-
-    if target["point_type"] == "точка интереса" and target["controlled_by"] == character.faction:
-        travel_minutes = max(5, int(travel_minutes * 0.7))
+    transport_mode, speed_mult, energy_cost = _pick_travel_transport(character)
+    base_minutes, distance_px = _compute_base_travel_minutes(
+        character.location,
+        destination,
+        locations,
+        character.faction,
+    )
+    travel_minutes = max(1, int(round(base_minutes / speed_mult)))
+    real_seconds = travel_minutes * TRAVEL_REAL_SECONDS_PER_GAME_MINUTE
+    arrives_at = _utc_now() + timedelta(seconds=real_seconds)
 
     if not storage.spend_energy(telegram_id, energy_cost):
         return ActionResult(False, f"Не хватает энергии для перехода (нужно {energy_cost}).")
-    if will_use_truck and not storage.change_fuel(telegram_id, -1):
-        storage.restore_energy(telegram_id, energy_cost)
-        return ActionResult(False, "Не удалось списать топливо, переход отменен.")
 
     truck_wear_text = ""
-    if will_use_truck:
+    if transport_mode == "truck":
+        if not storage.change_fuel(telegram_id, -1):
+            storage.restore_energy(telegram_id, energy_cost)
+            return ActionResult(False, "Не удалось списать топливо, переход отменён.")
         wear = _compute_truck_wear(distance_px, travel_minutes)
         durability = storage.apply_truck_wear(telegram_id, wear)
         if durability is None:
@@ -2969,12 +3371,14 @@ def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionRes
         else:
             truck_wear_text = f"\nИзнос грузовика: -{wear}% (прочность: {durability}%)."
 
-    storage.set_location(telegram_id, destination)
+    storage.start_travel(telegram_id, destination, arrives_at, transport_mode)
+    transport_labels = {"foot": "пешком", "niva": "на Ниве (×2)", "truck": "на грузовике (×5)"}
+    eta = format_arrival_eta(arrives_at)
     return ActionResult(
         True,
-        f"Переход в «{destination}» выполнен.\n"
+        f"Выехал из «{character.location}» → «{destination}» {transport_labels[transport_mode]}.\n"
         f"Затрачено энергии: {energy_cost}.\n"
-        f"Оценка времени пути: ~{travel_minutes} мин."
+        f"Время в пути: ~{travel_minutes} мин ({real_seconds} сек), прибытие {eta}."
         f"{truck_wear_text}",
     )
 
@@ -4741,6 +5145,9 @@ def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, _dead_block_text())
     if player.faction is None:
         return ActionResult(False, "Сначала выбери группировку.")
+    blocked = travel_block_text(player)
+    if blocked:
+        return ActionResult(False, blocked)
 
     energy_cost = 14
     if not storage.spend_energy(telegram_id, energy_cost):

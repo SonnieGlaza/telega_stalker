@@ -136,6 +136,8 @@ def run_smoke_check() -> None:
         assert buy_item(storage, 111, "detector_otklik").ok
         storage.change_money(111, 100000)
         assert buy_item(storage, 111, "truck").ok
+        storage.change_money(222, 20000)
+        assert buy_item(storage, 222, "niva").ok
         storage.change_fuel(111, 3)
         before_travel = storage.get_character(111, refresh_energy=False)
         assert before_travel is not None
@@ -149,9 +151,26 @@ def run_smoke_check() -> None:
         assert not buy_item(storage, 111, "detector_otklik", amount=5).ok
         assert use_medkit(storage, 111).ok is False  # hp full
         assert search_artifacts(storage, 111).text
-        assert travel_to(storage, 111, "Янтарь").text
+        travel_result = travel_to(storage, 111, "Янтарь")
+        assert travel_result.ok, travel_result.text
+        in_transit = storage.get_character(111, refresh_energy=False)
+        assert in_transit is not None
+        from app.game_logic import is_traveling, accept_quest_contract, run_contract_work
+
+        assert is_traveling(in_transit)
+        from datetime import datetime, timedelta, timezone
+
+        past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        with storage._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET travel_arrives_at = ? WHERE telegram_id = ?",
+                (past, 111),
+            )
+        storage.resolve_travel_if_due(111)
         after_travel = storage.get_character(111, refresh_energy=False)
         assert after_travel is not None
+        assert after_travel.location == "Янтарь"
+        assert not is_traveling(after_travel)
         assert after_travel.truck_durability < before_truck_durability
         assert before_truck_durability - after_travel.truck_durability >= 5
         assert before_truck_durability - after_travel.truck_durability <= 15
@@ -160,6 +179,14 @@ def run_smoke_check() -> None:
         after_repair = storage.get_character(111, refresh_energy=False)
         assert after_repair is not None
         assert after_repair.truck_durability == 100
+
+        storage.set_location(111, "Росток")
+        contract = accept_quest_contract(storage, 111, "easy_boloto")
+        assert contract.ok, contract.text
+        storage.set_location(111, "Болото")
+        work = run_contract_work(storage, 111)
+        assert work.text
+
         assert build_alliance_overview(storage, 111)
         assert build_economy_overview(storage, 111)
 
@@ -223,7 +250,8 @@ def run_smoke_check() -> None:
 
         # Keyboard callback sanity (basic non-empty check).
         callbacks = _all_callback_data()
-        assert "artifact:search" in callbacks
+        assert "contract:refresh" in callbacks
+        assert "travel:status" in callbacks
         assert "rank:menu" in callbacks
         assert "war:section:scenario" in callbacks
         assert "war:section:lobby" in callbacks

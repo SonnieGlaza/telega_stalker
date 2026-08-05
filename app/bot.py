@@ -53,6 +53,15 @@ from app.game_logic import (
     create_or_join_faction_raid,
     launch_open_raid,
     build_quest_overview,
+    accept_quest_contract,
+    cancel_quest_contract,
+    turn_in_quest_contract,
+    run_contract_work,
+    faction_home_base,
+    is_traveling,
+    travel_status_text,
+    format_location_display,
+    QUEST_CONTRACTS,
     apply_controlled_points_income,
     process_emission_cycle,
     process_zone_event_cycle,
@@ -63,7 +72,6 @@ from app.game_logic import (
     deposit_to_faction_warehouse,
     format_inventory,
     repair_gear,
-    run_quest,
     sell_item,
     list_owned_trader_sell_buttons,
     trader_sell_categories_with_stock,
@@ -139,6 +147,7 @@ from app.keyboards import (
     pda_keyboard,
     sortie_keyboard,
     quests_keyboard,
+    travel_keyboard,
     raid_keyboard,
     topup_keyboard,
     trader_buy_categories_keyboard,
@@ -876,10 +885,11 @@ async def cmd_dbstatus(message: Message) -> None:
         me_block = (
             f"Твой персонаж в БД:\n"
             f"• {me.nickname} | {me.gender} | {me.faction or 'без гп'}\n"
-            f"• Локация: {me.location}\n"
+            f"• Локация: {format_location_display(me)}\n"
             f"• HP {me.health} | энергия {me.energy}/{me.max_energy} | сила {me.gear_power}\n"
             f"• RU {me.money} | топливо {me.fuel}\n"
-            f"• Грузовик: {'да' if me.truck_owned else 'нет'} ({me.truck_durability}%) | "
+            f"• Нива: {'да' if me.niva_owned else 'нет'} | "
+            f"Грузовик: {'да' if me.truck_owned else 'нет'} ({me.truck_durability}%) | "
             f"Спальник: {'да' if me.sleeping_bag_owned else 'нет'}\n"
             f"• Оружие: {me.equipment.get('weapon')} ({me.equipment.get('weapon_durability')}%)\n"
             f"• Броня: {me.equipment.get('armor')} ({me.equipment.get('armor_durability')}%)\n"
@@ -1764,6 +1774,53 @@ async def equip_armor_callback(callback: CallbackQuery) -> None:
         await send_profile_snapshot(callback.message, player)
 
 
+QUEST_DIFFICULTY_EMOJI = {
+    "easy": "🟢",
+    "hard": "🟡",
+    "heavy": "🟠",
+    "impossible": "🔴",
+}
+
+
+def _quests_menu_payload(storage, player):
+    overview = build_quest_overview(storage, player)
+    active = storage.get_active_contract(player.telegram_id)
+    home = faction_home_base(player.faction)
+    traveling = is_traveling(player)
+    at_home = player.location == home and not traveling
+
+    contract_buttons: list[tuple[str, str]] = []
+    show_work = False
+    show_turnin = False
+    show_cancel = bool(active)
+
+    if active:
+        stage = str(active.get("stage", "work"))
+        template = QUEST_CONTRACTS.get(str(active.get("template_key", "")))
+        if stage == "work" and template:
+            show_work = player.location == template.work_location and not traveling
+        if stage == "return":
+            show_turnin = player.location == home and not traveling
+    elif at_home:
+        for template in QUEST_CONTRACTS.values():
+            emoji = QUEST_DIFFICULTY_EMOJI.get(template.difficulty, "📋")
+            contract_buttons.append(
+                (f"{emoji} {template.title}", f"contract:accept:{template.key}")
+            )
+
+    keyboard = quests_keyboard(
+        contract_buttons=contract_buttons,
+        show_work=show_work,
+        show_turnin=show_turnin,
+        show_cancel=show_cancel,
+    )
+    intro = (
+        "Контракты с переходами: прими на домашней базе, доберись до точки, выполни работу.\n"
+        "🚚 Контрабанда — отдельная кнопка ниже.\n\n"
+    )
+    return intro + overview, keyboard
+
+
 @router.message(F.text == "📋 Задания")
 async def show_quests(message: Message) -> None:
     player = ensure_character(message)
@@ -1774,20 +1831,73 @@ async def show_quests(message: Message) -> None:
         await message.answer("Сначала выбери группировку.")
         return
 
-    overview = build_quest_overview(player)
-    await message.answer(
-        "Выбери сложность задания.\n"
-        "🚚 Контрабанда — отдельная кнопка ниже, это не сложность квеста.\n\n"
-        f"{overview}",
-        reply_markup=quests_keyboard(),
-    )
+    storage = get_storage()
+    text, keyboard = _quests_menu_payload(storage, player)
+    await message.answer(text, reply_markup=keyboard)
 
 
-@router.callback_query(F.data.startswith("quest:"))
-async def handle_quest(callback: CallbackQuery) -> None:
-    quest_key = (callback.data or "").split(":", maxsplit=1)[1]
-    result = run_quest(get_storage(), callback.from_user.id, quest_key)
+@router.callback_query(F.data == "contract:refresh")
+async def refresh_quests_menu(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id)
+    if player is None or not player_ready(player):
+        await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
+        return
+    text, keyboard = _quests_menu_payload(storage, player)
+    await edit_menu_message(callback, text, keyboard)
+
+
+@router.callback_query(F.data.startswith("contract:accept:"))
+async def accept_contract_callback(callback: CallbackQuery) -> None:
+    contract_key = (callback.data or "").split(":", maxsplit=2)[2]
+    result = accept_quest_contract(get_storage(), callback.from_user.id, contract_key)
     await reply_action_result(callback, result.text)
+    if result.ok:
+        storage = get_storage()
+        player = storage.get_character(callback.from_user.id, refresh_energy=False)
+        if player is not None:
+            text, keyboard = _quests_menu_payload(storage, player)
+            await edit_menu_message(callback, text, keyboard)
+
+
+@router.callback_query(F.data == "contract:work")
+async def contract_work_callback(callback: CallbackQuery) -> None:
+    result = run_contract_work(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+    if result.ok or not result.ok:
+        storage = get_storage()
+        player = storage.get_character(callback.from_user.id, refresh_energy=False)
+        if player is not None:
+            text, keyboard = _quests_menu_payload(storage, player)
+            try:
+                await edit_menu_message(callback, text, keyboard)
+            except TelegramBadRequest:
+                pass
+
+
+@router.callback_query(F.data == "contract:turnin")
+async def contract_turnin_callback(callback: CallbackQuery) -> None:
+    result = turn_in_quest_contract(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is not None:
+        text, keyboard = _quests_menu_payload(storage, player)
+        try:
+            await edit_menu_message(callback, text, keyboard)
+        except TelegramBadRequest:
+            pass
+
+
+@router.callback_query(F.data == "contract:cancel")
+async def contract_cancel_callback(callback: CallbackQuery) -> None:
+    result = cancel_quest_contract(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is not None:
+        text, keyboard = _quests_menu_payload(storage, player)
+        await edit_menu_message(callback, text, keyboard)
 
 
 @router.message(F.text == "🎖 Достижения")
@@ -2259,17 +2369,49 @@ async def show_travel(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
-    locations = get_storage().get_locations()
+    db = get_storage()
+    locations = db.get_locations()
+    traveling = is_traveling(player)
+    status = travel_status_text(player)
+    if traveling and status:
+        text = (
+            "Ты уже в пути.\n"
+            f"{status}\n\n"
+            "Пока идёт переход, другие действия на точке недоступны."
+        )
+    else:
+        text = (
+            "Выбирай локацию для перехода.\n"
+            "Пешком — ×1, Нива (10 000 RU) — ×2, грузовик — ×5 (нужно топливо).\n"
+            "Переход занимает реальное время (1 игровая мин ≈ 10 сек)."
+        )
     await message.answer(
-        "Выбирай локацию для перехода. Переходы расходуют энергию, "
-        "грузовик ускоряет путь, но тратит топливо.",
-        reply_markup=locations_keyboard(locations, mode="travel"),
+        text,
+        reply_markup=travel_keyboard(locations, traveling=traveling),
     )
+
+
+@router.callback_query(F.data == "travel:status")
+async def travel_status_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    status = travel_status_text(player)
+    if not status:
+        await callback.answer("Сейчас ты никуда не едешь.", show_alert=True)
+        return
+    await callback.answer(status, show_alert=True)
 
 
 @router.callback_query(F.data.startswith("travel:"))
 async def handle_travel(callback: CallbackQuery) -> None:
-    destination = (callback.data or "").split(":", maxsplit=1)[1]
+    raw = (callback.data or "").split(":", maxsplit=1)
+    if len(raw) < 2:
+        return
+    destination = raw[1]
+    if destination == "status":
+        return
     result = travel_to(get_storage(), callback.from_user.id, destination)
     await reply_action_result(callback, result.text)
 

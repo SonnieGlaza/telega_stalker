@@ -44,8 +44,13 @@ class Character:
     equipment: dict[str, Any]
     truck_owned: bool
     truck_durability: int
+    niva_owned: bool
     sleeping_bag_owned: bool
     fuel: int
+    travel_destination: str | None
+    travel_arrives_at: datetime | None
+    travel_transport: str | None
+    active_contract_json: str | None
     energy_updated_at: datetime
     radiation: int
     hunger: int
@@ -1330,6 +1335,7 @@ class Storage:
         if refresh_energy:
             self.recover_energy(telegram_id)
             self.refresh_survival(telegram_id)
+        self.resolve_travel_if_due(telegram_id)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM characters WHERE telegram_id = ?",
@@ -1388,6 +1394,124 @@ class Storage:
             conn.execute(
                 "UPDATE characters SET location = ? WHERE telegram_id = ?",
                 (location, telegram_id),
+            )
+        self.save_snapshot()
+
+    def resolve_travel_if_due(self, telegram_id: int) -> bool:
+        """Завершить переход, если время прибытия наступило."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT travel_destination, travel_arrives_at
+                FROM characters
+                WHERE telegram_id = ?
+                """,
+                (telegram_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            destination = row["travel_destination"]
+            raw_arrives = row["travel_arrives_at"]
+            if destination is None or str(destination).strip() == "":
+                return False
+            if raw_arrives is None or str(raw_arrives).strip() == "":
+                return False
+            try:
+                arrives_at = datetime.fromisoformat(str(raw_arrives))
+            except ValueError:
+                return False
+            if arrives_at.tzinfo is None:
+                arrives_at = arrives_at.replace(tzinfo=timezone.utc)
+            if arrives_at > utc_now():
+                return False
+            conn.execute(
+                """
+                UPDATE characters
+                SET location = ?,
+                    travel_destination = NULL,
+                    travel_arrives_at = NULL,
+                    travel_transport = NULL
+                WHERE telegram_id = ?
+                """,
+                (str(destination), telegram_id),
+            )
+        self.save_snapshot()
+        return True
+
+    def start_travel(
+        self,
+        telegram_id: int,
+        destination: str,
+        arrives_at: datetime,
+        transport_mode: str,
+    ) -> None:
+        arrives_iso = arrives_at.isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE characters
+                SET travel_destination = ?,
+                    travel_arrives_at = ?,
+                    travel_transport = ?
+                WHERE telegram_id = ?
+                """,
+                (destination, arrives_iso, transport_mode, telegram_id),
+            )
+        self.save_snapshot()
+
+    def clear_travel(self, telegram_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE characters
+                SET travel_destination = NULL,
+                    travel_arrives_at = NULL,
+                    travel_transport = NULL
+                WHERE telegram_id = ?
+                """,
+                (telegram_id,),
+            )
+        self.save_snapshot()
+
+    def set_niva_owned(self, telegram_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET niva_owned = 1 WHERE telegram_id = ?",
+                (telegram_id,),
+            )
+        self.save_snapshot()
+
+    def clear_niva_owned(self, telegram_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET niva_owned = 0 WHERE telegram_id = ?",
+                (telegram_id,),
+            )
+        self.save_snapshot()
+
+    def get_active_contract(self, telegram_id: int) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT active_contract_json FROM characters WHERE telegram_id = ?",
+                (telegram_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        raw = row["active_contract_json"]
+        if raw is None or str(raw).strip() == "":
+            return None
+        try:
+            data = json.loads(str(raw))
+        except json.JSONDecodeError:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def set_active_contract(self, telegram_id: int, contract: dict[str, Any] | None) -> None:
+        payload = json.dumps(contract, ensure_ascii=False) if contract else None
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET active_contract_json = ? WHERE telegram_id = ?",
+                (payload, telegram_id),
             )
         self.save_snapshot()
 
@@ -3112,6 +3236,11 @@ class Storage:
                 "ALTER TABLE characters ADD COLUMN truck_durability INTEGER NOT NULL DEFAULT 0",
             ),
             ("faction_rank", "ALTER TABLE characters ADD COLUMN faction_rank TEXT"),
+            ("niva_owned", "ALTER TABLE characters ADD COLUMN niva_owned INTEGER NOT NULL DEFAULT 0"),
+            ("travel_destination", "ALTER TABLE characters ADD COLUMN travel_destination TEXT"),
+            ("travel_arrives_at", "ALTER TABLE characters ADD COLUMN travel_arrives_at TEXT"),
+            ("travel_transport", "ALTER TABLE characters ADD COLUMN travel_transport TEXT"),
+            ("active_contract_json", "ALTER TABLE characters ADD COLUMN active_contract_json TEXT"),
         ]
         for col_name, ddl in add_columns:
             if col_name in column_names:
@@ -3328,8 +3457,17 @@ class Storage:
             equipment=equipment,
             truck_owned=bool(Storage._row_get(row, "truck_owned", 0)),
             truck_durability=max(0, min(100, _as_int(Storage._row_get(row, "truck_durability"), 0))),
+            niva_owned=bool(Storage._row_get(row, "niva_owned", 0)),
             sleeping_bag_owned=bool(Storage._row_get(row, "sleeping_bag_owned", 0)),
             fuel=_as_int(Storage._row_get(row, "fuel"), 0),
+            travel_destination=Storage._row_get(row, "travel_destination"),
+            travel_arrives_at=(
+                _as_dt(Storage._row_get(row, "travel_arrives_at"))
+                if Storage._row_get(row, "travel_arrives_at")
+                else None
+            ),
+            travel_transport=Storage._row_get(row, "travel_transport"),
+            active_contract_json=Storage._row_get(row, "active_contract_json"),
             energy_updated_at=_as_dt(Storage._row_get(row, "energy_updated_at")),
             radiation=max(0, min(200, _as_int(Storage._row_get(row, "radiation"), 0))),
             hunger=max(0, min(200, _as_int(Storage._row_get(row, "hunger"), 0))),
