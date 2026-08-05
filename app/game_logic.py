@@ -550,6 +550,8 @@ DUEL_CHANCE_MIN = 15
 DUEL_CHANCE_MAX = 85
 DUEL_WINNER_WOUND_MIN = 5
 DUEL_WINNER_WOUND_MAX = 12
+DUEL_LOSER_HP_LOSS = 20
+DUEL_LOSER_MONEY_PERCENT = 10
 DUEL_META_IN_PREFIX = "duel:pending_in:"
 DUEL_META_OUT_PREFIX = "duel:pending_out:"
 
@@ -1923,7 +1925,7 @@ def create_duel_challenge(
         f"Сила снаряги: {challenger.nickname} {my_power} vs ты {their_power}.\n"
         f"Шанс победы вызывающего ~{chance}%.\n"
         f"Стоимость при согласии: {DUEL_ENERGY_COST} энергии у каждого.\n"
-        f"Проигравший падает (0 HP), победитель получает лёгкое ранение."
+        f"Проигравший: −{DUEL_LOSER_HP_LOSS} HP и −{DUEL_LOSER_MONEY_PERCENT}% денег (победителю)."
     )
     return ActionResult(True, challenger_msg), target_msg
 
@@ -1950,7 +1952,7 @@ def accept_duel(
     target_id: int,
     challenger_id: int,
 ) -> tuple[ActionResult, str | None]:
-    """Принятие дуэли: ролл шанса, урон/смерть, уведомление вызывающему."""
+    """Принятие дуэли: ролл шанса, штраф проигравшему, уведомление вызывающему."""
     pending = get_pending_duel_challenger(storage, target_id)
     if pending is None or pending != challenger_id:
         return ActionResult(False, "Этот вызов на дуэль уже неактивен."), None
@@ -1989,9 +1991,20 @@ def accept_duel(
     loser_id = loser.telegram_id
 
     winner_max_hp = effective_max_health(winner)
+    loser_max_hp = effective_max_health(loser)
     wound = random.randint(DUEL_WINNER_WOUND_MIN, DUEL_WINNER_WOUND_MAX)
     storage.change_health(winner_id, -wound, max_health=winner_max_hp)
-    storage.change_health(loser_id, -max(1, loser.health), max_health=effective_max_health(loser))
+    # Проигравший не падает: −20 HP, но не ниже 1.
+    loser_hp_loss = min(DUEL_LOSER_HP_LOSS, max(0, int(loser.health) - 1))
+    if loser_hp_loss > 0:
+        storage.change_health(loser_id, -loser_hp_loss, max_health=loser_max_hp)
+
+    money_taken = max(0, int(loser.money * DUEL_LOSER_MONEY_PERCENT // 100))
+    if money_taken > 0:
+        if storage.change_money(loser_id, -money_taken):
+            storage.change_money(winner_id, money_taken)
+        else:
+            money_taken = 0
 
     _add_rating(storage, winner_id, RATING_REWARD["duel_win"])
     _add_rating(storage, loser_id, -RATING_REWARD["duel_lose"])
@@ -2004,8 +2017,10 @@ def accept_duel(
     common = (
         f"⚔️ Дуэль: {challenger.nickname} ({c_power}) vs {target.nickname} ({t_power})\n"
         f"Шанс победы {challenger.nickname}: {chance}% (бросок {roll}).\n"
-        f"Победитель: {winner.nickname} (HP {winner_hp}, ранение −{wound}).\n"
-        f"Проигравший: {loser.nickname} пал (HP {loser_hp}). Респавн — 500 RU."
+        f"Победитель: {winner.nickname} (HP {winner_hp}, ранение −{wound}"
+        f"{f', +{money_taken} RU' if money_taken else ''}).\n"
+        f"Проигравший: {loser.nickname} (HP {loser_hp}, −{loser_hp_loss} HP"
+        f"{f', −{money_taken} RU' if money_taken else ''})."
     )
     if target_id == winner_id:
         target_text = f"Ты победил(а) в дуэли!\n{common}"
