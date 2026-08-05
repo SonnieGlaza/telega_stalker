@@ -224,8 +224,9 @@ def run_smoke_check() -> None:
         assert war_create.ok, war_create.text
         war_join = create_or_join_war_lobby(storage, 222, "Свалка")
         assert war_join.ok, war_join.text
-        war_launch = launch_war_lobby(storage, 111)
-        assert war_launch.text
+        too_few = launch_war_lobby(storage, 111)
+        assert not too_few.ok, too_few.text
+        assert "5" in too_few.text
         assert build_war_lobby_overview(storage, 111)
         assert "Создал:" in build_war_lobby_overview(storage, 111)
         from app.game_logic import dissolve_war_lobby, can_dissolve_war_lobby
@@ -233,6 +234,20 @@ def run_smoke_check() -> None:
         dissolved = dissolve_war_lobby(storage, 111)
         assert dissolved.ok, dissolved.text
         assert "Открытых военных лобби нет" in build_war_lobby_overview(storage, 111)
+
+        war_create2 = create_or_join_war_lobby(storage, 111, "Янтарь")
+        assert war_create2.ok, war_create2.text
+        storage.restore_energy(111, 100)
+        storage.restore_energy(222, 100)
+        create_or_join_war_lobby(storage, 222, "Янтарь")
+        for extra_id, extra_name in ((501, "Duty3"), (502, "Duty4"), (503, "Duty5")):
+            storage.create_character(extra_id, extra_name, "Мужской")
+            storage.set_faction(extra_id, "Долг")
+            storage.restore_energy(extra_id, 100)
+            join_extra = create_or_join_war_lobby(storage, extra_id, "Янтарь")
+            assert join_extra.ok, join_extra.text
+        war_launch = launch_war_lobby(storage, 111)
+        assert war_launch.text
         solo_assault = attack_location(storage, 111, "Свалка")
         assert not solo_assault.ok, solo_assault.text
         assert attempt_smuggling(storage, 111).text
@@ -259,11 +274,71 @@ def run_smoke_check() -> None:
         storage.change_health(111, 100)
 
         # Market + lots.
+        from app.game_logic import (
+            buy_first_market_lot,
+            create_duel_challenge,
+            accept_duel,
+            propose_alliance,
+            process_due_travels,
+        )
+        from app.html_utils import html_safe
+
+        assert html_safe("<test>") == "&lt;test&gt;"
+        assert html_safe(None) == ""
+
+        # Travel arrival notice on next action.
+        storage.set_location(111, "Росток")
+        travel3 = travel_to(storage, 111, "Свалка")
+        assert travel3.ok, travel3.text
+        past3 = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        with storage._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET travel_arrives_at = ? WHERE telegram_id = ?",
+                (past3, 111),
+            )
+        dest = storage.resolve_travel_if_due(111)
+        assert dest == "Свалка"
+        assert storage.pop_arrival_notice(111) == "Свалка"
+        assert storage.pop_arrival_notice(111) is None
+
+        # Periodic travel push for idle player.
+        storage.set_location(222, "Росток")
+        travel4 = travel_to(storage, 222, "Болото")
+        assert travel4.ok, travel4.text
+        past4 = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        with storage._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET travel_arrives_at = ? WHERE telegram_id = ?",
+                (past4, 222),
+            )
+        due = process_due_travels(storage)
+        assert (222, "Болото") in due
+        assert storage.get_character(222, refresh_energy=False).location == "Болото"
+
+        # Duels.
+        storage.restore_energy(111, 100)
+        storage.restore_energy(222, 100)
+        duel, target_msg = create_duel_challenge(storage, 111, 222)
+        assert duel.ok, duel.text
+        assert target_msg and "дуэль" in target_msg.lower()
+        duel_result, challenger_msg = accept_duel(storage, 222, 111)
+        assert duel_result.ok, duel_result.text
+        assert challenger_msg
+
+        # Alliance notify payload.
+        alliance = propose_alliance(storage, 111, "Бандиты")
+        assert alliance.ok, alliance.text
+        assert alliance.payload and alliance.payload.get("notify")
+
         # ensure one equipment exists in inventory
         buy_weapon = buy_item(storage, 111, "weapon_pm")
         assert buy_weapon.ok, buy_weapon.text
         lot_result = create_market_lot(storage, 111, "weapon_pm", 1)
         assert lot_result.ok, lot_result.text
+        storage.change_money(222, 50000)
+        market_buy = buy_first_market_lot(storage, 222)
+        assert market_buy.ok, market_buy.text
+        assert market_buy.payload and market_buy.payload.get("notify")
         lots_text, lots = build_market_lots_overview(storage, 222, limit=10)
         assert lots_text
         assert isinstance(lots, list)

@@ -14,7 +14,7 @@ from app.faction_ranks import (
     resolve_rank_title,
 )
 from app.skins import next_skin_progress, resolve_skin
-from app.storage import Character, Storage
+from app.html_utils import html_safe as h
 
 
 @dataclass(frozen=True)
@@ -1024,7 +1024,7 @@ def _dead_block_text() -> str:
 def build_dead_character_text(character: Character) -> str:
     max_hp = effective_max_health(character)
     return (
-        f"☠️ {character.nickname}, ты погиб в Зоне.\n"
+        f"☠️ {h(character.nickname)}, ты погиб в Зоне.\n"
         f"HP: {character.health}/{max_hp}\n"
         f"Локация: {character.location}\n"
         f"Для продолжения нужен респавн.\n"
@@ -1400,7 +1400,7 @@ def build_character_stats_overview(storage: Storage, telegram_id: int) -> str:
         return "Сначала создай персонажа через /start."
     stats = storage.get_player_stats(telegram_id)
     return (
-        f"📊 Статистика персонажа — {player.nickname}\n\n"
+        f"📊 Статистика персонажа — {h(player.nickname)}\n\n"
         f"📋 Заданий выполнено: {stats['quests_completed']}\n"
         f"🪖 Успешных рейдов: {stats['raids_completed']}\n"
         f"⚔️ Захватов точек: {stats['wars_won']}\n"
@@ -1444,7 +1444,7 @@ def build_rating_overview(
     for offset, row in enumerate(chunk):
         idx = start + offset + 1
         faction = row.get("faction") or "нейтрал"
-        nickname = str(row.get("nickname") or f"Игрок {row.get('telegram_id')}")
+        nickname = h(str(row.get("nickname") or f"Игрок {row.get('telegram_id')}"))
         rating = int(row.get("rating_points") or 0)
         achievements = int(row.get("achievements_unlocked") or 0)
         marker = "👑 " if idx == 1 else ""
@@ -2304,12 +2304,12 @@ def transfer_money_with_fee(storage: Storage, sender_id: int, target_id: int, am
     storage.change_money(target_id, amount)
     return ActionResult(
         True,
-        f"Перевод выполнен: {amount} RU игроку {target.nickname}.\nКомиссия: {fee} RU.\nСписано: {total} RU.",
+        f"Перевод выполнен: {amount} RU игроку {h(target.nickname)}.\nКомиссия: {fee} RU.\nСписано: {total} RU.",
         payload={
             "notify": [
                 (
                     target_id,
-                    f"💰 {sender.nickname} перевёл(а) тебе {amount} RU.",
+                    f"💰 {h(sender.nickname)} перевёл(а) тебе {amount} RU.",
                 ),
             ],
         },
@@ -2389,7 +2389,7 @@ def create_duel_challenge(
     if _is_dead(challenger):
         return ActionResult(False, _dead_block_text()), None
     if _is_dead(target):
-        return ActionResult(False, f"{target.nickname} сейчас мёртв и не может драться."), None
+        return ActionResult(False, f"{h(target.nickname)} сейчас мёртв и не может драться."), None
     if challenger.energy < DUEL_ENERGY_COST:
         return (
             ActionResult(False, f"Нужно минимум {DUEL_ENERGY_COST} энергии для дуэли."),
@@ -2397,7 +2397,7 @@ def create_duel_challenge(
         )
     if target.energy < DUEL_ENERGY_COST:
         return (
-            ActionResult(False, f"У {target.nickname} недостаточно энергии для дуэли."),
+            ActionResult(False, f"У {h(target.nickname)} недостаточно энергии для дуэли."),
             None,
         )
 
@@ -2414,7 +2414,7 @@ def create_duel_challenge(
     pending_for_target = get_pending_duel_challenger(storage, target_id)
     if pending_for_target is not None:
         return (
-            ActionResult(False, f"У {target.nickname} уже есть активный вызов на дуэль."),
+            ActionResult(False, f"У {h(target.nickname)} уже есть активный вызов на дуэль."),
             None,
         )
 
@@ -2434,15 +2434,15 @@ def create_duel_challenge(
     target_chance = 100 - chance
     conditions = _duel_conditions_text()
     challenger_msg = (
-        f"Вызов на дуэль отправлен: {target.nickname} ({target_id}).\n"
+        f"Вызов на дуэль отправлен: {h(target.nickname)} ({target_id}).\n"
         f"Сила: ты {my_power} vs {their_power}.\n"
         f"Твой шанс победы ~{chance}% (если примут).\n"
         f"{conditions}\n"
         f"Ожидание ответа до {DUEL_PENDING_TTL_SECONDS // 60} мин."
     )
     target_msg = (
-        f"⚔️ Тебя вызвал на дуэль {challenger.nickname} (id {challenger_id}).\n"
-        f"Сила снаряги: {challenger.nickname} {my_power} vs ты {their_power}.\n"
+        f"⚔️ Тебя вызвал на дуэль {h(challenger.nickname)} (id {challenger_id}).\n"
+        f"Сила снаряги: {h(challenger.nickname)} {my_power} vs ты {their_power}.\n"
         f"Шанс победы вызывающего ~{chance}%, твой ~{target_chance}%.\n"
         f"{conditions}"
     )
@@ -2460,8 +2460,8 @@ def decline_duel(
     challenger = storage.get_character(challenger_id, refresh_energy=False)
     target = storage.get_character(target_id, refresh_energy=False)
     _clear_duel_meta(storage, challenger_id, target_id)
-    target_name = target.nickname if target else str(target_id)
-    challenger_name = challenger.nickname if challenger else str(challenger_id)
+    target_name = h(target.nickname) if target else h(str(target_id))
+    challenger_name = h(challenger.nickname) if challenger else h(str(challenger_id))
     notify = f"{target_name} отклонил(а) твой вызов на дуэль."
     return ActionResult(True, f"Ты отклонил(а) дуэль с {challenger_name}."), notify
 
@@ -2534,11 +2534,11 @@ def accept_duel(
     loser_hp = loser_after.health if loser_after else 0
 
     common = (
-        f"⚔️ Дуэль: {challenger.nickname} ({c_power}) vs {target.nickname} ({t_power})\n"
-        f"Шанс победы {challenger.nickname}: {chance}% (бросок {roll}).\n"
-        f"Победитель: {winner.nickname} (HP {winner_hp}, ранение −{wound}"
+        f"⚔️ Дуэль: {h(challenger.nickname)} ({c_power}) vs {h(target.nickname)} ({t_power})\n"
+        f"Шанс победы {h(challenger.nickname)}: {chance}% (бросок {roll}).\n"
+        f"Победитель: {h(winner.nickname)} (HP {winner_hp}, ранение −{wound}"
         f"{f', +{money_taken} RU' if money_taken else ''}).\n"
-        f"Проигравший: {loser.nickname} (HP {loser_hp}"
+        f"Проигравший: {h(loser.nickname)} (HP {loser_hp}"
         f"{f', −{money_taken} RU' if money_taken else ''})."
     )
     if target_id == winner_id:
@@ -3352,7 +3352,7 @@ def format_inventory(
         faction_line = f"Фракция: {character.faction} | Звание: {rank_title}"
     return (
         f"{craving_notice}"
-        f"👤 {character.nickname} ({character.gender})\n"
+        f"👤 {h(character.nickname)} ({h(character.gender)})\n"
         f"ID-адрес: {character.player_uid}\n"
         f"Telegram ID: {character.telegram_id}\n"
         f"{faction_line}\n"
@@ -3549,14 +3549,14 @@ def propose_alliance(storage: Storage, telegram_id: int, target_faction: str) ->
         notify.append(
             (
                 int(target_leader_id),
-                f"🤝 {player.faction} предлагает союз.\n"
+                f"🤝 {h(player.faction)} предлагает союз.\n"
                 f"Открой «⚔️ Война» → дипломатия → «Подтвердить союз».",
             ),
         )
     return ActionResult(
         True,
-        f"Предложение союза отправлено в {target_faction}.\n"
-        f"Лидер {target_faction} должен подтвердить договор.",
+        f"Предложение союза отправлено в {h(target_faction)}.\n"
+        f"Лидер {h(target_faction)} должен подтвердить договор.",
         payload={"notify": notify} if notify else None,
     )
 
@@ -3594,12 +3594,12 @@ def accept_alliance(storage: Storage, telegram_id: int, from_faction: str) -> Ac
         notify.append(
             (
                 int(requester_leader_id),
-                f"✅ {player.faction} приняла союз с {from_faction}.",
+                f"✅ {h(player.faction)} приняла союз с {h(from_faction)}.",
             ),
         )
     return ActionResult(
         True,
-        f"Договор о союзе между {from_faction} и {player.faction} заключен.",
+        f"Договор о союзе между {h(from_faction)} и {h(player.faction)} заключен.",
         payload={"notify": notify} if notify else None,
     )
 
@@ -3626,12 +3626,12 @@ def break_alliance(storage: Storage, telegram_id: int, target_faction: str) -> A
         notify.append(
             (
                 int(target_leader_id),
-                f"⚠️ {player.faction} разорвала союз с {target_faction}.",
+                f"⚠️ {h(player.faction)} разорвала союз с {h(target_faction)}.",
             ),
         )
     return ActionResult(
         True,
-        f"Союз между {player.faction} и {target_faction} разорван.",
+        f"Союз между {h(player.faction)} и {h(target_faction)} разорван.",
         payload={"notify": notify} if notify else None,
     )
 
@@ -3656,7 +3656,7 @@ def declare_war(storage: Storage, telegram_id: int, target_faction: str) -> Acti
         war_notify.append(
             (
                 int(target_leader_id),
-                f"⚔️ {player.faction} объявила войну {target_faction}!",
+                f"⚔️ {h(player.faction)} объявила войну {h(target_faction)}!",
             ),
         )
     had_alliance = storage.are_factions_allied(player.faction, target_faction)
@@ -3667,12 +3667,12 @@ def declare_war(storage: Storage, telegram_id: int, target_faction: str) -> Acti
             return ActionResult(False, "Не удалось объявить войну: ошибка смены дипломатии.")
         return ActionResult(
             True,
-            f"{player.faction} объявила войну {target_faction}.\nСоюз разорван в одностороннем порядке.",
+            f"{h(player.faction)} объявила войну {h(target_faction)}.\nСоюз разорван в одностороннем порядке.",
             payload={"notify": war_notify} if war_notify else None,
         )
     return ActionResult(
         True,
-        f"{player.faction} объявила войну {target_faction}.\nПодтверждение второй стороны не требуется.",
+        f"{h(player.faction)} объявила войну {h(target_faction)}.\nПодтверждение второй стороны не требуется.",
         payload={"notify": war_notify} if war_notify else None,
     )
 
@@ -4038,7 +4038,9 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
     raid_id = int(open_raid["id"])
     member_ids = storage.get_raid_member_ids(raid_id)
     members = storage.get_characters_by_ids(member_ids)
-    members_text = "\n".join(f"• {member.nickname} (сила {equipment_power(member)}, HP {member.health})" for member in members)
+    members_text = "\n".join(
+        f"• {h(member.nickname)} (сила {equipment_power(member)}, HP {member.health})" for member in members
+    )
     location_name = str(open_raid["location"])
     location = storage.get_location(location_name)
     npc_power = int(location["npc_power"]) if location else 0
@@ -4241,12 +4243,12 @@ def assign_faction_rank(
         return ActionResult(False, "Не удалось сохранить звание.")
     return ActionResult(
         True,
-        f"{target.nickname} теперь «{rank.title}» в группировке «{leader.faction}».",
+        f"{h(target.nickname)} теперь «{h(rank.title)}» в группировке «{h(leader.faction)}».",
         payload={
             "notify": [
                 (
                     target.telegram_id,
-                    f"🎖 Лидер назначил тебе звание «{rank.title}» в группировке «{leader.faction}».",
+                    f"🎖 Лидер назначил тебе звание «{h(rank.title)}» в группировке «{h(leader.faction)}».",
                 ),
             ],
         },
@@ -4291,7 +4293,7 @@ def build_faction_member_rank_pick_text(
         return "Игрок не в твоей группировке."
     current = character_rank_title(storage, target) or "без звания"
     return (
-        f"Боец: {target.nickname}\n"
+        f"Боец: {h(target.nickname)}\n"
         f"Сейчас: {current}\n\n"
         "Выбери новое звание:"
     )
@@ -4345,15 +4347,18 @@ def buy_first_faction_auction(storage: Storage, telegram_id: int) -> ActionResul
     amount = int(target["amount"])
     seller_id = int(target["seller_id"])
 
-    if not storage.change_money(telegram_id, -price):
-        return ActionResult(False, "Недостаточно денег для покупки лота.")
-    if not storage.close_auction(auction_id, buyer_id=telegram_id, status="sold"):
-        storage.change_money(telegram_id, price)
-        return ActionResult(False, "Лот уже недоступен.")
     fee = max(1, int(round(price * (EXCHANGE_SELL_FEE_PERCENT / 100))))
     seller_income = max(0, price - fee)
-    storage.change_money(seller_id, seller_income)
-    storage.add_item(telegram_id, item_key, amount)
+    if not storage.complete_auction_sale(
+        auction_id,
+        buyer_id=telegram_id,
+        seller_id=seller_id,
+        price=price,
+        seller_income=seller_income,
+        item_key=item_key,
+        amount=amount,
+    ):
+        return ActionResult(False, "Недостаточно денег или лот уже недоступен.")
     storage.add_player_stat(telegram_id, "trades_done", 1)
     storage.add_player_stat(seller_id, "trades_done", 1)
     _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
@@ -4362,7 +4367,7 @@ def buy_first_faction_auction(storage: Storage, telegram_id: int) -> ActionResul
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     seller_achievements = _progress_and_unlock_achievements(storage, seller_id)
     buyer = storage.get_character(telegram_id, refresh_energy=False)
-    buyer_name = buyer.nickname if buyer else str(telegram_id)
+    buyer_name = h(buyer.nickname) if buyer else h(str(telegram_id))
     seller_msg = (
         f"🛒 {buyer_name} купил(а) твой лот #{auction_id}: "
         f"{ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.\n"
@@ -4520,17 +4525,20 @@ def buy_first_market_lot(storage: Storage, telegram_id: int) -> ActionResult:
     item_key = str(target["item_key"])
     amount = int(target["amount"])
     seller_id = int(target["seller_id"])
-    if not storage.change_money(telegram_id, -price):
-        return ActionResult(False, "Недостаточно денег для покупки лота.")
-    if not storage.close_auction(auction_id, buyer_id=telegram_id, status="sold"):
-        storage.change_money(telegram_id, price)
-        return ActionResult(False, "Лот уже недоступен.")
     fee = max(1, int(round(price * (MARKET_SELL_FEE_PERCENT / 100))))
     seller_income = max(0, price - fee)
-    storage.change_money(seller_id, seller_income)
-    storage.add_item(telegram_id, item_key, amount)
+    if not storage.complete_auction_sale(
+        auction_id,
+        buyer_id=telegram_id,
+        seller_id=seller_id,
+        price=price,
+        seller_income=seller_income,
+        item_key=item_key,
+        amount=amount,
+    ):
+        return ActionResult(False, "Недостаточно денег или лот уже недоступен.")
     item_name = ITEM_LABELS.get(item_key, item_key)
-    buyer_name = buyer.nickname if buyer else str(telegram_id)
+    buyer_name = h(buyer.nickname)
     return ActionResult(
         True,
         f"Куплен рыночный лот #{auction_id}: {item_name} x{amount} за {price} RU.\n"
@@ -4564,17 +4572,20 @@ def buy_market_lot(storage: Storage, telegram_id: int, lot_id: int) -> ActionRes
     price = int(lot["price"])
     item_key = str(lot["item_key"])
     amount = int(lot["amount"])
-    if not storage.change_money(telegram_id, -price):
-        return ActionResult(False, "Недостаточно денег для покупки лота.")
-    if not storage.close_auction(lot_id, buyer_id=telegram_id, status="sold"):
-        storage.change_money(telegram_id, price)
-        return ActionResult(False, "Лот уже недоступен.")
     fee = max(1, int(round(price * (MARKET_SELL_FEE_PERCENT / 100))))
     seller_income = max(0, price - fee)
-    storage.change_money(seller_id, seller_income)
-    storage.add_item(telegram_id, item_key, amount)
+    if not storage.complete_auction_sale(
+        lot_id,
+        buyer_id=telegram_id,
+        seller_id=seller_id,
+        price=price,
+        seller_income=seller_income,
+        item_key=item_key,
+        amount=amount,
+    ):
+        return ActionResult(False, "Недостаточно денег или лот уже недоступен.")
     item_name = ITEM_LABELS.get(item_key, item_key)
-    buyer_name = buyer.nickname
+    buyer_name = h(buyer.nickname)
     return ActionResult(
         True,
         f"Куплен рыночный лот #{lot_id}: {item_name} x{amount} за {price} RU.\n"
@@ -4697,7 +4708,7 @@ def build_war_lobby_overview(storage: Storage, telegram_id: int) -> str:
     leader_id = int(lobby["leader_id"])
     creator = storage.get_character(leader_id, refresh_energy=False)
     creator_label = (
-        f"{creator.nickname} (ID {leader_id})"
+        f"{h(creator.nickname)} (ID {leader_id})"
         if creator is not None
         else f"ID {leader_id}"
     )
@@ -4710,7 +4721,7 @@ def build_war_lobby_overview(storage: Storage, telegram_id: int) -> str:
             continue
         by_faction[member.faction] = by_faction.get(member.faction, 0) + 1
         mark = " 👑" if member.telegram_id == leader_id else ""
-        member_lines.append(f"• {member.nickname} — {member.faction}{mark}")
+        member_lines.append(f"• {h(member.nickname)} — {h(member.faction or '')}{mark}")
     total = sum(by_faction.values())
     share_lines = []
     for faction_name, count in sorted(by_faction.items()):
@@ -5181,7 +5192,7 @@ def build_faction_broadcast_text(
     body = (custom_text or "Бойцы, общий сбор!").strip()
     if not body:
         return ActionResult(False, "Текст рассылки пустой.")
-    text = f"📣 [{player.faction}] {player.nickname}:\n{body}"
+    text = f"📣 [{h(player.faction or '')}] {h(player.nickname)}:\n{h(body)}"
     return ActionResult(True, text)
 
 

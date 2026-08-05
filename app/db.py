@@ -213,6 +213,8 @@ def connect(config: DbConfig) -> DbConnection:
         raise ValueError("DB_PATH is empty")
     raw_sqlite = sqlite3.connect(config.sqlite_path)
     raw_sqlite.row_factory = sqlite3.Row
+    raw_sqlite.execute("PRAGMA journal_mode=WAL")
+    raw_sqlite.execute("PRAGMA synchronous=NORMAL")
     return DbConnection(raw_sqlite, "sqlite")
 
 

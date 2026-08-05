@@ -106,6 +106,7 @@ class Storage:
 
         requested = Path(snapshot_path) if snapshot_path else default_snapshot
         self.snapshot_path = self._resolve_writable_snapshot_path(requested)
+        self._pending_arrival_notices: dict[int, str] = {}
 
     @staticmethod
     def _resolve_writable_snapshot_path(preferred: Path) -> Path:
@@ -1398,8 +1399,11 @@ class Storage:
             )
         self.save_snapshot()
 
-    def resolve_travel_if_due(self, telegram_id: int) -> bool:
-        """Завершить переход, если время прибытия наступило."""
+    def pop_arrival_notice(self, telegram_id: int) -> str | None:
+        return self._pending_arrival_notices.pop(int(telegram_id), None)
+
+    def resolve_travel_if_due(self, telegram_id: int) -> str | None:
+        """Завершить переход, если время прибытия наступило. Возвращает локацию или None."""
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -1410,21 +1414,22 @@ class Storage:
                 (telegram_id,),
             ).fetchone()
             if row is None:
-                return False
+                return None
             destination = row["travel_destination"]
             raw_arrives = row["travel_arrives_at"]
             if destination is None or str(destination).strip() == "":
-                return False
+                return None
             if raw_arrives is None or str(raw_arrives).strip() == "":
-                return False
+                return None
             try:
                 arrives_at = datetime.fromisoformat(str(raw_arrives))
             except ValueError:
-                return False
+                return None
             if arrives_at.tzinfo is None:
                 arrives_at = arrives_at.replace(tzinfo=timezone.utc)
             if arrives_at > utc_now():
-                return False
+                return None
+            dest = str(destination)
             conn.execute(
                 """
                 UPDATE characters
@@ -1434,10 +1439,11 @@ class Storage:
                     travel_transport = NULL
                 WHERE telegram_id = ?
                 """,
-                (str(destination), telegram_id),
+                (dest, telegram_id),
             )
         self.save_snapshot()
-        return True
+        self._pending_arrival_notices[int(telegram_id)] = dest
+        return dest
 
     def pop_due_travels(self) -> list[tuple[int, str]]:
         """Завершить просроченные переходы и вернуть (telegram_id, destination)."""
@@ -1478,6 +1484,7 @@ class Storage:
                     (destination, telegram_id),
                 )
                 completed.append((telegram_id, destination))
+                self._pending_arrival_notices.pop(telegram_id, None)
         if completed:
             self.save_snapshot()
         return completed
@@ -3070,6 +3077,63 @@ class Storage:
                 WHERE id = ?
                 """,
                 (status, buyer_id, utc_now().isoformat(), auction_id),
+            )
+        self.save_snapshot()
+        return True
+
+    def complete_auction_sale(
+        self,
+        lot_id: int,
+        *,
+        buyer_id: int,
+        seller_id: int,
+        price: int,
+        seller_income: int,
+        item_key: str,
+        amount: int,
+    ) -> bool:
+        """Атомарно: списать деньги у покупателя, закрыть лот, выплатить продавцу, выдать предмет."""
+        with self._connect() as conn:
+            lot = conn.execute(
+                "SELECT status FROM auctions WHERE id = ?",
+                (lot_id,),
+            ).fetchone()
+            if lot is None or lot["status"] != "open":
+                return False
+            buyer_row = conn.execute(
+                "SELECT money, inventory_json FROM characters WHERE telegram_id = ?",
+                (buyer_id,),
+            ).fetchone()
+            if buyer_row is None or int(buyer_row["money"]) < price:
+                return False
+            conn.execute(
+                "UPDATE characters SET money = money - ? WHERE telegram_id = ? AND money >= ?",
+                (price, buyer_id, price),
+            )
+            if conn.total_changes <= 0:
+                return False
+            conn.execute(
+                """
+                UPDATE auctions
+                SET status = ?, buyer_id = ?, closed_at = ?
+                WHERE id = ? AND status = 'open'
+                """,
+                ("sold", buyer_id, utc_now().isoformat(), lot_id),
+            )
+            if conn.total_changes <= 0:
+                return False
+            conn.execute(
+                "UPDATE characters SET money = money + ? WHERE telegram_id = ?",
+                (seller_income, seller_id),
+            )
+            try:
+                inventory = json.loads(buyer_row["inventory_json"] or "{}")
+            except json.JSONDecodeError:
+                inventory = {}
+            inventory[item_key] = int(inventory.get(item_key, 0)) + amount
+            conn.execute(
+                "UPDATE characters SET inventory_json = ? WHERE telegram_id = ?",
+                (json.dumps(inventory, ensure_ascii=False), buyer_id),
             )
         self.save_snapshot()
         return True

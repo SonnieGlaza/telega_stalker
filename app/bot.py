@@ -24,7 +24,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from app.config import load_settings
+from app.html_utils import html_safe as h
 from app.game_logic import (
     apply_referral_rewards,
     build_referral_link,
@@ -227,18 +227,6 @@ async def safe_callback_answer(callback: CallbackQuery, *args: Any, **kwargs: An
             logger.debug("Ignored callback answer for user %s: %s", callback.from_user.id, exc)
             return
         raise
-
-
-def _clip_callback_alert(text: str, *, limit: int = CALLBACK_ALERT_MAX_LEN) -> str:
-    clean = (text or "").strip()
-    if len(clean) <= limit:
-        return clean
-    clipped = clean[: max(1, limit - 1)]
-    last_nl = clipped.rfind("\n")
-    # If the cut lands mid-line with only a short stub, drop that stub.
-    if last_nl >= 0 and (limit - 1 - last_nl) < 24:
-        clipped = clipped[:last_nl]
-    return clipped.rstrip() + "…"
 
 
 async def edit_menu_message(
@@ -448,7 +436,7 @@ async def _apply_and_announce_referral(
         invitee_name = invitee.nickname if invitee else str(invitee_id)
         await bot.send_message(
             int(referrer_id),
-            f"👥 По твоей ссылке в Зону пришёл {invitee_name}.\n"
+            f"👥 По твоей ссылке в Зону пришёл {h(invitee_name)}.\n"
             f"+{REFERRAL_INVITER_BONUS_RU} RU на баланс.",
         )
         if referrer is None:
@@ -1249,7 +1237,13 @@ def ensure_character(message: Message) -> Character | None:
 
 
 def action_result_text(telegram_id: int, text: str) -> str:
-    return append_survival_craving_notice(get_storage(), telegram_id, (text or "").strip())
+    storage = get_storage()
+    arrival = storage.pop_arrival_notice(telegram_id)
+    body = (text or "").strip()
+    if arrival:
+        arrival_line = f"🚐 Прибыл в «{h(arrival)}»."
+        body = f"{arrival_line}\n\n{body}" if body else arrival_line
+    return append_survival_craving_notice(storage, telegram_id, body)
 
 
 async def send_profile_snapshot(
@@ -2168,8 +2162,8 @@ async def broadcast_all_command(message: Message, bot: Bot) -> None:
         return
 
     sender = get_storage().get_character(sender_id, refresh_energy=False)
-    sender_name = sender.nickname if sender is not None else str(sender_id)
-    text = f"📢 Объявление:\n{body}\n\n— {sender_name}"
+    sender_name = h(sender.nickname if sender is not None else str(sender_id))
+    text = f"📢 Объявление:\n{h(body)}\n\n— {sender_name}"
 
     targets = [tid for tid in get_storage().list_player_ids() if tid != sender_id]
     sent = 0
@@ -2846,18 +2840,17 @@ async def cancel_all_raids_callback(callback: CallbackQuery, bot: Bot) -> None:
         notify_ids.update(storage.get_raid_member_ids(int(raid["id"])))
 
     result = cancel_all_raids_by_leader(storage, leader_id)
-    if result.ok:
-        for member_id in notify_ids:
-            if member_id == leader_id:
-                continue
-            try:
-                await bot.send_message(
-                    member_id,
-                    f"📣 Рейд отменён создателем.\n{result.text}",
-                )
-            except Exception:
-                logger.exception("Failed to notify raid member %s about cancel-all", member_id)
-    await reply_action_result(callback, result.text)
+    if result.ok and notify_ids:
+        from types import SimpleNamespace
+
+        group = SimpleNamespace(
+            ok=True,
+            text=f"Рейд отменён создателем.\n{result.text}",
+            notify_member_ids=tuple(notify_ids),
+        )
+        await deliver_group_result(callback, bot, group, prefix="📣")
+    else:
+        await reply_action_result(callback, result.text, bot=bot)
 
 
 @router.callback_query(F.data.startswith("raid:cancel:"))
@@ -2874,17 +2867,19 @@ async def cancel_one_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
 
     storage = get_storage()
     leader_id = callback.from_user.id
-    member_ids = storage.get_raid_member_ids(raid_id)
+    member_ids = tuple(storage.get_raid_member_ids(raid_id))
     result = cancel_raid_by_leader(storage, leader_id, raid_id)
-    if result.ok:
-        for member_id in member_ids:
-            if member_id == leader_id:
-                continue
-            try:
-                await bot.send_message(member_id, f"📣 {result.text}")
-            except Exception:
-                logger.exception("Failed to notify raid member %s about cancel", member_id)
-    await reply_action_result(callback, result.text)
+    if result.ok and member_ids:
+        from types import SimpleNamespace
+
+        group = SimpleNamespace(
+            ok=True,
+            text=result.text,
+            notify_member_ids=member_ids,
+        )
+        await deliver_group_result(callback, bot, group, prefix="📣")
+    else:
+        await reply_action_result(callback, result.text, bot=bot)
 
 
 def _faction_group_keyboard_for(telegram_id: int):
@@ -3334,6 +3329,10 @@ async def run_bot() -> None:
     settings = load_settings()
     global storage, admin_ids
     admin_ids = settings.admin_ids
+    if admin_ids:
+        logger.info("Admin IDs configured: %s", ", ".join(str(i) for i in admin_ids))
+    else:
+        logger.warning("ADMIN_IDS not set — /всем and admin commands are disabled")
     storage = Storage(
         settings.db_path,
         snapshot_path=settings.snapshot_path,
@@ -3393,7 +3392,7 @@ async def run_bot() -> None:
                     try:
                         await bot.send_message(
                             user_id,
-                            action_result_text(user_id, f"🚐 Прибыл в «{destination}»."),
+                            action_result_text(user_id, f"🚐 Прибыл в «{h(destination)}»."),
                         )
                     except Exception:
                         logger.debug("Failed travel arrival notify to %s", user_id)
