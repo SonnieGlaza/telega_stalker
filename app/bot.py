@@ -2318,39 +2318,55 @@ async def duel_command(message: Message, bot: Bot) -> None:
 @router.callback_query(F.data.startswith("duel:accept:"))
 async def duel_accept_callback(callback: CallbackQuery, bot: Bot) -> None:
     assert callback.data and callback.from_user
-    await callback.answer()
     try:
         challenger_id = int(callback.data.rsplit(":", 1)[1])
     except ValueError:
-        await callback.message.answer("Некорректный вызов.")  # type: ignore[union-attr]
+        await reply_action_result(callback, "Некорректный вызов.")
         return
     target_id = callback.from_user.id
     result, challenger_text = accept_duel(get_storage(), target_id, challenger_id)
-    await reply_action_result(callback, result.text)
-    if result.ok and challenger_text:
-        try:
-            await bot.send_message(challenger_id, action_result_text(challenger_id, challenger_text))
-        except Exception:
-            logger.exception("Failed to notify duel challenger %s", challenger_id)
+    if result.ok:
+        await safe_callback_answer(callback, "Дуэль завершена")
+        if callback.message:
+            await callback.message.answer(action_result_text(target_id, result.text))
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except TelegramBadRequest:
+                pass
+        if challenger_text:
+            try:
+                await bot.send_message(challenger_id, action_result_text(challenger_id, challenger_text))
+            except Exception:
+                logger.exception("Failed to notify duel challenger %s", challenger_id)
+    else:
+        await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data.startswith("duel:decline:"))
 async def duel_decline_callback(callback: CallbackQuery, bot: Bot) -> None:
     assert callback.data and callback.from_user
-    await callback.answer()
     try:
         challenger_id = int(callback.data.rsplit(":", 1)[1])
     except ValueError:
-        await callback.message.answer("Некорректный вызов.")  # type: ignore[union-attr]
+        await reply_action_result(callback, "Некорректный вызов.")
         return
     target_id = callback.from_user.id
     result, challenger_text = decline_duel(get_storage(), target_id, challenger_id)
-    await reply_action_result(callback, result.text)
-    if result.ok and challenger_text:
-        try:
-            await bot.send_message(challenger_id, action_result_text(challenger_id, challenger_text))
-        except Exception:
-            logger.exception("Failed to notify duel decline to %s", challenger_id)
+    if result.ok:
+        await safe_callback_answer(callback, "Дуэль отклонена")
+        if callback.message:
+            await callback.message.answer(action_result_text(target_id, result.text))
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except TelegramBadRequest:
+                pass
+        if challenger_text:
+            try:
+                await bot.send_message(challenger_id, action_result_text(challenger_id, challenger_text))
+            except Exception:
+                logger.exception("Failed to notify duel decline to %s", challenger_id)
+    else:
+        await reply_action_result(callback, result.text)
 
 
 @router.message(F.text == "🏕 Вылазка")
