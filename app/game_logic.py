@@ -1580,7 +1580,7 @@ def use_medkit_item(storage: Storage, telegram_id: int, item_key: str = "medkit"
     if heal_amount > 0:
         parts.append(f"+{heal_amount} HP")
     if rad_delta < 0:
-        parts.append(f"{rad_delta} рад.")
+        parts.append(f"{rad_delta} рад")
     return ActionResult(True, f"Ты использовал {label}: {', '.join(parts)}.")
 
 
