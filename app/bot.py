@@ -24,6 +24,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
+from app.config import load_settings
 from app.html_utils import html_safe as h
 from app.game_logic import (
     apply_referral_rewards,
