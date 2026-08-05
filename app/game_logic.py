@@ -2417,7 +2417,8 @@ def create_duel_challenge(
         f"Сила снаряги: {challenger.nickname} {my_power} vs ты {their_power}.\n"
         f"Шанс победы вызывающего ~{chance}%.\n"
         f"Стоимость при согласии: {DUEL_ENERGY_COST} энергии у каждого.\n"
-        f"Проигравший: остаётся {DUEL_LOSER_HP_REMAINING} HP и −{DUEL_LOSER_MONEY_PERCENT}% денег (победителю)."
+        f"Проигравший: HP снижается до {DUEL_LOSER_HP_REMAINING} (можно лечиться аптечками) "
+        f"и −{DUEL_LOSER_MONEY_PERCENT}% денег (победителю)."
     )
     return ActionResult(True, challenger_msg), target_msg
 
@@ -2511,7 +2512,7 @@ def accept_duel(
         f"Шанс победы {challenger.nickname}: {chance}% (бросок {roll}).\n"
         f"Победитель: {winner.nickname} (HP {winner_hp}, ранение −{wound}"
         f"{f', +{money_taken} RU' if money_taken else ''}).\n"
-        f"Проигравший: {loser.nickname} (остаётся {loser_hp} HP"
+        f"Проигравший: {loser.nickname} (HP {loser_hp}"
         f"{f', −{money_taken} RU' if money_taken else ''})."
     )
     if target_id == winner_id:
