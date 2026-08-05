@@ -150,6 +150,8 @@ def trader_buy_consumables_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
     items = [
         ("Купить энергетик (250)", "buy:energy_drink"),
         ("Купить аптечку (260)", "buy:medkit"),
+        ("Купить армейскую аптечку (450)", "buy:medkit_army"),
+        ("Купить научную аптечку (600)", "buy:medkit_science"),
         ("Купить патроны (120)", "buy:ammo_pack"),
         ("Купить водку (150)", "buy:vodka"),
         ("Купить антирад (400)", "buy:antirad"),
@@ -215,7 +217,9 @@ def inventory_consumables_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="⚡ Выпить энергетик", callback_data="use:energy_drink")],
-            [InlineKeyboardButton(text="🩹 Использовать аптечку", callback_data="use:medkit")],
+            [InlineKeyboardButton(text="🩹 Использовать аптечку (+25 HP)", callback_data="use:medkit")],
+            [InlineKeyboardButton(text="🪖 Армейская аптечка (+50 HP)", callback_data="use:medkit_army")],
+            [InlineKeyboardButton(text="🔬 Научная аптечка (+75 HP, −15 рад.)", callback_data="use:medkit_science")],
             [InlineKeyboardButton(text="🍸 Выпить водку (−20 рад.)", callback_data="use:vodka")],
             [InlineKeyboardButton(text="💉 Использовать антирад (−50 рад.)", callback_data="use:antirad")],
             [InlineKeyboardButton(text="🍞 Поесть хлеб (голод −10)", callback_data="use:bread")],
@@ -383,6 +387,8 @@ def trader_sell_consumables_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
     items = [
         ("Продать энергетик (170)", "sell:energy_drink"),
         ("Продать аптечку (120)", "sell:medkit"),
+        ("Продать армейскую аптечку (180)", "sell:medkit_army"),
+        ("Продать научную аптечку (240)", "sell:medkit_science"),
         ("Продать патроны (55)", "sell:ammo_pack"),
         ("Продать топливо +5 (200)", "sell:fuel_can"),
     ]

@@ -40,6 +40,8 @@ QUESTS: dict[str, QuestType] = {
 SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "energy_drink": {"name": "Энергетик", "buy_price": 250, "sell_price": 170},
     "medkit": {"name": "Аптечка", "buy_price": 260, "sell_price": 120},
+    "medkit_army": {"name": "Армейская аптечка", "buy_price": 450, "sell_price": 180},
+    "medkit_science": {"name": "Научная аптечка", "buy_price": 600, "sell_price": 240},
     "ammo_pack": {"name": "Патроны", "buy_price": 120, "sell_price": 55},
     "artifact": {"name": "Артефакт Зоны", "buy_price": 0, "sell_price": 5000},
     "artifact_power": {"name": "Арт «Сила»", "buy_price": 0, "sell_price": 1100},
@@ -169,6 +171,8 @@ ARMOR_RATING_BY_NAME.setdefault("Штурмовой экзоскелет", ARMOR
 ITEM_LABELS = {
     "energy_drink": "Энергетик",
     "medkit": "Аптечка",
+    "medkit_army": "Армейская аптечка",
+    "medkit_science": "Научная аптечка",
     "ammo_pack": "Патроны",
     "artifact": "Артефакт Зоны",
     "artifact_power": "Арт «Сила»",
@@ -442,6 +446,8 @@ STASH_ITEM_KEY = "stash_case"
 STASH_ACTIVITY_DROP_CHANCE = 5  # %
 STASH_CONSUMABLE_KEYS = (
     "medkit",
+    "medkit_army",
+    "medkit_science",
     "energy_drink",
     "ammo_pack",
     "vodka",
@@ -475,7 +481,19 @@ STASH_WEAPON_BY_TIER: dict[int, tuple[str, ...]] = {
     4: ("weapon_lr300", "weapon_il86", "weapon_an94"),
     5: ("weapon_gp37", "weapon_vintar", "weapon_svd", "weapon_rp74"),
 }
-STASH_CONSUMABLE_DROP_CHANCE = 40  # % на каждый тип расходника при открытии
+STASH_CONSUMABLE_DROP_CHANCE = 40  # % на каждый обычный расходник при открытии
+# Редкие расходники в тайнике — пониженный шанс.
+STASH_CONSUMABLE_DROP_CHANCE_BY_KEY: dict[str, int] = {
+    "medkit_army": 15,
+    "medkit_science": 10,
+}
+
+# Эффекты аптечек: heal HP, radiation delta (отрицательный = снятие).
+MEDKIT_EFFECTS: dict[str, dict[str, int]] = {
+    "medkit": {"heal": 25, "radiation": 0},
+    "medkit_army": {"heal": 50, "radiation": 0},
+    "medkit_science": {"heal": 75, "radiation": -15},
+}
 
 AUCTION_DEFAULT_LOTS: dict[str, tuple[str, int, int]] = {
     "artifact": ("artifact", 1, 5000),
@@ -1532,20 +1550,50 @@ def use_energy_drink(storage: Storage, telegram_id: int) -> ActionResult:
     return ActionResult(True, "Ты выпил энергетик и восстановил 35 энергии.")
 
 
-def use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
+def use_medkit_item(storage: Storage, telegram_id: int, item_key: str = "medkit") -> ActionResult:
+    effect = MEDKIT_EFFECTS.get(item_key)
+    if effect is None:
+        return ActionResult(False, "Неизвестный тип аптечки.")
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    label = ITEM_LABELS.get(item_key, item_key)
     max_hp = effective_max_health(player)
-    if player.health >= max_hp:
+    heal_cap = int(effect["heal"])
+    rad_delta = int(effect.get("radiation", 0))
+    needs_heal = player.health < max_hp
+    needs_rad = rad_delta < 0 and player.radiation > 0
+    if not needs_heal and not needs_rad:
+        if rad_delta < 0:
+            return ActionResult(False, "Здоровье полное и радиации нет — аптечка не нужна.")
         return ActionResult(False, "Здоровье уже полное, аптечка не требуется.")
-    if not storage.remove_item(telegram_id, "medkit", 1):
-        return ActionResult(False, "У тебя нет аптечки в инвентаре.")
-    heal_amount = min(25, max_hp - player.health)
-    storage.change_health(telegram_id, heal_amount, max_health=max_hp)
-    return ActionResult(True, f"Ты использовал аптечку и восстановил {heal_amount} HP.")
+    if not storage.remove_item(telegram_id, item_key, 1):
+        return ActionResult(False, f"У тебя нет предмета: {label}.")
+    heal_amount = min(heal_cap, max_hp - player.health) if needs_heal else 0
+    if heal_amount > 0:
+        storage.change_health(telegram_id, heal_amount, max_health=max_hp)
+    if rad_delta < 0:
+        storage.adjust_survival(telegram_id, radiation_delta=rad_delta)
+    parts: list[str] = []
+    if heal_amount > 0:
+        parts.append(f"+{heal_amount} HP")
+    if rad_delta < 0:
+        parts.append(f"{rad_delta} рад.")
+    return ActionResult(True, f"Ты использовал {label}: {', '.join(parts)}.")
+
+
+def use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
+    return use_medkit_item(storage, telegram_id, "medkit")
+
+
+def use_medkit_army(storage: Storage, telegram_id: int) -> ActionResult:
+    return use_medkit_item(storage, telegram_id, "medkit_army")
+
+
+def use_medkit_science(storage: Storage, telegram_id: int) -> ActionResult:
+    return use_medkit_item(storage, telegram_id, "medkit_science")
 
 
 def _apply_active_survival(storage: Storage, telegram_id: int) -> str:
@@ -1694,7 +1742,8 @@ def _roll_stash_loot(storage: Storage, telegram_id: int) -> list[str]:
     drops: list[str] = []
 
     for item_key in STASH_CONSUMABLE_KEYS:
-        if random.randint(1, 100) > STASH_CONSUMABLE_DROP_CHANCE:
+        chance = STASH_CONSUMABLE_DROP_CHANCE_BY_KEY.get(item_key, STASH_CONSUMABLE_DROP_CHANCE)
+        if random.randint(1, 100) > chance:
             continue
         amount = random.randint(1, 2)
         storage.add_item(telegram_id, item_key, amount)
@@ -1702,7 +1751,11 @@ def _roll_stash_loot(storage: Storage, telegram_id: int) -> list[str]:
 
     # Гарантия хотя бы одного расходника, если ничего не выпало.
     if not drops:
-        item_key = random.choice(STASH_CONSUMABLE_KEYS)
+        # Не гарантируем редкие аптечки — только обычный пул.
+        common_keys = [
+            key for key in STASH_CONSUMABLE_KEYS if key not in STASH_CONSUMABLE_DROP_CHANCE_BY_KEY
+        ]
+        item_key = random.choice(common_keys or list(STASH_CONSUMABLE_KEYS))
         amount = random.randint(1, 2)
         storage.add_item(telegram_id, item_key, amount)
         drops.append(f"{ITEM_LABELS.get(item_key, item_key)} x{amount}")

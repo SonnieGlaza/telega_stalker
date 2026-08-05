@@ -66,6 +66,8 @@ from app.game_logic import (
     travel_to,
     use_energy_drink,
     use_medkit,
+    use_medkit_army,
+    use_medkit_science,
     repair_truck,
     use_vodka,
     use_antirad,
@@ -2014,6 +2016,18 @@ async def use_energy_drink_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "use:medkit")
 async def use_medkit_callback(callback: CallbackQuery) -> None:
     result = use_medkit(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "use:medkit_army")
+async def use_medkit_army_callback(callback: CallbackQuery) -> None:
+    result = use_medkit_army(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "use:medkit_science")
+async def use_medkit_science_callback(callback: CallbackQuery) -> None:
+    result = use_medkit_science(get_storage(), callback.from_user.id)
     await reply_action_result(callback, result.text)
 
 
