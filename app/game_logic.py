@@ -1576,23 +1576,49 @@ def faction_home_base(faction: str | None) -> str:
     return FACTION_HOME_BASE.get(faction, "Кордон")
 
 
+def can_travel_by_truck(character: Character) -> bool:
+    return bool(
+        character.truck_owned
+        and character.truck_durability > 0
+        and character.diesel > 0
+    )
+
+
+def can_travel_by_niva(character: Character) -> bool:
+    return bool(character.niva_owned and character.gasoline > 0)
+
+
+def describe_travel_fuel_status(character: Character) -> str:
+    lines = [f"Запас: дизель {character.diesel}, бензин {character.gasoline}."]
+    if can_travel_by_truck(character):
+        lines.append("Грузовик готов (×5, −1 дизель за переход).")
+    elif character.truck_owned:
+        if character.truck_durability <= 0:
+            lines.append("Грузовик сломан — без ускорения.")
+        else:
+            lines.append("Грузовик без дизеля — ускорение недоступно.")
+    if can_travel_by_niva(character):
+        lines.append("Нива готова (×2, −1 бензин за переход).")
+    elif character.niva_owned:
+        lines.append("Нива без бензина — ускорение недоступно.")
+    if not can_travel_by_truck(character) and not can_travel_by_niva(character):
+        lines.append("Сейчас только пешком (×1).")
+    return "\n".join(lines)
+
+
 def _has_transport(character: Character, min_transport: str | None) -> bool:
     if min_transport is None:
         return True
     if min_transport == "niva":
-        return bool(character.niva_owned or character.truck_owned)
+        return can_travel_by_niva(character) or can_travel_by_truck(character)
     if min_transport == "truck":
-        return bool(
-            character.truck_owned
-            and character.truck_durability > 0
-            and character.diesel > 0
-        )
+        return can_travel_by_truck(character)
     return True
 
 
 def _transport_requirement_text(min_transport: str | None) -> str:
     if min_transport == "niva":
-        return " (нужна Нива или грузовик)"
+        return " (нужна Нива с бензином или грузовик с дизелем)"
     if min_transport == "truck":
         return " (нужен грузовик с дизелем)"
     return ""
@@ -1620,7 +1646,6 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
         "",
         "Транспорт ускоряет переход:",
         "• пешком — ×1",
-        "• Нива (10 000 RU) — ×2",
         "• Нива — ×2 (нужен бензин), грузовик — ×5 (нужен дизель)",
         f"1 игровая минута пути ≈ {TRAVEL_REAL_SECONDS_PER_GAME_MINUTE} сек реального времени.",
         "",
@@ -3331,13 +3356,26 @@ def _compute_truck_wear(distance_px: float | None, travel_minutes: int) -> int:
     return random.randint(min_wear, max_wear)
 
 
-def _pick_travel_transport(character: Character) -> tuple[str, int, int]:
-    """Режим, множитель скорости, стоимость энергии."""
+def _pick_travel_transport(character: Character) -> tuple[str, int, int, str | None]:
+    """Режим, множитель скорости, стоимость энергии, примечание при откате на пеший ход."""
+    foot_note: str | None = None
     if character.truck_owned and character.truck_durability > 0 and character.diesel > 0:
-        return "truck", TRAVEL_SPEED_TRUCK, 8
+        return "truck", TRAVEL_SPEED_TRUCK, 8, None
+    if character.truck_owned and character.truck_durability > 0 and character.diesel <= 0:
+        foot_note = "Нет дизеля — грузовик не поедет, идёшь пешком."
+    elif character.truck_owned and character.truck_durability <= 0:
+        foot_note = "Грузовик сломан — идёшь пешком."
+
     if character.niva_owned and character.gasoline > 0:
-        return "niva", TRAVEL_SPEED_NIVA, 12
-    return "foot", TRAVEL_SPEED_FOOT, 16
+        return "niva", TRAVEL_SPEED_NIVA, 12, foot_note
+
+    if character.niva_owned and character.gasoline <= 0:
+        if foot_note:
+            foot_note = f"{foot_note} Нет бензина — Нива не поедет."
+        else:
+            foot_note = "Нет бензина — Нива не поедет, идёшь пешком."
+
+    return "foot", TRAVEL_SPEED_FOOT, 16, foot_note
 
 
 def _compute_base_travel_minutes(
@@ -3385,7 +3423,12 @@ def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionRes
     if destination not in locations:
         return ActionResult(False, "Такой локации нет.")
 
-    transport_mode, speed_mult, energy_cost = _pick_travel_transport(character)
+    transport_mode, speed_mult, energy_cost, foot_note = _pick_travel_transport(character)
+    if transport_mode == "truck" and not can_travel_by_truck(character):
+        return ActionResult(False, "Недостаточно дизеля для поездки на грузовике.")
+    if transport_mode == "niva" and not can_travel_by_niva(character):
+        return ActionResult(False, "Недостаточно бензина для поездки на Ниве.")
+
     base_minutes, distance_px = _compute_base_travel_minutes(
         character.location,
         destination,
@@ -3423,12 +3466,13 @@ def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionRes
     storage.start_travel(telegram_id, destination, arrives_at, transport_mode)
     transport_labels = {"foot": "пешком", "niva": "на Ниве (×2)", "truck": "на грузовике (×5)"}
     eta = format_arrival_eta(arrives_at)
+    note_text = f"\n{foot_note}" if foot_note else ""
     return ActionResult(
         True,
         f"Выехал из «{character.location}» → «{destination}» {transport_labels[transport_mode]}.\n"
         f"Затрачено энергии: {energy_cost}.\n"
         f"Время в пути: ~{travel_minutes} мин ({real_seconds} сек), прибытие {eta}."
-        f"{fuel_text}{truck_wear_text}",
+        f"{fuel_text}{truck_wear_text}{note_text}",
     )
 
 
@@ -5202,7 +5246,7 @@ def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
     if not storage.spend_energy(telegram_id, energy_cost):
         return ActionResult(False, f"Не хватает энергии для контрабанды (нужно {energy_cost}).")
 
-    truck_bonus = 12 if player.truck_owned and player.diesel > 0 else 0
+    truck_bonus = 12 if can_travel_by_truck(player) else 0
     if truck_bonus > 0 and not storage.change_diesel(telegram_id, -1):
         truck_bonus = 0
     event_modifier = _active_location_event_modifier(storage, player.location)

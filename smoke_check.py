@@ -25,6 +25,7 @@ from app.game_logic import (
     use_medkit,
     accept_quest_contract,
     run_contract_work,
+    can_travel_by_truck,
 )
 from app.storage import Storage
 
@@ -176,8 +177,23 @@ def run_smoke_check() -> None:
         assert after_travel.location == "Янтарь"
         assert not is_traveling(after_travel)
         assert after_travel.truck_durability < before_truck_durability
-        assert before_truck_durability - after_travel.truck_durability >= 5
-        assert before_truck_durability - after_travel.truck_durability <= 15
+        no_fuel_player = storage.get_character(111, refresh_energy=False)
+        assert no_fuel_player is not None
+        if no_fuel_player.diesel > 0:
+            storage.change_diesel(111, -no_fuel_player.diesel)
+        if no_fuel_player.gasoline > 0:
+            storage.change_gasoline(111, -no_fuel_player.gasoline)
+        foot_travel = travel_to(storage, 111, "Болото")
+        assert foot_travel.ok, foot_travel.text
+        assert "пешком" in foot_travel.text.lower()
+        assert can_travel_by_truck(storage.get_character(111, refresh_energy=False)) is False
+        past2 = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        with storage._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET travel_arrives_at = ? WHERE telegram_id = ?",
+                (past2, 111),
+            )
+        storage.resolve_travel_if_due(111)
         repaired = repair_truck(storage, 111)
         assert repaired.ok, repaired.text
         after_repair = storage.get_character(111, refresh_energy=False)

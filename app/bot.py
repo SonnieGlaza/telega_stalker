@@ -76,6 +76,8 @@ from app.game_logic import (
     list_owned_trader_sell_buttons,
     trader_sell_categories_with_stock,
     travel_to,
+    describe_travel_fuel_status,
+    can_travel_by_truck,
     use_energy_drink,
     use_medkit,
     use_medkit_army,
@@ -2384,7 +2386,9 @@ async def show_travel(message: Message) -> None:
         text = (
             "Выбирай локацию для перехода.\n"
             "Пешком — ×1, Нива — ×2 (бензин), грузовик — ×5 (дизель).\n"
-            "Переход занимает реальное время (1 игровая мин ≈ 10 сек)."
+            "Без топлива транспорт не едет — только пеший переход.\n"
+            "Переход занимает реальное время (1 игровая мин ≈ 10 сек).\n\n"
+            f"{describe_travel_fuel_status(player)}"
         )
     await message.answer(
         text,
