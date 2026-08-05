@@ -95,6 +95,7 @@ from app.game_logic import (
     withdraw_from_faction_treasury,
     deposit_to_faction_treasury,
     can_withdraw_faction_treasury,
+    can_withdraw_faction_warehouse,
     upgrade_faction_base,
     assign_faction_rank,
     build_faction_ranks_overview,
@@ -534,7 +535,7 @@ def _build_info_text(player: Character) -> str:
         "Разделы меню:\n"
         "• 📟 КПК — профиль, чаты, рейтинг, карта, игроки, рефералка.\n"
         "• 🏕 Вылазка — война, переходы и рейды.\n"
-        "• 👥 Группировка — склад, казна, звания; вывод со склада/казны с 5 ранга.\n"
+        "• 👥 Группировка — склад, казна, звания; склад с 5 ранга, казна только лидер.\n"
         "• 🏦 Экономика — биржа и рынок экипировки.\n"
         "• 📋 Задания — сложности и отдельная контрабанда.\n\n"
         "Команды:\n"
@@ -2501,8 +2502,13 @@ def _faction_group_keyboard_for(telegram_id: int):
         and player.faction
         and storage.get_faction_leader_id(player.faction) == telegram_id
     )
-    can_withdraw = bool(player and can_withdraw_faction_treasury(storage, player))
-    return faction_group_keyboard(is_leader=is_leader, can_withdraw_treasury=can_withdraw)
+    can_wh = bool(player and can_withdraw_faction_warehouse(storage, player))
+    can_tr = bool(player and can_withdraw_faction_treasury(storage, player))
+    return faction_group_keyboard(
+        is_leader=is_leader,
+        can_withdraw_warehouse=can_wh,
+        can_withdraw_treasury=can_tr,
+    )
 
 
 @router.message(F.text == "🛰 События")
@@ -2592,7 +2598,7 @@ async def treasury_withdraw_callback(callback: CallbackQuery, state: FSMContext)
             return
         if not can_withdraw_faction_treasury(storage, player):
             await callback.answer(
-                "Снимать из казны можно с 5 ранга (или лидеру).",
+                "Снимать из казны может только лидер группировки.",
                 show_alert=True,
             )
             return
@@ -2656,7 +2662,7 @@ async def process_treasury_withdraw_custom(message: Message, state: FSMContext) 
     storage = get_storage()
     if player.faction is None or not can_withdraw_faction_treasury(storage, player):
         await state.clear()
-        await message.answer("Снимать из казны можно с 5 ранга (или лидеру группировки).")
+        await message.answer("Снимать из казны может только лидер группировки.")
         return
     amount = _parse_treasury_custom_amount(message.text or "")
     if amount is None:

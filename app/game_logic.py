@@ -2987,16 +2987,19 @@ def character_rank_level(character: Character) -> int:
 
 
 def can_withdraw_faction_treasury(storage: Storage, character: Character) -> bool:
-    """Вывод из казны и склада: лидер или звание от 5 уровня (по назначению лидера)."""
+    """Вывод из казны — только лидер группировки."""
+    if character.faction is None:
+        return False
+    return storage.get_faction_leader_id(character.faction) == character.telegram_id
+
+
+def can_withdraw_faction_warehouse(storage: Storage, character: Character) -> bool:
+    """Вывод со склада: лидер или звание от 5 уровня."""
     if character.faction is None:
         return False
     if storage.get_faction_leader_id(character.faction) == character.telegram_id:
         return True
     return character_rank_level(character) >= TREASURY_WITHDRAW_MIN_RANK
-
-
-def can_withdraw_faction_warehouse(storage: Storage, character: Character) -> bool:
-    return can_withdraw_faction_treasury(storage, character)
 
 
 def deposit_to_faction_warehouse(
@@ -3071,7 +3074,7 @@ def withdraw_from_faction_treasury(storage: Storage, telegram_id: int, amount: i
     if not can_withdraw_faction_treasury(storage, player):
         return ActionResult(
             False,
-            "Снимать деньги из казны можно с 5 ранга (или лидеру группировки).",
+            "Снимать деньги из казны может только лидер группировки.",
         )
     if not storage.withdraw_faction_treasury(player.faction, amount):
         return ActionResult(False, "В казне недостаточно денег для вывода.")
@@ -3760,8 +3763,8 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
             "\nТебе доступны вывод со склада/из казны, назначение званий "
             f"и укрепление базы (−{BASE_FORTIFY_COST_RU} RU из казны)."
         )
-    elif can_withdraw_faction_treasury(storage, player):
-        leader_hint = "\nТебе доступен вывод со склада и из казны (ранг 5+)."
+    elif can_withdraw_faction_warehouse(storage, player):
+        leader_hint = "\nТебе доступен вывод со склада (ранг 5+)."
 
     home_name = faction_home_base(player.faction)
     home = storage.get_location(home_name)
@@ -3786,7 +3789,7 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
         f"• точка ресурсов: {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч\n"
         f"• база: {BASE_POINT_INCOME_PER_HOUR} RU/ч\n\n"
         f"Любой боец может сдать патроны/аптечки на склад и пополнить казну.\n"
-        f"Забирать со склада и из казны — с 5 ранга (или лидер).\n"
+        f"Забирать со склада — с 5 ранга (или лидер). Из казны — только лидер.\n"
         f"Лидер может укрепить базу за {BASE_FORTIFY_COST_RU} RU "
         f"(+{BASE_FORTIFY_POWER_BONUS} к защите от штурма)."
         f"{leader_hint}"
