@@ -400,7 +400,7 @@ def trader_sell_trophies_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
         ("Продать артефакт Зоны (5000)", "sell:artifact"),
         ("Продать Арт «Сила» (1100)", "sell:artifact_power"),
         ("Продать Арт «Живучесть» (1100)", "sell:artifact_vitality"),
-        ("Продать Арт «Антирад» (1100)", "sell:artifact_antirad"),
+        ("Продать Арт «Антирад» (5000)", "sell:artifact_antirad"),
         ("Продать Слизь (350)", "sell:artifact_junk_slime"),
         ("Продать Ржавый болт (300)", "sell:artifact_junk_bolt"),
         ("Продать Дохлую батарейку (450)", "sell:artifact_junk_battery"),

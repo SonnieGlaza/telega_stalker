@@ -1558,7 +1558,7 @@ class Storage:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT energy, max_energy, energy_updated_at, sleeping_bag_owned, equipment_json
+                SELECT energy, max_energy, energy_updated_at, sleeping_bag_owned, equipment_json, radiation
                 FROM characters
                 WHERE telegram_id = ?
                 """,
@@ -1590,6 +1590,7 @@ class Storage:
 
             energy = _as_int(row["energy"], 0)
             max_energy = _as_int(row["max_energy"], 100)
+            radiation = _as_int(self._row_get(row, "radiation"), 0)
             last_update = _as_dt(row["energy_updated_at"])
             minutes_passed = int((now - last_update).total_seconds() // 60)
             if minutes_passed <= 0:
@@ -1597,20 +1598,36 @@ class Storage:
 
             regen_multiplier = 2.0 if _as_int(self._row_get(row, "sleeping_bag_owned", 0), 0) == 1 else 1.0
             has_zone_artifact = False
+            has_antirad_artifact = False
             try:
                 equipment = json.loads(self._row_get(row, "equipment_json", "{}") or "{}")
                 if isinstance(equipment, dict):
                     artifact_value = str(equipment.get("artifact") or "").strip()
-                    from app.game_logic import ARTIFACT_ENERGY_REGEN_NAMES
+                    from app.game_logic import ARTIFACT_ENERGY_REGEN_NAMES, ARTIFACT_RAD_CLEANSE_NAMES
 
                     has_zone_artifact = artifact_value in ARTIFACT_ENERGY_REGEN_NAMES
+                    has_antirad_artifact = artifact_value in ARTIFACT_RAD_CLEANSE_NAMES
             except (TypeError, json.JSONDecodeError, ImportError):
                 has_zone_artifact = False
+                has_antirad_artifact = False
             if has_zone_artifact:
                 regen_multiplier *= 1.05
             gained = int(minutes_passed * ENERGY_REGEN_PER_MINUTE * regen_multiplier)
             new_energy = min(max_energy, energy + gained)
-            if new_energy == energy and minutes_passed > 0:
+            new_radiation = radiation
+            if has_antirad_artifact:
+                from app.game_logic import (
+                    ARTIFACT_RAD_CLEANSE_AMOUNT,
+                    ARTIFACT_RAD_CLEANSE_INTERVAL_MINUTES,
+                )
+
+                cleanse_ticks = minutes_passed // max(1, int(ARTIFACT_RAD_CLEANSE_INTERVAL_MINUTES))
+                if cleanse_ticks > 0:
+                    new_radiation = max(
+                        0, radiation - cleanse_ticks * int(ARTIFACT_RAD_CLEANSE_AMOUNT)
+                    )
+
+            if new_energy == energy and new_radiation == radiation and minutes_passed > 0:
                 # Даже без прироста двигаем таймер, чтобы не пересчитывать огромный gap.
                 conn.execute(
                     "UPDATE characters SET energy_updated_at = ? WHERE telegram_id = ?",
@@ -1620,10 +1637,10 @@ class Storage:
                 conn.execute(
                     """
                     UPDATE characters
-                    SET energy = ?, energy_updated_at = ?
+                    SET energy = ?, radiation = ?, energy_updated_at = ?
                     WHERE telegram_id = ?
                     """,
-                    (new_energy, now.isoformat(), telegram_id),
+                    (new_energy, new_radiation, now.isoformat(), telegram_id),
                 )
         self.save_snapshot()
 
