@@ -43,6 +43,13 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "artifact": {"name": "Артефакт Зоны", "buy_price": 0, "sell_price": 5000},
     "artifact_power": {"name": "Арт «Сила»", "buy_price": 0, "sell_price": 1100},
     "artifact_vitality": {"name": "Арт «Живучесть»", "buy_price": 0, "sell_price": 1100},
+    "artifact_junk_slime": {"name": "Слизь", "buy_price": 0, "sell_price": 350},
+    "artifact_junk_bolt": {"name": "Ржавый болт", "buy_price": 0, "sell_price": 300},
+    "artifact_junk_battery": {"name": "Дохлая батарейка", "buy_price": 0, "sell_price": 450},
+    "artifact_junk_flash": {"name": "Вспышка", "buy_price": 0, "sell_price": 500},
+    "artifact_junk_stone": {"name": "Аномальный камень", "buy_price": 0, "sell_price": 400},
+    "artifact_junk_fog": {"name": "Сгусток тумана", "buy_price": 0, "sell_price": 550},
+    "artifact_junk_splinter": {"name": "Осколок", "buy_price": 0, "sell_price": 600},
     "vodka": {"name": "Водка", "buy_price": 150, "sell_price": 50},
     "antirad": {"name": "Антирад", "buy_price": 400, "sell_price": 130},
     "bread": {"name": "Хлеб", "buy_price": 50, "sell_price": 16},
@@ -164,6 +171,13 @@ ITEM_LABELS = {
     "artifact": "Артефакт Зоны",
     "artifact_power": "Арт «Сила»",
     "artifact_vitality": "Арт «Живучесть»",
+    "artifact_junk_slime": "Слизь",
+    "artifact_junk_bolt": "Ржавый болт",
+    "artifact_junk_battery": "Дохлая батарейка",
+    "artifact_junk_flash": "Вспышка",
+    "artifact_junk_stone": "Аномальный камень",
+    "artifact_junk_fog": "Сгусток тумана",
+    "artifact_junk_splinter": "Осколок",
     "vodka": "Водка",
     "antirad": "Антирад",
     "bread": "Хлеб",
@@ -228,13 +242,97 @@ ARTIFACT_INVENTORY_TO_NAME: dict[str, str] = {
     "artifact": "Артефакт Зоны",
     "artifact_power": "Арт «Сила»",
     "artifact_vitality": "Арт «Живучесть»",
+    "artifact_junk_slime": "Слизь",
+    "artifact_junk_bolt": "Ржавый болт",
+    "artifact_junk_battery": "Дохлая батарейка",
+    "artifact_junk_flash": "Вспышка",
+    "artifact_junk_stone": "Аномальный камень",
+    "artifact_junk_fog": "Сгусток тумана",
+    "artifact_junk_splinter": "Осколок",
 }
 ARTIFACT_NAME_TO_INVENTORY: dict[str, str] = {
     **{name: key for key, name in ARTIFACT_INVENTORY_TO_NAME.items()},
     "Артефакт": "artifact",  # старые сейвы
 }
+# Ценные арты (квесты/рейды) и полный список ключей.
 ARTIFACT_DROP_KEYS = ("artifact", "artifact_power", "artifact_vitality")
-# Абсолютные шансы дропа (взаимоисключающие), %:
+ARTIFACT_JUNK_KEYS = (
+    "artifact_junk_slime",
+    "artifact_junk_bolt",
+    "artifact_junk_battery",
+    "artifact_junk_flash",
+    "artifact_junk_stone",
+    "artifact_junk_fog",
+    "artifact_junk_splinter",
+)
+ARTIFACT_ALL_KEYS = ARTIFACT_DROP_KEYS + ARTIFACT_JUNK_KEYS
+
+# Артефакт Зоны — 0.1% на любой локации при поиске.
+ARTIFACT_ZONE_GLOBAL_PERCENT = 0.1
+
+# Локальные спавны при поиске детектором (кроме глобальной Зоны), %:
+ARTIFACT_LOCATION_SPAWNS: dict[str, tuple[tuple[str, float], ...]] = {
+    "Болото": (
+        ("artifact_power", 5.0),
+        ("artifact_vitality", 5.0),
+        ("artifact_junk_slime", 14.0),
+        ("artifact_junk_fog", 12.0),
+        ("artifact_junk_bolt", 10.0),
+    ),
+    "Радар": (
+        ("artifact_junk_flash", 12.0),
+        ("artifact_junk_battery", 10.0),
+        ("artifact_junk_splinter", 8.0),
+        ("artifact_junk_stone", 8.0),
+    ),
+    "Янтарь": (
+        ("artifact_junk_battery", 12.0),
+        ("artifact_junk_flash", 10.0),
+        ("artifact_junk_stone", 10.0),
+    ),
+    "Рыжий лес": (
+        ("artifact_junk_fog", 12.0),
+        ("artifact_junk_slime", 10.0),
+        ("artifact_junk_bolt", 10.0),
+    ),
+    "Темная долина": (
+        ("artifact_junk_splinter", 12.0),
+        ("artifact_junk_stone", 10.0),
+        ("artifact_junk_bolt", 10.0),
+    ),
+    "НИИ Агропром": (
+        ("artifact_junk_battery", 12.0),
+        ("artifact_junk_flash", 10.0),
+        ("artifact_junk_fog", 8.0),
+    ),
+    "Свалка": (
+        ("artifact_junk_bolt", 16.0),
+        ("artifact_junk_slime", 12.0),
+        ("artifact_junk_stone", 10.0),
+        ("artifact_junk_splinter", 8.0),
+    ),
+    "Росток": (
+        ("artifact_junk_bolt", 8.0),
+        ("artifact_junk_stone", 6.0),
+    ),
+    "Кордон": (
+        ("artifact_junk_bolt", 8.0),
+        ("artifact_junk_slime", 6.0),
+    ),
+    "Армейские склады": (
+        ("artifact_junk_battery", 8.0),
+        ("artifact_junk_bolt", 6.0),
+    ),
+}
+
+# Запасной пул мусора, если локации нет в таблице.
+ARTIFACT_DEFAULT_JUNK_SPAWNS: tuple[tuple[str, float], ...] = (
+    ("artifact_junk_bolt", 10.0),
+    ("artifact_junk_stone", 8.0),
+    ("artifact_junk_slime", 6.0),
+)
+
+# Абсолютные шансы дропа ценных артов с заданий/рейдов (взаимоисключающие), %:
 ARTIFACT_DROP_RATES_PERCENT: tuple[tuple[str, float], ...] = (
     ("artifact", 0.1),  # Артефакт Зоны
     ("artifact_power", 5.0),  # Арт «Сила»
@@ -243,7 +341,7 @@ ARTIFACT_DROP_RATES_PERCENT: tuple[tuple[str, float], ...] = (
 
 
 def roll_artifact_drop() -> str | None:
-    """Ролл дропа арта по абсолютным шансам. None — ничего не выпало."""
+    """Ролл дропа ценного арта (задания/рейды). None — ничего не выпало."""
     roll = random.uniform(0.0, 100.0)
     cumulative = 0.0
     for key, chance in ARTIFACT_DROP_RATES_PERCENT:
@@ -254,10 +352,50 @@ def roll_artifact_drop() -> str | None:
 
 
 def pick_weighted_artifact_key() -> str:
-    """Выбор типа арта по весам (когда награда уже гарантирована)."""
+    """Выбор ценного арта по весам (когда награда уже гарантирована)."""
     keys = [key for key, _ in ARTIFACT_DROP_RATES_PERCENT]
     weights = [float(chance) for _, chance in ARTIFACT_DROP_RATES_PERCENT]
     return random.choices(keys, weights=weights, k=1)[0]
+
+
+def _detector_spawn_multiplier(base_chance: int) -> float:
+    """Отклик ~0.55 … Сварог 1.0 — усиливает локальный спавн (не Зону)."""
+    return max(0.35, min(1.25, float(base_chance) / 50.0 + 0.35))
+
+
+def location_artifact_spawn_table(location: str, detector_base_chance: int) -> list[tuple[str, float]]:
+    """Таблица абсолютных %: Зона 0.1% везде + локальные арты (детектор усиливает локальные)."""
+    mult = _detector_spawn_multiplier(detector_base_chance)
+    table: list[tuple[str, float]] = [("artifact", ARTIFACT_ZONE_GLOBAL_PERCENT)]
+    local = ARTIFACT_LOCATION_SPAWNS.get(location, ARTIFACT_DEFAULT_JUNK_SPAWNS)
+    for key, chance in local:
+        if key == "artifact":
+            # Зона уже учтена глобально — не дублируем.
+            continue
+        table.append((key, float(chance) * mult))
+    return table
+
+
+def roll_location_artifact_drop(location: str, detector_base_chance: int) -> str | None:
+    """Поиск на локации: взаимоисключающий ролл по таблице спавна."""
+    table = location_artifact_spawn_table(location, detector_base_chance)
+    roll = random.uniform(0.0, 100.0)
+    cumulative = 0.0
+    for key, chance in table:
+        cumulative += float(chance)
+        if roll < cumulative:
+            return key
+    return None
+
+
+def describe_location_artifact_spawns(location: str) -> str:
+    local = ARTIFACT_LOCATION_SPAWNS.get(location, ARTIFACT_DEFAULT_JUNK_SPAWNS)
+    parts = [f"Артефакт Зоны ~{ARTIFACT_ZONE_GLOBAL_PERCENT}%"]
+    for key, chance in local:
+        if key == "artifact":
+            continue
+        parts.append(f"{ITEM_LABELS.get(key, key)} ~{chance:g}%")
+    return ", ".join(parts)
 
 
 EQUIP_PAGE_SIZE = 8
@@ -1586,30 +1724,33 @@ def search_artifacts(storage: Storage, telegram_id: int) -> ActionResult:
             False,
             "У тебя нет детектора. Купи его у торговца в разделе снаряжения.",
         )
-    detector_key, detector_name, base_chance = chosen
+    _, detector_name, base_chance = chosen
     energy_cost = 12
     if not storage.spend_energy(telegram_id, energy_cost):
         return ActionResult(False, f"Не хватает энергии для поиска артов (нужно {energy_cost}).")
-    event_bonus = max(0, _active_location_event_modifier(storage, player.location) // 2)
-    gear_bonus = min(15, equipment_power(player) * 2)
-    chance = max(5, min(90, base_chance + gear_bonus + event_bonus))
-    roll = random.randint(1, 100)
+    location = player.location
+    art_key = roll_location_artifact_drop(location, base_chance)
+    spawn_hint = describe_location_artifact_spawns(location)
     survival_text = _apply_active_survival(storage, telegram_id)
-    if roll <= chance:
-        art_key = pick_weighted_artifact_key()
-        storage.add_item(telegram_id, art_key, 1)
-        storage.add_player_stat(telegram_id, "artifacts_found", 1)
+    if art_key is None:
         return ActionResult(
-            True,
-            f"Поиск артефакта ({detector_name}) успешен!\n"
-            f"Шанс: {chance}% (бросок {roll}).\n"
-            f"Найдено: {ITEM_LABELS.get(art_key, art_key)} x1."
+            False,
+            f"Поиск ({detector_name}) на «{location}»: аномалия пуста.\n"
+            f"Базовые шансы здесь: {spawn_hint}.\n"
+            f"Лучший детектор повышает локальный спавн (не Зону)."
             f"{survival_text}",
         )
+    storage.add_item(telegram_id, art_key, 1)
+    storage.add_player_stat(telegram_id, "artifacts_found", 1)
+    label = ITEM_LABELS.get(art_key, art_key)
+    if art_key in ARTIFACT_JUNK_KEYS:
+        kind = "мусорный артефакт (без бонусов)"
+    else:
+        kind = "артефакт"
     return ActionResult(
-        False,
-        f"Поиск артефакта ({detector_name}) не дал результата.\n"
-        f"Шанс: {chance}% (бросок {roll})."
+        True,
+        f"Поиск ({detector_name}) на «{location}»!\n"
+        f"Найден {kind}: {label} x1."
         f"{survival_text}",
     )
 
@@ -2051,7 +2192,9 @@ def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = No
         return ActionResult(False, _dead_block_text())
 
     chosen_key = item_key
-    if chosen_key is None or chosen_key not in ARTIFACT_INVENTORY_TO_NAME:
+    if chosen_key is None or chosen_key not in ARTIFACT_DROP_KEYS:
+        if chosen_key in ARTIFACT_JUNK_KEYS:
+            return ActionResult(False, "Мусорные артефакты нельзя экипировать — только продать торговцу.")
         return ActionResult(False, "Выбери артефакт в меню экипировки.")
 
     if int(player.inventory.get(chosen_key, 0)) <= 0:
