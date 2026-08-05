@@ -2191,6 +2191,171 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
     return ActionResult(True, f"Куплено: {title}.")
 
 
+# Каталог продажи торговцу по категориям (ключи sell:…).
+TRADER_SELL_CATALOG: dict[str, tuple[str, ...]] = {
+    "consumables": (
+        "energy_drink",
+        "medkit",
+        "medkit_army",
+        "medkit_science",
+        "ammo_pack",
+        "vodka",
+        "antirad",
+        "bread",
+        "sausage",
+        "stew",
+        "water_bottle",
+        "mineral_water",
+        "beard_tea",
+        "fuel_can",
+    ),
+    "trophies": (
+        "artifact",
+        "artifact_power",
+        "artifact_vitality",
+        "artifact_antirad",
+        "artifact_junk_slime",
+        "artifact_junk_bolt",
+        "artifact_junk_battery",
+        "artifact_junk_flash",
+        "artifact_junk_stone",
+        "artifact_junk_fog",
+        "artifact_junk_splinter",
+    ),
+    "gear": (
+        "detector_otklik",
+        "detector_medved",
+        "detector_veles",
+        "detector_svarog",
+        "sleeping_bag",
+        "truck",
+        "stash_case",
+    ),
+    "armor": (
+        "armor_leather",
+        "armor_stalker_vest",
+        "armor_sunrise",
+        "armor_berill5m",
+        "armor_seva",
+        "armor_exoskeleton",
+        "armor_nosorog",
+    ),
+    "weapons": (
+        "weapon_pm",
+        "weapon_fora12",
+        "weapon_sawedoff",
+        "weapon_mp5",
+        "weapon_chaser13",
+        "weapon_aks74u",
+        "weapon_ak74",
+        "weapon_spas12",
+        "weapon_lr300",
+        "weapon_il86",
+        "weapon_an94",
+        "weapon_gp37",
+        "weapon_vintar",
+        "weapon_svd",
+        "weapon_rp74",
+        "weapon_gauss",
+    ),
+}
+
+# Алиасы ключей инвентаря для одной и той же вещи.
+_SELL_KEY_ALIASES: dict[str, tuple[str, ...]] = {
+    "weapon_fora12": ("weapon_fort12",),
+    "weapon_fort12": ("weapon_fora12",),
+    "armor_sunrise": ("armor_zarya",),
+    "armor_zarya": ("armor_sunrise",),
+    "armor_berill5m": ("armor_bulat",),
+    "armor_bulat": ("armor_berill5m",),
+    "armor_exoskeleton": ("armor_exo",),
+    "armor_exo": ("armor_exoskeleton",),
+}
+
+
+def _inventory_qty_for_sell_key(character: Character, item_key: str) -> int:
+    qty = int(character.inventory.get(item_key, 0))
+    for alias in _SELL_KEY_ALIASES.get(item_key, ()):
+        qty += int(character.inventory.get(alias, 0))
+    return qty
+
+
+def player_owns_sellable_item(character: Character, item_key: str) -> bool:
+    """Есть ли у игрока предмет для продажи торговцу (инвентарь / экип / флаги)."""
+    item = SHOP_ITEMS.get(item_key)
+    if item is None or int(item.get("sell_price", 0)) <= 0:
+        return False
+    if item_key == "truck":
+        return bool(character.truck_owned)
+    if item_key == "sleeping_bag":
+        return bool(character.sleeping_bag_owned)
+    if item_key == "fuel_can":
+        return int(character.fuel) >= 5
+    if _inventory_qty_for_sell_key(character, item_key) > 0:
+        return True
+    title = str(item["name"])
+    if item_key in WEAPON_CATALOG or item_key in _SELL_KEY_ALIASES:
+        equipped = str(character.equipment.get("weapon", "Нож"))
+        if equipped == title and title != "Нож":
+            return True
+    if item_key in ARMOR_CATALOG or item_key.startswith("armor_"):
+        equipped = str(character.equipment.get("armor", "Куртка новичка"))
+        if equipped == title and title != "Куртка новичка":
+            return True
+    if item_key in ARTIFACT_INVENTORY_TO_NAME:
+        equipped = str(character.equipment.get("artifact", "Нет") or "Нет")
+        expected = ARTIFACT_INVENTORY_TO_NAME[item_key]
+        if equipped == expected:
+            return True
+    return False
+
+
+def list_owned_trader_sell_buttons(character: Character, category: str) -> list[tuple[str, str]]:
+    """Кнопки продажи только для предметов, которые есть у игрока."""
+    keys = TRADER_SELL_CATALOG.get(category, ())
+    buttons: list[tuple[str, str]] = []
+    for item_key in keys:
+        if not player_owns_sellable_item(character, item_key):
+            continue
+        item = SHOP_ITEMS[item_key]
+        title = str(item["name"])
+        price = int(item["sell_price"])
+        if item_key == "truck":
+            label = f"Продать {title} ({price})"
+        elif item_key == "sleeping_bag":
+            label = f"Продать {title} ({price})"
+        elif item_key == "fuel_can":
+            cans = max(1, int(character.fuel) // 5)
+            label = f"Продать {title} ×{cans} ({price})"
+        else:
+            qty = _inventory_qty_for_sell_key(character, item_key)
+            if qty <= 0:
+                # Только экипированный экземпляр.
+                label = f"Продать {title} (экип.) ({price})"
+            elif qty > 1:
+                label = f"Продать {title} ×{qty} ({price})"
+            else:
+                label = f"Продать {title} ({price})"
+        buttons.append((label, f"sell:{item_key}"))
+    return buttons
+
+
+def trader_sell_categories_with_stock(character: Character) -> list[tuple[str, str]]:
+    """Категории продажи, в которых есть хотя бы один предмет игрока."""
+    labels = {
+        "consumables": "🧰 Расходники",
+        "trophies": "💎 Трофеи",
+        "gear": "🛠 Прочее",
+        "armor": "🦺 Броня",
+        "weapons": "🔫 Оружие",
+    }
+    rows: list[tuple[str, str]] = []
+    for key, title in labels.items():
+        if list_owned_trader_sell_buttons(character, key):
+            rows.append((title, f"trade:sell:{key}:0"))
+    return rows
+
+
 def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
     item = SHOP_ITEMS.get(item_key)
     if item is None:

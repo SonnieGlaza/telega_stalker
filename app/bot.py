@@ -63,6 +63,8 @@ from app.game_logic import (
     repair_gear,
     run_quest,
     sell_item,
+    list_owned_trader_sell_buttons,
+    trader_sell_categories_with_stock,
     travel_to,
     use_energy_drink,
     use_medkit,
@@ -1287,10 +1289,17 @@ async def show_buy_menu(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "trade:menu:sell")
 async def show_sell_menu(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    categories = trader_sell_categories_with_stock(player) if player is not None else []
+    text = (
+        "Продажа: выбери категорию.\nПоказаны только вещи, которые у тебя есть."
+        if categories
+        else "Продажа: нечего продавать торговцу."
+    )
     await edit_menu_message(
         callback,
-        "Продажа: выбери категорию.",
-        trader_sell_categories_keyboard(),
+        text,
+        trader_sell_categories_keyboard(categories),
     )
 
 
@@ -1316,6 +1325,21 @@ def _trade_category_page(data: str | None, *, prefix: str) -> int:
         return max(0, int(tail))
     except ValueError:
         return 0
+
+
+def _sell_category_keyboard(player, category: str, page: int):
+    items = list_owned_trader_sell_buttons(player, category) if player is not None else []
+    if category == "consumables":
+        return trader_sell_consumables_keyboard(items, page=page)
+    if category == "trophies":
+        return trader_sell_trophies_keyboard(items, page=page)
+    if category == "gear":
+        return trader_sell_gear_keyboard(items, page=page)
+    if category == "armor":
+        return trader_sell_armor_keyboard(items, page=page)
+    if category == "weapons":
+        return trader_sell_weapons_keyboard(items, page=page)
+    return trader_sell_categories_keyboard()
 
 
 @router.callback_query(F.data.startswith("trade:buy:consumables"))
@@ -1378,20 +1402,22 @@ async def show_buy_repair(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("trade:sell:consumables"))
 async def show_sell_consumables(callback: CallbackQuery) -> None:
     page = _trade_category_page(callback.data, prefix="trade:sell:consumables")
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     await edit_menu_message(
         callback,
-        "Продажа расходников:",
-        trader_sell_consumables_keyboard(page=page),
+        "Продажа расходников (только то, что есть):",
+        _sell_category_keyboard(player, "consumables", page),
     )
 
 
 @router.callback_query(F.data.startswith("trade:sell:trophies"))
 async def show_sell_trophies(callback: CallbackQuery) -> None:
     page = _trade_category_page(callback.data, prefix="trade:sell:trophies")
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     await edit_menu_message(
         callback,
-        "Продажа трофеев (артефакты):",
-        trader_sell_trophies_keyboard(page=page),
+        "Продажа трофеев (только то, что есть):",
+        _sell_category_keyboard(player, "trophies", page),
     )
 
 
@@ -1401,37 +1427,41 @@ async def show_sell_gear(callback: CallbackQuery) -> None:
     raw = callback.data or ""
     if raw == "trade:sell:gear:armor" or raw.startswith("trade:sell:gear:armor:"):
         page = _trade_category_page(raw, prefix="trade:sell:gear:armor")
+        player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
         await edit_menu_message(
             callback,
-            "Продажа брони и костюмов:",
-            trader_sell_armor_keyboard(page=page),
+            "Продажа брони и костюмов (только то, что есть):",
+            _sell_category_keyboard(player, "armor", page),
         )
         return
     page = _trade_category_page(callback.data, prefix="trade:sell:gear")
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     await edit_menu_message(
         callback,
-        "Продажа снаряжения:",
-        trader_sell_gear_keyboard(page=page),
+        "Продажа снаряжения (только то, что есть):",
+        _sell_category_keyboard(player, "gear", page),
     )
 
 
 @router.callback_query(F.data.startswith("trade:sell:armor"))
 async def show_sell_armor_alias_callback(callback: CallbackQuery) -> None:
     page = _trade_category_page(callback.data, prefix="trade:sell:armor")
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     await edit_menu_message(
         callback,
-        "Продажа брони и костюмов:",
-        trader_sell_armor_keyboard(page=page),
+        "Продажа брони и костюмов (только то, что есть):",
+        _sell_category_keyboard(player, "armor", page),
     )
 
 
 @router.callback_query(F.data.startswith("trade:sell:weapons"))
 async def show_sell_weapons(callback: CallbackQuery) -> None:
     page = _trade_category_page(callback.data, prefix="trade:sell:weapons")
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     await edit_menu_message(
         callback,
-        "Продажа оружия:",
-        trader_sell_weapons_keyboard(page=page),
+        "Продажа оружия (только то, что есть):",
+        _sell_category_keyboard(player, "weapons", page),
     )
 
 
