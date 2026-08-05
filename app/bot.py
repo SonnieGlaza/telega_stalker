@@ -36,6 +36,12 @@ from app.game_logic import (
     append_survival_craving_notice,
     attack_location,
     attempt_smuggling,
+    start_smuggling_run,
+    abandon_smuggling_run,
+    resolve_smuggling_if_pending,
+    build_smuggling_overview,
+    list_smuggling_destinations,
+    get_active_smuggling,
     build_achievements_overview,
     build_character_stats_overview,
     build_economy_overview,
@@ -61,6 +67,7 @@ from app.game_logic import (
     faction_home_base,
     is_traveling,
     travel_status_text,
+    travel_status_with_smuggle,
     format_location_display,
     QUEST_CONTRACTS,
     apply_controlled_points_income,
@@ -138,6 +145,7 @@ from app.game_logic import (
 )
 from app.keyboards import (
     economy_keyboard,
+    smuggling_keyboard,
     faction_group_keyboard,
     faction_ranks_members_keyboard,
     faction_rank_pick_keyboard,
@@ -637,7 +645,7 @@ def _build_info_text(player: Character) -> str:
         "• 🏕 Вылазка — война, переходы и рейды.\n"
         "• 👥 Группировка — склад, казна, звания; склад с 5 ранга, казна только лидер.\n"
         "• 🏦 Экономика — биржа и рынок экипировки.\n"
-        "• 📋 Задания — сложности и отдельная контрабанда.\n\n"
+        "• 📋 Задания — сложности; контрабанда — перевозка с риском ограбления.\n\n"
         "Команды:\n"
         "• /start — создать персонажа или войти в существующего.\n"
         "• /menu — открыть главное меню.\n"
@@ -1241,11 +1249,17 @@ def ensure_character(message: Message) -> Character | None:
 def action_result_text(telegram_id: int, text: str) -> str:
     storage = get_storage()
     arrival = storage.pop_arrival_notice(telegram_id)
+    smuggle_text = resolve_smuggling_if_pending(storage, telegram_id)
     body = (text or "").strip()
+    parts: list[str] = []
     if arrival:
-        arrival_line = f"🚐 Прибыл в «{h(arrival)}»."
-        body = f"{arrival_line}\n\n{body}" if body else arrival_line
-    return append_survival_craving_notice(storage, telegram_id, body)
+        parts.append(f"🚐 Прибыл в «{h(arrival)}».")
+    if smuggle_text:
+        parts.append(smuggle_text.strip())
+    if body:
+        parts.append(body)
+    combined = "\n\n".join(parts)
+    return append_survival_craving_notice(storage, telegram_id, combined)
 
 
 async def send_profile_snapshot(
@@ -2477,7 +2491,7 @@ async def show_travel(message: Message) -> None:
     db = get_storage()
     locations = db.get_locations()
     traveling = is_traveling(player)
-    status = travel_status_text(player)
+    status = travel_status_with_smuggle(db, player.telegram_id) or travel_status_text(player)
     if traveling and status:
         text = (
             "Ты уже в пути.\n"
@@ -2504,7 +2518,7 @@ async def travel_status_callback(callback: CallbackQuery) -> None:
     if player is None:
         await callback.answer("Сначала создай персонажа.", show_alert=True)
         return
-    status = travel_status_text(player)
+    status = travel_status_with_smuggle(get_storage(), callback.from_user.id) or travel_status_text(player)
     if not status:
         await callback.answer("Сейчас ты никуда не едешь.", show_alert=True)
         return
@@ -3299,10 +3313,50 @@ async def auction_cancel_mine_callback(callback: CallbackQuery) -> None:
     await reply_action_result(callback, result.text)
 
 
+@router.callback_query(F.data == "eco:smuggle:menu")
+async def smuggle_menu_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа", show_alert=True)
+        return
+    overview = build_smuggling_overview(storage, callback.from_user.id)
+    active = get_active_smuggling(storage, callback.from_user.id)
+    destinations = list_smuggling_destinations(storage, callback.from_user.id)
+    await callback.message.answer(
+        overview,
+        reply_markup=smuggling_keyboard(destinations, has_active=bool(active)),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "eco:smuggle:status")
+async def smuggle_status_callback(callback: CallbackQuery) -> None:
+    overview = build_smuggling_overview(get_storage(), callback.from_user.id)
+    await callback.message.answer(overview)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "eco:smuggle:abandon")
+async def smuggle_abandon_callback(callback: CallbackQuery, bot: Bot) -> None:
+    result = abandon_smuggling_run(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text, bot=bot)
+
+
+@router.callback_query(F.data.startswith("eco:smuggle:to:"))
+async def smuggle_to_callback(callback: CallbackQuery, bot: Bot) -> None:
+    destination = (callback.data or "").removeprefix("eco:smuggle:to:").strip()
+    if not destination:
+        await callback.answer("Некорректная точка", show_alert=True)
+        return
+    result = start_smuggling_run(get_storage(), callback.from_user.id, destination)
+    await reply_action_result(callback, result.text, bot=bot)
+
+
 @router.callback_query(F.data == "eco:smuggle:run")
 async def smuggle_callback(callback: CallbackQuery) -> None:
-    result = attempt_smuggling(get_storage(), callback.from_user.id)
-    await reply_action_result(callback, result.text)
+    # Старый callback: открыть меню выбора точки.
+    await smuggle_menu_callback(callback)
 
 
 @router.message()

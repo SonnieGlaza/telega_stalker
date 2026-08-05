@@ -82,7 +82,7 @@ def quests_keyboard(
     if show_cancel:
         rows.append([InlineKeyboardButton(text="❌ Отменить контракт", callback_data="contract:cancel")])
     rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="contract:refresh")])
-    rows.append([InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:run")])
+    rows.append([InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -741,8 +741,29 @@ def economy_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🛑 Рынок: отменить мой лот", callback_data="eco:market:cancel:mine")],
             [InlineKeyboardButton(text="⚖️ Биржа: купить старейший лот", callback_data="eco:auction:buy:first")],
             [InlineKeyboardButton(text="🛑 Биржа: отменить мой старейший лот", callback_data="eco:auction:cancel:mine")],
+            [InlineKeyboardButton(text="🚚 Контрабанда: перевозка", callback_data="eco:smuggle:menu")],
         ]
     )
+
+
+def smuggling_keyboard(
+    destinations: list[str],
+    *,
+    has_active: bool = False,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if has_active:
+        rows.append([InlineKeyboardButton(text="📦 Сбросить груз", callback_data="eco:smuggle:abandon")])
+        rows.append([InlineKeyboardButton(text="⏱ Статус рейса", callback_data="eco:smuggle:status")])
+    else:
+        for name in destinations:
+            rows.append(
+                [InlineKeyboardButton(text=f"→ {name}", callback_data=f"eco:smuggle:to:{name}")]
+            )
+        if not rows:
+            rows.append([InlineKeyboardButton(text="Нет доступных точек", callback_data="alliance:none")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def market_lots_keyboard(lots: list[dict[str, str | int]]) -> InlineKeyboardMarkup:

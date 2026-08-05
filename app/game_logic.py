@@ -528,6 +528,18 @@ SMUGGLING_CONSUMABLE_CHANCE = 20  # аптечка / еда / вода — ка�
 SMUGGLING_ARMOR_T2_CHANCE = 3
 SMUGGLING_WEAPON_T1_CHANCE = 3
 SMUGGLING_OTKLIK_CHANCE = 3
+SMUGGLING_META_PREFIX = "smuggle:active:"
+SMUGGLING_BASE_CHANCE = 42
+SMUGGLING_TRANSPORT_BONUS: dict[str, int] = {
+    "truck": 12,
+    "niva": 6,
+    "bicycle": 3,
+    "foot": 0,
+}
+SMUGGLING_REWARD_MIN = 180
+SMUGGLING_REWARD_MAX = 350
+SMUGGLING_FAIL_PENALTY_MIN = 150
+SMUGGLING_FAIL_PENALTY_MAX = 300
 
 SMUGGLING_FOOD_DROP_KEYS = ("bread", "sausage", "stew")
 SMUGGLING_WATER_DROP_KEYS = ("water_bottle", "mineral_water")
@@ -3510,6 +3522,23 @@ def travel_status_text(character: Character) -> str | None:
     )
 
 
+def travel_status_with_smuggle(storage: Storage, telegram_id: int) -> str | None:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return None
+    base = travel_status_text(player)
+    active = get_active_smuggling(storage, telegram_id)
+    if base is None and active is None:
+        return None
+    parts: list[str] = []
+    if base:
+        parts.append(base)
+    if active and is_traveling(player):
+        chance = int(active.get("success_chance") or 0)
+        parts.append(f"🚚 Контрабанда на борту (шанс доставки ~{chance}%).")
+    return "\n".join(parts) if parts else None
+
+
 def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionResult:
     character = storage.get_character(telegram_id)
     if character is None:
@@ -5079,7 +5108,8 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
 
     return (
         f"Биржа:\n{chr(10).join(auctions_lines)}\n\n"
-        f"Рынок экипировки:\n{chr(10).join(market_lines)}"
+        f"Рынок экипировки:\n{chr(10).join(market_lines)}\n\n"
+        f"{build_smuggling_overview(storage, telegram_id)}"
     )
 
 
@@ -5440,7 +5470,91 @@ def _roll_smuggling_loot(storage: Storage, telegram_id: int) -> list[str]:
     return drops
 
 
-def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
+def _smuggle_meta_key(telegram_id: int) -> str:
+    return f"{SMUGGLING_META_PREFIX}{int(telegram_id)}"
+
+
+def get_active_smuggling(storage: Storage, telegram_id: int) -> dict[str, Any] | None:
+    raw = storage.get_meta(_smuggle_meta_key(telegram_id))
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def clear_active_smuggling(storage: Storage, telegram_id: int) -> None:
+    storage.delete_meta(_smuggle_meta_key(telegram_id))
+
+
+def list_smuggling_destinations(storage: Storage, telegram_id: int) -> list[str]:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return []
+    return sorted(
+        str(loc["name"])
+        for loc in storage.get_locations()
+        if str(loc["name"]) != player.location and str(loc["name"]) in MAP_TRAVEL_POINTS
+    )
+
+
+def _smuggling_success_chance(
+    character: Character,
+    *,
+    transport_mode: str,
+    base_minutes: int,
+    event_modifier: int,
+) -> int:
+    transport_bonus = SMUGGLING_TRANSPORT_BONUS.get(transport_mode, 0)
+    # Чем длиннее путь, тем выше риск ограбления.
+    distance_penalty = min(12, max(0, int(base_minutes) // 3 - 2))
+    raw = (
+        SMUGGLING_BASE_CHANCE
+        + equipment_power(character) * 3
+        + transport_bonus
+        - distance_penalty
+        - max(0, int(event_modifier))
+    )
+    return min(90, max(20, raw))
+
+
+def build_smuggling_overview(storage: Storage, telegram_id: int) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return "Сначала создай персонажа."
+    active = get_active_smuggling(storage, telegram_id)
+    lines = [
+        "🚚 Перевозка контрабанды",
+        "Бери груз → едь до точки сдачи → по прибытии ролл: доставка или ограбление в пути.",
+        "Шанс доставки растёт от силы снаряги и транспорта; длинный путь повышает риск.",
+        "Бонусы транспорта: пешком 0, велосипед +3, Нива +6, грузовик +12.",
+        "",
+    ]
+    if active:
+        dest = str(active.get("destination") or "?")
+        chance = int(active.get("success_chance") or 0)
+        if is_traveling(player):
+            lines.append(
+                f"В пути с грузом → «{dest}». "
+                f"Шанс доставить без ограбления ~{chance}%.\n"
+                f"Прибытие: {format_travel_eta(player)}"
+            )
+        elif player.location == dest:
+            lines.append(
+                f"Груз на «{dest}» ждёт разгрузки (шанс ~{chance}%). "
+                "Итог придёт при следующем действии или фоновом тике."
+            )
+        else:
+            lines.append(f"Активный рейс на «{dest}» (шанс ~{chance}%).")
+    else:
+        lines.append("Активного рейса нет — выбери точку сдачи.")
+    return "\n".join(lines)
+
+
+def start_smuggling_run(storage: Storage, telegram_id: int, destination: str) -> ActionResult:
+    """Начать перевозку контрабанды: старт перехода до точки сдачи."""
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа.")
@@ -5448,57 +5562,144 @@ def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, _dead_block_text())
     if player.faction is None:
         return ActionResult(False, "Сначала выбери группировку.")
-    blocked = travel_block_text(player)
-    if blocked:
-        return ActionResult(False, blocked)
+    if get_active_smuggling(storage, telegram_id):
+        return ActionResult(False, "У тебя уже есть активный рейс контрабанды.")
+    if is_traveling(player):
+        return ActionResult(False, travel_block_text(player) or "Ты уже в пути.")
+    if not destination or destination == player.location:
+        return ActionResult(False, "Выбери другую локацию для сдачи груза.")
+    locations = {loc["name"]: loc for loc in storage.get_locations()}
+    if destination not in locations:
+        return ActionResult(False, "Такой локации нет.")
 
-    energy_cost = 14
-    if not storage.spend_energy(telegram_id, energy_cost):
-        return ActionResult(False, f"Не хватает энергии для контрабанды (нужно {energy_cost}).")
-
-    truck_bonus = 12 if can_travel_by_truck(player) else 0
-    if truck_bonus > 0 and not storage.change_diesel(telegram_id, -1):
-        truck_bonus = 0
+    preview_mode, _, _, _ = _pick_travel_transport(player)
+    base_minutes, _ = _compute_base_travel_minutes(
+        player.location,
+        destination,
+        locations,
+        player.faction,
+    )
     event_modifier = _active_location_event_modifier(storage, player.location)
-    chance = min(90, max(20, 42 + equipment_power(player) * 3 + truck_bonus - max(0, event_modifier)))
+    success_chance = _smuggling_success_chance(
+        player,
+        transport_mode=preview_mode,
+        base_minutes=base_minutes,
+        event_modifier=event_modifier,
+    )
+
+    travel_result = travel_to(storage, telegram_id, destination)
+    if not travel_result.ok:
+        return travel_result
+
+    after = storage.get_character(telegram_id, refresh_energy=False)
+    transport_mode = (after.travel_transport if after else None) or preview_mode
+    success_chance = _smuggling_success_chance(
+        after or player,
+        transport_mode=str(transport_mode),
+        base_minutes=base_minutes,
+        event_modifier=event_modifier,
+    )
+    storage.set_meta(
+        _smuggle_meta_key(telegram_id),
+        json.dumps(
+            {
+                "destination": destination,
+                "origin": player.location,
+                "success_chance": success_chance,
+                "transport": transport_mode,
+                "started_at": _utc_now().isoformat(),
+            },
+            ensure_ascii=False,
+        ),
+    )
+    return ActionResult(
+        True,
+        f"🚚 Рейс контрабанды начат.\n"
+        f"Груз: «{player.location}» → «{destination}».\n"
+        f"Шанс доставить без ограбления ~{success_chance}% "
+        f"(провал = ограбили в пути).\n\n"
+        f"{travel_result.text}",
+    )
+
+
+def abandon_smuggling_run(storage: Storage, telegram_id: int) -> ActionResult:
+    """Сбросить груз (рейс отменяется, переход если идёт — продолжается порожняком)."""
+    active = get_active_smuggling(storage, telegram_id)
+    if active is None:
+        return ActionResult(False, "Активного рейса контрабанды нет.")
+    clear_active_smuggling(storage, telegram_id)
+    dest = str(active.get("destination") or "?")
+    return ActionResult(
+        True,
+        f"Груз сброшен — рейс на «{dest}» отменён.\n"
+        "Если ты в пути, едешь дальше без контрабанды.",
+    )
+
+
+def resolve_smuggling_if_pending(storage: Storage, telegram_id: int) -> str | None:
+    """По прибытии на точку сдачи: доставка или ограбление в пути."""
+    active = get_active_smuggling(storage, telegram_id)
+    if active is None:
+        return None
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return None
+    if is_traveling(player):
+        return None
+    destination = str(active.get("destination") or "")
+    if not destination or player.location != destination:
+        return None
+
+    clear_active_smuggling(storage, telegram_id)
+    chance = min(90, max(20, int(active.get("success_chance") or 50)))
     roll = random.randint(1, 100)
     success = roll <= chance
 
     if success:
-        reward = random.randint(180, 350)
+        reward = random.randint(SMUGGLING_REWARD_MIN, SMUGGLING_REWARD_MAX)
         warehouse_bonus = random.randint(1, 3)
         durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=4, armor_loss=2)
         storage.change_money(telegram_id, reward)
-        storage.change_faction_treasury(player.faction, reward // 3)
-        storage.change_faction_warehouse_item(player.faction, "ammo_pack", warehouse_bonus)
+        treasury_line = ""
+        if player.faction:
+            storage.change_faction_treasury(player.faction, reward // 3)
+            storage.change_faction_warehouse_item(player.faction, "ammo_pack", warehouse_bonus)
+            treasury_line = f"В казну ушло {reward // 3} RU, на склад патронов +{warehouse_bonus}."
         loot_lines = _roll_smuggling_loot(storage, telegram_id)
         loot_text = (
             "\nДроп:\n" + "\n".join(f"• {line}" for line in loot_lines)
             if loot_lines
-            else "\nДроп: пусто (не повезло с доп. находками)."
+            else "\nДроп: пусто."
         )
         _add_rating(storage, telegram_id, RATING_REWARD["smuggle_success"])
         storage.add_player_stat(telegram_id, "smuggling_success", 1)
         storage.add_player_stat(telegram_id, "money_earned", reward)
         achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
-        return ActionResult(
-            True,
-            f"Контрабанда удалась! Шанс {chance}% (бросок {roll}).\n"
-            f"Ты получил {reward} RU, в казну ушло {reward // 3} RU.\n"
-            f"На склад добавлено патронов: +{warehouse_bonus}."
-            f"{loot_text}{durability_text}{achievements_text}",
+        return (
+            f"🚚 Контрабанда доставлена на «{destination}»!\n"
+            f"Шанс {chance}% (бросок {roll}) — путь прошёл без ограбления.\n"
+            f"Награда: {reward} RU. {treasury_line}"
+            f"{loot_text}{durability_text}{achievements_text}"
         )
 
-    penalty = random.randint(150, 300)
+    penalty = random.randint(SMUGGLING_FAIL_PENALTY_MIN, SMUGGLING_FAIL_PENALTY_MAX)
     durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=5, armor_loss=3)
     storage.change_money(telegram_id, -penalty)
     storage.change_health(telegram_id, -12)
     _add_rating(storage, telegram_id, -RATING_REWARD["smuggle_fail"])
-    return ActionResult(
-        False,
-        f"Контрабанда сорвана. Шанс {chance}% (бросок {roll}).\n"
-        f"Потери: {penalty} RU и ранение (-12 HP).{durability_text}",
+    return (
+        f"💀 Ограбили в пути до «{destination}»!\n"
+        f"Шанс доставить был {chance}% (бросок {roll}).\n"
+        f"Потери: {penalty} RU и ранение (−12 HP).{durability_text}"
     )
+
+
+def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
+    """Совместимость: старт рейса на случайную доступную точку."""
+    destinations = list_smuggling_destinations(storage, telegram_id)
+    if not destinations:
+        return ActionResult(False, "Нет доступных точек для перевозки.")
+    return start_smuggling_run(storage, telegram_id, random.choice(destinations))
 
 
 def _schedule_next_zone_event(storage: Storage, now: datetime | None = None) -> datetime:

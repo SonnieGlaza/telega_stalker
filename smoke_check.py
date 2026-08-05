@@ -266,7 +266,32 @@ def run_smoke_check() -> None:
         assert war_launch.text
         solo_assault = attack_location(storage, 111, "Свалка")
         assert not solo_assault.ok, solo_assault.text
-        assert attempt_smuggling(storage, 111).text
+
+        # Smuggling as travel run with arrival resolve.
+        from app.game_logic import (
+            start_smuggling_run,
+            resolve_smuggling_if_pending,
+            get_active_smuggling,
+            abandon_smuggling_run,
+        )
+
+        storage.restore_energy(111, 100)
+        storage.set_location(111, "Росток")
+        smuggle_start = start_smuggling_run(storage, 111, "Болото")
+        assert smuggle_start.ok, smuggle_start.text
+        assert get_active_smuggling(storage, 111)
+        assert "ограб" in smuggle_start.text.lower() or "контрабанд" in smuggle_start.text.lower()
+        past_smuggle = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        with storage._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET travel_arrives_at = ? WHERE telegram_id = ?",
+                (past_smuggle, 111),
+            )
+        storage.resolve_travel_if_due(111)
+        smuggle_result = resolve_smuggling_if_pending(storage, 111)
+        assert smuggle_result
+        assert get_active_smuggling(storage, 111) is None
+        assert abandon_smuggling_run(storage, 111).ok is False
 
         # Character career stats.
         from app.game_logic import build_character_stats_overview
