@@ -64,6 +64,7 @@ from app.game_logic import (
     QUEST_CONTRACTS,
     apply_controlled_points_income,
     process_emission_cycle,
+    process_due_travels,
     process_zone_event_cycle,
     build_players_root_text,
     build_players_faction_page_text,
@@ -213,12 +214,17 @@ def _is_stale_callback_error(exc: TelegramBadRequest) -> bool:
     return "query is too old" in message or "query id is invalid" in message
 
 
+def _is_benign_callback_answer_error(exc: TelegramBadRequest) -> bool:
+    message = str(exc).lower()
+    return _is_stale_callback_error(exc) or "query already answered" in message
+
+
 async def safe_callback_answer(callback: CallbackQuery, *args: Any, **kwargs: Any) -> None:
     try:
         await callback.answer(*args, **kwargs)
     except TelegramBadRequest as exc:
-        if _is_stale_callback_error(exc):
-            logger.debug("Ignored stale callback answer for user %s", callback.from_user.id)
+        if _is_benign_callback_answer_error(exc):
+            logger.debug("Ignored callback answer for user %s: %s", callback.from_user.id, exc)
             return
         raise
 
@@ -239,18 +245,22 @@ async def edit_menu_message(
     callback: CallbackQuery,
     text: str,
     reply_markup: Any = None,
+    *,
+    answer_callback: bool = True,
 ) -> None:
     """Обновляет меню на месте, чтобы не копить сообщения в чате."""
     message = callback.message
     if message is None:
-        await safe_callback_answer(callback)
+        if answer_callback:
+            await safe_callback_answer(callback)
         return
     try:
         await message.edit_text(text, reply_markup=reply_markup)
     except TelegramBadRequest as exc:
         error_text = str(exc).lower()
         if "message is not modified" in error_text:
-            await safe_callback_answer(callback)
+            if answer_callback:
+                await safe_callback_answer(callback)
             return
         # Нельзя отредактировать (например, это не текст) — шлём новое и пытаемся убрать старое.
         await message.answer(text, reply_markup=reply_markup)
@@ -258,20 +268,99 @@ async def edit_menu_message(
             await message.delete()
         except TelegramBadRequest:
             pass
-    await safe_callback_answer(callback)
+    if answer_callback:
+        await safe_callback_answer(callback)
 
 
-async def reply_action_result(callback: CallbackQuery, text: str) -> None:
-    """Итог действия — всегда всплывающее окно, без спама в чат."""
-    clean = append_survival_craving_notice(
-        get_storage(),
-        callback.from_user.id,
-        (text or "").strip(),
-    )
+def action_notify_pairs(result: Any) -> list[tuple[int, str]]:
+    payload = getattr(result, "payload", None)
+    if not payload:
+        return []
+    raw = payload.get("notify")
+    if not raw:
+        return []
+    pairs: list[tuple[int, str]] = []
+    for item in raw:
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            pairs.append((int(item[0]), str(item[1])))
+    return pairs
+
+
+async def notify_player(bot: Bot, user_id: int, text: str) -> None:
+    clean = action_result_text(user_id, text)
+    if not clean:
+        return
+    try:
+        await bot.send_message(user_id, clean)
+    except Exception:
+        logger.exception("Failed to notify player %s", user_id)
+
+
+async def apply_action_notifies(bot: Bot, result: Any) -> None:
+    for user_id, text in action_notify_pairs(result):
+        await notify_player(bot, user_id, text)
+
+
+async def reply_action_result(
+    callback: CallbackQuery,
+    text: str,
+    *,
+    bot: Bot | None = None,
+    short_ack: str = "Готово",
+) -> None:
+    """Короткий итог — popup; длинный — сообщение в чат."""
+    clean = action_result_text(callback.from_user.id, text)
     if not clean:
         await safe_callback_answer(callback)
         return
-    await safe_callback_answer(callback, _clip_callback_alert(clean), show_alert=True)
+    if len(clean) <= CALLBACK_ALERT_MAX_LEN:
+        await safe_callback_answer(callback, clean, show_alert=True)
+        return
+    await safe_callback_answer(callback, short_ack)
+    message = callback.message
+    if message is not None:
+        await message.answer(clean)
+    elif bot is not None:
+        await bot.send_message(callback.from_user.id, clean)
+
+
+async def finish_callback_action(
+    callback: CallbackQuery,
+    result: Any,
+    bot: Bot,
+    *,
+    short_ack: str = "Готово",
+) -> None:
+    await reply_action_result(callback, result.text, bot=bot, short_ack=short_ack)
+    await apply_action_notifies(bot, result)
+
+
+async def deliver_group_result(
+    callback: CallbackQuery,
+    bot: Bot,
+    result: Any,
+    *,
+    prefix: str = "📣",
+    short_ack: str = "Готово",
+) -> None:
+    notified: set[int] = set()
+    member_ids = getattr(result, "notify_member_ids", ()) or ()
+    for member_id in member_ids:
+        if member_id in notified:
+            continue
+        notified.add(member_id)
+        try:
+            await bot.send_message(
+                member_id,
+                action_result_text(member_id, f"{prefix}\n{result.text}"),
+            )
+        except Exception:
+            logger.exception("Failed to deliver group result to %s", member_id)
+    if callback.from_user.id not in notified:
+        await reply_action_result(callback, result.text, bot=bot, short_ack=short_ack)
+    else:
+        await safe_callback_answer(callback, short_ack)
+    await apply_action_notifies(bot, result)
 
 
 @router.error()
@@ -1860,7 +1949,7 @@ async def accept_contract_callback(callback: CallbackQuery) -> None:
         player = storage.get_character(callback.from_user.id, refresh_energy=False)
         if player is not None:
             text, keyboard = _quests_menu_payload(storage, player)
-            await edit_menu_message(callback, text, keyboard)
+            await edit_menu_message(callback, text, keyboard, answer_callback=False)
 
 
 @router.callback_query(F.data == "contract:work")
@@ -1873,7 +1962,7 @@ async def contract_work_callback(callback: CallbackQuery) -> None:
         if player is not None:
             text, keyboard = _quests_menu_payload(storage, player)
             try:
-                await edit_menu_message(callback, text, keyboard)
+                await edit_menu_message(callback, text, keyboard, answer_callback=False)
             except TelegramBadRequest:
                 pass
 
@@ -1887,7 +1976,7 @@ async def contract_turnin_callback(callback: CallbackQuery) -> None:
     if player is not None:
         text, keyboard = _quests_menu_payload(storage, player)
         try:
-            await edit_menu_message(callback, text, keyboard)
+            await edit_menu_message(callback, text, keyboard, answer_callback=False)
         except TelegramBadRequest:
             pass
 
@@ -1900,7 +1989,7 @@ async def contract_cancel_callback(callback: CallbackQuery) -> None:
     player = storage.get_character(callback.from_user.id, refresh_energy=False)
     if player is not None:
         text, keyboard = _quests_menu_payload(storage, player)
-        await edit_menu_message(callback, text, keyboard)
+        await edit_menu_message(callback, text, keyboard, answer_callback=False)
 
 
 @router.message(F.text == "🎖 Достижения")
@@ -2266,7 +2355,7 @@ async def artifact_search_callback(callback: CallbackQuery) -> None:
 
 
 @router.message(Command("pay"))
-async def pay_command(message: Message) -> None:
+async def pay_command(message: Message, bot: Bot) -> None:
     sender_id = message.from_user.id
     parts = (message.text or "").strip().split()
     if len(parts) != 3:
@@ -2280,6 +2369,7 @@ async def pay_command(message: Message) -> None:
         return
     result = transfer_money_with_fee(get_storage(), sender_id, target_telegram_id, amount)
     await message.answer(action_result_text(sender_id, result.text))
+    await apply_action_notifies(bot, result)
 
 
 @router.message(Command("дуэль"))
@@ -2569,26 +2659,26 @@ async def war_lobby_join_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "war_lobby:launch")
-async def war_lobby_launch_callback(callback: CallbackQuery) -> None:
+async def war_lobby_launch_callback(callback: CallbackQuery, bot: Bot) -> None:
     result = launch_war_lobby(get_storage(), callback.from_user.id)
-    await reply_action_result(callback, result.text)
+    await deliver_group_result(callback, bot, result, prefix="📣 Итог штурма:")
     if result.ok:
         await _refresh_war_lobby_menu(callback)
 
 
 @router.callback_query(F.data == "war_lobby:dissolve")
-async def war_lobby_dissolve_callback(callback: CallbackQuery) -> None:
+async def war_lobby_dissolve_callback(callback: CallbackQuery, bot: Bot) -> None:
     result = dissolve_war_lobby(get_storage(), callback.from_user.id)
-    await reply_action_result(callback, result.text)
+    await deliver_group_result(callback, bot, result, prefix="📣 Лобби распущено:")
     if result.ok:
         await _refresh_war_lobby_menu(callback)
 
 
 @router.callback_query(F.data.startswith("alliance:propose:"))
-async def alliance_propose_callback(callback: CallbackQuery) -> None:
+async def alliance_propose_callback(callback: CallbackQuery, bot: Bot) -> None:
     target_faction = (callback.data or "").split(":", maxsplit=2)[2]
     result = propose_alliance(get_storage(), callback.from_user.id, target_faction)
-    await reply_action_result(callback, result.text)
+    await finish_callback_action(callback, result, bot)
 
 
 @router.callback_query(F.data == "alliance:menu:propose")
@@ -2660,24 +2750,24 @@ async def alliance_none_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("alliance:confirm:"))
-async def alliance_confirm_callback(callback: CallbackQuery) -> None:
+async def alliance_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
     source_faction = (callback.data or "").split(":", maxsplit=2)[2]
     result = accept_alliance(get_storage(), callback.from_user.id, source_faction)
-    await reply_action_result(callback, result.text)
+    await finish_callback_action(callback, result, bot)
 
 
 @router.callback_query(F.data.startswith("alliance:break:"))
-async def alliance_break_callback(callback: CallbackQuery) -> None:
+async def alliance_break_callback(callback: CallbackQuery, bot: Bot) -> None:
     target_faction = (callback.data or "").split(":", maxsplit=2)[2]
     result = break_alliance(get_storage(), callback.from_user.id, target_faction)
-    await reply_action_result(callback, result.text)
+    await finish_callback_action(callback, result, bot)
 
 
 @router.callback_query(F.data.startswith("alliance:war:"))
-async def alliance_war_callback(callback: CallbackQuery) -> None:
+async def alliance_war_callback(callback: CallbackQuery, bot: Bot) -> None:
     target_faction = (callback.data or "").split(":", maxsplit=2)[2]
     result = declare_war(get_storage(), callback.from_user.id, target_faction)
-    await reply_action_result(callback, result.text)
+    await finish_callback_action(callback, result, bot)
 
 
 @router.message(F.text == "🪖 Рейды")
@@ -2743,20 +2833,7 @@ async def join_raid_as_ally_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "raid:launch")
 async def launch_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
     result = launch_open_raid(get_storage(), callback.from_user.id)
-    notified: set[int] = set()
-    if result.notify_member_ids:
-        for member_id in result.notify_member_ids:
-            if member_id in notified:
-                continue
-            notified.add(member_id)
-            try:
-                await bot.send_message(member_id, f"📣 Итог рейда:\n{result.text}")
-            except Exception:
-                logger.exception("Failed to deliver raid result to member %s", member_id)
-    if callback.from_user.id not in notified:
-        await reply_action_result(callback, result.text)
-    else:
-        await safe_callback_answer(callback)
+    await deliver_group_result(callback, bot, result, prefix="📣 Итог рейда:")
 
 
 @router.callback_query(F.data == "raid:cancel:all")
@@ -3023,7 +3100,6 @@ async def faction_base_fortify_callback(callback: CallbackQuery) -> None:
         f"{result.text}\n\n{overview}",
         _faction_group_keyboard_for(player.telegram_id),
     )
-    await callback.answer("Готово." if result.ok else result.text[:180], show_alert=not result.ok)
 
 
 @router.callback_query(F.data == "eco:menu:root")
@@ -3080,7 +3156,7 @@ async def faction_rank_member_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("rank:set:"))
-async def faction_rank_set_callback(callback: CallbackQuery) -> None:
+async def faction_rank_set_callback(callback: CallbackQuery, bot: Bot) -> None:
     storage = get_storage()
     parts = (callback.data or "").split(":", maxsplit=3)
     if len(parts) != 4:
@@ -3107,6 +3183,7 @@ async def faction_rank_set_callback(callback: CallbackQuery) -> None:
         f"{result.text}\n\n{overview}",
         faction_ranks_members_keyboard(members, leader_id=player.telegram_id),
     )
+    await apply_action_notifies(bot, result)
 
 
 @router.callback_query(F.data.startswith("eco:auction:create:"))
@@ -3178,9 +3255,9 @@ async def process_market_lot_price(message: Message, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data == "eco:market:buy:first")
-async def market_buy_first_callback(callback: CallbackQuery) -> None:
+async def market_buy_first_callback(callback: CallbackQuery, bot: Bot) -> None:
     result = buy_first_market_lot(get_storage(), callback.from_user.id)
-    await reply_action_result(callback, result.text)
+    await finish_callback_action(callback, result, bot)
 
 
 @router.callback_query(F.data == "eco:market:list")
@@ -3196,7 +3273,7 @@ async def market_list_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("eco:market:buy:"))
-async def market_buy_by_id_callback(callback: CallbackQuery) -> None:
+async def market_buy_by_id_callback(callback: CallbackQuery, bot: Bot) -> None:
     lot_id = (callback.data or "").split(":", maxsplit=3)[3]
     try:
         auction_id = int(lot_id)
@@ -3204,7 +3281,7 @@ async def market_buy_by_id_callback(callback: CallbackQuery) -> None:
         await callback.answer("Некорректный ID лота.", show_alert=True)
         return
     result = buy_market_lot(get_storage(), callback.from_user.id, auction_id)
-    await reply_action_result(callback, result.text)
+    await finish_callback_action(callback, result, bot)
 
 
 @router.callback_query(F.data == "eco:market:cancel:mine")
@@ -3214,9 +3291,9 @@ async def market_cancel_mine_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "eco:auction:buy:first")
-async def auction_buy_first_callback(callback: CallbackQuery) -> None:
+async def auction_buy_first_callback(callback: CallbackQuery, bot: Bot) -> None:
     result = buy_first_faction_auction(get_storage(), callback.from_user.id)
-    await reply_action_result(callback, result.text)
+    await finish_callback_action(callback, result, bot)
 
 
 @router.callback_query(F.data == "eco:auction:cancel:mine")
@@ -3311,6 +3388,17 @@ async def run_bot() -> None:
                             logger.debug("Failed zone event notify to %s", user_id)
             except Exception:
                 logger.exception("Zone event cycle tick failed")
+            try:
+                for user_id, destination in process_due_travels(get_storage()):
+                    try:
+                        await bot.send_message(
+                            user_id,
+                            action_result_text(user_id, f"🚐 Прибыл в «{destination}»."),
+                        )
+                    except Exception:
+                        logger.debug("Failed travel arrival notify to %s", user_id)
+            except Exception:
+                logger.exception("Travel arrival tick failed")
 
     sync_task = asyncio.create_task(periodic_snapshot_sync())
     zone_task = asyncio.create_task(periodic_zone_systems())

@@ -865,6 +865,13 @@ class RaidLaunchResult:
 
 
 @dataclass(frozen=True)
+class WarLobbyResult:
+    ok: bool
+    text: str
+    notify_member_ids: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class QuestChanceBreakdown:
     chance: int
     base_chance: int
@@ -2298,6 +2305,14 @@ def transfer_money_with_fee(storage: Storage, sender_id: int, target_id: int, am
     return ActionResult(
         True,
         f"Перевод выполнен: {amount} RU игроку {target.nickname}.\nКомиссия: {fee} RU.\nСписано: {total} RU.",
+        payload={
+            "notify": [
+                (
+                    target_id,
+                    f"💰 {sender.nickname} перевёл(а) тебе {amount} RU.",
+                ),
+            ],
+        },
     )
 
 
@@ -3529,10 +3544,20 @@ def propose_alliance(storage: Storage, telegram_id: int, target_faction: str) ->
         return ActionResult(False, f"Можно иметь максимум {MAX_FACTION_ALLIANCES} союзов.")
     if not storage.create_alliance_request(player.faction, target_faction, telegram_id):
         return ActionResult(False, "Предложение уже отправлено или не удалось создать заявку.")
+    notify: list[tuple[int, str]] = []
+    if target_leader_id is not None:
+        notify.append(
+            (
+                int(target_leader_id),
+                f"🤝 {player.faction} предлагает союз.\n"
+                f"Открой «⚔️ Война» → дипломатия → «Подтвердить союз».",
+            ),
+        )
     return ActionResult(
         True,
         f"Предложение союза отправлено в {target_faction}.\n"
         f"Лидер {target_faction} должен подтвердить договор.",
+        payload={"notify": notify} if notify else None,
     )
 
 
@@ -3563,7 +3588,20 @@ def accept_alliance(storage: Storage, telegram_id: int, from_faction: str) -> Ac
     if not storage.set_faction_alliance(from_faction, player.faction, allied=True):
         return ActionResult(False, "Не удалось подтвердить союз.")
     storage.remove_alliance_request(from_faction, player.faction)
-    return ActionResult(True, f"Договор о союзе между {from_faction} и {player.faction} заключен.")
+    requester_leader_id = storage.get_faction_leader_id(from_faction)
+    notify: list[tuple[int, str]] = []
+    if requester_leader_id is not None:
+        notify.append(
+            (
+                int(requester_leader_id),
+                f"✅ {player.faction} приняла союз с {from_faction}.",
+            ),
+        )
+    return ActionResult(
+        True,
+        f"Договор о союзе между {from_faction} и {player.faction} заключен.",
+        payload={"notify": notify} if notify else None,
+    )
 
 
 def break_alliance(storage: Storage, telegram_id: int, target_faction: str) -> ActionResult:
@@ -3582,7 +3620,20 @@ def break_alliance(storage: Storage, telegram_id: int, target_faction: str) -> A
         return ActionResult(False, f"Союза с {target_faction} сейчас нет.")
     if not storage.set_faction_alliance(player.faction, target_faction, allied=False):
         return ActionResult(False, "Не удалось разорвать союз.")
-    return ActionResult(True, f"Союз между {player.faction} и {target_faction} разорван.")
+    target_leader_id = storage.get_faction_leader_id(target_faction)
+    notify: list[tuple[int, str]] = []
+    if target_leader_id is not None:
+        notify.append(
+            (
+                int(target_leader_id),
+                f"⚠️ {player.faction} разорвала союз с {target_faction}.",
+            ),
+        )
+    return ActionResult(
+        True,
+        f"Союз между {player.faction} и {target_faction} разорван.",
+        payload={"notify": notify} if notify else None,
+    )
 
 
 def declare_war(storage: Storage, telegram_id: int, target_faction: str) -> ActionResult:
@@ -3599,6 +3650,15 @@ def declare_war(storage: Storage, telegram_id: int, target_faction: str) -> Acti
         return ActionResult(False, "Объявлять войну может только лидер твоей группировки.")
     if storage.get_faction_leader_id(target_faction) is None:
         return ActionResult(False, f"У группировки {target_faction} не назначен лидер.")
+    target_leader_id = storage.get_faction_leader_id(target_faction)
+    war_notify: list[tuple[int, str]] = []
+    if target_leader_id is not None:
+        war_notify.append(
+            (
+                int(target_leader_id),
+                f"⚔️ {player.faction} объявила войну {target_faction}!",
+            ),
+        )
     had_alliance = storage.are_factions_allied(player.faction, target_faction)
     storage.remove_alliance_request(player.faction, target_faction)
     storage.remove_alliance_request(target_faction, player.faction)
@@ -3608,10 +3668,12 @@ def declare_war(storage: Storage, telegram_id: int, target_faction: str) -> Acti
         return ActionResult(
             True,
             f"{player.faction} объявила войну {target_faction}.\nСоюз разорван в одностороннем порядке.",
+            payload={"notify": war_notify} if war_notify else None,
         )
     return ActionResult(
         True,
         f"{player.faction} объявила войну {target_faction}.\nПодтверждение второй стороны не требуется.",
+        payload={"notify": war_notify} if war_notify else None,
     )
 
 
@@ -4180,6 +4242,14 @@ def assign_faction_rank(
     return ActionResult(
         True,
         f"{target.nickname} теперь «{rank.title}» в группировке «{leader.faction}».",
+        payload={
+            "notify": [
+                (
+                    target.telegram_id,
+                    f"🎖 Лидер назначил тебе звание «{rank.title}» в группировке «{leader.faction}».",
+                ),
+            ],
+        },
     )
 
 
@@ -4291,11 +4361,18 @@ def buy_first_faction_auction(storage: Storage, telegram_id: int) -> ActionResul
     storage.add_player_stat(seller_id, "money_earned", seller_income)
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     seller_achievements = _progress_and_unlock_achievements(storage, seller_id)
-    suffix = achievements_text + seller_achievements
+    buyer = storage.get_character(telegram_id, refresh_energy=False)
+    buyer_name = buyer.nickname if buyer else str(telegram_id)
+    seller_msg = (
+        f"🛒 {buyer_name} купил(а) твой лот #{auction_id}: "
+        f"{ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.\n"
+        f"На баланс: +{seller_income} RU (комиссия {fee} RU).{seller_achievements}"
+    )
     return ActionResult(
         True,
         f"Куплен лот #{auction_id}: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.\n"
-        f"Продавец получил {seller_income} RU (комиссия {fee} RU).{suffix}",
+        f"Продавец получил {seller_income} RU (комиссия {fee} RU).{achievements_text}",
+        payload={"notify": [(seller_id, seller_msg)]},
     )
 
 
@@ -4453,10 +4530,20 @@ def buy_first_market_lot(storage: Storage, telegram_id: int) -> ActionResult:
     storage.change_money(seller_id, seller_income)
     storage.add_item(telegram_id, item_key, amount)
     item_name = ITEM_LABELS.get(item_key, item_key)
+    buyer_name = buyer.nickname if buyer else str(telegram_id)
     return ActionResult(
         True,
         f"Куплен рыночный лот #{auction_id}: {item_name} x{amount} за {price} RU.\n"
         f"Продавец получил {seller_income} RU (комиссия {fee} RU).",
+        payload={
+            "notify": [
+                (
+                    seller_id,
+                    f"🛒 {buyer_name} купил(а) твой лот #{auction_id}: {item_name} x{amount} за {price} RU.\n"
+                    f"На баланс: +{seller_income} RU (комиссия {fee} RU).",
+                ),
+            ],
+        },
     )
 
 
@@ -4487,10 +4574,20 @@ def buy_market_lot(storage: Storage, telegram_id: int, lot_id: int) -> ActionRes
     storage.change_money(seller_id, seller_income)
     storage.add_item(telegram_id, item_key, amount)
     item_name = ITEM_LABELS.get(item_key, item_key)
+    buyer_name = buyer.nickname
     return ActionResult(
         True,
         f"Куплен рыночный лот #{lot_id}: {item_name} x{amount} за {price} RU.\n"
         f"Продавец получил {seller_income} RU (комиссия {fee} RU).",
+        payload={
+            "notify": [
+                (
+                    seller_id,
+                    f"🛒 {buyer_name} купил(а) твой лот #{lot_id}: {item_name} x{amount} за {price} RU.\n"
+                    f"На баланс: +{seller_income} RU (комиссия {fee} RU).",
+                ),
+            ],
+        },
     )
 
 
@@ -4642,47 +4739,55 @@ def can_dissolve_war_lobby(storage: Storage, telegram_id: int) -> bool:
     return int(lobby["leader_id"]) == telegram_id
 
 
-def dissolve_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
+def dissolve_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
-        return ActionResult(False, "Сначала создай персонажа.")
+        return WarLobbyResult(False, "Сначала создай персонажа.")
     if _is_dead(player):
-        return ActionResult(False, _dead_block_text())
+        return WarLobbyResult(False, _dead_block_text())
     if player.faction is None:
-        return ActionResult(False, "Сначала выбери группировку.")
+        return WarLobbyResult(False, "Сначала выбери группировку.")
     lobby = find_open_war_lobby_for_character(storage, player)
     if lobby is None:
-        return ActionResult(False, "Открытого военного лобби нет.")
+        return WarLobbyResult(False, "Открытого военного лобби нет.")
     war_id = int(lobby["id"])
     if int(lobby["leader_id"]) != telegram_id:
-        return ActionResult(False, "Распустить лобби может только его создатель.")
+        return WarLobbyResult(False, "Распустить лобби может только его создатель.")
+    member_ids = tuple(storage.get_war_lobby_member_ids(war_id))
     cancelled = storage.cancel_war_lobby(war_id, telegram_id)
     if cancelled is None:
-        return ActionResult(False, "Не удалось распустить лобби.")
+        return WarLobbyResult(False, "Не удалось распустить лобби.")
     location = str(cancelled.get("location", lobby["location"]))
-    return ActionResult(True, f"Военное лобби #{war_id} на «{location}» распущено.")
+    return WarLobbyResult(
+        True,
+        f"Военное лобби #{war_id} на «{location}» распущено.",
+        member_ids,
+    )
 
 
-def launch_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
+def launch_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
     leader = storage.get_character(telegram_id, refresh_energy=False)
     if leader is None:
-        return ActionResult(False, "Сначала создай персонажа.")
+        return WarLobbyResult(False, "Сначала создай персонажа.")
     if _is_dead(leader):
-        return ActionResult(False, _dead_block_text())
+        return WarLobbyResult(False, _dead_block_text())
     if leader.faction is None:
-        return ActionResult(False, "Сначала выбери группировку.")
+        return WarLobbyResult(False, "Сначала выбери группировку.")
     lobby = storage.get_open_war_lobby_for_faction(leader.faction)
     if lobby is None:
-        return ActionResult(False, "У твоей группировки нет открытого военного лобби.")
+        return WarLobbyResult(False, "У твоей группировки нет открытого военного лобби.")
     if int(lobby["leader_id"]) != telegram_id:
-        return ActionResult(False, "Запускать лобби может только лидер, который его создал.")
+        return WarLobbyResult(False, "Запускать лобби может только лидер, который его создал.")
     war_id = int(lobby["id"])
     location_name = str(lobby["location"])
     host_faction = str(lobby.get("host_faction") or leader.faction)
-    member_ids = storage.get_war_lobby_member_ids(war_id)
+    member_ids = tuple(storage.get_war_lobby_member_ids(war_id))
     members = [m for m in storage.get_characters_by_ids(member_ids) if m.health > 0 and m.faction]
     if len(members) < WAR_MIN_FACTION_MEMBERS:
-        return ActionResult(False, f"Для запуска нужно минимум {WAR_MIN_FACTION_MEMBERS} живых бойцов.")
+        return WarLobbyResult(
+            False,
+            f"Для запуска нужно минимум {WAR_MIN_FACTION_MEMBERS} живых бойцов.",
+        )
     active: list[Character] = []
     spent_ids: list[int] = []
     for member in members:
@@ -4691,15 +4796,15 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
             spent_ids.append(member.telegram_id)
     if len(active) < WAR_MIN_FACTION_MEMBERS:
         _refund_spent_energy(storage, spent_ids, 24)
-        return ActionResult(False, "Недостаточно энергии у бойцов лобби.")
+        return WarLobbyResult(False, "Недостаточно энергии у бойцов лобби.")
     winner = host_faction
     target = storage.get_location(location_name)
     if target is None:
         _refund_spent_energy(storage, spent_ids, 24)
-        return ActionResult(False, "Локация лобби не найдена.")
+        return WarLobbyResult(False, "Локация лобби не найдена.")
     if _location_is_friendly_to_faction(storage, target, host_faction):
         _refund_spent_energy(storage, spent_ids, 24)
-        return ActionResult(False, "Нельзя штурмовать свою или союзническую точку.")
+        return WarLobbyResult(False, "Нельзя штурмовать свою или союзническую точку.")
     enemy_power = int(target["npc_power"]) + max(0, int(target.get("defense_bonus") or 0))
     total_power = sum(equipment_power(member) for member in active)
     chance = int(round((total_power / (total_power + enemy_power + 10)) * 100))
@@ -4731,15 +4836,20 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> ActionResult:
                 achievement_notes.append(note)
         breakdown = ", ".join(f"{f}:{faction_counts[f]}" for f in sorted(faction_counts))
         base_note = "\nЗахвачена вражеская база!" if captured_enemy_base else ""
-        return ActionResult(
+        return WarLobbyResult(
             True,
             f"Штурм лобби #{war_id} успешен (шанс {chance}%).\n"
             f"Локация «{location_name}» перешла под контроль: {winner}.{base_note}\n"
             f"Распределение бойцов: {breakdown}."
             f"{''.join(achievement_notes)}",
+            member_ids,
         )
     storage.finish_war_lobby(war_id, "failed", "Поражение штурма")
-    return ActionResult(False, f"Штурм лобби #{war_id} провален (шанс {chance}%).")
+    return WarLobbyResult(
+        False,
+        f"Штурм лобби #{war_id} провален (шанс {chance}%).",
+        member_ids,
+    )
 
 
 def upgrade_faction_base(storage: Storage, telegram_id: int) -> ActionResult:
@@ -5386,3 +5496,8 @@ def build_events_overview(storage: Storage) -> str:
             f"• {location}: {event.get('description')} (мод {modifier:+d}, NPC {npc_power}, ~{minutes_left} мин)"
         )
     return "\n".join(lines)
+
+
+def process_due_travels(storage: Storage) -> list[tuple[int, str]]:
+    """Завершить просроченные переходы. Возвращает (telegram_id, destination) для уведомлений."""
+    return storage.pop_due_travels()

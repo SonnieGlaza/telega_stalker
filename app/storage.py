@@ -1439,6 +1439,49 @@ class Storage:
         self.save_snapshot()
         return True
 
+    def pop_due_travels(self) -> list[tuple[int, str]]:
+        """Завершить просроченные переходы и вернуть (telegram_id, destination)."""
+        completed: list[tuple[int, str]] = []
+        now = utc_now()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT telegram_id, travel_destination, travel_arrives_at
+                FROM characters
+                WHERE travel_destination IS NOT NULL
+                  AND TRIM(travel_destination) != ''
+                  AND travel_arrives_at IS NOT NULL
+                  AND TRIM(travel_arrives_at) != ''
+                """
+            ).fetchall()
+            for row in rows:
+                destination = str(row["travel_destination"])
+                raw_arrives = row["travel_arrives_at"]
+                try:
+                    arrives_at = datetime.fromisoformat(str(raw_arrives))
+                except ValueError:
+                    continue
+                if arrives_at.tzinfo is None:
+                    arrives_at = arrives_at.replace(tzinfo=timezone.utc)
+                if arrives_at > now:
+                    continue
+                telegram_id = int(row["telegram_id"])
+                conn.execute(
+                    """
+                    UPDATE characters
+                    SET location = ?,
+                        travel_destination = NULL,
+                        travel_arrives_at = NULL,
+                        travel_transport = NULL
+                    WHERE telegram_id = ?
+                    """,
+                    (destination, telegram_id),
+                )
+                completed.append((telegram_id, destination))
+        if completed:
+            self.save_snapshot()
+        return completed
+
     def start_travel(
         self,
         telegram_id: int,
