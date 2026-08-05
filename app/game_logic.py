@@ -43,6 +43,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "artifact": {"name": "Артефакт Зоны", "buy_price": 0, "sell_price": 5000},
     "artifact_power": {"name": "Арт «Сила»", "buy_price": 0, "sell_price": 1100},
     "artifact_vitality": {"name": "Арт «Живучесть»", "buy_price": 0, "sell_price": 1100},
+    "artifact_antirad": {"name": "Арт «Антирад»", "buy_price": 0, "sell_price": 1100},
     "artifact_junk_slime": {"name": "Слизь", "buy_price": 0, "sell_price": 350},
     "artifact_junk_bolt": {"name": "Ржавый болт", "buy_price": 0, "sell_price": 300},
     "artifact_junk_battery": {"name": "Дохлая батарейка", "buy_price": 0, "sell_price": 450},
@@ -171,6 +172,7 @@ ITEM_LABELS = {
     "artifact": "Артефакт Зоны",
     "artifact_power": "Арт «Сила»",
     "artifact_vitality": "Арт «Живучесть»",
+    "artifact_antirad": "Арт «Антирад»",
     "artifact_junk_slime": "Слизь",
     "artifact_junk_bolt": "Ржавый болт",
     "artifact_junk_battery": "Дохлая батарейка",
@@ -230,18 +232,20 @@ ARTIFACT_DETECTORS: tuple[tuple[str, str, int], ...] = (
     ("detector_svarog", "Сварог", 50),
 )
 
-# Экипированные арты: бонус к силе и/или к запасу HP.
+# Экипированные арты: бонус к силе, HP и/или модификатор радиации.
 ARTIFACT_EQUIP_BONUSES: dict[str, dict[str, int]] = {
-    "Артефакт Зоны": {"power": 2, "hp": 0},
-    "Артефакт": {"power": 2, "hp": 0},  # старые сейвы
-    "Арт «Сила»": {"power": 1, "hp": 0},
-    "Арт «Живучесть»": {"power": 1, "hp": 10},
+    "Артефакт Зоны": {"power": 2, "hp": 0, "radiation": 0},
+    "Артефакт": {"power": 2, "hp": 0, "radiation": 0},  # старые сейвы
+    "Арт «Сила»": {"power": 1, "hp": 0, "radiation": 0},
+    "Арт «Живучесть»": {"power": 1, "hp": 10, "radiation": 0},
+    "Арт «Антирад»": {"power": 0, "hp": 0, "radiation": -1},
 }
 ARTIFACT_ENERGY_REGEN_NAMES = frozenset({"Артефакт Зоны", "Артефакт"})
 ARTIFACT_INVENTORY_TO_NAME: dict[str, str] = {
     "artifact": "Артефакт Зоны",
     "artifact_power": "Арт «Сила»",
     "artifact_vitality": "Арт «Живучесть»",
+    "artifact_antirad": "Арт «Антирад»",
     "artifact_junk_slime": "Слизь",
     "artifact_junk_bolt": "Ржавый болт",
     "artifact_junk_battery": "Дохлая батарейка",
@@ -255,7 +259,7 @@ ARTIFACT_NAME_TO_INVENTORY: dict[str, str] = {
     "Артефакт": "artifact",  # старые сейвы
 }
 # Ценные арты (квесты/рейды) и полный список ключей.
-ARTIFACT_DROP_KEYS = ("artifact", "artifact_power", "artifact_vitality")
+ARTIFACT_DROP_KEYS = ("artifact", "artifact_power", "artifact_vitality", "artifact_antirad")
 ARTIFACT_JUNK_KEYS = (
     "artifact_junk_slime",
     "artifact_junk_bolt",
@@ -286,6 +290,7 @@ ARTIFACT_LOCATION_SPAWNS: dict[str, tuple[tuple[str, float], ...]] = {
         ("artifact_junk_stone", 8.0),
     ),
     "Янтарь": (
+        ("artifact_antirad", 5.0),
         ("artifact_junk_battery", 12.0),
         ("artifact_junk_flash", 10.0),
         ("artifact_junk_stone", 10.0),
@@ -337,6 +342,7 @@ ARTIFACT_DROP_RATES_PERCENT: tuple[tuple[str, float], ...] = (
     ("artifact", 0.1),  # Артефакт Зоны
     ("artifact_power", 5.0),  # Арт «Сила»
     ("artifact_vitality", 5.0),  # Арт «Живучесть»
+    ("artifact_antirad", 5.0),  # Арт «Антирад»
 )
 
 
@@ -463,6 +469,7 @@ AUCTION_DEFAULT_LOTS: dict[str, tuple[str, int, int]] = {
     "artifact": ("artifact", 1, 5000),
     "artifact_power": ("artifact_power", 1, 1100),
     "artifact_vitality": ("artifact_vitality", 1, 1100),
+    "artifact_antirad": ("artifact_antirad", 1, 1100),
     "ammo_pack": ("ammo_pack", 5, 520),
     "medkit": ("medkit", 2, 420),
 }
@@ -757,6 +764,12 @@ def equipment_power(character: Character) -> int:
 def _artifact_hp_bonus(character: Character) -> int:
     artifact_name = str(character.equipment.get("artifact", "Нет"))
     return int(ARTIFACT_EQUIP_BONUSES.get(artifact_name, {}).get("hp", 0))
+
+
+def _artifact_radiation_bonus(character: Character) -> int:
+    """Модификатор радиации от экипированного арта (отрицательный = защита)."""
+    artifact_name = str(character.equipment.get("artifact", "Нет") or "Нет")
+    return int(ARTIFACT_EQUIP_BONUSES.get(artifact_name, {}).get("radiation", 0))
 
 
 def effective_max_health(character: Character) -> int:
@@ -1518,6 +1531,9 @@ def use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
 
 def _apply_active_survival(storage: Storage, telegram_id: int) -> str:
     radiation_gain = random.randint(SURVIVAL_ACTIVE_RADIATION_MIN, SURVIVAL_ACTIVE_RADIATION_MAX)
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is not None:
+        radiation_gain = max(0, radiation_gain + _artifact_radiation_bonus(player))
     hp_loss = random.randint(SURVIVAL_ACTIVE_HP_DRAIN_MIN, SURVIVAL_ACTIVE_HP_DRAIN_MAX)
     storage.adjust_survival(
         telegram_id,
@@ -1976,11 +1992,14 @@ def _artifact_bonus_short(artifact_name: str) -> str:
     bonus = ARTIFACT_EQUIP_BONUSES.get(artifact_name, {})
     power = int(bonus.get("power", 0))
     hp = int(bonus.get("hp", 0))
+    radiation = int(bonus.get("radiation", 0))
     parts: list[str] = []
     if power:
         parts.append(f"+{power} сила")
     if hp:
         parts.append(f"+{hp} HP")
+    if radiation:
+        parts.append(f"{radiation:+d} рад.")
     return ", ".join(parts) if parts else "без бонуса"
 
 
@@ -2233,6 +2252,9 @@ def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = No
                 storage.change_health(telegram_id, heal, max_health=max_hp)
     if hp_bonus:
         bonus_parts.append(f"+{hp_bonus} к запасу HP")
+    radiation_bonus = int(bonus.get("radiation") or 0)
+    if radiation_bonus:
+        bonus_parts.append(f"{radiation_bonus:+d} к набору радиации")
     if chosen_key == "artifact":
         bonus_parts.append("+5% реген энергии")
     if not bonus_parts:
@@ -2828,7 +2850,7 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
             f"Рейд #{raid_id} завершен успешно на логове «{location_name}».\n"
             f"Бойцов: {len(ready_members)}, критические попадания: {battle['total_crits']}.\n"
             f"Награда каждому: артефакты x{artifacts_reward} "
-            f"(Зона 0.1% / Сила 5% / Живучесть 5% среди типов, макс. {RAID_ARTIFACT_REWARD_CAP}).\n"
+            f"(Зона 0.1% / Сила 5% / Живучесть 5% / Антирад 5% среди типов, макс. {RAID_ARTIFACT_REWARD_CAP}).\n"
             f"Порог сложности для награды артефактами: от {RAID_ARTIFACT_MIN_ENEMY_POWER} силы.\n"
             f"В казну группировки: {treasury_gain} RU.\n"
             f"Раненых: {len(battle['wounds'])}."
