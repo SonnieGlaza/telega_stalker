@@ -45,6 +45,7 @@ class Character:
     truck_owned: bool
     truck_durability: int
     niva_owned: bool
+    bicycle_owned: bool
     sleeping_bag_owned: bool
     diesel: int
     gasoline: int
@@ -1536,6 +1537,22 @@ class Storage:
         with self._connect() as conn:
             conn.execute(
                 "UPDATE characters SET niva_owned = 0 WHERE telegram_id = ?",
+                (telegram_id,),
+            )
+        self.save_snapshot()
+
+    def set_bicycle_owned(self, telegram_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET bicycle_owned = 1 WHERE telegram_id = ?",
+                (telegram_id,),
+            )
+        self.save_snapshot()
+
+    def clear_bicycle_owned(self, telegram_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET bicycle_owned = 0 WHERE telegram_id = ?",
                 (telegram_id,),
             )
         self.save_snapshot()
@@ -3370,6 +3387,7 @@ class Storage:
             ),
             ("faction_rank", "ALTER TABLE characters ADD COLUMN faction_rank TEXT"),
             ("niva_owned", "ALTER TABLE characters ADD COLUMN niva_owned INTEGER NOT NULL DEFAULT 0"),
+            ("bicycle_owned", "ALTER TABLE characters ADD COLUMN bicycle_owned INTEGER NOT NULL DEFAULT 0"),
             ("travel_destination", "ALTER TABLE characters ADD COLUMN travel_destination TEXT"),
             ("travel_arrives_at", "ALTER TABLE characters ADD COLUMN travel_arrives_at TEXT"),
             ("travel_transport", "ALTER TABLE characters ADD COLUMN travel_transport TEXT"),
@@ -3603,6 +3621,7 @@ class Storage:
             truck_owned=bool(Storage._row_get(row, "truck_owned", 0)),
             truck_durability=max(0, min(100, _as_int(Storage._row_get(row, "truck_durability"), 0))),
             niva_owned=bool(Storage._row_get(row, "niva_owned", 0)),
+            bicycle_owned=bool(Storage._row_get(row, "bicycle_owned", 0)),
             sleeping_bag_owned=bool(Storage._row_get(row, "sleeping_bag_owned", 0)),
             diesel=_as_int(
                 Storage._row_get(row, "diesel"),

@@ -119,6 +119,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "gear_upgrade": {"name": "Улучшение снаряги", "buy_price": 1200, "sell_price": 0},
     "truck": {"name": "Грузовик", "buy_price": 50000, "sell_price": 17500},
     "niva": {"name": "Нива", "buy_price": 10000, "sell_price": 4500},
+    "bicycle": {"name": "Велосипед", "buy_price": 3500, "sell_price": 1500},
     "sleeping_bag": {"name": "Спальник", "buy_price": 20000, "sell_price": 10000},
     "diesel_can": {"name": "Канистра дизеля (+5)", "buy_price": 450, "sell_price": 200},
     "gasoline_can": {"name": "Канистра бензина (+5)", "buy_price": 225, "sell_price": 100},
@@ -254,6 +255,7 @@ ITEM_LABELS = {
     "detector_veles": "Детектор «Велес»",
     "detector_svarog": "Детектор «Сварог»",
     "sleeping_bag": "Спальник",
+    "bicycle": "Велосипед",
     "stash_case": "Тайник",
     "armor_leather": "Кожаная куртка",
     "armor_stalker_vest": "Сталкерский бронежилет",
@@ -661,10 +663,12 @@ FACTION_HOME_BASE: dict[str, str] = {
     "Бандиты": "Свалка",
 }
 
-# Скорость перехода: пешком ×1, Нива ×2, грузовик ×5.
+# Скорость перехода: пешком ×1, велосипед ×1.5, Нива ×2, грузовик ×5.
 TRAVEL_SPEED_FOOT = 1
+TRAVEL_SPEED_BICYCLE = 1.5
 TRAVEL_SPEED_NIVA = 2
 TRAVEL_SPEED_TRUCK = 5
+BICYCLE_QUEST_REWARD_MULT = 1.5
 # 1 игровая минута пути = 10 реальных секунд (отсчёт в КПК).
 TRAVEL_REAL_SECONDS_PER_GAME_MINUTE = 10
 ZONE_EVENT_POOL: tuple[tuple[str, int, str], ...] = (
@@ -1595,7 +1599,7 @@ def format_arrival_eta(arrives_at: datetime) -> str:
 def format_location_display(character: Character) -> str:
     if is_traveling(character):
         transport = character.travel_transport or "пешком"
-        labels = {"foot": "пешком", "niva": "на Ниве", "truck": "на грузовике"}
+        labels = {"foot": "пешком", "bicycle": "на велосипеде", "niva": "на Ниве", "truck": "на грузовике"}
         return (
             f"В пути → «{character.travel_destination}» ({labels.get(transport, transport)}), "
             f"{format_travel_eta(character)}"
@@ -1621,6 +1625,10 @@ def can_travel_by_niva(character: Character) -> bool:
     return bool(character.niva_owned and character.gasoline > 0)
 
 
+def can_travel_by_bicycle(character: Character) -> bool:
+    return bool(character.bicycle_owned)
+
+
 def describe_travel_fuel_status(character: Character) -> str:
     lines = [f"Запас: дизель {character.diesel}, бензин {character.gasoline}."]
     if can_travel_by_truck(character):
@@ -1634,7 +1642,16 @@ def describe_travel_fuel_status(character: Character) -> str:
         lines.append("Нива готова (×2, −1 бензин за переход).")
     elif character.niva_owned:
         lines.append("Нива без бензина — ускорение недоступно.")
-    if not can_travel_by_truck(character) and not can_travel_by_niva(character):
+    if can_travel_by_bicycle(character):
+        lines.append(
+            f"Велосипед готов (×{TRAVEL_SPEED_BICYCLE:g}, без топлива; "
+            f"награда за задания ×{BICYCLE_QUEST_REWARD_MULT:g})."
+        )
+    if (
+        not can_travel_by_truck(character)
+        and not can_travel_by_niva(character)
+        and not can_travel_by_bicycle(character)
+    ):
         lines.append("Сейчас только пешком (×1).")
     return "\n".join(lines)
 
@@ -1679,6 +1696,7 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
         "",
         "Транспорт ускоряет переход:",
         "• пешком — ×1",
+        f"• велосипед — ×{TRAVEL_SPEED_BICYCLE:g} (без топлива, награда за задания ×{BICYCLE_QUEST_REWARD_MULT:g})",
         "• Нива — ×2 (нужен бензин), грузовик — ×5 (нужен дизель)",
         f"1 игровая минута пути ≈ {TRAVEL_REAL_SECONDS_PER_GAME_MINUTE} сек реального времени.",
         "",
@@ -1857,6 +1875,10 @@ def _execute_quest_roll(
     if success:
         base_reward = random.randint(quest.reward_min, quest.reward_max)
         ru_mult = _location_contract_ru_mult(storage, work_location, updated.faction)
+        bicycle_note = ""
+        if updated.bicycle_owned:
+            ru_mult *= BICYCLE_QUEST_REWARD_MULT
+            bicycle_note = f" ×{BICYCLE_QUEST_REWARD_MULT:g} велосипед"
         reward = max(1, int(round(base_reward * ru_mult)))
         storage.change_money(telegram_id, reward)
         _add_rating(storage, telegram_id, rating_success)
@@ -1875,7 +1897,14 @@ def _execute_quest_roll(
             extra = ""
         stash_text = _maybe_drop_stash(storage, telegram_id)
         achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
-        mult_note = f" (×{ru_mult:.2f} за локацию)" if ru_mult > 1.0 else ""
+        mult_note = ""
+        if ru_mult > 1.0:
+            loc_part = ""
+            loc_only = _location_contract_ru_mult(storage, work_location, updated.faction)
+            if loc_only > 1.0:
+                loc_part = f"локация ×{loc_only:.2f}"
+            parts = [p for p in (loc_part, bicycle_note.strip()) if p]
+            mult_note = f" ({', '.join(parts)})" if parts else ""
         formula_line = (
             f"База {breakdown.base_chance}% (+снар {breakdown.gear_bonus}%) "
             f"+патр {breakdown.ammo_bonus}% +апт {breakdown.medkit_bonus}% "
@@ -2623,6 +2652,8 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
         return ActionResult(False, "У тебя уже есть грузовик.")
     if item_key == "niva" and character.niva_owned:
         return ActionResult(False, "У тебя уже есть Нива.")
+    if item_key == "bicycle" and character.bicycle_owned:
+        return ActionResult(False, "У тебя уже есть велосипед.")
     if item_key == "sleeping_bag" and character.sleeping_bag_owned:
         return ActionResult(False, "У тебя уже есть спальник.")
     if item_key == "gear_upgrade":
@@ -2630,7 +2661,7 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
 
     # Пачкой — только расходники, и не больше ×25.
     if qty > 1:
-        if item_key in {"truck", "niva", "sleeping_bag"}:
+        if item_key in {"truck", "niva", "bicycle", "sleeping_bag"}:
             return ActionResult(False, f"{title} можно купить только по одной штуке.")
         if item_key not in BULK_BUY_ITEM_KEYS:
             return ActionResult(False, f"{title} покупается по одной штуке.")
@@ -2648,6 +2679,13 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
     if item_key == "niva":
         storage.set_niva_owned(telegram_id)
         return ActionResult(True, "Нива куплена: переходы ускоряются в 2 раза.")
+    if item_key == "bicycle":
+        storage.set_bicycle_owned(telegram_id)
+        return ActionResult(
+            True,
+            f"Велосипед куплен: переходы ×{TRAVEL_SPEED_BICYCLE:g}, "
+            f"награда за задания ×{BICYCLE_QUEST_REWARD_MULT:g}.",
+        )
     if item_key == "sleeping_bag":
         storage.set_sleeping_bag_owned(telegram_id)
         return ActionResult(True, "Спальник куплен. Энергия теперь восстанавливается в 2 раза быстрее.")
@@ -2732,6 +2770,7 @@ TRADER_SELL_CATALOG: dict[str, tuple[str, ...]] = {
         "detector_veles",
         "detector_svarog",
         "sleeping_bag",
+        "bicycle",
         "niva",
         "truck",
         "stash_case",
@@ -2795,6 +2834,8 @@ def player_owns_sellable_item(character: Character, item_key: str) -> bool:
         return bool(character.truck_owned)
     if item_key == "niva":
         return bool(character.niva_owned)
+    if item_key == "bicycle":
+        return bool(character.bicycle_owned)
     if item_key == "sleeping_bag":
         return bool(character.sleeping_bag_owned)
     if item_key == "diesel_can":
@@ -2893,6 +2934,12 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
         if not character.niva_owned:
             return ActionResult(False, "У тебя нет Нивы для продажи.")
         storage.clear_niva_owned(telegram_id)
+        storage.change_money(telegram_id, sell_price)
+        return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
+    if item_key == "bicycle":
+        if not character.bicycle_owned:
+            return ActionResult(False, "У тебя нет велосипеда для продажи.")
+        storage.clear_bicycle_owned(telegram_id)
         storage.change_money(telegram_id, sell_price)
         return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
     if item_key == "sleeping_bag":
@@ -3331,19 +3378,14 @@ def format_inventory(
     else:
         items = "• Пусто"
 
-    vehicle = (
-        f"Грузовик ({max(0, min(100, int(character.truck_durability)))}%)"
-        if character.truck_owned
-        else (
-            "Нива"
-            if character.niva_owned
-            else "Нет транспорта"
-        )
-    )
-    if character.truck_owned and character.niva_owned:
-        vehicle = (
-            f"Грузовик ({max(0, min(100, int(character.truck_durability)))}%) + Нива"
-        )
+    vehicle_parts: list[str] = []
+    if character.truck_owned:
+        vehicle_parts.append(f"Грузовик ({max(0, min(100, int(character.truck_durability)))}%)")
+    if character.niva_owned:
+        vehicle_parts.append("Нива")
+    if character.bicycle_owned:
+        vehicle_parts.append("Велосипед")
+    vehicle = " + ".join(vehicle_parts) if vehicle_parts else "Нет транспорта"
     sleeping_bag = "Есть спальник (x2 реген энергии)" if character.sleeping_bag_owned else "Спальника нет"
     equipment_labels = {
         "weapon": "Оружие",
@@ -3413,18 +3455,18 @@ def _compute_truck_wear(distance_px: float | None, travel_minutes: int) -> int:
     return random.randint(min_wear, max_wear)
 
 
-def _pick_travel_transport(character: Character) -> tuple[str, int, int, str | None]:
+def _pick_travel_transport(character: Character) -> tuple[str, float, int, str | None]:
     """Режим, множитель скорости, стоимость энергии, примечание при откате на пеший ход."""
     foot_note: str | None = None
     if character.truck_owned and character.truck_durability > 0 and character.diesel > 0:
-        return "truck", TRAVEL_SPEED_TRUCK, 8, None
+        return "truck", float(TRAVEL_SPEED_TRUCK), 8, None
     if character.truck_owned and character.truck_durability > 0 and character.diesel <= 0:
         foot_note = "Нет дизеля — грузовик не поедет, идёшь пешком."
     elif character.truck_owned and character.truck_durability <= 0:
         foot_note = "Грузовик сломан — идёшь пешком."
 
     if character.niva_owned and character.gasoline > 0:
-        return "niva", TRAVEL_SPEED_NIVA, 12, foot_note
+        return "niva", float(TRAVEL_SPEED_NIVA), 12, foot_note
 
     if character.niva_owned and character.gasoline <= 0:
         if foot_note:
@@ -3432,7 +3474,10 @@ def _pick_travel_transport(character: Character) -> tuple[str, int, int, str | N
         else:
             foot_note = "Нет бензина — Нива не поедет, идёшь пешком."
 
-    return "foot", TRAVEL_SPEED_FOOT, 16, foot_note
+    if character.bicycle_owned:
+        return "bicycle", float(TRAVEL_SPEED_BICYCLE), 14, foot_note
+
+    return "foot", float(TRAVEL_SPEED_FOOT), 16, foot_note
 
 
 def _compute_base_travel_minutes(
@@ -3458,7 +3503,7 @@ def travel_status_text(character: Character) -> str | None:
     if not is_traveling(character):
         return None
     transport = character.travel_transport or "foot"
-    labels = {"foot": "пешком", "niva": "на Ниве", "truck": "на грузовике"}
+    labels = {"foot": "пешком", "bicycle": "на велосипеде", "niva": "на Ниве", "truck": "на грузовике"}
     return (
         f"🚐 В пути → «{character.travel_destination}» ({labels.get(transport, transport)})\n"
         f"Прибытие: {format_travel_eta(character)}"
@@ -3485,6 +3530,8 @@ def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionRes
         return ActionResult(False, "Недостаточно дизеля для поездки на грузовике.")
     if transport_mode == "niva" and not can_travel_by_niva(character):
         return ActionResult(False, "Недостаточно бензина для поездки на Ниве.")
+    if transport_mode == "bicycle" and not can_travel_by_bicycle(character):
+        return ActionResult(False, "У тебя нет велосипеда.")
 
     base_minutes, distance_px = _compute_base_travel_minutes(
         character.location,
@@ -3521,7 +3568,12 @@ def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionRes
         fuel_text = "\nБензин: −1."
 
     storage.start_travel(telegram_id, destination, arrives_at, transport_mode)
-    transport_labels = {"foot": "пешком", "niva": "на Ниве (×2)", "truck": "на грузовике (×5)"}
+    transport_labels = {
+        "foot": "пешком",
+        "bicycle": f"на велосипеде (×{TRAVEL_SPEED_BICYCLE:g})",
+        "niva": "на Ниве (×2)",
+        "truck": "на грузовике (×5)",
+    }
     eta = format_arrival_eta(arrives_at)
     note_text = f"\n{foot_note}" if foot_note else ""
     return ActionResult(

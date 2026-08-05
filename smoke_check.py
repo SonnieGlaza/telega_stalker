@@ -141,6 +141,23 @@ def run_smoke_check() -> None:
         assert buy_item(storage, 111, "truck").ok
         storage.change_money(222, 20000)
         assert buy_item(storage, 222, "niva").ok
+        from datetime import datetime, timedelta, timezone
+
+        storage.change_money(333, 10000)
+        bike = buy_item(storage, 333, "bicycle")
+        assert bike.ok, bike.text
+        assert storage.get_character(333, refresh_energy=False).bicycle_owned
+        bike_travel = travel_to(storage, 333, "Янтарь")
+        assert bike_travel.ok, bike_travel.text
+        assert "велосипед" in bike_travel.text.lower()
+        past_bike = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        with storage._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET travel_arrives_at = ? WHERE telegram_id = ?",
+                (past_bike, 333),
+            )
+        storage.resolve_travel_if_due(333)
+        assert storage.get_character(333, refresh_energy=False).location == "Янтарь"
         storage.change_diesel(111, 3)
         storage.change_gasoline(222, 5)
         assert buy_item(storage, 222, "gasoline_can").ok
@@ -163,7 +180,6 @@ def run_smoke_check() -> None:
         from app.game_logic import is_traveling, accept_quest_contract, run_contract_work
 
         assert is_traveling(in_transit)
-        from datetime import datetime, timedelta, timezone
 
         past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
         with storage._connect() as conn:

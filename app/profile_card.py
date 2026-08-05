@@ -609,7 +609,15 @@ def build_character_card(
         (
             f"Транспорт: Грузовик ({max(0, min(100, int(character.truck_durability)))}%)"
             if character.truck_owned
-            else "Транспорт: Отсутствует"
+            else (
+                "Транспорт: Нива"
+                if character.niva_owned
+                else (
+                    "Транспорт: Велосипед"
+                    if character.bicycle_owned
+                    else "Транспорт: Отсутствует"
+                )
+            )
         ),
         fill=(225, 225, 225),
         font=body_font,
