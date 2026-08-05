@@ -2347,6 +2347,16 @@ def calculate_duel_challenger_chance(challenger_power: int, target_power: int) -
     return max(DUEL_CHANCE_MIN, min(DUEL_CHANCE_MAX, 50 + diff * 4))
 
 
+def _duel_conditions_text() -> str:
+    return (
+        f"Стоимость при согласии: {DUEL_ENERGY_COST} энергии у каждого.\n"
+        f"Проигравший: HP снижается до {DUEL_LOSER_HP_REMAINING} (можно лечиться аптечками), "
+        f"−{DUEL_LOSER_MONEY_PERCENT}% денег (победителю), −{RATING_REWARD['duel_lose']} рейтинга.\n"
+        f"Победитель: ранение −{DUEL_WINNER_WOUND_MIN}…−{DUEL_WINNER_WOUND_MAX} HP, "
+        f"+{DUEL_LOSER_MONEY_PERCENT}% денег проигравшего, +{RATING_REWARD['duel_win']} рейтинга."
+    )
+
+
 def create_duel_challenge(
     storage: Storage,
     challenger_id: int,
@@ -2406,19 +2416,20 @@ def create_duel_challenge(
     my_power = equipment_power(challenger)
     their_power = equipment_power(target)
     chance = calculate_duel_challenger_chance(my_power, their_power)
+    target_chance = 100 - chance
+    conditions = _duel_conditions_text()
     challenger_msg = (
         f"Вызов на дуэль отправлен: {target.nickname} ({target_id}).\n"
         f"Сила: ты {my_power} vs {their_power}.\n"
         f"Твой шанс победы ~{chance}% (если примут).\n"
+        f"{conditions}\n"
         f"Ожидание ответа до {DUEL_PENDING_TTL_SECONDS // 60} мин."
     )
     target_msg = (
         f"⚔️ Тебя вызвал на дуэль {challenger.nickname} (id {challenger_id}).\n"
         f"Сила снаряги: {challenger.nickname} {my_power} vs ты {their_power}.\n"
-        f"Шанс победы вызывающего ~{chance}%.\n"
-        f"Стоимость при согласии: {DUEL_ENERGY_COST} энергии у каждого.\n"
-        f"Проигравший: HP снижается до {DUEL_LOSER_HP_REMAINING} (можно лечиться аптечками) "
-        f"и −{DUEL_LOSER_MONEY_PERCENT}% денег (победителю)."
+        f"Шанс победы вызывающего ~{chance}%, твой ~{target_chance}%.\n"
+        f"{conditions}"
     )
     return ActionResult(True, challenger_msg), target_msg
 
