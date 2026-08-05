@@ -49,7 +49,6 @@ from app.game_logic import (
     DUEL_LOSER_HP_REMAINING,
     TRANSFER_FEE_PERCENT,
     TRAVEL_SPEED_BICYCLE,
-    BICYCLE_QUEST_REWARD_MULT,
     QUESTS,
     RESOURCE_POINT_INCOME_PER_HOUR,
     BASE_POINT_INCOME_PER_HOUR,
@@ -666,21 +665,20 @@ def _build_info_text(player: Character) -> str:
         "• /info — эта справка.\n"
         f"• /pay [id] [сумма] — перевод (комиссия {TRANSFER_FEE_PERCENT}%).\n"
         "• /дуэль [id] — вызвать на дуэль (или кнопка в КПК → Игроки).\n"
-        f"  Проигравший: HP до {DUEL_LOSER_HP_REMAINING}, "
+        f"  Проигравший: HP опускается до {DUEL_LOSER_HP_REMAINING}, "
         f"−{DUEL_LOSER_MONEY_PERCENT}% денег (макс. {DUEL_LOSER_MONEY_CAP} RU).\n\n"
         "Механики:\n"
-        "• 🗺 Переходы: 1 игр. мин ≈ 10 сек реального\n"
-        f"  пешком ×1, велосипед ×{TRAVEL_SPEED_BICYCLE:g} "
-        f"(награда ×{BICYCLE_QUEST_REWARD_MULT:g} если доехал на нём), "
+        "• 🗺 Переходы: 1 игр. мин ≈ 10 сек реально;\n"
+        f"  пешком ×1, велосипед ×{TRAVEL_SPEED_BICYCLE:g}, "
         "Нива ×2 + бензин, грузовик ×5 + дизель.\n"
-        f"• 📋 Контракты: Легко до {easy.max_success}% / {easy.reward_min}–{easy.reward_max} RU; "
-        f"Средне до {hard.max_success}%; Опасно до {heavy.max_success}%; "
-        f"Невозможно до {impossible.max_success}% / {impossible.reward_min}–{impossible.reward_max} RU.\n"
-        f"• 🚚 Контрабанда: перевозка, ограбление в пути = провал; лут важнее чистого RU.\n"
-        f"• 💰 Пассив казны: ресурсы {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч, база {BASE_POINT_INCOME_PER_HOUR} RU/ч.\n"
+        f"• 📋 Контракты: Легко до {easy.max_success}%; Средне до {hard.max_success}%; "
+        f"Опасно до {heavy.max_success}%; Невозможно до {impossible.max_success}%.\n"
+        "• 🚚 Контрабанда: перевозка, ограбление в пути = провал; лут важнее чистого RU.\n"
+        f"• 💰 Пассив казны: ресурсы {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч, "
+        f"база {BASE_POINT_INCOME_PER_HOUR} RU/ч.\n"
         f"• 🔗 Реферал: пригласившему +{REFERRAL_INVITER_BONUS_RU} RU.\n"
         "• 🛏 Спальник — ×2 реген энергии.\n"
-        "• 💎 Артефакты — поиск детектором по таблицам локаций (Зона 0.1% везде).\n"
+        "• 💎 Артефакты — поиск детектором по таблицам локаций.\n"
         "• 🎖 Скины по рейтингу: 0 / 500 / 2000 / 5000.\n\n"
         "Чаты и рефералка: 📟 КПК."
     )
