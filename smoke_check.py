@@ -23,6 +23,8 @@ from app.game_logic import (
     search_artifacts,
     travel_to,
     use_medkit,
+    accept_quest_contract,
+    run_contract_work,
 )
 from app.storage import Storage
 
@@ -138,7 +140,9 @@ def run_smoke_check() -> None:
         assert buy_item(storage, 111, "truck").ok
         storage.change_money(222, 20000)
         assert buy_item(storage, 222, "niva").ok
-        storage.change_fuel(111, 3)
+        storage.change_diesel(111, 3)
+        storage.change_gasoline(222, 5)
+        assert buy_item(storage, 222, "gasoline_can").ok
         before_travel = storage.get_character(111, refresh_energy=False)
         assert before_travel is not None
         before_truck_durability = before_travel.truck_durability

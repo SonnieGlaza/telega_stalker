@@ -219,7 +219,7 @@ STALKER_QUOTES: tuple[str, ...] = (
     "Лут с контейнера: один болт.",
     "Квест: принеси. Я: потерялся.",
     "Водка лечит всё, кроме выброса.",
-    "Грузовик купил — топлива нет.",
+    "Грузовик купил — дизеля нет.",
     "Спальник есть, спать некогда.",
     "Рейд прошёл, снаряга сломалась.",
     "Штурм точки: мы шли героически.",
@@ -614,7 +614,7 @@ def build_character_card(
         fill=(225, 225, 225),
         font=body_font,
     )
-    draw.text((right_x, 262), f"Топливо: {character.fuel}", fill=(225, 225, 225), font=body_font)
+    draw.text((right_x, 262), f"Дизель: {character.diesel}  Бензин: {character.gasoline}", fill=(225, 225, 225), font=body_font)
     draw.text(
         (right_x, 288),
         _ellipsize_text(draw, skin.title, body_font, right_max_width),

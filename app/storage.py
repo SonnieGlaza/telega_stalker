@@ -46,7 +46,8 @@ class Character:
     truck_durability: int
     niva_owned: bool
     sleeping_bag_owned: bool
-    fuel: int
+    diesel: int
+    gasoline: int
     travel_destination: str | None
     travel_arrives_at: datetime | None
     travel_transport: str | None
@@ -1901,7 +1902,7 @@ class Storage:
                     1 if character.truck_owned else 0,
                     character.truck_durability,
                     1 if character.sleeping_bag_owned else 0,
-                    character.fuel,
+                    character.diesel,
                     character.radiation,
                     character.hunger,
                     character.thirst,
@@ -2199,20 +2200,45 @@ class Storage:
         self.save_snapshot()
         return True
 
-    def change_fuel(self, telegram_id: int, delta: int) -> bool:
+    def change_diesel(self, telegram_id: int, delta: int) -> bool:
         character = self.get_character(telegram_id, refresh_energy=False)
         if character is None:
             return False
-        new_fuel = character.fuel + delta
-        if new_fuel < 0:
+        new_diesel = character.diesel + delta
+        if new_diesel < 0:
+            return False
+        with self._connect() as conn:
+            if "fuel" in self._table_columns(conn, "characters"):
+                conn.execute(
+                    "UPDATE characters SET diesel = ?, fuel = ? WHERE telegram_id = ?",
+                    (new_diesel, new_diesel, telegram_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE characters SET diesel = ? WHERE telegram_id = ?",
+                    (new_diesel, telegram_id),
+                )
+        self.save_snapshot()
+        return True
+
+    def change_gasoline(self, telegram_id: int, delta: int) -> bool:
+        character = self.get_character(telegram_id, refresh_energy=False)
+        if character is None:
+            return False
+        new_gasoline = character.gasoline + delta
+        if new_gasoline < 0:
             return False
         with self._connect() as conn:
             conn.execute(
-                "UPDATE characters SET fuel = ? WHERE telegram_id = ?",
-                (new_fuel, telegram_id),
+                "UPDATE characters SET gasoline = ? WHERE telegram_id = ?",
+                (new_gasoline, telegram_id),
             )
         self.save_snapshot()
         return True
+
+    def change_fuel(self, telegram_id: int, delta: int) -> bool:
+        """Обратная совместимость: fuel = дизель."""
+        return self.change_diesel(telegram_id, delta)
 
     def change_health(self, telegram_id: int, delta: int, *, max_health: int | None = None) -> bool:
         character = self.get_character(telegram_id, refresh_energy=False)
@@ -3241,6 +3267,8 @@ class Storage:
             ("travel_arrives_at", "ALTER TABLE characters ADD COLUMN travel_arrives_at TEXT"),
             ("travel_transport", "ALTER TABLE characters ADD COLUMN travel_transport TEXT"),
             ("active_contract_json", "ALTER TABLE characters ADD COLUMN active_contract_json TEXT"),
+            ("gasoline", "ALTER TABLE characters ADD COLUMN gasoline INTEGER NOT NULL DEFAULT 0"),
+            ("diesel", "ALTER TABLE characters ADD COLUMN diesel INTEGER NOT NULL DEFAULT 0"),
         ]
         for col_name, ddl in add_columns:
             if col_name in column_names:
@@ -3256,6 +3284,16 @@ class Storage:
                     conn.rollback_to_savepoint(sp)
                 except Exception:
                     pass
+
+        column_names = self._table_columns(conn, "characters")
+        if "fuel" in column_names and "diesel" in column_names:
+            conn.execute(
+                """
+                UPDATE characters
+                SET diesel = CASE WHEN diesel > 0 THEN diesel ELSE COALESCE(fuel, 0) END
+                WHERE diesel = 0 AND COALESCE(fuel, 0) > 0
+                """
+            )
 
         # Backfill ID-address for old rows created before this column existed.
         rows = conn.execute(
@@ -3459,7 +3497,11 @@ class Storage:
             truck_durability=max(0, min(100, _as_int(Storage._row_get(row, "truck_durability"), 0))),
             niva_owned=bool(Storage._row_get(row, "niva_owned", 0)),
             sleeping_bag_owned=bool(Storage._row_get(row, "sleeping_bag_owned", 0)),
-            fuel=_as_int(Storage._row_get(row, "fuel"), 0),
+            diesel=_as_int(
+                Storage._row_get(row, "diesel"),
+                _as_int(Storage._row_get(row, "fuel"), 0),
+            ),
+            gasoline=_as_int(Storage._row_get(row, "gasoline"), 0),
             travel_destination=Storage._row_get(row, "travel_destination"),
             travel_arrives_at=(
                 _as_dt(Storage._row_get(row, "travel_arrives_at"))

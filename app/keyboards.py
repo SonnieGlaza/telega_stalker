@@ -194,7 +194,8 @@ def trader_buy_consumables_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
         ("Вода (от 50)", "buyqty:water_bottle"),
         ("Минералка (от 100)", "buyqty:mineral_water"),
         ("Чай Бороды (от 250)", "buyqty:beard_tea"),
-        ("Топливо +5 (от 450)", "buyqty:fuel_can"),
+        ("Дизель +5 (от 450)", "buyqty:diesel_can"),
+        ("Бензин +5 (от 225)", "buyqty:gasoline_can"),
     ]
     return _trader_page_keyboard(
         items,
@@ -486,7 +487,8 @@ def trader_sell_consumables_keyboard(
             ("Продать воду (16)", "sell:water_bottle"),
             ("Продать минералку (33)", "sell:mineral_water"),
             ("Продать чай Бороды (83)", "sell:beard_tea"),
-            ("Продать топливо +5 (200)", "sell:fuel_can"),
+            ("Продать дизель +5 (200)", "sell:diesel_can"),
+            ("Продать бензин +5 (100)", "sell:gasoline_can"),
         ]
     return _trader_sell_items_keyboard(items, page=page, page_prefix="trade:sell:consumables")
 

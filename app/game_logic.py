@@ -120,7 +120,9 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "truck": {"name": "Грузовик", "buy_price": 50000, "sell_price": 3500},
     "niva": {"name": "Нива", "buy_price": 10000, "sell_price": 2000},
     "sleeping_bag": {"name": "Спальник", "buy_price": 30000, "sell_price": 10000},
-    "fuel_can": {"name": "Канистра топлива (+5)", "buy_price": 450, "sell_price": 200},
+    "diesel_can": {"name": "Канистра дизеля (+5)", "buy_price": 450, "sell_price": 200},
+    "gasoline_can": {"name": "Канистра бензина (+5)", "buy_price": 225, "sell_price": 100},
+    "fuel_can": {"name": "Канистра дизеля (+5)", "buy_price": 450, "sell_price": 200},
     "stash_case": {"name": "Тайник", "buy_price": 3000, "sell_price": 500},
 }
 
@@ -244,6 +246,9 @@ ITEM_LABELS = {
     "water_bottle": "Бутылка воды",
     "mineral_water": "Минералка",
     "beard_tea": "Чай Бороды",
+    "diesel_can": "Канистра дизеля",
+    "gasoline_can": "Канистра бензина",
+    "fuel_can": "Канистра дизеля",
     "detector_otklik": "Детектор «Отклик»",
     "detector_medved": "Детектор «Медведь»",
     "detector_veles": "Детектор «Велес»",
@@ -280,6 +285,15 @@ ITEM_LABELS = {
     "weapon_rp74": "РП-74",
     "weapon_gauss": "Гаусс-пушка",
 }
+
+FUEL_CAN_DIESEL_AMOUNT = 5
+FUEL_CAN_GASOLINE_AMOUNT = 5
+SHOP_FUEL_CAN_ALIASES: dict[str, str] = {"fuel_can": "diesel_can"}
+
+
+def normalize_shop_item_key(item_key: str) -> str:
+    return SHOP_FUEL_CAN_ALIASES.get(item_key, item_key)
+
 
 ARTIFACT_DETECTORS: tuple[tuple[str, str, int], ...] = (
     ("detector_otklik", "Отклик", 10),
@@ -1571,7 +1585,7 @@ def _has_transport(character: Character, min_transport: str | None) -> bool:
         return bool(
             character.truck_owned
             and character.truck_durability > 0
-            and character.fuel > 0
+            and character.diesel > 0
         )
     return True
 
@@ -1580,7 +1594,7 @@ def _transport_requirement_text(min_transport: str | None) -> str:
     if min_transport == "niva":
         return " (нужна Нива или грузовик)"
     if min_transport == "truck":
-        return " (нужен грузовик с топливом)"
+        return " (нужен грузовик с дизелем)"
     return ""
 
 
@@ -1607,7 +1621,7 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
         "Транспорт ускоряет переход:",
         "• пешком — ×1",
         "• Нива (10 000 RU) — ×2",
-        "• грузовик — ×5 (нужно топливо)",
+        "• Нива — ×2 (нужен бензин), грузовик — ×5 (нужен дизель)",
         f"1 игровая минута пути ≈ {TRAVEL_REAL_SECONDS_PER_GAME_MINUTE} сек реального времени.",
         "",
         "Текущие запасы:",
@@ -2500,6 +2514,8 @@ BULK_BUY_ITEM_KEYS: frozenset[str] = frozenset(
         "water_bottle",
         "mineral_water",
         "beard_tea",
+        "diesel_can",
+        "gasoline_can",
         "fuel_can",
     }
 )
@@ -2507,6 +2523,7 @@ BULK_BUY_MAX_QTY = 25
 
 
 def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1) -> ActionResult:
+    item_key = normalize_shop_item_key(item_key)
     item = SHOP_ITEMS.get(item_key)
     if item is None:
         return ActionResult(False, "Такого товара нет у торговца.")
@@ -2552,13 +2569,27 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
     if item_key == "sleeping_bag":
         storage.set_sleeping_bag_owned(telegram_id)
         return ActionResult(True, "Спальник куплен. Энергия теперь восстанавливается в 2 раза быстрее.")
-    if item_key == "fuel_can":
-        storage.change_fuel(telegram_id, 5 * qty)
+    if item_key == "diesel_can":
+        storage.change_diesel(telegram_id, FUEL_CAN_DIESEL_AMOUNT * qty)
         if qty == 1:
-            return ActionResult(True, f"Куплена канистра топлива. Топливо +5 (стоимость {total_price} RU).")
+            return ActionResult(
+                True,
+                f"Куплена канистра дизеля. Дизель +{FUEL_CAN_DIESEL_AMOUNT} (стоимость {total_price} RU).",
+            )
         return ActionResult(
             True,
-            f"Куплено канистр: {qty}. Топливо +{5 * qty} (стоимость {total_price} RU).",
+            f"Куплено канистр дизеля: {qty}. Дизель +{FUEL_CAN_DIESEL_AMOUNT * qty} (стоимость {total_price} RU).",
+        )
+    if item_key == "gasoline_can":
+        storage.change_gasoline(telegram_id, FUEL_CAN_GASOLINE_AMOUNT * qty)
+        if qty == 1:
+            return ActionResult(
+                True,
+                f"Куплена канистра бензина. Бензин +{FUEL_CAN_GASOLINE_AMOUNT} (стоимость {total_price} RU).",
+            )
+        return ActionResult(
+            True,
+            f"Куплено канистр бензина: {qty}. Бензин +{FUEL_CAN_GASOLINE_AMOUNT * qty} (стоимость {total_price} RU).",
         )
     if item_key in WEAPON_CATALOG:
         storage.add_item(telegram_id, item_key, 1)
@@ -2597,7 +2628,8 @@ TRADER_SELL_CATALOG: dict[str, tuple[str, ...]] = {
         "water_bottle",
         "mineral_water",
         "beard_tea",
-        "fuel_can",
+        "diesel_can",
+        "gasoline_can",
     ),
     "trophies": (
         "artifact",
@@ -2673,6 +2705,7 @@ def _inventory_qty_for_sell_key(character: Character, item_key: str) -> int:
 
 def player_owns_sellable_item(character: Character, item_key: str) -> bool:
     """Есть ли у игрока предмет для продажи торговцу (инвентарь / экип / флаги)."""
+    item_key = normalize_shop_item_key(item_key)
     item = SHOP_ITEMS.get(item_key)
     if item is None or int(item.get("sell_price", 0)) <= 0:
         return False
@@ -2682,8 +2715,10 @@ def player_owns_sellable_item(character: Character, item_key: str) -> bool:
         return bool(character.niva_owned)
     if item_key == "sleeping_bag":
         return bool(character.sleeping_bag_owned)
-    if item_key == "fuel_can":
-        return int(character.fuel) >= 5
+    if item_key == "diesel_can":
+        return int(character.diesel) >= FUEL_CAN_DIESEL_AMOUNT
+    if item_key == "gasoline_can":
+        return int(character.gasoline) >= FUEL_CAN_GASOLINE_AMOUNT
     if _inventory_qty_for_sell_key(character, item_key) > 0:
         return True
     title = str(item["name"])
@@ -2717,8 +2752,11 @@ def list_owned_trader_sell_buttons(character: Character, category: str) -> list[
             label = f"Продать {title} ({price})"
         elif item_key == "sleeping_bag":
             label = f"Продать {title} ({price})"
-        elif item_key == "fuel_can":
-            cans = max(1, int(character.fuel) // 5)
+        elif item_key == "diesel_can":
+            cans = max(1, int(character.diesel) // FUEL_CAN_DIESEL_AMOUNT)
+            label = f"Продать {title} ×{cans} ({price})"
+        elif item_key == "gasoline_can":
+            cans = max(1, int(character.gasoline) // FUEL_CAN_GASOLINE_AMOUNT)
             label = f"Продать {title} ×{cans} ({price})"
         else:
             qty = _inventory_qty_for_sell_key(character, item_key)
@@ -2750,6 +2788,7 @@ def trader_sell_categories_with_stock(character: Character) -> list[tuple[str, s
 
 
 def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
+    item_key = normalize_shop_item_key(item_key)
     item = SHOP_ITEMS.get(item_key)
     if item is None:
         return ActionResult(False, "Такого предмета нет.")
@@ -2835,9 +2874,12 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
             storage.sync_gear_power(telegram_id)
         storage.change_money(telegram_id, sell_price)
         return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
-    if item_key == "fuel_can":
-        if not storage.change_fuel(telegram_id, -5):
-            return ActionResult(False, "Недостаточно топлива для продажи канистры.")
+    if item_key == "diesel_can":
+        if not storage.change_diesel(telegram_id, -FUEL_CAN_DIESEL_AMOUNT):
+            return ActionResult(False, "Недостаточно дизеля для продажи канистры.")
+    elif item_key == "gasoline_can":
+        if not storage.change_gasoline(telegram_id, -FUEL_CAN_GASOLINE_AMOUNT):
+            return ActionResult(False, "Недостаточно бензина для продажи канистры.")
     else:
         if item_key not in WEAPON_CATALOG and not storage.remove_item(telegram_id, item_key, 1):
             return ActionResult(False, f"У тебя нет предмета: {title}.")
@@ -3262,7 +3304,7 @@ def format_inventory(
         f"ID-адрес: {character.player_uid}\n"
         f"Telegram ID: {character.telegram_id}\n"
         f"{faction_line}\n"
-        f"Локация: {character.location}\n"
+        f"Локация: {format_location_display(character)}\n"
         f"Здоровье: {character.health}/{effective_max_health(character)}\n"
         f"Энергия: {character.energy}/{character.max_energy}\n"
         f"Сила снаряги: {current_gear_power}\n"
@@ -3270,7 +3312,7 @@ def format_inventory(
         f"Баланс: {character.money} RU\n"
         f"Транспорт: {vehicle}\n"
         f"Спальник: {sleeping_bag}\n"
-        f"Топливо: {character.fuel}\n"
+        f"Дизель: {character.diesel} | Бензин: {character.gasoline}\n"
         f"{survival_line}\n\n"
         f"Снаряга:\n{equipment}\n{durability_block}\n\n"
         f"Вещи:\n{items}"
@@ -3291,9 +3333,9 @@ def _compute_truck_wear(distance_px: float | None, travel_minutes: int) -> int:
 
 def _pick_travel_transport(character: Character) -> tuple[str, int, int]:
     """Режим, множитель скорости, стоимость энергии."""
-    if character.truck_owned and character.truck_durability > 0 and character.fuel > 0:
+    if character.truck_owned and character.truck_durability > 0 and character.diesel > 0:
         return "truck", TRAVEL_SPEED_TRUCK, 8
-    if character.niva_owned:
+    if character.niva_owned and character.gasoline > 0:
         return "niva", TRAVEL_SPEED_NIVA, 12
     return "foot", TRAVEL_SPEED_FOOT, 16
 
@@ -3358,10 +3400,12 @@ def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionRes
         return ActionResult(False, f"Не хватает энергии для перехода (нужно {energy_cost}).")
 
     truck_wear_text = ""
+    fuel_text = ""
     if transport_mode == "truck":
-        if not storage.change_fuel(telegram_id, -1):
+        if not storage.change_diesel(telegram_id, -1):
             storage.restore_energy(telegram_id, energy_cost)
-            return ActionResult(False, "Не удалось списать топливо, переход отменён.")
+            return ActionResult(False, "Не удалось списать дизель, переход отменён.")
+        fuel_text = "\nДизель: −1."
         wear = _compute_truck_wear(distance_px, travel_minutes)
         durability = storage.apply_truck_wear(telegram_id, wear)
         if durability is None:
@@ -3370,6 +3414,11 @@ def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionRes
             truck_wear_text = f"\nГрузовик изношен на {wear}% и окончательно сломан."
         else:
             truck_wear_text = f"\nИзнос грузовика: -{wear}% (прочность: {durability}%)."
+    elif transport_mode == "niva":
+        if not storage.change_gasoline(telegram_id, -1):
+            storage.restore_energy(telegram_id, energy_cost)
+            return ActionResult(False, "Не удалось списать бензин, переход отменён.")
+        fuel_text = "\nБензин: −1."
 
     storage.start_travel(telegram_id, destination, arrives_at, transport_mode)
     transport_labels = {"foot": "пешком", "niva": "на Ниве (×2)", "truck": "на грузовике (×5)"}
@@ -3379,7 +3428,7 @@ def travel_to(storage: Storage, telegram_id: int, destination: str) -> ActionRes
         f"Выехал из «{character.location}» → «{destination}» {transport_labels[transport_mode]}.\n"
         f"Затрачено энергии: {energy_cost}.\n"
         f"Время в пути: ~{travel_minutes} мин ({real_seconds} сек), прибытие {eta}."
-        f"{truck_wear_text}",
+        f"{fuel_text}{truck_wear_text}",
     )
 
 
@@ -5153,8 +5202,8 @@ def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
     if not storage.spend_energy(telegram_id, energy_cost):
         return ActionResult(False, f"Не хватает энергии для контрабанды (нужно {energy_cost}).")
 
-    truck_bonus = 12 if player.truck_owned and player.fuel > 0 else 0
-    if truck_bonus > 0 and not storage.change_fuel(telegram_id, -1):
+    truck_bonus = 12 if player.truck_owned and player.diesel > 0 else 0
+    if truck_bonus > 0 and not storage.change_diesel(telegram_id, -1):
         truck_bonus = 0
     event_modifier = _active_location_event_modifier(storage, player.location)
     chance = min(90, max(20, 42 + equipment_power(player) * 3 + truck_bonus - max(0, event_modifier)))
