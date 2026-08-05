@@ -585,6 +585,7 @@ def war_sections_keyboard() -> InlineKeyboardMarkup:
 def faction_group_keyboard(
     *,
     is_leader: bool = False,
+    can_withdraw_warehouse: bool = False,
     can_withdraw_treasury: bool = False,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
@@ -595,11 +596,16 @@ def faction_group_keyboard(
         [InlineKeyboardButton(text="💰 Внести 1000 RU в казну", callback_data="eco:treasury:deposit:1000")],
         [InlineKeyboardButton(text="💰 Внести своё количество", callback_data="eco:treasury:deposit:custom")],
     ]
-    if can_withdraw_treasury:
+    if can_withdraw_warehouse:
         rows.extend(
             [
                 [InlineKeyboardButton(text="📤 Забрать 1 патроны со склада", callback_data="eco:warehouse:withdraw:ammo_pack")],
                 [InlineKeyboardButton(text="📤 Забрать 1 аптечку со склада", callback_data="eco:warehouse:withdraw:medkit")],
+            ]
+        )
+    if can_withdraw_treasury:
+        rows.extend(
+            [
                 [InlineKeyboardButton(text="🏦 Вывести 500 RU из казны", callback_data="eco:treasury:withdraw:500")],
                 [InlineKeyboardButton(text="🏦 Вывести 1000 RU из казны", callback_data="eco:treasury:withdraw:1000")],
                 [InlineKeyboardButton(text="🏦 Снять своё количество", callback_data="eco:treasury:withdraw:custom")],
