@@ -390,6 +390,14 @@ def trader_sell_consumables_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
         ("Продать армейскую аптечку (180)", "sell:medkit_army"),
         ("Продать научную аптечку (240)", "sell:medkit_science"),
         ("Продать патроны (55)", "sell:ammo_pack"),
+        ("Продать водку (50)", "sell:vodka"),
+        ("Продать антирад (130)", "sell:antirad"),
+        ("Продать хлеб (16)", "sell:bread"),
+        ("Продать колбасу (33)", "sell:sausage"),
+        ("Продать тушёнку (83)", "sell:stew"),
+        ("Продать воду (16)", "sell:water_bottle"),
+        ("Продать минералку (33)", "sell:mineral_water"),
+        ("Продать чай Бороды (83)", "sell:beard_tea"),
         ("Продать топливо +5 (200)", "sell:fuel_can"),
     ]
     return _trader_page_keyboard(
@@ -426,6 +434,11 @@ def trader_sell_trophies_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
 
 def trader_sell_gear_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
     items = [
+        ("Продать детектор «Отклик» (330)", "sell:detector_otklik"),
+        ("Продать детектор «Медведь» (1330)", "sell:detector_medved"),
+        ("Продать детектор «Велес» (3330)", "sell:detector_veles"),
+        ("Продать детектор «Сварог» (10000)", "sell:detector_svarog"),
+        ("Продать спальник (10000)", "sell:sleeping_bag"),
         ("Продать грузовик (3500)", "sell:truck"),
         ("Продать тайник (500)", "sell:stash_case"),
     ]

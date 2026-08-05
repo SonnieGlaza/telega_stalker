@@ -67,7 +67,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "detector_veles": {"name": "Детектор «Велес»", "buy_price": 10000, "sell_price": 3330},
     "detector_svarog": {"name": "Детектор «Сварог»", "buy_price": 30000, "sell_price": 10000},
     "gear_upgrade": {"name": "Улучшение снаряги", "buy_price": 1200, "sell_price": 0},
-    "truck": {"name": "Грузовик", "buy_price": 50000, "sell_price": 0},
+    "truck": {"name": "Грузовик", "buy_price": 50000, "sell_price": 3500},
     "sleeping_bag": {"name": "Спальник", "buy_price": 30000, "sell_price": 10000},
     "fuel_can": {"name": "Канистра топлива (+5)", "buy_price": 450, "sell_price": 200},
     "stash_case": {"name": "Тайник", "buy_price": 3000, "sell_price": 500},
