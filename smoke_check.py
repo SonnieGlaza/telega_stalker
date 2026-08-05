@@ -128,8 +128,8 @@ def run_smoke_check() -> None:
         assert newbie.inventory.get("stew") == 2
         assert newbie.inventory.get("antirad") == 1
         assert newbie.inventory.get("water_bottle") == 1
-        assert newbie.inventory.get("weapon_pm") == 1
         assert newbie.inventory.get("medkit") == 1
+        assert newbie.inventory.get("weapon_pm", 0) == 0
         after_money = storage.get_character(111, refresh_energy=False).money
         assert after_money == before_money + REFERRAL_INVITER_BONUS_RU
         again = apply_referral_rewards(storage, 444, 111)

@@ -30,10 +30,10 @@ class QuestType:
 
 
 QUESTS: dict[str, QuestType] = {
-    "easy": QuestType("easy", "Легко", 80, 10, 270, 410, 0, 0),
-    "hard": QuestType("hard", "Средне", 70, 16, 400, 650, 0, 0),
-    "heavy": QuestType("heavy", "Опасно", 60, 22, 550, 1000, 2, 1),
-    "impossible": QuestType("impossible", "Невозможно", 50, 28, 700, 1500, 3, 1),
+    "easy": QuestType("easy", "Легко", 75, 10, 270, 410, 0, 0),
+    "hard": QuestType("hard", "Средне", 65, 16, 400, 650, 0, 0),
+    "heavy": QuestType("heavy", "Опасно", 55, 22, 660, 1200, 2, 1),
+    "impossible": QuestType("impossible", "Невозможно", 45, 28, 840, 1800, 3, 1),
 }
 
 
@@ -88,7 +88,7 @@ LOCATION_TYPE_RU_MULT: dict[str, float] = {
 CONTROLLED_LOCATION_RU_BONUS = 1.1
 
 SHOP_ITEMS: dict[str, dict[str, int | str]] = {
-    "energy_drink": {"name": "Энергетик", "buy_price": 250, "sell_price": 170},
+    "energy_drink": {"name": "Энергетик", "buy_price": 250, "sell_price": 112},
     "medkit": {"name": "Аптечка", "buy_price": 260, "sell_price": 120},
     "medkit_army": {"name": "Армейская аптечка", "buy_price": 450, "sell_price": 180},
     "medkit_science": {"name": "Научная аптечка", "buy_price": 600, "sell_price": 240},
@@ -97,13 +97,13 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "artifact_power": {"name": "Арт «Сила»", "buy_price": 0, "sell_price": 1100},
     "artifact_vitality": {"name": "Арт «Живучесть»", "buy_price": 0, "sell_price": 1100},
     "artifact_antirad": {"name": "Арт «Антирад»", "buy_price": 0, "sell_price": 5000},
-    "artifact_junk_slime": {"name": "Слизь", "buy_price": 0, "sell_price": 350},
-    "artifact_junk_bolt": {"name": "Ржавый болт", "buy_price": 0, "sell_price": 300},
-    "artifact_junk_battery": {"name": "Дохлая батарейка", "buy_price": 0, "sell_price": 450},
-    "artifact_junk_flash": {"name": "Вспышка", "buy_price": 0, "sell_price": 500},
-    "artifact_junk_stone": {"name": "Аномальный камень", "buy_price": 0, "sell_price": 400},
-    "artifact_junk_fog": {"name": "Сгусток тумана", "buy_price": 0, "sell_price": 550},
-    "artifact_junk_splinter": {"name": "Осколок", "buy_price": 0, "sell_price": 600},
+    "artifact_junk_slime": {"name": "Слизь", "buy_price": 0, "sell_price": 280},
+    "artifact_junk_bolt": {"name": "Ржавый болт", "buy_price": 0, "sell_price": 250},
+    "artifact_junk_battery": {"name": "Дохлая батарейка", "buy_price": 0, "sell_price": 350},
+    "artifact_junk_flash": {"name": "Вспышка", "buy_price": 0, "sell_price": 400},
+    "artifact_junk_stone": {"name": "Аномальный камень", "buy_price": 0, "sell_price": 300},
+    "artifact_junk_fog": {"name": "Сгусток тумана", "buy_price": 0, "sell_price": 400},
+    "artifact_junk_splinter": {"name": "Осколок", "buy_price": 0, "sell_price": 350},
     "vodka": {"name": "Водка", "buy_price": 150, "sell_price": 50},
     "antirad": {"name": "Антирад", "buy_price": 400, "sell_price": 130},
     "bread": {"name": "Хлеб", "buy_price": 50, "sell_price": 16},
@@ -112,18 +112,18 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "water_bottle": {"name": "Бутылка воды", "buy_price": 50, "sell_price": 16},
     "mineral_water": {"name": "Минералка", "buy_price": 100, "sell_price": 33},
     "beard_tea": {"name": "Чай Бороды", "buy_price": 250, "sell_price": 83},
-    "detector_otklik": {"name": "Детектор «Отклик»", "buy_price": 1000, "sell_price": 330},
-    "detector_medved": {"name": "Детектор «Медведь»", "buy_price": 4000, "sell_price": 1330},
-    "detector_veles": {"name": "Детектор «Велес»", "buy_price": 10000, "sell_price": 3330},
-    "detector_svarog": {"name": "Детектор «Сварог»", "buy_price": 30000, "sell_price": 10000},
+    "detector_otklik": {"name": "Детектор «Отклик»", "buy_price": 1000, "sell_price": 500},
+    "detector_medved": {"name": "Детектор «Медведь»", "buy_price": 4000, "sell_price": 2000},
+    "detector_veles": {"name": "Детектор «Велес»", "buy_price": 10000, "sell_price": 5000},
+    "detector_svarog": {"name": "Детектор «Сварог»", "buy_price": 30000, "sell_price": 15000},
     "gear_upgrade": {"name": "Улучшение снаряги", "buy_price": 1200, "sell_price": 0},
-    "truck": {"name": "Грузовик", "buy_price": 50000, "sell_price": 3500},
-    "niva": {"name": "Нива", "buy_price": 10000, "sell_price": 2000},
-    "sleeping_bag": {"name": "Спальник", "buy_price": 30000, "sell_price": 10000},
+    "truck": {"name": "Грузовик", "buy_price": 50000, "sell_price": 17500},
+    "niva": {"name": "Нива", "buy_price": 10000, "sell_price": 4500},
+    "sleeping_bag": {"name": "Спальник", "buy_price": 20000, "sell_price": 10000},
     "diesel_can": {"name": "Канистра дизеля (+5)", "buy_price": 450, "sell_price": 200},
     "gasoline_can": {"name": "Канистра бензина (+5)", "buy_price": 225, "sell_price": 100},
     "fuel_can": {"name": "Канистра дизеля (+5)", "buy_price": 450, "sell_price": 200},
-    "stash_case": {"name": "Тайник", "buy_price": 3000, "sell_price": 500},
+    "stash_case": {"name": "Тайник", "buy_price": 2000, "sell_price": 500},
 }
 
 # Сила снаряги: рейтинги и цены оружия/брони масштабированы ×18/11,
@@ -296,11 +296,12 @@ def normalize_shop_item_key(item_key: str) -> str:
 
 
 ARTIFACT_DETECTORS: tuple[tuple[str, str, int], ...] = (
-    ("detector_otklik", "Отклик", 10),
+    ("detector_otklik", "Отклик", 17),
     ("detector_medved", "Медведь", 20),
     ("detector_veles", "Велес", 35),
     ("detector_svarog", "Сварог", 50),
 )
+ARTIFACT_SEARCH_ENERGY_COST = 10
 
 # Экипированные арты: бонус к силе и/или к запасу HP.
 ARTIFACT_EQUIP_BONUSES: dict[str, dict[str, int]] = {
@@ -357,11 +358,13 @@ ARTIFACT_LOCATION_SPAWNS: dict[str, tuple[tuple[str, float], ...]] = {
     "Болото": (
         ("artifact_power", 5.0),
         ("artifact_vitality", 5.0),
-        ("artifact_junk_slime", 14.0),
+        ("artifact_junk_slime", 11.0),
         ("artifact_junk_fog", 12.0),
-        ("artifact_junk_bolt", 10.0),
+        ("artifact_junk_bolt", 7.0),
     ),
     "Радар": (
+        ("artifact_power", 7.0),
+        ("artifact_vitality", 6.0),
         ("artifact_junk_flash", 12.0),
         ("artifact_junk_battery", 10.0),
         ("artifact_junk_splinter", 8.0),
@@ -373,14 +376,16 @@ ARTIFACT_LOCATION_SPAWNS: dict[str, tuple[tuple[str, float], ...]] = {
         ("artifact_junk_stone", 10.0),
     ),
     "Рыжий лес": (
-        ("artifact_junk_fog", 12.0),
-        ("artifact_junk_slime", 10.0),
-        ("artifact_junk_bolt", 10.0),
+        ("artifact_junk_fog", 10.0),
+        ("artifact_junk_slime", 8.0),
+        ("artifact_junk_bolt", 8.0),
     ),
     "Темная долина": (
+        ("artifact_power", 7.0),
+        ("artifact_vitality", 7.0),
         ("artifact_junk_splinter", 12.0),
         ("artifact_junk_stone", 10.0),
-        ("artifact_junk_bolt", 10.0),
+        ("artifact_junk_bolt", 8.0),
     ),
     "НИИ Агропром": (
         ("artifact_junk_battery", 12.0),
@@ -388,8 +393,8 @@ ARTIFACT_LOCATION_SPAWNS: dict[str, tuple[tuple[str, float], ...]] = {
         ("artifact_junk_fog", 8.0),
     ),
     "Свалка": (
-        ("artifact_junk_bolt", 16.0),
-        ("artifact_junk_slime", 12.0),
+        ("artifact_junk_bolt", 13.0),
+        ("artifact_junk_slime", 10.0),
         ("artifact_junk_stone", 10.0),
         ("artifact_junk_splinter", 8.0),
     ),
@@ -409,17 +414,22 @@ ARTIFACT_LOCATION_SPAWNS: dict[str, tuple[tuple[str, float], ...]] = {
 
 # Запасной пул мусора, если локации нет в таблице.
 ARTIFACT_DEFAULT_JUNK_SPAWNS: tuple[tuple[str, float], ...] = (
-    ("artifact_junk_bolt", 10.0),
+    ("artifact_junk_bolt", 8.0),
     ("artifact_junk_stone", 8.0),
-    ("artifact_junk_slime", 6.0),
+    ("artifact_junk_slime", 5.0),
 )
 
-# Абсолютные шансы дропа ценных артов с заданий/рейдов (взаимоисключающие), %:
+# Абсолютные шансы дропа ценных артов с заданий (взаимоисключающие), %:
 ARTIFACT_DROP_RATES_PERCENT: tuple[tuple[str, float], ...] = (
-    ("artifact", 0.1),  # Артефакт Зоны
-    ("artifact_antirad", 0.1),  # Арт «Антирад»
-    ("artifact_power", 5.0),  # Арт «Сила»
-    ("artifact_vitality", 5.0),  # Арт «Живучесть»
+    ("artifact", 0.1),
+    ("artifact_antirad", 0.1),
+    ("artifact_power", 3.0),
+    ("artifact_vitality", 3.0),
+)
+# Только typed-арты в награде рейдов (без Зоны/Антирада):
+ARTIFACT_RAID_DROP_RATES_PERCENT: tuple[tuple[str, float], ...] = (
+    ("artifact_power", 3.0),
+    ("artifact_vitality", 3.0),
 )
 
 
@@ -439,6 +449,22 @@ def pick_weighted_artifact_key() -> str:
     keys = [key for key, _ in ARTIFACT_DROP_RATES_PERCENT]
     weights = [float(chance) for _, chance in ARTIFACT_DROP_RATES_PERCENT]
     return random.choices(keys, weights=weights, k=1)[0]
+
+
+def pick_weighted_raid_artifact_key() -> str:
+    """Выбор typed-арта для награды рейда (без Зоны/Антирада)."""
+    keys = [key for key, _ in ARTIFACT_RAID_DROP_RATES_PERCENT]
+    weights = [float(chance) for _, chance in ARTIFACT_RAID_DROP_RATES_PERCENT]
+    return random.choices(keys, weights=weights, k=1)[0]
+
+
+def best_detector_base_chance(character: Character) -> int:
+    """Базовый шанс лучшего детектора в инвентаре (0 если нет)."""
+    best = 0
+    for key, _, base in ARTIFACT_DETECTORS:
+        if int(character.inventory.get(key, 0)) > 0:
+            best = int(base)
+    return best
 
 
 def _detector_spawn_multiplier(base_chance: int) -> float:
@@ -499,7 +525,7 @@ TREASURY_WITHDRAW_MIN_RANK = 5
 SMUGGLING_CONSUMABLE_CHANCE = 20  # аптечка / еда / вода — каждый тип отдельно
 SMUGGLING_ARMOR_T2_CHANCE = 3
 SMUGGLING_WEAPON_T1_CHANCE = 3
-SMUGGLING_OTKLIK_CHANCE = 7
+SMUGGLING_OTKLIK_CHANCE = 3
 
 SMUGGLING_FOOD_DROP_KEYS = ("bread", "sausage", "stew")
 SMUGGLING_WATER_DROP_KEYS = ("water_bottle", "mineral_water")
@@ -525,12 +551,12 @@ STASH_CONSUMABLE_KEYS = (
     "beard_tea",
 )
 # Шансы тира снаряги при открытии (броня ИЛИ оружие, не вместе), %:
-# 1-2: 4%, 3: 2%, 4: 0.5%, 5: 0.01%
+# 1-2: 4%, 3: 2%, 4: 1%, 5: 0.05%
 STASH_GEAR_TIER_CHANCES: tuple[tuple[int | tuple[int, int], float], ...] = (
     ((1, 2), 4.0),
     (3, 2.0),
-    (4, 0.5),
-    (5, 0.01),
+    (4, 1.0),
+    (5, 0.05),
 )
 STASH_ARMOR_BY_TIER: dict[int, tuple[str, ...]] = {
     1: ("armor_leather",),
@@ -609,15 +635,15 @@ AUCTION_DEFAULT_LOTS: dict[str, tuple[str, int, int]] = {
     "medkit": ("medkit", 2, 420),
 }
 
-MARKET_SELL_FEE_PERCENT = 30
+MARKET_SELL_FEE_PERCENT = 25
 EXCHANGE_SELL_FEE_PERCENT = 30
 TRADER_EQUIPMENT_SELL_RATE = 1 / 3
-RESOURCE_POINT_INCOME_PER_HOUR = 100
-BASE_POINT_INCOME_PER_HOUR = 50
+RESOURCE_POINT_INCOME_PER_HOUR = 60
+BASE_POINT_INCOME_PER_HOUR = 25
 BASE_FORTIFY_COST_RU = 10_000
 BASE_FORTIFY_POWER_BONUS = 1
 POINTS_INCOME_META_KEY = "points_income_last_at"
-POINTS_INCOME_MAX_HOURS = 24
+POINTS_INCOME_MAX_HOURS = 16
 EMISSION_INTERVAL_HOURS = 6
 EMISSION_WARN_60_MINUTES = 60
 EMISSION_WARN_30_MINUTES = 30
@@ -666,7 +692,7 @@ RATING_REWARD = {
     "war_fail": 6,
     "raid_success": 26,
     "raid_fail": 8,
-    "smuggle_success": 10,
+    "smuggle_success": 13,
     "smuggle_fail": 3,
     "trade_action": 4,
     "duel_win": 8,
@@ -677,8 +703,8 @@ RATING_REWARD = {
 QUEST_RATING_BY_DIFFICULTY: dict[str, tuple[int, int]] = {
     "easy": (8, 1),
     "hard": (14, 2),
-    "heavy": (22, 3),
-    "impossible": (32, 5),
+    "heavy": (28, 5),
+    "impossible": (40, 8),
 }
 
 DUEL_ENERGY_COST = 10
@@ -688,7 +714,8 @@ DUEL_CHANCE_MAX = 85
 DUEL_WINNER_WOUND_MIN = 5
 DUEL_WINNER_WOUND_MAX = 12
 DUEL_LOSER_HP_REMAINING = 20
-DUEL_LOSER_MONEY_PERCENT = 10
+DUEL_LOSER_MONEY_PERCENT = 5
+DUEL_LOSER_MONEY_CAP = 5000
 DUEL_META_IN_PREFIX = "duel:pending_in:"
 DUEL_META_OUT_PREFIX = "duel:pending_out:"
 
@@ -699,8 +726,8 @@ QUEST_FAIL_PENALTY_RANGE: dict[str, tuple[int, int]] = {
     "impossible": (120, 220),
 }
 
-RAID_ARTIFACT_REWARD_CAP = 2
-RAID_ARTIFACT_MIN_ENEMY_POWER = 25
+RAID_ARTIFACT_REWARD_CAP = 1
+RAID_ARTIFACT_MIN_ENEMY_POWER = 35
 WAR_MIN_FACTION_MEMBERS = 5
 MAX_FACTION_ALLIANCES = 2
 
@@ -715,9 +742,9 @@ HUNGER_PASSIVE_PER_HOUR = 1
 THIRST_PASSIVE_PER_HOUR = 1
 SURVIVAL_TICK_MINUTES = 30
 SURVIVAL_OVERLIMIT_HP_DRAIN = 10
-TRANSFER_FEE_PERCENT = 30
-TRUCK_WEAR_MIN = 5
-TRUCK_WEAR_MAX = 15
+TRANSFER_FEE_PERCENT = 20
+TRUCK_WEAR_MIN = 3
+TRUCK_WEAR_MAX = 8
 
 SURVIVAL_CRAVING_THRESHOLD = 40
 SURVIVAL_URGENT_THRESHOLD = 75
@@ -792,13 +819,12 @@ class ActionResult:
     payload: dict[str, Any] | None = None
 
 
-REFERRAL_INVITER_BONUS_RU = 2000
+REFERRAL_INVITER_BONUS_RU = 1250
 REFERRAL_STARTER_PACK: tuple[tuple[str, int], ...] = (
     ("stew", 2),
     ("antirad", 1),
     ("water_bottle", 1),
     ("medkit", 1),
-    ("weapon_pm", 1),
 )
 
 
@@ -830,7 +856,7 @@ def apply_referral_rewards(
     invitee_id: int,
     referrer_id: int | None,
 ) -> ActionResult:
-    """Награда за реферал: пригласивший +2000 RU, новичок — стартовый набор."""
+    """Награда за реферал: пригласивший +1250 RU, новичок — стартовый набор."""
     if referrer_id is None:
         return ActionResult(False, "Реферал не указан.")
     if int(referrer_id) == int(invitee_id):
@@ -1496,9 +1522,9 @@ def calculate_quest_success(
     ammo_required: int,
     medkit_required: int,
 ) -> QuestChanceBreakdown:
-    """Шанс = база 18% + вклад снаряги/пушек + бонусы запасов, потолок по сложности."""
-    gear_contrib = max(0, gear_power) * 4
-    base_chance = 18
+    """Шанс = база 22% + вклад снаряги/пушек + бонусы запасов, потолок по сложности."""
+    gear_contrib = max(0, gear_power) * 3
+    base_chance = 22
     extra_ammo = max(0, ammo_stock - ammo_required)
     extra_medkits = max(0, medkit_stock - medkit_required)
     ammo_bonus = min(18, extra_ammo * 2)
@@ -1837,7 +1863,10 @@ def _execute_quest_roll(
         storage.add_player_stat(telegram_id, "quests_completed", 1)
         storage.add_player_stat(telegram_id, "money_earned", reward)
 
-        art_key = roll_location_artifact_drop(work_location, 12)
+        art_key = roll_location_artifact_drop(
+            work_location,
+            best_detector_base_chance(updated) or 12,
+        )
         if art_key is not None:
             storage.add_item(telegram_id, art_key, 1)
             storage.add_player_stat(telegram_id, "artifacts_found", 1)
@@ -2256,7 +2285,7 @@ def search_artifacts(storage: Storage, telegram_id: int) -> ActionResult:
             "У тебя нет детектора. Купи его у торговца в разделе снаряжения.",
         )
     _, detector_name, base_chance = chosen
-    energy_cost = 12
+    energy_cost = ARTIFACT_SEARCH_ENERGY_COST
     if not storage.spend_energy(telegram_id, energy_cost):
         return ActionResult(False, f"Не хватает энергии для поиска артов (нужно {energy_cost}).")
     location = player.location
@@ -2297,7 +2326,7 @@ def transfer_money_with_fee(storage: Storage, sender_id: int, target_id: int, am
         return ActionResult(False, "Один из игроков не найден.")
     if _is_dead(sender):
         return ActionResult(False, _dead_block_text())
-    fee = int(round(amount * 0.30))
+    fee = int(round(amount * (TRANSFER_FEE_PERCENT / 100)))
     total = amount + fee
     if not storage.change_money(sender_id, -total):
         return ActionResult(False, f"Недостаточно денег. Нужно {total} RU (включая комиссию {fee} RU).")
@@ -2366,9 +2395,9 @@ def _duel_conditions_text() -> str:
     return (
         f"Стоимость при согласии: {DUEL_ENERGY_COST} энергии у каждого.\n"
         f"Проигравший: HP снижается до {DUEL_LOSER_HP_REMAINING} (можно лечиться аптечками), "
-        f"−{DUEL_LOSER_MONEY_PERCENT}% денег (победителю), −{RATING_REWARD['duel_lose']} рейтинга.\n"
+        f"−{DUEL_LOSER_MONEY_PERCENT}% денег (макс. {DUEL_LOSER_MONEY_CAP} RU, победителю), −{RATING_REWARD['duel_lose']} рейтинга.\n"
         f"Победитель: ранение −{DUEL_WINNER_WOUND_MIN}…−{DUEL_WINNER_WOUND_MAX} HP, "
-        f"+{DUEL_LOSER_MONEY_PERCENT}% денег проигравшего, +{RATING_REWARD['duel_win']} рейтинга."
+        f"+{DUEL_LOSER_MONEY_PERCENT}% денег проигравшего (макс. {DUEL_LOSER_MONEY_CAP} RU), +{RATING_REWARD['duel_win']} рейтинга."
     )
 
 
@@ -2519,6 +2548,7 @@ def accept_duel(
         storage.change_health(loser_id, loser_hp_delta, max_health=loser_max_hp)
 
     money_taken = max(0, int(loser.money * DUEL_LOSER_MONEY_PERCENT // 100))
+    money_taken = min(money_taken, DUEL_LOSER_MONEY_CAP)
     if money_taken > 0:
         if storage.change_money(loser_id, -money_taken):
             storage.change_money(winner_id, money_taken)
@@ -3933,10 +3963,7 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
         storage.change_faction_treasury(leader.faction, treasury_gain)
         artifacts_reward = 0
         if enemy_power >= RAID_ARTIFACT_MIN_ENEMY_POWER:
-            artifacts_reward = min(
-                RAID_ARTIFACT_REWARD_CAP,
-                random.randint(1, RAID_ARTIFACT_REWARD_CAP),
-            )
+            artifacts_reward = RAID_ARTIFACT_REWARD_CAP
         notes: list[str] = []
         stash_finds = 0
         for member in ready_members:
@@ -3947,10 +3974,9 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
                 armor_loss=5,
             )
             if artifacts_reward > 0:
-                for _ in range(artifacts_reward):
-                    art_key = pick_weighted_artifact_key()
-                    storage.add_item(member.telegram_id, art_key, 1)
-                storage.add_player_stat(member.telegram_id, "artifacts_found", artifacts_reward)
+                art_key = pick_weighted_raid_artifact_key()
+                storage.add_item(member.telegram_id, art_key, 1)
+                storage.add_player_stat(member.telegram_id, "artifacts_found", 1)
             if _maybe_drop_stash(storage, member.telegram_id):
                 stash_finds += 1
             _add_rating(storage, member.telegram_id, RATING_REWARD["raid_success"])
@@ -3978,9 +4004,8 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
             True,
             f"Рейд #{raid_id} завершен успешно на логове «{location_name}».\n"
             f"Бойцов: {len(ready_members)}, критические попадания: {battle['total_crits']}.\n"
-            f"Награда каждому: артефакты x{artifacts_reward} "
-            f"(Зона 0.1% / Антирад 0.1% / Сила 5% / Живучесть 5% среди типов, макс. {RAID_ARTIFACT_REWARD_CAP}).\n"
-            f"Порог сложности для награды артефактами: от {RAID_ARTIFACT_MIN_ENEMY_POWER} силы.\n"
+            f"Награда каждому: артефакт x{artifacts_reward} "
+            f"(Сила 3% / Живучесть 3% среди типов, при силе NPC ≥ {RAID_ARTIFACT_MIN_ENEMY_POWER}).\n"
             f"В казну группировки: {treasury_gain} RU.\n"
             f"Раненых: {len(battle['wounds'])}."
             f"{stash_line}{''.join(notes)}",
@@ -4032,7 +4057,7 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
             "• Создай рейд на нужное логово.\n"
             "• Другие бойцы твоей группировки могут присоединиться.\n"
             "• Для запуска нужно минимум 2 участника.\n"
-            f"• Награды: до {RAID_ARTIFACT_REWARD_CAP} артефактов за успешный рейд (от {RAID_ARTIFACT_MIN_ENEMY_POWER} силы NPC)."
+            f"• Награды: до {RAID_ARTIFACT_REWARD_CAP} typed-арта за бойца (NPC ≥ {RAID_ARTIFACT_MIN_ENEMY_POWER}, Сила/Живучесть по 3%)."
         )
 
     raid_id = int(open_raid["id"])
@@ -5388,7 +5413,7 @@ def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
     success = roll <= chance
 
     if success:
-        reward = random.randint(280, 520)
+        reward = random.randint(180, 350)
         warehouse_bonus = random.randint(1, 3)
         durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=4, armor_loss=2)
         storage.change_money(telegram_id, reward)
@@ -5412,7 +5437,7 @@ def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
             f"{loot_text}{durability_text}{achievements_text}",
         )
 
-    penalty = random.randint(120, 240)
+    penalty = random.randint(150, 300)
     durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=5, armor_loss=3)
     storage.change_money(telegram_id, -penalty)
     storage.change_health(telegram_id, -12)

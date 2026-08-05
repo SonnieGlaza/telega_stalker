@@ -201,7 +201,7 @@ storage: Storage | None = None
 admin_ids: tuple[int, ...] = ()
 SNAPSHOT_SYNC_SECONDS = 300
 POINTS_INCOME_TICK_SECONDS = 60
-TOPUP_RATE_RU_PER_STAR = 150
+TOPUP_RATE_RU_PER_STAR = 100
 TOPUP_PAYLOAD_PREFIX = "topup_stars:"
 TOPUP_ALLOWED_AMOUNTS = {1, 5, 10, 25}
 TOPUP_MIN_STARS = 1
@@ -642,7 +642,7 @@ def _build_info_text(player: Character) -> str:
         "• /start — создать персонажа или войти в существующего.\n"
         "• /menu — открыть главное меню.\n"
         "• /info — открыть эту справку.\n"
-        "• /pay [telegram_id] [сумма] — перевод игроку (комиссия 30%).\n"
+        "• /pay [telegram_id] [сумма] — перевод игроку (комиссия 20%).\n"
         "• /дуэль [telegram_id] — вызвать игрока на дуэль (принять/отклонить).\n"
         "  Шанс от разницы силы снаряги, бросок 1–100;\n"
         "  проигравший: HP снижается до 20 (можно лечиться аптечками), −10% денег (победителю).\n"
@@ -3215,7 +3215,7 @@ async def market_create_callback(callback: CallbackQuery, state: FSMContext) -> 
         callback,
         "Введи цену лота в RU (целое число больше 0).\n"
         "Пример: 800\n"
-        "Комиссия рынка 30%: покупатель платит цену лота, продавец получает 70%.",
+        "Комиссия рынка 25%: покупатель платит цену лота, продавец получает 75%.",
         economy_keyboard(),
     )
 
