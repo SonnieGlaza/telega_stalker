@@ -30,7 +30,7 @@ from app.artifact_hunt import (
     get_hunt_session,
     hunt_status_caption,
     move_artifact_hunt,
-    render_hunt_frame,
+    render_hunt_for_player,
     start_artifact_hunt,
 )
 from app.config import load_settings
@@ -2663,7 +2663,7 @@ async def artifact_hunt_callback(callback: CallbackQuery) -> None:
         if session is None or player is None:
             await callback.answer("Активной вылазки нет.", show_alert=True)
             return
-        image = render_hunt_frame(session, player)
+        image = render_hunt_for_player(storage, telegram_id, session, player)
         await _send_or_edit_hunt_frame(
             callback,
             image_bytes=image,
