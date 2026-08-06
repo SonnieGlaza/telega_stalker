@@ -1546,6 +1546,37 @@ class Storage:
             )
         self.save_snapshot()
 
+    def list_active_travels(self) -> list[tuple[int, str, datetime, str]]:
+        """Активные переходы: (telegram_id, destination, arrives_at, transport)."""
+        now = utc_now()
+        active: list[tuple[int, str, datetime, str]] = []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT telegram_id, travel_destination, travel_arrives_at, travel_transport
+                FROM characters
+                WHERE travel_destination IS NOT NULL
+                  AND TRIM(travel_destination) != ''
+                  AND travel_arrives_at IS NOT NULL
+                  AND TRIM(travel_arrives_at) != ''
+                """
+            ).fetchall()
+            for row in rows:
+                destination = str(row["travel_destination"] or "").strip()
+                if not destination:
+                    continue
+                try:
+                    arrives_at = datetime.fromisoformat(str(row["travel_arrives_at"]))
+                except ValueError:
+                    continue
+                if arrives_at.tzinfo is None:
+                    arrives_at = arrives_at.replace(tzinfo=timezone.utc)
+                if arrives_at <= now:
+                    continue
+                transport = str(row["travel_transport"] or "foot")
+                active.append((int(row["telegram_id"]), destination, arrives_at, transport))
+        return active
+
     def clear_travel(self, telegram_id: int) -> None:
         with self._connect() as conn:
             conn.execute(

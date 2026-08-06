@@ -99,6 +99,7 @@ from app.game_logic import (
     apply_controlled_points_income,
     process_emission_cycle,
     process_due_travels,
+    collect_travel_eta_notices,
     process_zone_event_cycle,
     build_players_root_text,
     build_players_faction_page_text,
@@ -4032,6 +4033,14 @@ async def run_bot() -> None:
                         logger.debug("Failed travel arrival notify to %s", user_id)
             except Exception:
                 logger.exception("Travel arrival tick failed")
+            try:
+                for user_id, text in collect_travel_eta_notices(get_storage()):
+                    try:
+                        await bot.send_message(user_id, action_result_text(user_id, text))
+                    except Exception:
+                        logger.debug("Failed travel ETA notify to %s", user_id)
+            except Exception:
+                logger.exception("Travel ETA tick failed")
 
     sync_task = asyncio.create_task(periodic_snapshot_sync())
     zone_task = asyncio.create_task(periodic_zone_systems())

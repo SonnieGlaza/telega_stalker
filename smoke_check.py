@@ -207,10 +207,19 @@ def run_smoke_check() -> None:
         assert travel_result.ok, travel_result.text
         in_transit = storage.get_character(111, refresh_energy=False)
         assert in_transit is not None
-        from app.game_logic import is_traveling, accept_quest_contract, run_contract_work
+        from app.game_logic import (
+            is_traveling,
+            accept_quest_contract,
+            run_contract_work,
+            collect_travel_eta_notices,
+            travel_status_text,
+        )
 
         assert is_traveling(in_transit)
-
+        status = travel_status_text(in_transit)
+        assert status is not None and "Осталось ехать" in status
+        eta_notices = collect_travel_eta_notices(storage)
+        assert any(uid == 111 and "Осталось ехать" in text for uid, text in eta_notices)
         past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
         with storage._connect() as conn:
             conn.execute(

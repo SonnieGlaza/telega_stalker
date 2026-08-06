@@ -1796,8 +1796,12 @@ def is_traveling(character: Character) -> bool:
 def travel_block_text(character: Character) -> str | None:
     if not is_traveling(character):
         return None
-    eta = format_travel_eta(character)
-    return f"Ты в пути → «{character.travel_destination}». Прибытие {eta}."
+    remaining = (
+        format_remaining_travel(character.travel_arrives_at)
+        if character.travel_arrives_at is not None
+        else "скоро"
+    )
+    return f"Ты в пути → «{character.travel_destination}». Осталось ехать: {remaining}."
 
 
 def format_travel_eta(character: Character) -> str:
@@ -1815,13 +1819,69 @@ def format_arrival_eta(arrives_at: datetime) -> str:
     return f"через {seconds} сек"
 
 
+def format_remaining_travel(arrives_at: datetime) -> str:
+    """Сколько осталось ехать — для статуса в чате."""
+    remaining = _as_utc(arrives_at) - _utc_now()
+    total_sec = max(0, int(remaining.total_seconds()))
+    minutes, seconds = divmod(total_sec, 60)
+    if minutes > 0:
+        return f"{minutes} мин {seconds} сек"
+    return f"{seconds} сек"
+
+
+def travel_status_text(character: Character) -> str | None:
+    if not is_traveling(character):
+        return None
+    transport = character.travel_transport or "foot"
+    labels = {"foot": "пешком", "bicycle": "на велосипеде", "niva": "на Ниве", "truck": "на грузовике"}
+    remaining = (
+        format_remaining_travel(character.travel_arrives_at)
+        if character.travel_arrives_at is not None
+        else "скоро"
+    )
+    return (
+        f"🚐 В пути → «{character.travel_destination}» ({labels.get(transport, transport)})\n"
+        f"Осталось ехать: {remaining}"
+    )
+
+
+def collect_travel_eta_notices(storage: Storage) -> list[tuple[int, str]]:
+    """Периодические пинги в чат: сколько ещё ехать до точки."""
+    notices: list[tuple[int, str]] = []
+    labels = {"foot": "пешком", "bicycle": "на велосипеде", "niva": "на Ниве", "truck": "на грузовике"}
+    for telegram_id, destination, arrives_at, transport in storage.list_active_travels():
+        remaining_sec = max(0, int((_as_utc(arrives_at) - _utc_now()).total_seconds()))
+        # Близко к прибытию — не спамим, ждём сообщение о прибытии.
+        if remaining_sec < 15:
+            continue
+        remaining = format_remaining_travel(arrives_at)
+        mode = labels.get(transport, transport)
+        notices.append(
+            (
+                telegram_id,
+                f"🚐 Едешь → «{destination}» ({mode})\nОсталось ехать: {remaining}",
+            )
+        )
+    return notices
+
+
+def process_due_travels(storage: Storage) -> list[tuple[int, str]]:
+    """Завершить просроченные переходы. Возвращает (telegram_id, destination) для уведомлений."""
+    return storage.pop_due_travels()
+
+
 def format_location_display(character: Character) -> str:
     if is_traveling(character):
         transport = character.travel_transport or "пешком"
         labels = {"foot": "пешком", "bicycle": "на велосипеде", "niva": "на Ниве", "truck": "на грузовике"}
+        remaining = (
+            format_remaining_travel(character.travel_arrives_at)
+            if character.travel_arrives_at is not None
+            else "скоро"
+        )
         return (
             f"В пути → «{character.travel_destination}» ({labels.get(transport, transport)}), "
-            f"{format_travel_eta(character)}"
+            f"осталось {remaining}"
         )
     return character.location
 
@@ -3848,17 +3908,6 @@ def roll_arrival_encounter(storage: Storage, telegram_id: int, destination: str)
     rad = random.randint(1, 2)
     storage.adjust_survival(telegram_id, radiation_delta=rad)
     return f"☢️ Аномальный фон на подходе к «{destination}»: +{rad} рад."
-
-
-def travel_status_text(character: Character) -> str | None:
-    if not is_traveling(character):
-        return None
-    transport = character.travel_transport or "foot"
-    labels = {"foot": "пешком", "bicycle": "на велосипеде", "niva": "на Ниве", "truck": "на грузовике"}
-    return (
-        f"🚐 В пути → «{character.travel_destination}» ({labels.get(transport, transport)})\n"
-        f"Прибытие: {format_travel_eta(character)}"
-    )
 
 
 def travel_status_with_smuggle(storage: Storage, telegram_id: int) -> str | None:
@@ -6177,8 +6226,3 @@ def build_events_overview(storage: Storage) -> str:
             f"• {location}: {event.get('description')} (мод {modifier:+d}, NPC {npc_power}, ~{minutes_left} мин)"
         )
     return "\n".join(lines)
-
-
-def process_due_travels(storage: Storage) -> list[tuple[int, str]]:
-    """Завершить просроченные переходы. Возвращает (telegram_id, destination) для уведомлений."""
-    return storage.pop_due_travels()
