@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.game_logic import (
     ITEM_LABELS,
+    SHOP_ITEMS,
     attack_location,
     attempt_smuggling,
     buy_item,
@@ -261,12 +262,24 @@ def run_smoke_check() -> None:
         storage.change_money(111, 10_000)
         upgraded = upgrade_armor(storage, 111)
         assert upgraded.ok, upgraded.text
+        assert int(storage.get_character(111, refresh_energy=False).inventory.get("armor_upgrade", 0)) == 1
+        assert armor_defense(storage.get_character(111, refresh_energy=False)) == 0
+        from app.game_logic import install_armor_upgrade, unequip_armor_upgrade, equip_armor
+
+        installed = install_armor_upgrade(storage, 111)
+        assert installed.ok, installed.text
         assert armor_defense(storage.get_character(111, refresh_energy=False)) == 1
         player_111 = storage.get_character(111, refresh_energy=False)
         assert apply_incoming_damage(10, player_111) == 9
         upgraded2 = upgrade_armor(storage, 111)
         assert upgraded2.ok, upgraded2.text
+        installed2 = install_armor_upgrade(storage, 111)
+        assert installed2.ok, installed2.text
         assert armor_defense(storage.get_character(111, refresh_energy=False)) == 2
+        removed = unequip_armor_upgrade(storage, 111)
+        assert removed.ok, removed.text
+        assert armor_defense(storage.get_character(111, refresh_energy=False)) == 1
+        assert int(storage.get_character(111, refresh_energy=False).inventory.get("armor_upgrade", 0)) == 1
 
         storage.set_location(111, "Росток")
         contract = accept_quest_contract(storage, 111, "easy_boloto")
@@ -284,7 +297,20 @@ def run_smoke_check() -> None:
             _finish_success,
             move_quest_mission,
             render_mission_frame,
+            use_mission_medkit,
         )
+
+        # Army medkit must heal during mission (not only basic medkit).
+        storage.add_item(111, "medkit_army", 1)
+        # Remove basic medkits so only army is available.
+        cur_inv = storage.get_character(111, refresh_energy=False)
+        basic = int(cur_inv.inventory.get("medkit", 0))
+        if basic > 0:
+            storage.remove_item(111, "medkit", basic)
+        storage.change_health(111, -40)
+        med_result = use_mission_medkit(storage, 111)
+        assert med_result.ok, med_result.text
+        assert int(storage.get_character(111, refresh_energy=False).inventory.get("medkit_army", 0)) == 0
 
         session = get_mission_session(storage, 111)
         assert session is not None
@@ -568,6 +594,22 @@ def run_smoke_check() -> None:
         assert "stash:menu" in callbacks
         assert "hunt:up" in callbacks
         assert "upgrade:armor" in callbacks
+        assert "equip:upgrade:install" in callbacks
+        assert "equip:upgrade:remove" in callbacks
+
+        # Top gear set achievement: Nosorog + Gauss.
+        storage.change_money(111, 200_000)
+        buy_n = buy_item(storage, 111, "armor_nosorog")
+        assert buy_n.ok, buy_n.text
+        buy_g = buy_item(storage, 111, "weapon_gauss")
+        assert buy_g.ok, buy_g.text
+        assert "Тяжёлая артиллерия" in buy_g.text or "Тяжёлая артиллерия" in buy_n.text or (
+            "nosorog_gauss" in storage.get_player_achievement_keys(111)
+        )
+        assert "armor_nosorog" in SHOP_ITEMS
+        assert int(SHOP_ITEMS["armor_nosorog"]["buy_price"]) == 90000
+        assert int(SHOP_ITEMS["weapon_gauss"]["buy_price"]) == 90000
+        assert int(SHOP_ITEMS["armor_upgrade"]["buy_price"]) == 5000
         assert "rank:menu" in callbacks
         assert "war:section:scenario" in callbacks
         assert "war:section:lobby" in callbacks

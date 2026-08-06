@@ -276,7 +276,7 @@ def trader_buy_repair_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="Ремонт оружия", callback_data="repair:weapon")],
             [InlineKeyboardButton(text="Ремонт брони", callback_data="repair:armor")],
-            [InlineKeyboardButton(text="Улучшить броню (+1 защита, 5000 RU)", callback_data="upgrade:armor")],
+            [InlineKeyboardButton(text="Купить улучшение брони (+1 защита, 5000 RU)", callback_data="upgrade:armor")],
             [InlineKeyboardButton(text="Ремонт грузовика", callback_data="repair:truck")],
             [InlineKeyboardButton(text="⬅️ Назад к категориям покупки", callback_data="trade:menu:buy")],
         ]
@@ -431,7 +431,12 @@ def dead_character_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def equip_root_keyboard(items: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:
+def equip_root_keyboard(
+    items: list[tuple[str, str, int]],
+    *,
+    can_install_upgrade: bool = False,
+    can_remove_upgrade: bool = False,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for slot_key, title, count in items:
         rows.append(
@@ -439,6 +444,24 @@ def equip_root_keyboard(items: list[tuple[str, str, int]]) -> InlineKeyboardMark
                 InlineKeyboardButton(
                     text=f"{title} ({count})",
                     callback_data=f"equip:slot:{slot_key}:0",
+                )
+            ]
+        )
+    if can_install_upgrade:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🛡 Установить улучшение брони",
+                    callback_data="equip:upgrade:install",
+                )
+            ]
+        )
+    if can_remove_upgrade:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🛡 Снять улучшение брони",
+                    callback_data="equip:upgrade:remove",
                 )
             ]
         )
@@ -517,7 +540,7 @@ def trader_buy_armor_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
         ("Купить Костюм СЕВА (8840)", "buy:armor_seva"),
         ("Купить Научный костюм (16040)", "buy:armor_scientific"),
         ("Купить Экзоскелет (29450)", "buy:armor_exoskeleton"),
-        ("Купить Носорог (39270)", "buy:armor_nosorog"),
+        ("Купить Носорог (90000)", "buy:armor_nosorog"),
     ]
     return _trader_page_keyboard(
         items,
@@ -545,7 +568,7 @@ def trader_buy_weapons_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
         ("Купить Винтарь ВС (14240)", "buy:weapon_vintar"),
         ("Купить СВДм-2 (14400)", "buy:weapon_svd"),
         ("Купить РП-74 (15550)", "buy:weapon_rp74"),
-        ("Купить Гаусс-пушку (40910)", "buy:weapon_gauss"),
+        ("Купить Гаусс-пушку (90000)", "buy:weapon_gauss"),
     ]
     return _trader_page_keyboard(
         items,
@@ -681,7 +704,7 @@ def trader_sell_armor_keyboard(
             ("Продать Берилл-5М (4170)", "sell:armor_berill5m"),
             ("Продать Костюм СЕВА (4250)", "sell:armor_seva"),
             ("Продать Экзоскелет (14240)", "sell:armor_exoskeleton"),
-            ("Продать Носорог (18980)", "sell:armor_nosorog"),
+            ("Продать Носорог (45000)", "sell:armor_nosorog"),
         ]
     return _trader_sell_items_keyboard(items, page=page, page_prefix="trade:sell:armor")
 
@@ -708,7 +731,7 @@ def trader_sell_weapons_keyboard(
             ("Продать Винтарь ВС (7040)", "sell:weapon_vintar"),
             ("Продать СВДм-2 (7040)", "sell:weapon_svd"),
             ("Продать РП-74 (7530)", "sell:weapon_rp74"),
-            ("Продать Гаусс-пушку (20450)", "sell:weapon_gauss"),
+            ("Продать Гаусс-пушку (45000)", "sell:weapon_gauss"),
         ]
     return _trader_sell_items_keyboard(items, page=page, page_prefix="trade:sell:weapons")
 

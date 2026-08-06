@@ -175,6 +175,8 @@ from app.game_logic import (
     equip_armor,
     equip_weapon,
     unequip_artifact,
+    install_armor_upgrade,
+    unequip_armor_upgrade,
     build_equip_root_text,
     build_equip_slot_page,
 )
@@ -1804,7 +1806,8 @@ async def show_buy_repair(callback: CallbackQuery) -> None:
         callback,
         "Ремонт снаряжения:\n"
         "• Оружие и броня — по текущей прочности.\n"
-        "• Улучшение брони — +1 защита за 5000 RU (1 защита = −1 урона от удара).\n"
+        "• Улучшение брони — предмет в инвентарь (5000 RU, +1 защита).\n"
+        "  Установи/сними в «Экипировка» на любую броню.\n"
         "• Грузовик — восстановление прочности кузова.",
         trader_buy_repair_keyboard(),
     )
@@ -1961,7 +1964,75 @@ async def equip_root_callback(callback: CallbackQuery) -> None:
         )
         return
     text, items = build_equip_root_text(player)
-    await edit_menu_message(callback, text, equip_root_keyboard(items))
+    inv_upgrades = int(player.inventory.get("armor_upgrade", 0))
+    installed = 0
+    try:
+        installed = max(0, int(player.equipment.get("armor_upgrade_level", 0)))
+    except (TypeError, ValueError):
+        installed = 0
+    await edit_menu_message(
+        callback,
+        text,
+        equip_root_keyboard(
+            items,
+            can_install_upgrade=inv_upgrades > 0,
+            can_remove_upgrade=installed > 0,
+        ),
+    )
+
+
+@router.callback_query(F.data == "equip:upgrade:install")
+async def equip_upgrade_install_callback(callback: CallbackQuery) -> None:
+    db = get_storage()
+    result = install_armor_upgrade(db, callback.from_user.id)
+    await reply_action_result(callback, result.text)
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or callback.message is None:
+        return
+    text, items = build_equip_root_text(player)
+    inv_upgrades = int(player.inventory.get("armor_upgrade", 0))
+    try:
+        installed = max(0, int(player.equipment.get("armor_upgrade_level", 0)))
+    except (TypeError, ValueError):
+        installed = 0
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=equip_root_keyboard(
+                items,
+                can_install_upgrade=inv_upgrades > 0,
+                can_remove_upgrade=installed > 0,
+            ),
+        )
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data == "equip:upgrade:remove")
+async def equip_upgrade_remove_callback(callback: CallbackQuery) -> None:
+    db = get_storage()
+    result = unequip_armor_upgrade(db, callback.from_user.id)
+    await reply_action_result(callback, result.text)
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or callback.message is None:
+        return
+    text, items = build_equip_root_text(player)
+    inv_upgrades = int(player.inventory.get("armor_upgrade", 0))
+    try:
+        installed = max(0, int(player.equipment.get("armor_upgrade_level", 0)))
+    except (TypeError, ValueError):
+        installed = 0
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=equip_root_keyboard(
+                items,
+                can_install_upgrade=inv_upgrades > 0,
+                can_remove_upgrade=installed > 0,
+            ),
+        )
+    except TelegramBadRequest:
+        pass
 
 
 @router.callback_query(F.data.startswith("equip:slot:"))

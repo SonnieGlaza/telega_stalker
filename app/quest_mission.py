@@ -31,7 +31,7 @@ from app.game_logic import (
     effective_max_health,
     equipment_power,
     faction_home_base,
-    use_medkit,
+    use_medkit_item,
 )
 from app.storage import Character, Storage
 
@@ -444,7 +444,19 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     session = get_mission_session(storage, telegram_id)
     if session is None:
         return ActionResult(False, "Сначала начни вылазку по контракту.")
-    result = use_medkit(storage, telegram_id)
+    # В миссии берём лучшую доступную аптечку (наука → армия → обычная).
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    preferred = ("medkit_science", "medkit_army", "medkit")
+    chosen = next((key for key in preferred if int(player.inventory.get(key, 0)) > 0), None)
+    if chosen is None:
+        return ActionResult(
+            False,
+            "Нет аптечек в инвентаре (обычная / армейская / научная).",
+            payload={"mission_active": True},
+        )
+    result = use_medkit_item(storage, telegram_id, chosen)
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return result

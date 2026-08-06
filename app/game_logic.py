@@ -157,7 +157,8 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "detector_medved": {"name": "Детектор «Медведь»", "buy_price": 4000, "sell_price": 2000},
     "detector_veles": {"name": "Детектор «Велес»", "buy_price": 10000, "sell_price": 5000},
     "detector_svarog": {"name": "Детектор «Сварог»", "buy_price": 30000, "sell_price": 15000},
-    "gear_upgrade": {"name": "Улучшение снаряги", "buy_price": 1200, "sell_price": 0},
+    "gear_upgrade": {"name": "Улучшение брони (+1 защита)", "buy_price": 5000, "sell_price": 2000},
+    "armor_upgrade": {"name": "Улучшение брони (+1 защита)", "buy_price": 5000, "sell_price": 2000},
     "truck": {"name": "Грузовик", "buy_price": 50000, "sell_price": 17500},
     "niva": {"name": "Нива", "buy_price": 10000, "sell_price": 4500},
     "bicycle": {"name": "Велосипед", "buy_price": 3500, "sell_price": 1500},
@@ -179,7 +180,7 @@ ARMOR_CATALOG: dict[str, dict[str, int | str]] = {
     "armor_seva": {"name": "Костюм СЕВА", "buy_price": 8840, "sell_price": 4250},
     "armor_scientific": {"name": "Научный костюм", "buy_price": 16040, "sell_price": 7850},
     "armor_exo": {"name": "Экзоскелет", "buy_price": 29450, "sell_price": 14240},
-    "armor_nosorog": {"name": "Носорог", "buy_price": 39270, "sell_price": 18980},
+    "armor_nosorog": {"name": "Носорог", "buy_price": 90000, "sell_price": 45000},
 }
 
 WEAPON_CATALOG: dict[str, dict[str, int | str]] = {
@@ -198,7 +199,7 @@ WEAPON_CATALOG: dict[str, dict[str, int | str]] = {
     "weapon_vintar": {"name": "Винтарь ВС", "buy_price": 14240, "sell_price": 7040},
     "weapon_svd": {"name": "СВДм-2", "buy_price": 14400, "sell_price": 7040},
     "weapon_rp74": {"name": "РП-74", "buy_price": 15550, "sell_price": 7530},
-    "weapon_gauss": {"name": "Гаусс-пушка", "buy_price": 40910, "sell_price": 20450},
+    "weapon_gauss": {"name": "Гаусс-пушка", "buy_price": 90000, "sell_price": 45000},
 }
 
 # Legacy callback alias used in keyboards.
@@ -310,6 +311,8 @@ ITEM_LABELS = {
     "armor_sunrise": "Комбинезон «Заря»",
     "armor_berill5m": "Берилл-5М «Булат»",
     "armor_exoskeleton": "Экзоскелет",
+    "armor_upgrade": "Улучшение брони (+1 защита)",
+    "gear_upgrade": "Улучшение брони (+1 защита)",
     "weapon_pm": "ПМ",
     "weapon_fort12": "Фора-12",
     "weapon_fora12": "Фора-12",
@@ -332,10 +335,11 @@ ITEM_LABELS = {
 FUEL_CAN_DIESEL_AMOUNT = 5
 FUEL_CAN_GASOLINE_AMOUNT = 5
 SHOP_FUEL_CAN_ALIASES: dict[str, str] = {"fuel_can": "diesel_can"}
+SHOP_ITEM_ALIASES: dict[str, str] = {"gear_upgrade": "armor_upgrade", **SHOP_FUEL_CAN_ALIASES}
 
 
 def normalize_shop_item_key(item_key: str) -> str:
-    return SHOP_FUEL_CAN_ALIASES.get(item_key, item_key)
+    return SHOP_ITEM_ALIASES.get(item_key, item_key)
 
 
 ARTIFACT_DETECTORS: tuple[tuple[str, str, int], ...] = (
@@ -1050,6 +1054,41 @@ def apply_incoming_damage(raw_damage: int, character: Character, *, min_damage: 
     return max(min_damage, int(raw_damage) - armor_defense(character))
 
 
+def _inventory_has_named_gear(character: Character, catalog: dict[str, dict[str, int | str]], name: str) -> bool:
+    for key, meta in catalog.items():
+        if str(meta.get("name")) != name:
+            continue
+        if int(character.inventory.get(key, 0)) > 0:
+            return True
+    return False
+
+
+def _owns_named_armor(character: Character, name: str) -> bool:
+    if str(character.equipment.get("armor", "")) == name:
+        return True
+    return _inventory_has_named_gear(character, ARMOR_CATALOG, name)
+
+
+def _owns_named_weapon(character: Character, name: str) -> bool:
+    if str(character.equipment.get("weapon", "")) == name:
+        return True
+    return _inventory_has_named_gear(character, WEAPON_CATALOG, name)
+
+
+def _owns_top_gear_set(character: Character) -> bool:
+    return _owns_named_armor(character, "Носорог") and _owns_named_weapon(character, "Гаусс-пушка")
+
+
+def _return_armor_upgrades_to_inventory(storage: Storage, telegram_id: int, character: Character) -> int:
+    """Снимает установленные улучшения брони обратно в инвентарь. Возвращает число снятых."""
+    level = armor_defense(character)
+    if level <= 0:
+        return 0
+    storage.update_equipment_fields(telegram_id, {"armor_upgrade_level": 0})
+    storage.add_item(telegram_id, "armor_upgrade", level)
+    return level
+
+
 def _apply_durability_decay(storage: Storage, telegram_id: int, weapon_loss: int, armor_loss: int) -> str:
     character = storage.get_character(telegram_id, refresh_energy=False)
     if character is None:
@@ -1573,6 +1612,14 @@ def _achievement_rules() -> tuple[AchievementRule, ...]:
             reward_ru=350,
             reward_rating=25,
             check=lambda _, char: bool(char.sleeping_bag_owned),
+        ),
+        AchievementRule(
+            key="nosorog_gauss",
+            title="Тяжёлая артиллерия",
+            description="Собери комплект: броня «Носорог» и Гаусс-пушка",
+            reward_ru=5000,
+            reward_rating=120,
+            check=lambda _, char: _owns_top_gear_set(char),
         ),
         AchievementRule(
             key="achievements_10",
@@ -2982,6 +3029,8 @@ BULK_BUY_ITEM_KEYS: frozenset[str] = frozenset(
         "diesel_can",
         "gasoline_can",
         "fuel_can",
+        "armor_upgrade",
+        "gear_upgrade",
     }
 )
 BULK_BUY_MAX_QTY = 25
@@ -3010,8 +3059,6 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
         return ActionResult(False, "У тебя уже есть велосипед.")
     if item_key == "sleeping_bag" and character.sleeping_bag_owned:
         return ActionResult(False, "У тебя уже есть спальник.")
-    if item_key == "gear_upgrade":
-        return ActionResult(False, "Улучшение снаряги отключено. Сила теперь зависит от оружия и брони.")
 
     # Пачкой — только расходники, и не больше ×25.
     if qty > 1:
@@ -3067,17 +3114,42 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
         )
     if item_key in WEAPON_CATALOG:
         storage.add_item(telegram_id, item_key, 1)
+        storage.add_player_stat(telegram_id, "trades_done", 1)
+        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
         return ActionResult(
             True,
             f"Куплено оружие: {title} (стоимость {total_price} RU).\n"
-            "Предмет добавлен в инвентарь, экипируй его вручную в разделе Инвентарь.",
+            "Предмет добавлен в инвентарь, экипируй его вручную в разделе Инвентарь."
+            f"{achievements_text}",
         )
     if item_key in ARMOR_CATALOG:
         storage.add_item(telegram_id, item_key, 1)
+        storage.add_player_stat(telegram_id, "trades_done", 1)
+        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
         return ActionResult(
             True,
             f"Куплена броня: {title}.\n"
-            "Предмет добавлен в инвентарь, экипируй его вручную в разделе Инвентарь.",
+            "Предмет добавлен в инвентарь, экипируй его вручную в разделе Инвентарь."
+            f"{achievements_text}",
+        )
+    if item_key == "armor_upgrade":
+        storage.add_item(telegram_id, "armor_upgrade", qty)
+        storage.add_player_stat(telegram_id, "trades_done", 1)
+        _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
+        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+        if qty == 1:
+            return ActionResult(
+                True,
+                f"Куплено улучшение брони за {total_price} RU.\n"
+                "Установи его в разделе «Экипировка» на любую броню "
+                "(+1 защита = −1 урона от удара)."
+                f"{achievements_text}",
+            )
+        return ActionResult(
+            True,
+            f"Куплено улучшений брони: {qty} за {total_price} RU.\n"
+            "Установи их в разделе «Экипировка»."
+            f"{achievements_text}",
         )
 
     storage.add_item(telegram_id, item_key, qty)
@@ -3128,6 +3200,8 @@ TRADER_SELL_CATALOG: dict[str, tuple[str, ...]] = {
         "niva",
         "truck",
         "stash_case",
+        "armor_upgrade",
+        "gear_upgrade",
     ),
     "armor": (
         "armor_leather",
@@ -3334,17 +3408,21 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
         if equipped_armor == armor_name:
             armor_durability = _durability_percent(character, "armor")
             final_sell_price = _price_with_durability(sell_price, armor_durability)
+            returned = _return_armor_upgrades_to_inventory(storage, telegram_id, character)
             storage.set_equipment_item(telegram_id, "armor", "Куртка новичка")
+            upgrade_note = f"\nУлучшения брони сняты в инвентарь: ×{returned}." if returned else ""
         elif not storage.remove_item(telegram_id, item_key, 1):
             return ActionResult(False, f"У тебя нет брони: {armor_name}.")
+        else:
+            upgrade_note = ""
         storage.change_money(telegram_id, final_sell_price)
         if final_sell_price != sell_price:
             return ActionResult(
                 True,
                 f"Продано: {title} за {final_sell_price} RU.\n"
-                f"(Базовая цена {sell_price} RU снижена из-за износа.)",
+                f"(Базовая цена {sell_price} RU снижена из-за износа.){upgrade_note}",
             )
-        return ActionResult(True, f"Продано: {title} за {final_sell_price} RU.")
+        return ActionResult(True, f"Продано: {title} за {final_sell_price} RU.{upgrade_note}")
     if item_key in ARTIFACT_INVENTORY_TO_NAME:
         removed_from_inventory = storage.remove_item(telegram_id, item_key, 1)
         if not removed_from_inventory:
@@ -3465,7 +3543,13 @@ def build_equip_root_text(character: Character) -> tuple[str, list[tuple[str, st
     if artifact and artifact != "Нет":
         art_note = f" ({_artifact_bonus_short(artifact)})"
     defense = armor_defense(character)
-    defense_line = f"\n🛡 Защита брони: +{defense} (−{defense} урона от удара)" if defense > 0 else ""
+    upgrade_stock = int(character.inventory.get("armor_upgrade", 0))
+    defense_line = ""
+    if defense > 0 or upgrade_stock > 0:
+        defense_line = (
+            f"\n🛡 Защита на броне: +{defense} (−{defense} урона от удара)"
+            f"\n📦 Улучшений в инвентаре: {upgrade_stock}"
+        )
     text = (
         "⚙️ Экипировка\n"
         "Выбери категорию, затем предмет из инвентаря.\n"
@@ -3574,7 +3658,8 @@ def equip_weapon(storage: Storage, telegram_id: int, item_key: str) -> ActionRes
     if old_key is not None and current_weapon != "Нож":
         storage.add_item(telegram_id, old_key, 1)
     storage.set_equipment_item(telegram_id, "weapon", weapon_name)
-    return ActionResult(True, f"Экипировано оружие: {weapon_name}.")
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    return ActionResult(True, f"Экипировано оружие: {weapon_name}.{achievements_text}")
 
 
 def equip_armor(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
@@ -3597,9 +3682,13 @@ def equip_armor(storage: Storage, telegram_id: int, item_key: str) -> ActionResu
     old_key = _primary_keys_by_name(ARMOR_CATALOG).get(current_armor)
     if old_key is not None:
         storage.add_item(telegram_id, old_key, 1)
+    returned = _return_armor_upgrades_to_inventory(storage, telegram_id, player)
     storage.set_equipment_item(telegram_id, "armor", armor_name)
-    storage.update_equipment_fields(telegram_id, {"armor_upgrade_level": 0})
-    return ActionResult(True, f"Экипирована броня: {armor_name}. Улучшения брони сброшены.")
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    note = ""
+    if returned > 0:
+        note = f" Улучшения брони сняты в инвентарь (×{returned}) — установи на новую броню."
+    return ActionResult(True, f"Экипирована броня: {armor_name}.{note}{achievements_text}")
 
 
 def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult:
@@ -3630,6 +3719,12 @@ def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult
 
 
 def upgrade_armor(storage: Storage, telegram_id: int) -> ActionResult:
+    """Покупка модуля улучшения брони в инвентарь (не ставит сразу)."""
+    return buy_item(storage, telegram_id, "armor_upgrade", 1)
+
+
+def install_armor_upgrade(storage: Storage, telegram_id: int) -> ActionResult:
+    """Установить одно улучшение из инвентаря на текущую броню."""
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
@@ -3638,21 +3733,40 @@ def upgrade_armor(storage: Storage, telegram_id: int) -> ActionResult:
     armor_name = str(player.equipment.get("armor", "") or "").strip()
     if not armor_name:
         return ActionResult(False, "Сначала экипируй броню.")
-    current_level = armor_defense(player)
-    if not storage.change_money(telegram_id, -ARMOR_UPGRADE_PRICE):
+    if int(player.inventory.get("armor_upgrade", 0)) <= 0:
         return ActionResult(
             False,
-            f"Недостаточно денег на улучшение брони ({ARMOR_UPGRADE_PRICE} RU).",
+            "Нет улучшения брони в инвентаре. Купи у торговца в разделе «Ремонт».",
         )
-    new_level = current_level + 1
+    if not storage.remove_item(telegram_id, "armor_upgrade", 1):
+        return ActionResult(False, "Нет улучшения брони в инвентаре.")
+    new_level = armor_defense(player) + 1
     storage.update_equipment_fields(telegram_id, {"armor_upgrade_level": new_level})
-    storage.add_player_stat(telegram_id, "trades_done", 1)
-    _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
-    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     return ActionResult(
         True,
-        f"Броня «{armor_name}» улучшена за {ARMOR_UPGRADE_PRICE} RU.\n"
-        f"Защита: +{new_level} (−{new_level} урона от удара).{achievements_text}",
+        f"На броню «{armor_name}» установлено улучшение.\n"
+        f"Защита: +{new_level} (−{new_level} урона от удара).",
+    )
+
+
+def unequip_armor_upgrade(storage: Storage, telegram_id: int) -> ActionResult:
+    """Снять одно улучшение с текущей брони обратно в инвентарь."""
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    level = armor_defense(player)
+    if level <= 0:
+        return ActionResult(False, "На броне нет установленных улучшений.")
+    armor_name = str(player.equipment.get("armor", "Броня") or "Броня")
+    new_level = level - 1
+    storage.update_equipment_fields(telegram_id, {"armor_upgrade_level": new_level})
+    storage.add_item(telegram_id, "armor_upgrade", 1)
+    return ActionResult(
+        True,
+        f"С брони «{armor_name}» снято улучшение (вернулось в инвентарь).\n"
+        f"Защита сейчас: +{new_level}.",
     )
 
 
