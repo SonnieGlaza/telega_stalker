@@ -45,37 +45,78 @@ class QuestContractTemplate:
     work_location: str
     min_transport: str | None = None  # "niva" | "truck"
     return_home: bool = True
+    # collect/scout/loot — поиск; clear_mutant/clear_marauder — зачистка; anomaly — аномалии.
+    mission_kind: str = "collect"
 
 
 QUEST_CONTRACTS: dict[str, QuestContractTemplate] = {
-    "easy_boloto": QuestContractTemplate("easy_boloto", "easy", "Сбор образцов на Болоте", "Болото"),
-    "easy_agroprom": QuestContractTemplate(
-        "easy_agroprom", "easy", "Разведка у Агропрома", "НИИ Агропром"
+    "easy_boloto": QuestContractTemplate(
+        "easy_boloto", "easy", "Сбор образцов на Болоте", "Болото", mission_kind="collect"
     ),
-    "easy_dump": QuestContractTemplate("easy_dump", "easy", "Поиск хабара на Свалке", "Свалка"),
+    "easy_agroprom": QuestContractTemplate(
+        "easy_agroprom", "easy", "Разведка у Агропрома", "НИИ Агропром", mission_kind="scout"
+    ),
+    "easy_dump": QuestContractTemplate(
+        "easy_dump", "easy", "Поиск хабара на Свалке", "Свалка", mission_kind="loot"
+    ),
     "hard_yantar": QuestContractTemplate(
-        "hard_yantar", "hard", "Снять показания на Янтаре", "Янтарь", min_transport="niva"
+        "hard_yantar",
+        "hard",
+        "Снять показания на Янтаре",
+        "Янтарь",
+        min_transport="niva",
+        mission_kind="scout",
     ),
     "hard_forest": QuestContractTemplate(
-        "hard_forest", "hard", "Зачистка Рыжего леса", "Рыжий лес", min_transport="niva"
+        "hard_forest",
+        "hard",
+        "Зачистка Рыжего леса",
+        "Рыжий лес",
+        min_transport="niva",
+        mission_kind="clear_mutant",
     ),
     "hard_valley": QuestContractTemplate(
-        "hard_valley", "hard", "Рейд в Тёмную долину", "Темная долина", min_transport="niva"
+        "hard_valley",
+        "hard",
+        "Рейд в Тёмную долину",
+        "Темная долина",
+        min_transport="niva",
+        mission_kind="clear_marauder",
     ),
     "heavy_boloto": QuestContractTemplate(
-        "heavy_boloto", "heavy", "Опасный сбор на Болоте", "Болото"
+        "heavy_boloto", "heavy", "Опасный сбор на Болоте", "Болото", mission_kind="collect"
     ),
     "heavy_yantar": QuestContractTemplate(
-        "heavy_yantar", "heavy", "Экспедиция на Янтарь", "Янтарь", min_transport="niva"
+        "heavy_yantar",
+        "heavy",
+        "Экспедиция на Янтарь",
+        "Янтарь",
+        min_transport="niva",
+        mission_kind="scout",
     ),
     "heavy_valley": QuestContractTemplate(
-        "heavy_valley", "heavy", "Зачистка в Тёмной долине", "Темная долина", min_transport="niva"
+        "heavy_valley",
+        "heavy",
+        "Зачистка в Тёмной долине",
+        "Темная долина",
+        min_transport="niva",
+        mission_kind="clear_mutant",
     ),
     "impossible_radar": QuestContractTemplate(
-        "impossible_radar", "impossible", "Зачистка Радара", "Радар", min_transport="truck"
+        "impossible_radar",
+        "impossible",
+        "Зачистка Радара",
+        "Радар",
+        min_transport="truck",
+        mission_kind="clear_mutant",
     ),
     "impossible_forest": QuestContractTemplate(
-        "impossible_forest", "impossible", "Аномалии Рыжего леса", "Рыжий лес", min_transport="truck"
+        "impossible_forest",
+        "impossible",
+        "Аномалии Рыжего леса",
+        "Рыжий лес",
+        min_transport="truck",
+        mission_kind="anomaly",
     ),
 }
 
@@ -2021,14 +2062,12 @@ def cancel_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
     )
 
 
-def _execute_quest_roll(
+def _spend_quest_resources(
     storage: Storage,
     telegram_id: int,
     quest: QuestType,
-    *,
-    work_location: str,
-    title_override: str | None = None,
-) -> ActionResult:
+) -> ActionResult | None:
+    """Списать энергию/патроны/аптечки. None = ок, иначе ошибка."""
     character = storage.get_character(telegram_id, refresh_energy=False)
     if character is None:
         return ActionResult(False, "Персонаж не найден.")
@@ -2057,6 +2096,108 @@ def _execute_quest_roll(
         storage.add_item(telegram_id, "ammo_pack", quest.ammo_required)
         storage.restore_energy(telegram_id, quest.energy_cost)
         return ActionResult(False, "Ошибка расхода аптечек.")
+    return None
+
+
+def apply_contract_mission_success(
+    storage: Storage,
+    telegram_id: int,
+    *,
+    quest: QuestType,
+    work_location: str,
+    title: str,
+) -> ActionResult:
+    """Награда за успешную grid-миссию (без RNG — поле и есть испытание)."""
+    updated = storage.get_character(telegram_id, refresh_energy=False)
+    if updated is None:
+        return ActionResult(False, "Персонаж не найден.")
+
+    durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=3, armor_loss=2)
+    rating_success, _rating_fail = QUEST_RATING_BY_DIFFICULTY.get(
+        quest.key,
+        (RATING_REWARD["quest_success"], RATING_REWARD["quest_fail"]),
+    )
+    base_reward = random.randint(quest.reward_min, quest.reward_max)
+    ru_mult = _location_contract_ru_mult(storage, work_location, updated.faction)
+    bicycle_note = ""
+    arrived_transport = storage.get_last_arrival_transport(telegram_id)
+    if arrived_transport == "bicycle" and updated.bicycle_owned:
+        ru_mult *= BICYCLE_QUEST_REWARD_MULT
+        bicycle_note = f" ×{BICYCLE_QUEST_REWARD_MULT:g} велосипед"
+        storage.consume_last_arrival_transport(telegram_id)
+    reward = max(1, int(round(base_reward * ru_mult)))
+    storage.change_money(telegram_id, reward)
+    _add_rating(storage, telegram_id, rating_success)
+    storage.add_player_stat(telegram_id, "quests_completed", 1)
+    storage.add_player_stat(telegram_id, "money_earned", reward)
+
+    art_key = roll_location_artifact_drop(
+        work_location,
+        best_detector_base_chance(updated) or 12,
+    )
+    if art_key is not None:
+        storage.add_item(telegram_id, art_key, 1)
+        storage.add_player_stat(telegram_id, "artifacts_found", 1)
+        extra = f"\nНаходка на «{work_location}»: {ITEM_LABELS.get(art_key, art_key)}!"
+    else:
+        extra = ""
+    stash_text = _maybe_drop_stash(storage, telegram_id)
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    mult_note = ""
+    if ru_mult > 1.0:
+        loc_part = ""
+        loc_only = _location_contract_ru_mult(storage, work_location, updated.faction)
+        if loc_only > 1.0:
+            loc_part = f"локация ×{loc_only:.2f}"
+        parts = [p for p in (loc_part, bicycle_note.strip()) if p]
+        mult_note = f" ({', '.join(parts)})" if parts else ""
+    return ActionResult(
+        True,
+        f"«{title}» выполнено на «{work_location}»!\n"
+        f"Награда: {reward} RU{mult_note}, рейтинг +{rating_success}."
+        f"{extra}{stash_text}{durability_text}{achievements_text}",
+        payload={"reward": reward},
+    )
+
+
+def apply_contract_mission_fail(
+    storage: Storage,
+    telegram_id: int,
+    *,
+    quest: QuestType,
+    work_location: str,
+    title: str,
+    reason: str = "",
+) -> ActionResult:
+    durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=2, armor_loss=1)
+    _rating_success, rating_fail = QUEST_RATING_BY_DIFFICULTY.get(
+        quest.key,
+        (RATING_REWARD["quest_success"], RATING_REWARD["quest_fail"]),
+    )
+    min_penalty, max_penalty = QUEST_FAIL_PENALTY_RANGE.get(quest.key, (50, 120))
+    penalty = random.randint(min_penalty, max_penalty)
+    storage.change_money(telegram_id, -penalty)
+    _add_rating(storage, telegram_id, -rating_fail)
+    storage.add_player_stat(telegram_id, "quests_failed", 1)
+    note = f"\n{reason}" if reason else ""
+    return ActionResult(
+        False,
+        f"Провал «{title}» на «{work_location}».{note}\n"
+        f"Потери: {penalty} RU, рейтинг −{rating_fail}.{durability_text}",
+    )
+
+
+def _execute_quest_roll(
+    storage: Storage,
+    telegram_id: int,
+    quest: QuestType,
+    *,
+    work_location: str,
+    title_override: str | None = None,
+) -> ActionResult:
+    spend_err = _spend_quest_resources(storage, telegram_id, quest)
+    if spend_err is not None:
+        return spend_err
 
     updated = storage.get_character(telegram_id, refresh_energy=False)
     if updated is None:
@@ -2067,71 +2208,33 @@ def _execute_quest_roll(
     success = roll <= breakdown.chance
     display_title = title_override or quest.title
 
-    durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=3, armor_loss=2)
-    rating_success, rating_fail = QUEST_RATING_BY_DIFFICULTY.get(
-        quest.key,
-        (RATING_REWARD["quest_success"], RATING_REWARD["quest_fail"]),
-    )
-
     if success:
-        base_reward = random.randint(quest.reward_min, quest.reward_max)
-        ru_mult = _location_contract_ru_mult(storage, work_location, updated.faction)
-        bicycle_note = ""
-        arrived_transport = storage.get_last_arrival_transport(telegram_id)
-        if arrived_transport == "bicycle" and updated.bicycle_owned:
-            ru_mult *= BICYCLE_QUEST_REWARD_MULT
-            bicycle_note = f" ×{BICYCLE_QUEST_REWARD_MULT:g} велосипед"
-            storage.consume_last_arrival_transport(telegram_id)
-        reward = max(1, int(round(base_reward * ru_mult)))
-        storage.change_money(telegram_id, reward)
-        _add_rating(storage, telegram_id, rating_success)
-        storage.add_player_stat(telegram_id, "quests_completed", 1)
-        storage.add_player_stat(telegram_id, "money_earned", reward)
-
-        art_key = roll_location_artifact_drop(
-            work_location,
-            best_detector_base_chance(updated) or 12,
+        result = apply_contract_mission_success(
+            storage,
+            telegram_id,
+            quest=quest,
+            work_location=work_location,
+            title=display_title,
         )
-        if art_key is not None:
-            storage.add_item(telegram_id, art_key, 1)
-            storage.add_player_stat(telegram_id, "artifacts_found", 1)
-            extra = f"\nНаходка на «{work_location}»: {ITEM_LABELS.get(art_key, art_key)}!"
-        else:
-            extra = ""
-        stash_text = _maybe_drop_stash(storage, telegram_id)
-        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
-        mult_note = ""
-        if ru_mult > 1.0:
-            loc_part = ""
-            loc_only = _location_contract_ru_mult(storage, work_location, updated.faction)
-            if loc_only > 1.0:
-                loc_part = f"локация ×{loc_only:.2f}"
-            parts = [p for p in (loc_part, bicycle_note.strip()) if p]
-            mult_note = f" ({', '.join(parts)})" if parts else ""
         formula_line = (
+            f"Шанс {breakdown.chance}% (бросок {roll}). "
             f"База {breakdown.base_chance}% (+снар {breakdown.gear_bonus}%) "
             f"+патр {breakdown.ammo_bonus}% +апт {breakdown.medkit_bonus}% "
             f"(потолок {quest.max_success}%)."
         )
         return ActionResult(
             True,
-            f"«{display_title}» выполнено на «{work_location}»! "
-            f"Шанс {breakdown.chance}% (бросок {roll}).\n"
-            f"{formula_line}\n"
-            f"Награда: {reward} RU{mult_note}, рейтинг +{rating_success}."
-            f"{extra}{stash_text}{durability_text}{achievements_text}",
-            payload={"reward": reward},
+            result.text.replace("!\n", f"!\n{formula_line}\n", 1),
+            payload=result.payload,
         )
 
-    min_penalty, max_penalty = QUEST_FAIL_PENALTY_RANGE.get(quest.key, (50, 120))
-    penalty = random.randint(min_penalty, max_penalty)
-    storage.change_money(telegram_id, -penalty)
-    _add_rating(storage, telegram_id, -rating_fail)
-    storage.add_player_stat(telegram_id, "quests_failed", 1)
-    return ActionResult(
-        False,
-        f"Провал «{display_title}» на «{work_location}».\n"
-        f"Потери: {penalty} RU, рейтинг −{rating_fail}.{durability_text}",
+    return apply_contract_mission_fail(
+        storage,
+        telegram_id,
+        quest=quest,
+        work_location=work_location,
+        title=display_title,
+        reason=f"Шанс был {breakdown.chance}% (бросок {roll}).",
     )
 
 
@@ -2164,36 +2267,10 @@ def run_contract_work(storage: Storage, telegram_id: int) -> ActionResult:
     if quest is None:
         return ActionResult(False, "Неизвестная сложность контракта.")
 
-    result = _execute_quest_roll(
-        storage,
-        telegram_id,
-        quest,
-        work_location=template.work_location,
-        title_override=template.title,
-    )
-    if not result.ok:
-        storage.set_active_contract(telegram_id, None)
-        return result
+    # Grid-миссии (поиск / разведка / зачистка).
+    from app.quest_mission import start_or_resume_quest_mission
 
-    reward = int((result.payload or {}).get("reward", 0))
-    if template.return_home:
-        storage.set_active_contract(
-            telegram_id,
-            {
-                "template_key": template.key,
-                "stage": "return",
-                "pending_reward": reward,
-            },
-        )
-        home = faction_home_base(character.faction)
-        return ActionResult(
-            True,
-            result.text
-            + f"\n\nВернись на «{home}» и сдай отчёт (+{CONTRACT_TURN_IN_BONUS_PERCENT}% RU).",
-        )
-
-    storage.set_active_contract(telegram_id, None)
-    return result
+    return start_or_resume_quest_mission(storage, telegram_id, template, quest)
 
 
 def turn_in_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:

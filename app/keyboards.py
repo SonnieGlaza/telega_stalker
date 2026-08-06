@@ -313,6 +313,25 @@ def artifact_hunt_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def quest_mission_keyboard(*, medkits: int = 0) -> InlineKeyboardMarkup:
+    med_label = f"💊 Аптечка ({medkits})" if medkits > 0 else "💊 Аптечка"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⬆️ Вперёд", callback_data="qmission:up")],
+            [
+                InlineKeyboardButton(text="⬅️ Лево", callback_data="qmission:left"),
+                InlineKeyboardButton(text="⬇️ Назад", callback_data="qmission:down"),
+                InlineKeyboardButton(text="➡️ Право", callback_data="qmission:right"),
+            ],
+            [
+                InlineKeyboardButton(text=med_label, callback_data="qmission:medkit"),
+                InlineKeyboardButton(text="🔄", callback_data="qmission:refresh"),
+            ],
+            [InlineKeyboardButton(text="🏃 Свалить", callback_data="qmission:leave")],
+        ]
+    )
+
+
 def personal_stash_menu_keyboard(*, at_home: bool) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if at_home:

@@ -33,6 +33,14 @@ from app.artifact_hunt import (
     render_hunt_for_player,
     start_artifact_hunt,
 )
+from app.quest_mission import (
+    abandon_quest_mission,
+    get_mission_session,
+    mission_status_caption,
+    move_quest_mission,
+    render_mission_frame,
+    use_mission_medkit,
+)
 from app.config import load_settings
 from app.html_utils import html_safe as h
 from app.game_logic import (
@@ -179,6 +187,7 @@ from app.keyboards import (
     personal_stash_items_keyboard,
     personal_stash_amount_keyboard,
     artifact_hunt_keyboard,
+    quest_mission_keyboard,
     dead_character_keyboard,
     faction_keyboard,
     gender_keyboard,
@@ -2144,7 +2153,8 @@ def _quests_menu_payload(storage, player):
         show_cancel=show_cancel,
     )
     intro = (
-        "Контракты с переходами: прими на домашней базе, доберись до точки, выполни работу.\n"
+        "Контракты с переходами: прими на базе, доберись до точки, выполни работу на поле (как поиск артов).\n"
+        "Поиск/разведка — зелёные цели и опасности; зачистка — мутанты/мародёры.\n"
         "🚚 Контрабанда — отдельная кнопка ниже.\n\n"
     )
     return intro + overview, keyboard
@@ -2192,6 +2202,16 @@ async def accept_contract_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "contract:work")
 async def contract_work_callback(callback: CallbackQuery) -> None:
     result = run_contract_work(get_storage(), callback.from_user.id)
+    payload = result.payload or {}
+    image = payload.get("mission_image")
+    if image and payload.get("mission_active"):
+        await _send_or_edit_quest_mission_frame(
+            callback,
+            image_bytes=image,
+            caption=str(payload.get("caption") or result.text),
+            note=result.text if payload.get("mission_started") else None,
+        )
+        return
     await reply_action_result(callback, result.text)
     if result.ok or not result.ok:
         storage = get_storage()
@@ -2203,6 +2223,122 @@ async def contract_work_callback(callback: CallbackQuery) -> None:
             except TelegramBadRequest:
                 pass
 
+
+async def _send_or_edit_quest_mission_frame(
+    callback: CallbackQuery,
+    *,
+    image_bytes: bytes,
+    caption: str,
+    note: str | None = None,
+) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    meds = 0
+    if player is not None:
+        meds = sum(int(player.inventory.get(k, 0)) for k in ("medkit", "medkit_army", "medkit_science"))
+    media = BufferedInputFile(image_bytes, filename="quest_mission.png")
+    text = caption if not note else f"{caption}\n\n{note}"
+    markup = quest_mission_keyboard(medkits=meds)
+    try:
+        if callback.message and callback.message.photo:
+            await callback.message.edit_media(
+                media=InputMediaPhoto(media=media, caption=text),
+                reply_markup=markup,
+            )
+        elif callback.message:
+            await callback.message.answer_photo(photo=media, caption=text, reply_markup=markup)
+            try:
+                await callback.message.delete()
+            except TelegramBadRequest:
+                pass
+        else:
+            await callback.bot.send_photo(
+                callback.from_user.id,
+                photo=media,
+                caption=text,
+                reply_markup=markup,
+            )
+    except TelegramBadRequest:
+        await callback.bot.send_photo(
+            callback.from_user.id,
+            photo=media,
+            caption=text,
+            reply_markup=markup,
+        )
+    await safe_callback_answer(callback)
+
+
+@router.callback_query(F.data.startswith("qmission:"))
+async def quest_mission_callback(callback: CallbackQuery) -> None:
+    action = (callback.data or "").removeprefix("qmission:").strip()
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+
+    if action == "leave":
+        result = abandon_quest_mission(storage, telegram_id)
+        await reply_action_result(callback, result.text)
+        return
+
+    if action == "medkit":
+        result = use_mission_medkit(storage, telegram_id)
+        payload = result.payload or {}
+        image = payload.get("mission_image")
+        if image and payload.get("mission_active"):
+            await _send_or_edit_quest_mission_frame(
+                callback,
+                image_bytes=image,
+                caption=str(payload.get("caption") or ""),
+                note=str(payload.get("move_note") or result.text),
+            )
+            return
+        await reply_action_result(callback, result.text)
+        return
+
+    if action == "refresh":
+        session = get_mission_session(storage, telegram_id)
+        player = storage.get_character(telegram_id, refresh_energy=False)
+        if session is None or player is None:
+            await callback.answer("Активной вылазки нет.", show_alert=True)
+            return
+        image = render_mission_frame(session, player)
+        await _send_or_edit_quest_mission_frame(
+            callback,
+            image_bytes=image,
+            caption=mission_status_caption(session, player),
+        )
+        return
+
+    if action not in {"up", "down", "left", "right"}:
+        await callback.answer("Неизвестное действие.", show_alert=True)
+        return
+
+    result = move_quest_mission(storage, telegram_id, action)
+    payload = result.payload or {}
+
+    if payload.get("mission_dead"):
+        await reply_action_result(callback, result.text)
+        player = storage.get_character(telegram_id, refresh_energy=False)
+        if player is not None and player.health <= 0 and callback.message:
+            await callback.message.answer(
+                build_dead_character_text(player),
+                reply_markup=dead_character_keyboard(),
+            )
+        return
+
+    if payload.get("mission_done") or not payload.get("mission_active"):
+        await reply_action_result(callback, result.text)
+        return
+
+    image = payload.get("mission_image")
+    if not image:
+        await reply_action_result(callback, result.text)
+        return
+    await _send_or_edit_quest_mission_frame(
+        callback,
+        image_bytes=image,
+        caption=str(payload.get("caption") or ""),
+        note=str(payload.get("move_note") or result.text),
+    )
 
 @router.callback_query(F.data == "contract:turnin")
 async def contract_turnin_callback(callback: CallbackQuery) -> None:

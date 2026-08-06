@@ -251,7 +251,33 @@ def run_smoke_check() -> None:
         assert contract.ok, contract.text
         storage.set_location(111, "Болото")
         work = run_contract_work(storage, 111)
-        assert work.text
+        assert work.ok, work.text
+        assert (work.payload or {}).get("mission_active"), work.text
+        assert (work.payload or {}).get("mission_image"), "mission png missing"
+
+        from app.quest_mission import (
+            get_mission_session,
+            save_mission_session,
+            clear_mission_session,
+            _finish_success,
+            move_quest_mission,
+            render_mission_frame,
+        )
+
+        session = get_mission_session(storage, 111)
+        assert session is not None
+        assert session.kind == "collect"
+        assert len(session.objectives) >= 1
+        png = render_mission_frame(session, storage.get_character(111, refresh_energy=False))
+        assert len(png) > 1000
+        # Forced finish for smoke.
+        session.collected = list(session.objectives)
+        session.objectives_done = True
+        session.player = session.start
+        save_mission_session(storage, 111, session)
+        done = _finish_success(storage, 111, session)
+        assert done.ok, done.text
+        assert storage.get_active_contract(111) is not None  # stage return
 
         # Bicycle quest mult only after bike arrival (and then consumed).
         from app.game_logic import BICYCLE_QUEST_REWARD_MULT, build_players_faction_page_text
@@ -267,14 +293,23 @@ def run_smoke_check() -> None:
         assert bike_contract.ok, bike_contract.text
         storage.set_location(333, "Болото")
         bike_work = run_contract_work(storage, 333)
-        assert bike_work.text
-        if bike_work.ok:
-            assert f"×{BICYCLE_QUEST_REWARD_MULT:g}" in bike_work.text or "велосипед" in bike_work.text.lower()
-            assert storage.get_last_arrival_transport(333) is None
+        assert bike_work.ok, bike_work.text
+        assert (bike_work.payload or {}).get("mission_active")
+        bike_session = get_mission_session(storage, 333)
+        assert bike_session is not None
+        bike_session.collected = list(bike_session.objectives)
+        bike_session.objectives_done = True
+        bike_session.player = bike_session.start
+        save_mission_session(storage, 333, bike_session)
+        bike_done = _finish_success(storage, 333, bike_session)
+        assert bike_done.ok, bike_done.text
+        assert f"×{BICYCLE_QUEST_REWARD_MULT:g}" in bike_done.text or "велосипед" in bike_done.text.lower()
+        assert storage.get_last_arrival_transport(333) is None
         storage.set_last_arrival_transport(333, "bicycle")
         assert storage.consume_last_arrival_transport(333) == "bicycle"
         assert storage.get_last_arrival_transport(333) is None
-
+        clear_mission_session(storage, 111)
+        clear_mission_session(storage, 333)
         page_text, key, page, pages, page_players = build_players_faction_page_text(
             storage, "Долг", 0
         )
