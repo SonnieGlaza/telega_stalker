@@ -742,7 +742,7 @@ def render_mission_frame(
         draw.text((pl + 18, y), f"Цели: {done}/{total}", fill=(150, 230, 170), font=body)
     draw.text((pl + 18, y + 28), f"Ход {session.moves}/{session.max_moves}", fill=(200, 200, 200), font=small)
     if session.objectives_done:
-        draw.text((pl + 18, y + 52), "→ Вернись на старт!", fill=(120, 255, 140), font=body)
+        draw.text((pl + 18, y + 52), ">> Вернись на старт!", fill=(120, 255, 140), font=body)
     else:
         draw.text((pl + 18, y + 52), "Собери / зачисти поле", fill=(170, 170, 170), font=small)
 
@@ -770,7 +770,7 @@ def render_mission_frame(
 
     draw.text((pl + 18, bar_top + 84), f"Аптечки: {meds}", fill=(180, 200, 180), font=small)
     draw.text((pl + 18, pb - 50), session.title[:28], fill=(160, 160, 160), font=small)
-    draw.text((pl + 18, pb - 28), "↑↓←→ ход · 💊 аптечка", fill=(130, 130, 130), font=small)
+    draw.text((pl + 18, pb - 28), "Стрелки - ход, кнопка - аптечка", fill=(130, 130, 130), font=small)
 
     out = canvas.convert("RGB")
     buf = BytesIO()
