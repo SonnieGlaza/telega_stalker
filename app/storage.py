@@ -3286,6 +3286,39 @@ class Storage:
                 (json.dumps(inventory, ensure_ascii=False), telegram_id),
             )
 
+    def get_personal_stash(self, telegram_id: int) -> dict[str, int]:
+        with self._connect() as conn:
+            self._ensure_characters_schema(conn)
+            row = conn.execute(
+                "SELECT stash_json FROM characters WHERE telegram_id = ?",
+                (telegram_id,),
+            ).fetchone()
+        if row is None:
+            return {}
+        raw = Storage._row_get(row, "stash_json", "{}")
+        try:
+            data = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            data = {}
+        if not isinstance(data, dict):
+            return {}
+        result: dict[str, int] = {}
+        for key, value in data.items():
+            amount = int(value or 0)
+            if amount > 0:
+                result[str(key)] = amount
+        return result
+
+    def set_personal_stash(self, telegram_id: int, stash: dict[str, int]) -> None:
+        cleaned = {str(k): int(v) for k, v in stash.items() if int(v) > 0}
+        with self._connect() as conn:
+            self._ensure_characters_schema(conn)
+            conn.execute(
+                "UPDATE characters SET stash_json = ? WHERE telegram_id = ?",
+                (json.dumps(cleaned, ensure_ascii=False), telegram_id),
+            )
+        self.save_snapshot()
+
     def _set_equipment(self, telegram_id: int, equipment: dict[str, Any]) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -3429,6 +3462,7 @@ class Storage:
             ("active_contract_json", "ALTER TABLE characters ADD COLUMN active_contract_json TEXT"),
             ("gasoline", "ALTER TABLE characters ADD COLUMN gasoline INTEGER NOT NULL DEFAULT 0"),
             ("diesel", "ALTER TABLE characters ADD COLUMN diesel INTEGER NOT NULL DEFAULT 0"),
+            ("stash_json", "ALTER TABLE characters ADD COLUMN stash_json TEXT NOT NULL DEFAULT '{}'"),
         ]
         for col_name, ddl in add_columns:
             if col_name in column_names:

@@ -141,6 +141,11 @@ from app.game_logic import (
     character_rank_title,
     build_dead_character_text,
     respawn_character,
+    format_personal_stash,
+    deposit_to_personal_stash,
+    withdraw_from_personal_stash,
+    list_stash_deposit_buttons,
+    list_stash_withdraw_buttons,
     build_alliance_overview,
     propose_alliance,
     break_alliance,
@@ -161,6 +166,9 @@ from app.keyboards import (
     faction_rank_pick_keyboard,
     inventory_equipment_keyboard,
     inventory_consumables_keyboard,
+    personal_stash_menu_keyboard,
+    personal_stash_items_keyboard,
+    personal_stash_amount_keyboard,
     dead_character_keyboard,
     faction_keyboard,
     gender_keyboard,
@@ -1371,6 +1379,184 @@ async def open_inventory_consumables_callback(callback: CallbackQuery) -> None:
         "🧰 Расходники\nВыбери предмет для использования:",
         inventory_consumables_keyboard(),
     )
+
+
+def _stash_menu_payload(storage, player) -> tuple[str, object]:
+    home = faction_home_base(player.faction)
+    at_home = player.location == home and not bool(player.travel_destination)
+    text = format_personal_stash(storage, player.telegram_id)
+    if at_home:
+        text += (
+            f"\n\nТы на базе «{home}».\n"
+            "Схрон сохраняет вещи при смерти (мутанты берут только рюкзак)."
+        )
+    else:
+        text += (
+            f"\n\nСхрон открывается только на домашней базе «{home}».\n"
+            f"Сейчас ты в «{player.location}»."
+        )
+    return text, personal_stash_menu_keyboard(at_home=at_home)
+
+
+@router.callback_query(F.data == "stash:menu")
+async def stash_menu_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    if player.health <= 0:
+        await edit_menu_message(
+            callback,
+            build_dead_character_text(player),
+            dead_character_keyboard(),
+        )
+        return
+    text, keyboard = _stash_menu_payload(storage, player)
+    await edit_menu_message(callback, text, keyboard)
+
+
+@router.callback_query(F.data.startswith("stash:putlist:"))
+async def stash_put_list_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    try:
+        page = int((callback.data or "").rsplit(":", 1)[1])
+    except ValueError:
+        page = 0
+    buttons, safe_page, total_pages = list_stash_deposit_buttons(player, page=page)
+    if not buttons:
+        await callback.answer("Инвентарь пуст.", show_alert=True)
+        return
+    await edit_menu_message(
+        callback,
+        "📥 Что положить в схрон?\nВыбери предмет, затем количество.",
+        personal_stash_items_keyboard(
+            buttons,
+            page=safe_page,
+            total_pages=total_pages,
+            page_prefix="stash:putlist",
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("stash:takelist:"))
+async def stash_take_list_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    try:
+        page = int((callback.data or "").rsplit(":", 1)[1])
+    except ValueError:
+        page = 0
+    buttons, safe_page, total_pages = list_stash_withdraw_buttons(
+        storage, player.telegram_id, page=page
+    )
+    if not buttons:
+        await callback.answer("Схрон пуст.", show_alert=True)
+        return
+    await edit_menu_message(
+        callback,
+        "📤 Что забрать из схрона?\nВыбери предмет, затем количество.",
+        personal_stash_items_keyboard(
+            buttons,
+            page=safe_page,
+            total_pages=total_pages,
+            page_prefix="stash:takelist",
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("stash:put:"))
+async def stash_put_pick_callback(callback: CallbackQuery) -> None:
+    # stash:put:<item_key>
+    item_key = (callback.data or "").removeprefix("stash:put:").strip()
+    if not item_key or item_key.startswith("list:"):
+        return
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    have = int(player.inventory.get(item_key, 0))
+    if have <= 0:
+        await callback.answer("Этого предмета уже нет.", show_alert=True)
+        return
+    from app.game_logic import ITEM_LABELS
+
+    await edit_menu_message(
+        callback,
+        f"📥 В схрон: {ITEM_LABELS.get(item_key, item_key)}\nСколько положить? (есть {have})",
+        personal_stash_amount_keyboard("put", item_key, have),
+    )
+
+
+@router.callback_query(F.data.startswith("stash:take:"))
+async def stash_take_pick_callback(callback: CallbackQuery) -> None:
+    item_key = (callback.data or "").removeprefix("stash:take:").strip()
+    if not item_key or item_key.startswith("list:"):
+        return
+    storage = get_storage()
+    have = int(storage.get_personal_stash(callback.from_user.id).get(item_key, 0))
+    if have <= 0:
+        await callback.answer("Этого предмета уже нет в схроне.", show_alert=True)
+        return
+    from app.game_logic import ITEM_LABELS
+
+    await edit_menu_message(
+        callback,
+        f"📤 Из схрона: {ITEM_LABELS.get(item_key, item_key)}\nСколько забрать? (есть {have})",
+        personal_stash_amount_keyboard("take", item_key, have),
+    )
+
+
+@router.callback_query(F.data.startswith("stash:putqty:"))
+async def stash_put_qty_callback(callback: CallbackQuery) -> None:
+    # stash:putqty:<item_key>:<qty>
+    parts = (callback.data or "").split(":")
+    if len(parts) < 4:
+        await callback.answer("Некорректное количество.", show_alert=True)
+        return
+    item_key = parts[2]
+    try:
+        qty = int(parts[3])
+    except ValueError:
+        await callback.answer("Некорректное количество.", show_alert=True)
+        return
+    result = deposit_to_personal_stash(get_storage(), callback.from_user.id, item_key, qty)
+    await reply_action_result(callback, result.text)
+    if result.ok:
+        storage = get_storage()
+        player = storage.get_character(callback.from_user.id, refresh_energy=False)
+        if player is not None:
+            text, keyboard = _stash_menu_payload(storage, player)
+            await edit_menu_message(callback, text, keyboard, answer_callback=False)
+
+
+@router.callback_query(F.data.startswith("stash:takeqty:"))
+async def stash_take_qty_callback(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) < 4:
+        await callback.answer("Некорректное количество.", show_alert=True)
+        return
+    item_key = parts[2]
+    try:
+        qty = int(parts[3])
+    except ValueError:
+        await callback.answer("Некорректное количество.", show_alert=True)
+        return
+    result = withdraw_from_personal_stash(get_storage(), callback.from_user.id, item_key, qty)
+    await reply_action_result(callback, result.text)
+    if result.ok:
+        storage = get_storage()
+        player = storage.get_character(callback.from_user.id, refresh_energy=False)
+        if player is not None:
+            text, keyboard = _stash_menu_payload(storage, player)
+            await edit_menu_message(callback, text, keyboard, answer_callback=False)
 
 
 @router.callback_query(F.data == "respawn:base")

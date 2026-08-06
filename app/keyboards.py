@@ -286,11 +286,78 @@ def inventory_equipment_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🧰 Расходники", callback_data="inventory:consumables")],
+            [InlineKeyboardButton(text="🗄 Схрон", callback_data="stash:menu")],
             [InlineKeyboardButton(text="📦 Открыть тайник", callback_data="use:stash_case")],
             [InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")],
             [InlineKeyboardButton(text="⚙️ Экипировка", callback_data="equip:root")],
         ]
     )
+
+
+def personal_stash_menu_keyboard(*, at_home: bool) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if at_home:
+        rows.append([InlineKeyboardButton(text="📥 Положить в схрон", callback_data="stash:putlist:0")])
+        rows.append([InlineKeyboardButton(text="📤 Забрать из схрона", callback_data="stash:takelist:0")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад в инвентарь", callback_data="inventory:open")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def personal_stash_items_keyboard(
+    buttons: list[tuple[str, str]],
+    *,
+    page: int,
+    total_pages: int,
+    page_prefix: str,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text=label, callback_data=cb)] for label, cb in buttons
+    ]
+    if total_pages > 1:
+        nav: list[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(
+                InlineKeyboardButton(text="⬅️", callback_data=f"{page_prefix}:{page - 1}")
+            )
+        nav.append(
+            InlineKeyboardButton(
+                text=f"{page + 1}/{total_pages}",
+                callback_data=f"{page_prefix}:{page}",
+            )
+        )
+        if page + 1 < total_pages:
+            nav.append(
+                InlineKeyboardButton(text="➡️", callback_data=f"{page_prefix}:{page + 1}")
+            )
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="⬅️ К схрону", callback_data="stash:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def personal_stash_amount_keyboard(action: str, item_key: str, max_amount: int) -> InlineKeyboardMarkup:
+    """action: put | take"""
+    rows: list[list[InlineKeyboardButton]] = []
+    choices = [1]
+    if max_amount >= 5:
+        choices.append(5)
+    if max_amount >= 10:
+        choices.append(10)
+    if max_amount not in choices:
+        choices.append(max_amount)
+    for qty in choices:
+        if qty > max_amount:
+            continue
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{'📥' if action == 'put' else '📤'} {qty} шт.",
+                    callback_data=f"stash:{action}qty:{item_key}:{qty}",
+                )
+            ]
+        )
+    back = "stash:putlist:0" if action == "put" else "stash:takelist:0"
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def inventory_consumables_keyboard() -> InlineKeyboardMarkup:
@@ -320,7 +387,7 @@ def inventory_actions_keyboard() -> InlineKeyboardMarkup:
 def dead_character_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="♻️ Респавн на базе (500 RU)", callback_data="respawn:base")],
+            [InlineKeyboardButton(text="♻️ Спасение на базе (500 RU)", callback_data="respawn:base")],
         ]
     )
 

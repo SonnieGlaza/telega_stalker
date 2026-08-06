@@ -1021,6 +1021,8 @@ def _apply_durability_decay(storage: Storage, telegram_id: int, weapon_loss: int
 RESPAWN_HEALTH = 60
 RESPAWN_ENERGY = 60
 RESPAWN_COST_RU = 500
+DEATH_INVENTORY_KEEP_RATIO = 0.2  # 80% лута растаскивают мутанты
+PERSONAL_STASH_PAGE_SIZE = 8
 
 
 def _is_dead(character: Character) -> bool:
@@ -1071,10 +1073,169 @@ def build_dead_character_text(character: Character) -> str:
     return (
         f"☠️ {h(character.nickname)}, ты погиб в Зоне.\n"
         f"HP: {character.health}/{max_hp}\n"
-        f"Локация: {character.location}\n"
-        f"Для продолжения нужен респавн.\n"
-        f"Стоимость: {RESPAWN_COST_RU} RU."
+        f"Локация: {character.location}\n\n"
+        "Мутанты уже обшаривают твой рюкзак (потеряешь ~80% инвентаря).\n"
+        "Сталкеры готовы доставить тебя на базу — но не бесплатно.\n"
+        f"Стоимость спасения: {RESPAWN_COST_RU} RU.\n"
+        "Вещи в личном схроне не трогают."
     )
+
+
+def _apply_death_inventory_loot(storage: Storage, telegram_id: int) -> str:
+    """Оставить ~20% каждого стака в инвентаре. Экипировка и схрон не трогаются."""
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ""
+    inventory = dict(player.inventory)
+    if not inventory:
+        return "Рюкзак и так был пуст."
+    kept: dict[str, int] = {}
+    lost_lines: list[str] = []
+    total_lost = 0
+    for key, amount in sorted(inventory.items()):
+        qty = int(amount or 0)
+        if qty <= 0:
+            continue
+        keep = max(0, int(qty * DEATH_INVENTORY_KEEP_RATIO))
+        lost = qty - keep
+        if keep > 0:
+            kept[key] = keep
+        if lost > 0:
+            total_lost += lost
+            lost_lines.append(f"• {ITEM_LABELS.get(key, key)} ×{lost}")
+    storage._set_inventory(telegram_id, kept)
+    storage.save_snapshot()
+    if total_lost <= 0:
+        return "Мутанты почти ничего не нашли — потери минимальны."
+    preview = "\n".join(lost_lines[:12])
+    more = f"\n• …и ещё позиций: {len(lost_lines) - 12}" if len(lost_lines) > 12 else ""
+    return f"Мутанты растащили из рюкзака:\n{preview}{more}"
+
+
+def format_personal_stash(storage: Storage, telegram_id: int) -> str:
+    stash = storage.get_personal_stash(telegram_id)
+    if not stash:
+        return "🗄 Личный схрон пуст."
+    lines = [
+        f"• {ITEM_LABELS.get(key, key)} x{amount}"
+        for key, amount in sorted(stash.items())
+    ]
+    return "🗄 Личный схрон:\n" + "\n".join(lines)
+
+
+def deposit_to_personal_stash(
+    storage: Storage,
+    telegram_id: int,
+    item_key: str,
+    amount: int,
+) -> ActionResult:
+    if amount <= 0:
+        return ActionResult(False, "Некорректное количество.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if is_traveling(player):
+        return ActionResult(False, travel_block_text(player) or "Ты в пути.")
+    home = faction_home_base(player.faction)
+    if player.location != home:
+        return ActionResult(False, f"Схрон доступен только на домашней базе «{home}».")
+    key = str(item_key)
+    if not storage.remove_item(telegram_id, key, amount):
+        return ActionResult(False, f"Недостаточно: {ITEM_LABELS.get(key, key)}.")
+    stash = storage.get_personal_stash(telegram_id)
+    stash[key] = int(stash.get(key, 0)) + amount
+    storage.set_personal_stash(telegram_id, stash)
+    return ActionResult(
+        True,
+        f"В схрон убрано: {ITEM_LABELS.get(key, key)} x{amount}.",
+    )
+
+
+def withdraw_from_personal_stash(
+    storage: Storage,
+    telegram_id: int,
+    item_key: str,
+    amount: int,
+) -> ActionResult:
+    if amount <= 0:
+        return ActionResult(False, "Некорректное количество.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if is_traveling(player):
+        return ActionResult(False, travel_block_text(player) or "Ты в пути.")
+    home = faction_home_base(player.faction)
+    if player.location != home:
+        return ActionResult(False, f"Схрон доступен только на домашней базе «{home}».")
+    key = str(item_key)
+    stash = storage.get_personal_stash(telegram_id)
+    have = int(stash.get(key, 0))
+    if have < amount:
+        return ActionResult(False, f"В схроне недостаточно: {ITEM_LABELS.get(key, key)}.")
+    left = have - amount
+    if left <= 0:
+        stash.pop(key, None)
+    else:
+        stash[key] = left
+    storage.set_personal_stash(telegram_id, stash)
+    storage.add_item(telegram_id, key, amount)
+    return ActionResult(
+        True,
+        f"Из схрона взято: {ITEM_LABELS.get(key, key)} x{amount}.",
+    )
+
+
+def list_stash_deposit_buttons(
+    character: Character,
+    *,
+    page: int = 0,
+) -> tuple[list[tuple[str, str]], int, int]:
+    """[(label, callback), ...], page, total_pages."""
+    items = [
+        (key, int(amount))
+        for key, amount in sorted(character.inventory.items())
+        if int(amount) > 0
+    ]
+    total = len(items)
+    total_pages = max(1, (total + PERSONAL_STASH_PAGE_SIZE - 1) // PERSONAL_STASH_PAGE_SIZE)
+    safe_page = max(0, min(int(page), total_pages - 1))
+    start = safe_page * PERSONAL_STASH_PAGE_SIZE
+    chunk = items[start : start + PERSONAL_STASH_PAGE_SIZE]
+    buttons: list[tuple[str, str]] = []
+    for key, amount in chunk:
+        title = ITEM_LABELS.get(key, key)
+        label = f"📥 {title} x{amount}"
+        if len(label) > 48:
+            label = f"📥 {title[:28]}… x{amount}"
+        buttons.append((label, f"stash:put:{key}"))
+    return buttons, safe_page, total_pages
+
+
+def list_stash_withdraw_buttons(
+    storage: Storage,
+    telegram_id: int,
+    *,
+    page: int = 0,
+) -> tuple[list[tuple[str, str]], int, int]:
+    stash = storage.get_personal_stash(telegram_id)
+    items = [(key, int(amount)) for key, amount in sorted(stash.items()) if int(amount) > 0]
+    total = len(items)
+    total_pages = max(1, (total + PERSONAL_STASH_PAGE_SIZE - 1) // PERSONAL_STASH_PAGE_SIZE)
+    safe_page = max(0, min(int(page), total_pages - 1))
+    start = safe_page * PERSONAL_STASH_PAGE_SIZE
+    chunk = items[start : start + PERSONAL_STASH_PAGE_SIZE]
+    buttons: list[tuple[str, str]] = []
+    for key, amount in chunk:
+        title = ITEM_LABELS.get(key, key)
+        label = f"📤 {title} x{amount}"
+        if len(label) > 48:
+            label = f"📤 {title[:28]}… x{amount}"
+        buttons.append((label, f"stash:take:{key}"))
+    return buttons, safe_page, total_pages
 
 
 def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
@@ -1084,7 +1245,8 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
     if not _is_dead(player):
         return ActionResult(False, "Респавн доступен только при HP=0.")
     if not storage.change_money(telegram_id, -RESPAWN_COST_RU):
-        return ActionResult(False, f"Недостаточно денег для респавна ({RESPAWN_COST_RU} RU).")
+        return ActionResult(False, f"Недостаточно денег для спасения ({RESPAWN_COST_RU} RU).")
+    loot_text = _apply_death_inventory_loot(storage, telegram_id)
     current_health = player.health
     current_energy = player.energy
     storage.change_health(telegram_id, RESPAWN_HEALTH - current_health)
@@ -1093,9 +1255,10 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
     storage.set_location(telegram_id, home)
     return ActionResult(
         True,
-        f"Ты был эвакуирован в «{home}».\n"
-        f"HP восстановлено до {RESPAWN_HEALTH}, энергия до {RESPAWN_ENERGY}.\n"
-        f"Списано за респавн: {RESPAWN_COST_RU} RU.",
+        f"Сталкеры нашли тебя без сознания и доставили на «{home}».\n"
+        f"За спасение жизни потребовали {RESPAWN_COST_RU} RU.\n"
+        f"HP восстановлено до {RESPAWN_HEALTH}, энергия до {RESPAWN_ENERGY}.\n\n"
+        f"{loot_text}",
     )
 
 

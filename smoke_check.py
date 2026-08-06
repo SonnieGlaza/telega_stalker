@@ -447,9 +447,43 @@ def run_smoke_check() -> None:
         assert lots_text
         assert isinstance(lots, list)
 
+        # Personal stash + death inventory loot.
+        from app.game_logic import (
+            deposit_to_personal_stash,
+            withdraw_from_personal_stash,
+            respawn_character,
+            RESPAWN_COST_RU,
+        )
+
+        storage.set_location(111, faction_home_base("Долг"))
+        storage.change_money(111, 5000)
+        # Reset medkit stack for predictable death loot math.
+        cur = storage.get_character(111, refresh_energy=False)
+        have = int(cur.inventory.get("medkit", 0))
+        if have > 0:
+            storage.remove_item(111, "medkit", have)
+        storage.add_item(111, "medkit", 10)
+        put = deposit_to_personal_stash(storage, 111, "medkit", 3)
+        assert put.ok, put.text
+        assert storage.get_personal_stash(111).get("medkit") == 3
+        assert storage.get_character(111, refresh_energy=False).inventory.get("medkit") == 7
+        storage.change_health(111, -10_000)
+        money_before = storage.get_character(111, refresh_energy=False).money
+        revive = respawn_character(storage, 111)
+        assert revive.ok, revive.text
+        assert "доставили" in revive.text.lower() or "спасен" in revive.text.lower()
+        after = storage.get_character(111, refresh_energy=False)
+        assert after.health > 0
+        assert after.money == money_before - RESPAWN_COST_RU
+        assert after.inventory.get("medkit", 0) == 1  # 7 → keep 20% = 1
+        assert storage.get_personal_stash(111).get("medkit") == 3
+        take = withdraw_from_personal_stash(storage, 111, "medkit", 1)
+        assert take.ok, take.text
+
         # Keyboard callback sanity (basic non-empty check).
         callbacks = _all_callback_data()
         assert "contract:refresh" in callbacks
+        assert "stash:menu" in callbacks
         assert "travel:status" in callbacks
         assert "rank:menu" in callbacks
         assert "war:section:scenario" in callbacks
