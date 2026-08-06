@@ -66,6 +66,15 @@ LOCATIONS_ASSET_DIR = PROJECT_ROOT / "assets" / "locations"
 HUNT_ASSET_DIR = PROJECT_ROOT / "assets" / "hunt"
 LOCATION_THUMB_SLUGS: dict[str, str] = {
     "Кордон": "kordon",
+    "Свалка": "svalka",
+    "Росток": "rostok",
+    "Армейские склады": "army_warehouses",
+    "НИИ Агропром": "agroprom",
+    "Янтарь": "yantar",
+    "Болото": "boloto",
+    "Темная долина": "dark_valley",
+    "Рыжий лес": "red_forest",
+    "Радар": "radar",
 }
 DETECTOR_SIGNAL_ASSET = HUNT_ASSET_DIR / "detector_signal.png"
 
@@ -855,20 +864,21 @@ def render_hunt_frame(
     small_font = _load_font(16)
     tiny_font = _load_font(14)
 
-    # Превью локации (фото-ассет или fallback).
-    thumb = (panel_left + 22, panel_top + 22, panel_right - 22, panel_top + 118)
+    # Фото локации — слот справа сверху над названием.
+    thumb = (panel_left + 18, panel_top + 16, panel_right - 18, panel_top + 152)
     loc_img = _load_location_thumb(session.location)
     if loc_img is not None:
-        _paste_rounded(canvas, loc_img, thumb, radius=10)
-        ImageDraw.Draw(canvas).rounded_rectangle(thumb, radius=10, outline=(110, 120, 100, 255), width=2)
+        _paste_rounded(canvas, loc_img, thumb, radius=12)
+        ImageDraw.Draw(canvas).rounded_rectangle(thumb, radius=12, outline=(120, 130, 110, 255), width=2)
     else:
         _draw_fallback_location_thumb(draw, thumb)
 
     loc = session.location
     draw = ImageDraw.Draw(canvas)
-    draw.text((panel_left + 28, panel_top + 128), loc, fill=(245, 245, 245, 255), font=title_font)
+    loc_font = title_font if len(loc) <= 14 else _load_font(24)
+    draw.text((panel_left + 24, panel_top + 160), loc, fill=(245, 245, 245, 255), font=loc_font)
 
-    det_y = panel_top + 172
+    det_y = panel_top + 202
     _draw_detector_icon(draw, panel_left + 24, det_y, 72, 52)
     draw.text(
         (panel_left + 110, det_y),
@@ -889,15 +899,14 @@ def render_hunt_frame(
             draw.ellipse((cx - 9, led_y - 9, cx + 9, led_y + 9), fill=(48, 50, 52, 255), outline=(85, 85, 88, 255))
 
     # HD-экран сигнала детектора.
-    screen = (panel_left + 22, panel_top + 245, panel_right - 22, panel_top + 420)
+    screen = (panel_left + 22, panel_top + 275, panel_right - 22, panel_top + 440)
     dist = _chebyshev(session.player, session.artifact)
     strength = max(0.12, min(1.0, 1.0 - dist / 6.0))
-    # Заполненные кружки тоже усиливают «картинку» сигнала.
     strength = max(strength, 0.18 + 0.16 * (filled / max(1, session.circles_needed)))
     _draw_signal_screen(canvas, screen, strength=strength)
     draw = ImageDraw.Draw(canvas)
 
-    info_y = panel_top + 435
+    info_y = panel_top + 452
     draw.text(
         (panel_left + 28, info_y),
         f"Сигнал  {filled}/{session.circles_needed}",
@@ -905,13 +914,13 @@ def render_hunt_frame(
         font=body_font,
     )
     draw.text(
-        (panel_left + 28, info_y + 28),
+        (panel_left + 28, info_y + 26),
         f"Ход  {session.moves}/{session.max_moves}   ·   Аномалий  {len(session.anomalies)}",
         fill=(195, 195, 195, 255),
         font=small_font,
     )
     draw.text(
-        (panel_left + 28, info_y + 50),
+        (panel_left + 28, info_y + 48),
         f"Рад за вылазку  +{session.rad_gained}",
         fill=(210, 180, 140, 255),
         font=small_font,
@@ -925,9 +934,9 @@ def render_hunt_frame(
     hunger = int(character.hunger) if character else 0
     thirst = int(character.thirst) if character else 0
 
-    bar_top = panel_top + 520
+    bar_top = panel_top + 530
     bar_w = 44
-    bar_h = 120
+    bar_h = 115
     gap = 62
     bx = panel_left + 40
     _draw_status_tube(
