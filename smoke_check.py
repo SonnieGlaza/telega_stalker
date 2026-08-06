@@ -178,6 +178,31 @@ def run_smoke_check() -> None:
         assert not buy_item(storage, 111, "detector_otklik", amount=5).ok
         assert use_medkit(storage, 111).ok is False  # hp full
         assert search_artifacts(storage, 111).text
+
+        # Artifact hunt mini-game (visual field).
+        from app.artifact_hunt import (
+            start_artifact_hunt,
+            move_artifact_hunt,
+            get_hunt_session,
+            abandon_artifact_hunt,
+            location_anomaly_count,
+        )
+
+        storage.restore_energy(111, 100)
+        storage.set_location(111, "Кордон")
+        if int(storage.get_character(111, refresh_energy=False).inventory.get("detector_otklik", 0)) <= 0:
+            assert buy_item(storage, 111, "detector_otklik").ok
+        hunt = start_artifact_hunt(storage, 111)
+        assert hunt.ok, hunt.text
+        assert hunt.payload and hunt.payload.get("hunt_image")
+        assert get_hunt_session(storage, 111) is not None
+        assert location_anomaly_count("Кордон") == 3
+        step = move_artifact_hunt(storage, 111, "right")
+        assert step.payload is not None
+        left = abandon_artifact_hunt(storage, 111)
+        assert left.ok, left.text
+        assert get_hunt_session(storage, 111) is None
+
         travel_result = travel_to(storage, 111, "Янтарь")
         assert travel_result.ok, travel_result.text
         in_transit = storage.get_character(111, refresh_energy=False)
@@ -484,6 +509,7 @@ def run_smoke_check() -> None:
         callbacks = _all_callback_data()
         assert "contract:refresh" in callbacks
         assert "stash:menu" in callbacks
+        assert "hunt:up" in callbacks
         assert "travel:status" in callbacks
         assert "rank:menu" in callbacks
         assert "war:section:scenario" in callbacks

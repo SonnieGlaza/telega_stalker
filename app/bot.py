@@ -18,12 +18,21 @@ from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
     LabeledPrice,
     Message,
     PreCheckoutQuery,
     ReplyKeyboardMarkup,
 )
 
+from app.artifact_hunt import (
+    abandon_artifact_hunt,
+    get_hunt_session,
+    hunt_status_caption,
+    move_artifact_hunt,
+    render_hunt_frame,
+    start_artifact_hunt,
+)
 from app.config import load_settings
 from app.html_utils import html_safe as h
 from app.game_logic import (
@@ -169,6 +178,7 @@ from app.keyboards import (
     personal_stash_menu_keyboard,
     personal_stash_items_keyboard,
     personal_stash_amount_keyboard,
+    artifact_hunt_keyboard,
     dead_character_keyboard,
     faction_keyboard,
     gender_keyboard,
@@ -2581,10 +2591,117 @@ async def use_stash_case_callback(callback: CallbackQuery) -> None:
     await reply_action_result(callback, result.text)
 
 
+async def _send_or_edit_hunt_frame(
+    callback: CallbackQuery,
+    *,
+    image_bytes: bytes,
+    caption: str,
+    note: str | None = None,
+) -> None:
+    media = BufferedInputFile(image_bytes, filename="artifact_hunt.png")
+    text = caption if not note else f"{caption}\n\n{note}"
+    markup = artifact_hunt_keyboard()
+    try:
+        if callback.message and callback.message.photo:
+            await callback.message.edit_media(
+                media=InputMediaPhoto(media=media, caption=text),
+                reply_markup=markup,
+            )
+        elif callback.message:
+            await callback.message.answer_photo(photo=media, caption=text, reply_markup=markup)
+            try:
+                await callback.message.delete()
+            except TelegramBadRequest:
+                pass
+        else:
+            await callback.bot.send_photo(
+                callback.from_user.id,
+                photo=media,
+                caption=text,
+                reply_markup=markup,
+            )
+    except TelegramBadRequest:
+        await callback.bot.send_photo(
+            callback.from_user.id,
+            photo=media,
+            caption=text,
+            reply_markup=markup,
+        )
+    await safe_callback_answer(callback)
+
+
 @router.callback_query(F.data == "artifact:search")
 async def artifact_search_callback(callback: CallbackQuery) -> None:
-    result = search_artifacts(get_storage(), callback.from_user.id)
+    result = start_artifact_hunt(get_storage(), callback.from_user.id)
+    payload = result.payload or {}
+    image = payload.get("hunt_image")
+    if image and payload.get("hunt_active"):
+        await _send_or_edit_hunt_frame(
+            callback,
+            image_bytes=image,
+            caption=str(payload.get("caption") or result.text),
+            note=result.text if payload.get("hunt_started") else None,
+        )
+        return
     await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data.startswith("hunt:"))
+async def artifact_hunt_callback(callback: CallbackQuery) -> None:
+    action = (callback.data or "").removeprefix("hunt:").strip()
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+
+    if action == "leave":
+        result = abandon_artifact_hunt(storage, telegram_id)
+        await reply_action_result(callback, result.text)
+        return
+
+    if action == "refresh":
+        session = get_hunt_session(storage, telegram_id)
+        player = storage.get_character(telegram_id, refresh_energy=False)
+        if session is None or player is None:
+            await callback.answer("Активной вылазки нет.", show_alert=True)
+            return
+        image = render_hunt_frame(session, player)
+        await _send_or_edit_hunt_frame(
+            callback,
+            image_bytes=image,
+            caption=hunt_status_caption(session, player),
+        )
+        return
+
+    if action not in {"up", "down", "left", "right"}:
+        await callback.answer("Неизвестное действие.", show_alert=True)
+        return
+
+    result = move_artifact_hunt(storage, telegram_id, action)
+    payload = result.payload or {}
+
+    if payload.get("hunt_dead"):
+        await reply_action_result(callback, result.text)
+        player = storage.get_character(telegram_id, refresh_energy=False)
+        if player is not None and player.health <= 0 and callback.message:
+            await callback.message.answer(
+                build_dead_character_text(player),
+                reply_markup=dead_character_keyboard(),
+            )
+        return
+
+    if payload.get("hunt_done") or not payload.get("hunt_active"):
+        await reply_action_result(callback, result.text)
+        return
+
+    image = payload.get("hunt_image")
+    if not image:
+        await reply_action_result(callback, result.text)
+        return
+    await _send_or_edit_hunt_frame(
+        callback,
+        image_bytes=image,
+        caption=str(payload.get("caption") or ""),
+        note=str(payload.get("move_note") or result.text),
+    )
 
 
 @router.message(Command("pay"))

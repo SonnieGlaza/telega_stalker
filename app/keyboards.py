@@ -294,6 +294,25 @@ def inventory_equipment_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def artifact_hunt_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⬆️", callback_data="hunt:up"),
+            ],
+            [
+                InlineKeyboardButton(text="⬅️", callback_data="hunt:left"),
+                InlineKeyboardButton(text="⬇️", callback_data="hunt:down"),
+                InlineKeyboardButton(text="➡️", callback_data="hunt:right"),
+            ],
+            [
+                InlineKeyboardButton(text="🏃 Свалить", callback_data="hunt:leave"),
+                InlineKeyboardButton(text="🔄 Обновить", callback_data="hunt:refresh"),
+            ],
+        ]
+    )
+
+
 def personal_stash_menu_keyboard(*, at_home: bool) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if at_home:
