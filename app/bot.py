@@ -100,6 +100,7 @@ from app.game_logic import (
     process_emission_cycle,
     process_due_travels,
     collect_travel_eta_notices,
+    build_travel_arrival_live_text,
     process_zone_event_cycle,
     build_players_root_text,
     build_players_faction_page_text,
@@ -249,6 +250,8 @@ storage: Storage | None = None
 admin_ids: tuple[int, ...] = ()
 SNAPSHOT_SYNC_SECONDS = 300
 POINTS_INCOME_TICK_SECONDS = 60
+TRAVEL_ETA_TICK_SECONDS = 1
+TRAVEL_ETA_MSG_META_PREFIX = "travel_eta_msg:"
 TOPUP_RATE_RU_PER_STAR = 75
 TOPUP_PAYLOAD_PREFIX = "topup_stars:"
 TOPUP_ALLOWED_AMOUNTS = {1, 5, 10, 25}
@@ -256,6 +259,64 @@ TOPUP_MIN_STARS = 1
 TOPUP_MAX_STARS = 10000
 # Telegram callback alerts are limited to 200 characters.
 CALLBACK_ALERT_MAX_LEN = 200
+
+
+def _travel_eta_msg_key(telegram_id: int) -> str:
+    return f"{TRAVEL_ETA_MSG_META_PREFIX}{int(telegram_id)}"
+
+
+def get_travel_eta_message_id(storage: Storage, telegram_id: int) -> int | None:
+    raw = storage.get_meta(_travel_eta_msg_key(telegram_id))
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def set_travel_eta_message_id(storage: Storage, telegram_id: int, message_id: int) -> None:
+    storage.set_meta(_travel_eta_msg_key(telegram_id), str(int(message_id)))
+
+
+def clear_travel_eta_message_id(storage: Storage, telegram_id: int) -> None:
+    storage.delete_meta(_travel_eta_msg_key(telegram_id))
+
+
+async def upsert_travel_eta_message(bot: Bot, telegram_id: int, text: str) -> None:
+    """Создать или отредактировать live-сообщение о времени в пути."""
+    storage = get_storage()
+    clean = (text or "").strip()
+    if not clean:
+        return
+    message_id = get_travel_eta_message_id(storage, telegram_id)
+    if message_id is not None:
+        try:
+            await bot.edit_message_text(chat_id=telegram_id, message_id=message_id, text=clean)
+            return
+        except TelegramBadRequest as exc:
+            low = str(exc).lower()
+            if "message is not modified" in low:
+                return
+            # Сообщение удалили / нельзя править — шлём новое.
+            logger.debug("Travel ETA edit failed for %s: %s", telegram_id, exc)
+        except Exception:
+            logger.debug("Travel ETA edit error for %s", telegram_id, exc_info=True)
+    try:
+        sent = await bot.send_message(telegram_id, clean)
+        set_travel_eta_message_id(storage, telegram_id, sent.message_id)
+    except Exception:
+        logger.debug("Travel ETA send failed for %s", telegram_id, exc_info=True)
+
+
+async def publish_travel_live_eta(bot: Bot, telegram_id: int) -> None:
+    storage = get_storage()
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or not is_traveling(player):
+        return
+    status = travel_status_text(player)
+    if status:
+        await upsert_travel_eta_message(bot, telegram_id, status)
 
 
 def _is_stale_callback_error(exc: TelegramBadRequest) -> bool:
@@ -3059,20 +3120,30 @@ async def travel_pick_destination(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("travel:go:"))
-async def travel_go_callback(callback: CallbackQuery) -> None:
+async def travel_go_callback(callback: CallbackQuery, bot: Bot) -> None:
     parts = (callback.data or "").split(":", maxsplit=3)
     if len(parts) < 4:
         await callback.answer("Некорректный переход.", show_alert=True)
         return
     mode = parts[2]
     destination = parts[3]
+    storage = get_storage()
     result = travel_to(
-        get_storage(),
+        storage,
         callback.from_user.id,
         destination,
         transport_mode=mode,
     )
-    await reply_action_result(callback, result.text)
+    if not result.ok:
+        await reply_action_result(callback, result.text, bot=bot)
+        return
+    await safe_callback_answer(callback, "В путь!")
+    # Разовые детали выезда + live-таймер, который правится каждую секунду.
+    if callback.message is not None:
+        await callback.message.answer(action_result_text(callback.from_user.id, result.text))
+    else:
+        await bot.send_message(callback.from_user.id, action_result_text(callback.from_user.id, result.text))
+    await publish_travel_live_eta(bot, callback.from_user.id)
 
 
 @router.callback_query(F.data.startswith("travel:"))
@@ -3929,6 +4000,14 @@ async def smuggle_go_callback(callback: CallbackQuery, bot: Bot) -> None:
         destination,
         transport_mode=mode,
     )
+    if result.ok:
+        await safe_callback_answer(callback, "Рейс начат!")
+        if callback.message is not None:
+            await callback.message.answer(action_result_text(callback.from_user.id, result.text))
+        else:
+            await bot.send_message(callback.from_user.id, action_result_text(callback.from_user.id, result.text))
+        await publish_travel_live_eta(bot, callback.from_user.id)
+        return
     await reply_action_result(callback, result.text, bot=bot)
 
 
@@ -4022,28 +4101,39 @@ async def run_bot() -> None:
                             logger.debug("Failed zone event notify to %s", user_id)
             except Exception:
                 logger.exception("Zone event cycle tick failed")
+
+    async def periodic_travel_live_eta() -> None:
+        """Каждую секунду правит сообщение «сколько осталось ехать»."""
+        while True:
+            await asyncio.sleep(TRAVEL_ETA_TICK_SECONDS)
+            storage = get_storage()
             try:
-                for user_id, destination in process_due_travels(get_storage()):
+                for user_id, destination in process_due_travels(storage):
+                    # Один раз: прибытие + энкаунтер/контрабанда через action_result_text.
+                    arrival_body = action_result_text(
+                        user_id,
+                        build_travel_arrival_live_text(destination),
+                    )
                     try:
-                        await bot.send_message(
-                            user_id,
-                            action_result_text(user_id, f"🚐 Прибыл в «{h(destination)}»."),
-                        )
+                        await upsert_travel_eta_message(bot, user_id, arrival_body)
                     except Exception:
-                        logger.debug("Failed travel arrival notify to %s", user_id)
+                        logger.debug("Failed travel arrival ETA edit for %s", user_id)
+                    clear_travel_eta_message_id(storage, user_id)
             except Exception:
-                logger.exception("Travel arrival tick failed")
+                logger.exception("Travel live arrival tick failed")
             try:
-                for user_id, text in collect_travel_eta_notices(get_storage()):
+                for user_id, text in collect_travel_eta_notices(storage):
                     try:
-                        await bot.send_message(user_id, action_result_text(user_id, text))
+                        # Без action_result_text — иначе каждую секунду дергаются сайд-эффекты.
+                        await upsert_travel_eta_message(bot, user_id, text)
                     except Exception:
-                        logger.debug("Failed travel ETA notify to %s", user_id)
+                        logger.debug("Failed travel live ETA for %s", user_id)
             except Exception:
-                logger.exception("Travel ETA tick failed")
+                logger.exception("Travel live ETA tick failed")
 
     sync_task = asyncio.create_task(periodic_snapshot_sync())
     zone_task = asyncio.create_task(periodic_zone_systems())
+    travel_eta_task = asyncio.create_task(periodic_travel_live_eta())
     dp = Dispatcher()
     dp.include_router(router)
     try:
@@ -4051,7 +4141,8 @@ async def run_bot() -> None:
     finally:
         sync_task.cancel()
         zone_task.cancel()
-        for task in (sync_task, zone_task):
+        travel_eta_task.cancel()
+        for task in (sync_task, zone_task, travel_eta_task):
             try:
                 await task
             except asyncio.CancelledError:

@@ -1846,14 +1846,11 @@ def travel_status_text(character: Character) -> str | None:
 
 
 def collect_travel_eta_notices(storage: Storage) -> list[tuple[int, str]]:
-    """Периодические пинги в чат: сколько ещё ехать до точки."""
+    """Снимок ETA для всех активных переходов (для live-редактирования в чате)."""
     notices: list[tuple[int, str]] = []
     labels = {"foot": "пешком", "bicycle": "на велосипеде", "niva": "на Ниве", "truck": "на грузовике"}
     for telegram_id, destination, arrives_at, transport in storage.list_active_travels():
         remaining_sec = max(0, int((_as_utc(arrives_at) - _utc_now()).total_seconds()))
-        # Близко к прибытию — не спамим, ждём сообщение о прибытии.
-        if remaining_sec < 15:
-            continue
         remaining = format_remaining_travel(arrives_at)
         mode = labels.get(transport, transport)
         notices.append(
@@ -1863,6 +1860,10 @@ def collect_travel_eta_notices(storage: Storage) -> list[tuple[int, str]]:
             )
         )
     return notices
+
+
+def build_travel_arrival_live_text(destination: str) -> str:
+    return f"🚐 Прибыл в «{destination}».\nОсталось ехать: 0 сек"
 
 
 def process_due_travels(storage: Storage) -> list[tuple[int, str]]:
