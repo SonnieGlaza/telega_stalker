@@ -1850,7 +1850,6 @@ def collect_travel_eta_notices(storage: Storage) -> list[tuple[int, str]]:
     notices: list[tuple[int, str]] = []
     labels = {"foot": "пешком", "bicycle": "на велосипеде", "niva": "на Ниве", "truck": "на грузовике"}
     for telegram_id, destination, arrives_at, transport in storage.list_active_travels():
-        remaining_sec = max(0, int((_as_utc(arrives_at) - _utc_now()).total_seconds()))
         remaining = format_remaining_travel(arrives_at)
         mode = labels.get(transport, transport)
         notices.append(
