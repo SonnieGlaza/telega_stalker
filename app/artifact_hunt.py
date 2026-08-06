@@ -62,6 +62,154 @@ FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 )
 
+LOCATIONS_ASSET_DIR = PROJECT_ROOT / "assets" / "locations"
+HUNT_ASSET_DIR = PROJECT_ROOT / "assets" / "hunt"
+LOCATION_THUMB_SLUGS: dict[str, str] = {
+    "Кордон": "kordon",
+}
+DETECTOR_SIGNAL_ASSET = HUNT_ASSET_DIR / "detector_signal.png"
+
+_location_thumb_cache: dict[str, Image.Image | None] = {}
+_signal_asset_cache: Image.Image | None | bool = False
+
+
+def _load_location_thumb(location: str) -> Image.Image | None:
+    slug = LOCATION_THUMB_SLUGS.get(location)
+    if not slug:
+        return None
+    if slug in _location_thumb_cache:
+        return _location_thumb_cache[slug]
+    path = LOCATIONS_ASSET_DIR / f"{slug}.png"
+    img: Image.Image | None = None
+    if path.is_file():
+        try:
+            img = Image.open(path).convert("RGBA")
+        except Exception:
+            img = None
+    _location_thumb_cache[slug] = img
+    return img
+
+
+def _load_signal_asset() -> Image.Image | None:
+    global _signal_asset_cache
+    if _signal_asset_cache is not False:
+        return _signal_asset_cache  # type: ignore[return-value]
+    img: Image.Image | None = None
+    if DETECTOR_SIGNAL_ASSET.is_file():
+        try:
+            img = Image.open(DETECTOR_SIGNAL_ASSET).convert("RGBA")
+        except Exception:
+            img = None
+    _signal_asset_cache = img
+    return img
+
+
+def _cover_crop(src: Image.Image, tw: int, th: int) -> Image.Image:
+    """Масштаб cover + center crop."""
+    sw, sh = src.size
+    scale = max(tw / max(1, sw), th / max(1, sh))
+    nw, nh = max(1, int(sw * scale)), max(1, int(sh * scale))
+    resized = src.resize((nw, nh), Image.Resampling.LANCZOS)
+    left = max(0, (nw - tw) // 2)
+    top = max(0, (nh - th) // 2)
+    return resized.crop((left, top, left + tw, top + th))
+
+
+def _rounded_mask(size: tuple[int, int], radius: int) -> Image.Image:
+    mask = Image.new("L", size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, size[0] - 1, size[1] - 1), radius=radius, fill=255)
+    return mask
+
+
+def _paste_rounded(
+    canvas: Image.Image,
+    src: Image.Image,
+    box: tuple[int, int, int, int],
+    *,
+    radius: int = 10,
+) -> None:
+    x0, y0, x1, y1 = box
+    tw, th = max(1, x1 - x0), max(1, y1 - y0)
+    fitted = _cover_crop(src.convert("RGBA"), tw, th)
+    mask = _rounded_mask((tw, th), radius)
+    canvas.paste(fitted, (x0, y0), mask)
+
+
+def _draw_fallback_location_thumb(draw: ImageDraw.ImageDraw, thumb: tuple[int, int, int, int]) -> None:
+    draw.rounded_rectangle(thumb, radius=10, fill=(30, 34, 28, 255), outline=(90, 100, 80, 255), width=2)
+    draw.rectangle((thumb[0] + 8, thumb[1] + 48, thumb[2] - 8, thumb[3] - 8), fill=(48, 56, 40, 255))
+    draw.polygon(
+        [
+            (thumb[0] + 20, thumb[3] - 8),
+            (thumb[0] + 70, thumb[1] + 55),
+            (thumb[0] + 120, thumb[3] - 8),
+        ],
+        fill=(62, 70, 50, 255),
+    )
+    draw.rectangle((thumb[0] + 140, thumb[1] + 70, thumb[0] + 175, thumb[3] - 8), fill=(70, 55, 40, 255))
+    draw.ellipse((thumb[0] + 40, thumb[1] + 18, thumb[0] + 95, thumb[1] + 55), fill=(95, 105, 70, 255))
+
+
+def _draw_signal_screen(
+    canvas: Image.Image,
+    screen: tuple[int, int, int, int],
+    *,
+    strength: float,
+) -> None:
+    """HD-экран детектора: фото-ассет + кольца/сканлайны по силе сигнала."""
+    x0, y0, x1, y1 = screen
+    tw, th = max(1, x1 - x0), max(1, y1 - y0)
+    strength = max(0.0, min(1.0, float(strength)))
+    draw = ImageDraw.Draw(canvas)
+    draw.rounded_rectangle(screen, radius=14, fill=(18, 20, 24, 255), outline=(80, 82, 86, 255), width=2)
+
+    asset = _load_signal_asset()
+    layer = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+    if asset is not None:
+        fitted = _cover_crop(asset, tw, th)
+        # Затемнение при слабом сигнале, ярче при сильном.
+        dim = Image.new("RGBA", (tw, th), (0, 0, 0, int(160 * (1.0 - strength))))
+        fitted = Image.alpha_composite(fitted, dim)
+        # Лёгкий cyan tint по силе.
+        tint_a = int(40 + 70 * strength)
+        tint = Image.new("RGBA", (tw, th), (40, 120, 180, tint_a))
+        fitted = Image.blend(fitted, Image.alpha_composite(fitted, tint), 0.35)
+        layer.alpha_composite(fitted)
+    else:
+        # Fallback: процедурный овал.
+        ld = ImageDraw.Draw(layer)
+        blue = (70, 150, int(150 + 80 * strength))
+        pad = int(22 + (1.0 - strength) * 16)
+        oval = (pad, 18, tw - pad, th - 18)
+        for expand, alpha in ((16, 30), (8, 70), (0, 140)):
+            ld.ellipse(
+                (oval[0] - expand, oval[1] - expand, oval[2] + expand, oval[3] + expand),
+                fill=(*blue, alpha),
+            )
+        ld.ellipse(oval, outline=(160, 220, 255, 220), width=3)
+
+    # Концентрические кольца радара.
+    fx = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+    fd = ImageDraw.Draw(fx)
+    cx, cy = tw // 2, th // 2
+    ring_alpha = int(35 + 90 * strength)
+    for r in (28, 48, 70, 96):
+        fd.ellipse((cx - r, cy - int(r * 1.15), cx + r, cy + int(r * 1.15)), outline=(120, 200, 230, ring_alpha))
+    # Сканлайны.
+    for yy in range(0, th, 3):
+        fd.line((0, yy, tw, yy), fill=(0, 0, 0, 28))
+    # Центральный блик-артефакт.
+    core_r = int(10 + 18 * strength)
+    for i, a in ((core_r + 14, int(40 * strength + 20)), (core_r, int(120 * strength + 40)), (max(4, core_r // 2), 220)):
+        fd.ellipse((cx - i, cy - int(i * 1.3), cx + i, cy + int(i * 1.3)), fill=(160, 220, 255, a))
+    # Угловой блик стекла.
+    fd.ellipse((12, 10, 70, 48), fill=(220, 240, 255, 35))
+    layer.alpha_composite(fx)
+
+    mask = _rounded_mask((tw, th), 12)
+    canvas.paste(layer, (x0, y0), mask)
+    ImageDraw.Draw(canvas).rounded_rectangle(screen, radius=14, outline=(100, 120, 140, 255), width=2)
+
 
 @dataclass
 class HuntSession:
@@ -707,22 +855,17 @@ def render_hunt_frame(
     small_font = _load_font(16)
     tiny_font = _load_font(14)
 
-    # Превью локации.
+    # Превью локации (фото-ассет или fallback).
     thumb = (panel_left + 22, panel_top + 22, panel_right - 22, panel_top + 118)
-    draw.rounded_rectangle(thumb, radius=10, fill=(30, 34, 28, 255), outline=(90, 100, 80, 255), width=2)
-    draw.rectangle((thumb[0] + 8, thumb[1] + 48, thumb[2] - 8, thumb[3] - 8), fill=(48, 56, 40, 255))
-    draw.polygon(
-        [
-            (thumb[0] + 20, thumb[3] - 8),
-            (thumb[0] + 70, thumb[1] + 55),
-            (thumb[0] + 120, thumb[3] - 8),
-        ],
-        fill=(62, 70, 50, 255),
-    )
-    draw.rectangle((thumb[0] + 140, thumb[1] + 70, thumb[0] + 175, thumb[3] - 8), fill=(70, 55, 40, 255))
-    draw.ellipse((thumb[0] + 40, thumb[1] + 18, thumb[0] + 95, thumb[1] + 55), fill=(95, 105, 70, 255))
+    loc_img = _load_location_thumb(session.location)
+    if loc_img is not None:
+        _paste_rounded(canvas, loc_img, thumb, radius=10)
+        ImageDraw.Draw(canvas).rounded_rectangle(thumb, radius=10, outline=(110, 120, 100, 255), width=2)
+    else:
+        _draw_fallback_location_thumb(draw, thumb)
 
     loc = session.location
+    draw = ImageDraw.Draw(canvas)
     draw.text((panel_left + 28, panel_top + 128), loc, fill=(245, 245, 245, 255), font=title_font)
 
     det_y = panel_top + 172
@@ -745,28 +888,14 @@ def render_hunt_frame(
         else:
             draw.ellipse((cx - 9, led_y - 9, cx + 9, led_y + 9), fill=(48, 50, 52, 255), outline=(85, 85, 88, 255))
 
-    # Овал сигнала.
+    # HD-экран сигнала детектора.
     screen = (panel_left + 22, panel_top + 245, panel_right - 22, panel_top + 420)
-    draw.rounded_rectangle(screen, radius=14, fill=(26, 28, 32, 255), outline=(80, 82, 86, 255), width=2)
     dist = _chebyshev(session.player, session.artifact)
-    strength = max(0.15, 1.0 - dist / 6.0)
-    oval_pad = int(28 + (1.0 - strength) * 18)
-    oval = (screen[0] + oval_pad, screen[1] + 22, screen[2] - oval_pad, screen[3] - 22)
-    glow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow)
-    blue = (90, 170, int(160 + 70 * strength))
-    for expand, alpha in ((18, 25), (10, 55), (0, 120)):
-        gd.ellipse(
-            (oval[0] - expand, oval[1] - expand, oval[2] + expand, oval[3] + expand),
-            fill=(*blue, alpha),
-        )
-    canvas.alpha_composite(glow)
+    strength = max(0.12, min(1.0, 1.0 - dist / 6.0))
+    # Заполненные кружки тоже усиливают «картинку» сигнала.
+    strength = max(strength, 0.18 + 0.16 * (filled / max(1, session.circles_needed)))
+    _draw_signal_screen(canvas, screen, strength=strength)
     draw = ImageDraw.Draw(canvas)
-    draw.ellipse(oval, outline=(140, 210, 240, 255), width=3)
-    draw.ellipse(
-        (oval[0] + 20, oval[1] + 25, oval[0] + 55, oval[1] + 70),
-        fill=(180, 220, 255, 40),
-    )
 
     info_y = panel_top + 435
     draw.text(
