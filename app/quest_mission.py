@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 from app.artifact_hunt import (
     FONT_CANDIDATES,
     _load_location_thumb,
+    _paste_circle,
     _paste_rounded,
 )
 from app.game_logic import (
@@ -276,6 +277,26 @@ def _hazard_damage(kind: str) -> int:
     return 25
 
 
+def _mission_rating(storage: Storage, telegram_id: int) -> int:
+    try:
+        return int(storage.get_player_stats(telegram_id).get("rating_points", 0))
+    except Exception:
+        return 0
+
+
+def render_mission_for_player(
+    storage: Storage,
+    telegram_id: int,
+    session: QuestMissionSession,
+    player: Character,
+) -> bytes:
+    return render_mission_frame(session, player, rating_points=_mission_rating(storage, telegram_id))
+
+
+def _render_for_player(storage: Storage, telegram_id: int, session: QuestMissionSession, player: Character) -> bytes:
+    return render_mission_for_player(storage, telegram_id, session, player)
+
+
 def mission_status_caption(session: QuestMissionSession, character: Character | None = None) -> str:
     kind_label = KIND_LABELS.get(session.kind, session.kind)
     lines = [
@@ -356,7 +377,7 @@ def start_or_resume_quest_mission(
 
     existing = get_mission_session(storage, telegram_id)
     if existing is not None and existing.contract_key == template.key:
-        image = render_mission_frame(existing, player)
+        image = _render_for_player(storage, telegram_id, existing, player)
         return ActionResult(
             True,
             "Продолжай вылазку по контракту.",
@@ -376,7 +397,7 @@ def start_or_resume_quest_mission(
     session.resources_spent = True
     save_mission_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
-    image = render_mission_frame(session, player)
+    image = _render_for_player(storage, telegram_id, session, player)
     return ActionResult(
         True,
         f"Вылазка: «{template.title}» на «{template.work_location}».\n"
@@ -423,7 +444,7 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return result
-    image = render_mission_frame(session, player)
+    image = _render_for_player(storage, telegram_id, session, player)
     return ActionResult(
         result.ok,
         result.text,
@@ -455,7 +476,7 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
     nx = session.player[0] + delta[0]
     ny = session.player[1] + delta[1]
     if not (0 <= nx < session.grid and 0 <= ny < session.grid):
-        image = render_mission_frame(session, player)
+        image = _render_for_player(storage, telegram_id, session, player)
         return ActionResult(
             False,
             "Край поля — туда не пройти.",
@@ -546,7 +567,7 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
 
     save_mission_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
-    image = render_mission_frame(session, player)
+    image = _render_for_player(storage, telegram_id, session, player)
     note = " ".join(notes) if notes else "Тихо."
     if session.objectives_done:
         note += " Цель есть — на старт!"
@@ -607,7 +628,12 @@ def _draw_enemy_icon(draw: ImageDraw.ImageDraw, cx: int, cy: int, *, marauder: b
         draw.polygon([(cx - 10, cy + 6), (cx, cy + 16), (cx + 10, cy + 6)], fill=(40, 70, 35))
 
 
-def render_mission_frame(session: QuestMissionSession, character: Character | None = None) -> bytes:
+def render_mission_frame(
+    session: QuestMissionSession,
+    character: Character | None = None,
+    *,
+    rating_points: int = 0,
+) -> bytes:
     cell = 108
     grid = session.grid
     grid_px = grid * cell
@@ -663,16 +689,25 @@ def render_mission_frame(session: QuestMissionSession, character: Character | No
         cy = margin + oy * cell + cell // 2
         _glow(canvas, cx, cy, (70, 230, 110), 22)
 
-    # Игрок.
+    # Игрок — аватар персонажа в зелёном кольце.
     px, py = session.player
     pcx = margin + px * cell + cell // 2
     pcy = margin + py * cell + cell // 2
-    token = Image.new("RGBA", (70, 70), (0, 0, 0, 0))
-    td = ImageDraw.Draw(token)
-    td.ellipse((4, 4, 66, 66), fill=(70, 100, 60), outline=(90, 220, 90), width=4)
-    td.ellipse((22, 18, 48, 42), fill=(40, 50, 40))
-    canvas.alpha_composite(token, (pcx - 35, pcy - 35))
+    token = None
+    if character is not None:
+        try:
+            from app.avatar_render import render_avatar
 
+            token = render_avatar(character, rating_points=rating_points, width=160, height=160)
+        except Exception:
+            token = None
+    if token is None:
+        token = Image.new("RGBA", (160, 160), (0, 0, 0, 0))
+        td = ImageDraw.Draw(token)
+        td.ellipse((20, 10, 140, 130), fill=(75, 85, 65), outline=(30, 35, 28), width=3)
+        td.ellipse((45, 35, 115, 85), fill=(40, 48, 40))
+        td.rectangle((45, 120, 115, 155), fill=(95, 75, 50))
+    _paste_circle(canvas, token, pcx, pcy, 72, ring_color=(72, 220, 90), ring_width=5)
     # Панель.
     pl = margin + grid_px + 20
     pr = width - margin

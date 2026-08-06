@@ -38,7 +38,7 @@ from app.quest_mission import (
     get_mission_session,
     mission_status_caption,
     move_quest_mission,
-    render_mission_frame,
+    render_mission_for_player,
     use_mission_medkit,
 )
 from app.config import load_settings
@@ -2300,7 +2300,7 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
         if session is None or player is None:
             await callback.answer("Активной вылазки нет.", show_alert=True)
             return
-        image = render_mission_frame(session, player)
+        image = render_mission_for_player(storage, telegram_id, session, player)
         await _send_or_edit_quest_mission_frame(
             callback,
             image_bytes=image,
