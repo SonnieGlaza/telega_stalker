@@ -3564,7 +3564,8 @@ def repair_truck(storage: Storage, telegram_id: int) -> ActionResult:
     if current >= 100:
         return ActionResult(False, "Грузовик уже в идеальном состоянии.")
     missing = 100 - current
-    price = max(500, missing * 70)
+    # Ремонт транспорта −10% от базовой формулы missing*70 / floor 500.
+    price = max(450, int(round(missing * 63)))
     if not storage.change_money(telegram_id, -price):
         return ActionResult(False, f"Недостаточно денег на ремонт грузовика ({price} RU).")
     storage.set_truck_durability(telegram_id, 100)
