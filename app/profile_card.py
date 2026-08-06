@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.avatar_render import render_avatar
 from app.faction_ranks import resolve_rank_title
-from app.game_logic import ITEM_LABELS, effective_max_health, equipment_power
+from app.game_logic import ITEM_LABELS, armor_defense, effective_max_health, equipment_power
 from app.skins import resolve_skin
 from app.storage import Character, Storage
 
@@ -667,12 +667,15 @@ def build_character_card(
     except (TypeError, ValueError):
         armor_durability = 100
     artifact_name = str(equipment.get("artifact", "Нет"))
+    defense = armor_defense(character)
     equipment_lines = [
         f"Сила снаряжения: {equipment_power(character)}",
         f"Оружие: {weapon_name} ({weapon_durability}%)",
         f"Броня: {armor_name} ({armor_durability}%)",
-        f"Артефакт: {artifact_name}",
     ]
+    if defense > 0:
+        equipment_lines.append(f"Защита: +{defense}")
+    equipment_lines.append(f"Артефакт: {artifact_name}")
     _draw_text_block(
         draw=draw,
         x=480,

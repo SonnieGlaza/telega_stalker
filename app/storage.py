@@ -3632,6 +3632,9 @@ class Storage:
             if "armor_durability" not in equipment:
                 equipment["armor_durability"] = 100
                 changed = True
+            if "armor_upgrade_level" not in equipment:
+                equipment["armor_upgrade_level"] = 0
+                changed = True
             if changed:
                 conn.execute(
                     "UPDATE characters SET equipment_json = ? WHERE telegram_id = ?",
@@ -3679,6 +3682,11 @@ class Storage:
             armor_durability = 100
         equipment["weapon_durability"] = max(0, min(100, weapon_durability))
         equipment["armor_durability"] = max(0, min(100, armor_durability))
+        try:
+            armor_upgrade_level = int(equipment.get("armor_upgrade_level", 0))
+        except (TypeError, ValueError):
+            armor_upgrade_level = 0
+        equipment["armor_upgrade_level"] = max(0, armor_upgrade_level)
 
         def _as_int(value: Any, default: int = 0) -> int:
             try:

@@ -20,6 +20,9 @@ from app.game_logic import (
     launch_open_raid,
     launch_war_lobby,
     repair_truck,
+    upgrade_armor,
+    armor_defense,
+    apply_incoming_damage,
     search_artifacts,
     travel_to,
     use_medkit,
@@ -254,6 +257,16 @@ def run_smoke_check() -> None:
         after_repair = storage.get_character(111, refresh_energy=False)
         assert after_repair is not None
         assert after_repair.truck_durability == 100
+
+        storage.change_money(111, 10_000)
+        upgraded = upgrade_armor(storage, 111)
+        assert upgraded.ok, upgraded.text
+        assert armor_defense(storage.get_character(111, refresh_energy=False)) == 1
+        player_111 = storage.get_character(111, refresh_energy=False)
+        assert apply_incoming_damage(10, player_111) == 9
+        upgraded2 = upgrade_armor(storage, 111)
+        assert upgraded2.ok, upgraded2.text
+        assert armor_defense(storage.get_character(111, refresh_energy=False)) == 2
 
         storage.set_location(111, "Росток")
         contract = accept_quest_contract(storage, 111, "easy_boloto")
@@ -554,7 +567,7 @@ def run_smoke_check() -> None:
         assert "contract:refresh" in callbacks
         assert "stash:menu" in callbacks
         assert "hunt:up" in callbacks
-        assert "travel:status" in callbacks
+        assert "upgrade:armor" in callbacks
         assert "rank:menu" in callbacks
         assert "war:section:scenario" in callbacks
         assert "war:section:lobby" in callbacks

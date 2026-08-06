@@ -109,6 +109,7 @@ from app.game_logic import (
     deposit_to_faction_warehouse,
     format_inventory,
     repair_gear,
+    upgrade_armor,
     sell_item,
     list_owned_trader_sell_buttons,
     trader_sell_categories_with_stock,
@@ -1803,6 +1804,7 @@ async def show_buy_repair(callback: CallbackQuery) -> None:
         callback,
         "Ремонт снаряжения:\n"
         "• Оружие и броня — по текущей прочности.\n"
+        "• Улучшение брони — +1 защита за 5000 RU (1 защита = −1 урона от удара).\n"
         "• Грузовик — восстановление прочности кузова.",
         trader_buy_repair_keyboard(),
     )
@@ -1930,6 +1932,12 @@ async def repair_weapon_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "repair:armor")
 async def repair_armor_callback(callback: CallbackQuery) -> None:
     result = repair_gear(get_storage(), callback.from_user.id, "armor")
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "upgrade:armor")
+async def upgrade_armor_callback(callback: CallbackQuery) -> None:
+    result = upgrade_armor(get_storage(), callback.from_user.id)
     await reply_action_result(callback, result.text)
 
 

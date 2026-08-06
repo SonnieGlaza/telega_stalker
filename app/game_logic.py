@@ -750,6 +750,7 @@ GEAR_PROGRESS: tuple[tuple[int, str, str], ...] = (
 
 MAX_DURABILITY = 100
 MIN_EFFECTIVE_DURABILITY = 15
+ARMOR_UPGRADE_PRICE = 5000
 RATING_REWARD = {
     "quest_success": 12,  # fallback; см. QUEST_RATING_BY_DIFFICULTY
     "quest_fail": 2,
@@ -1034,6 +1035,19 @@ def effective_max_health(character: Character) -> int:
 
 def compute_total_gear_power(character: Character) -> int:
     return equipment_power(character)
+
+
+def armor_defense(character: Character) -> int:
+    """Плоское снижение урона от ударов: +1 за каждый уровень улучшения брони."""
+    try:
+        return max(0, int(character.equipment.get("armor_upgrade_level", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def apply_incoming_damage(raw_damage: int, character: Character, *, min_damage: int = 1) -> int:
+    """1 защита = −1 к входящему урону."""
+    return max(min_damage, int(raw_damage) - armor_defense(character))
 
 
 def _apply_durability_decay(storage: Storage, telegram_id: int, weapon_loss: int, armor_loss: int) -> str:
@@ -3450,12 +3464,14 @@ def build_equip_root_text(character: Character) -> tuple[str, list[tuple[str, st
     art_note = ""
     if artifact and artifact != "Нет":
         art_note = f" ({_artifact_bonus_short(artifact)})"
+    defense = armor_defense(character)
+    defense_line = f"\n🛡 Защита брони: +{defense} (−{defense} урона от удара)" if defense > 0 else ""
     text = (
         "⚙️ Экипировка\n"
         "Выбери категорию, затем предмет из инвентаря.\n"
         f"Сила снаряги: {equipment_power(character)}\n\n"
         f"🔫 Оружие: {weapon}\n"
-        f"🦺 Броня: {armor}\n"
+        f"🦺 Броня: {armor}{defense_line}\n"
         f"💎 Артефакт: {artifact}{art_note}\n\n"
         f"В инвентаре: оружие {w_count}, броня {a_count}, арты {art_count}."
     )
@@ -3582,7 +3598,8 @@ def equip_armor(storage: Storage, telegram_id: int, item_key: str) -> ActionResu
     if old_key is not None:
         storage.add_item(telegram_id, old_key, 1)
     storage.set_equipment_item(telegram_id, "armor", armor_name)
-    return ActionResult(True, f"Экипирована броня: {armor_name}.")
+    storage.update_equipment_fields(telegram_id, {"armor_upgrade_level": 0})
+    return ActionResult(True, f"Экипирована броня: {armor_name}. Улучшения брони сброшены.")
 
 
 def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult:
@@ -3609,6 +3626,33 @@ def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult
     return ActionResult(
         True,
         f"{target_label} «{item_name}» полностью отремонтировано за {price} RU.{achievements_text}",
+    )
+
+
+def upgrade_armor(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    armor_name = str(player.equipment.get("armor", "") or "").strip()
+    if not armor_name:
+        return ActionResult(False, "Сначала экипируй броню.")
+    current_level = armor_defense(player)
+    if not storage.change_money(telegram_id, -ARMOR_UPGRADE_PRICE):
+        return ActionResult(
+            False,
+            f"Недостаточно денег на улучшение брони ({ARMOR_UPGRADE_PRICE} RU).",
+        )
+    new_level = current_level + 1
+    storage.update_equipment_fields(telegram_id, {"armor_upgrade_level": new_level})
+    storage.add_player_stat(telegram_id, "trades_done", 1)
+    _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    return ActionResult(
+        True,
+        f"Броня «{armor_name}» улучшена за {ARMOR_UPGRADE_PRICE} RU.\n"
+        f"Защита: +{new_level} (−{new_level} урона от удара).{achievements_text}",
     )
 
 
@@ -3902,7 +3946,8 @@ def roll_arrival_encounter(storage: Storage, telegram_id: int, destination: str)
         storage.add_item(telegram_id, "bread", 1)
         return "🍞 Нашёл чёрствый хлеб у дороги."
     if roll <= 97:
-        loss = random.randint(1, 3)
+        raw_loss = random.randint(1, 3)
+        loss = apply_incoming_damage(raw_loss, player, min_damage=1)
         storage.change_health(telegram_id, -loss)
         return f"⚠️ Лёгкая засада мутантов: −{loss} HP."
     rad = random.randint(1, 2)
@@ -4278,7 +4323,8 @@ def _simulate_raid_battle(
             break
 
         target_id = random.choice(active_ids)
-        armor_block = squad_armor_bonus.get(target_id, 0) * 2
+        target_member = next(m for m in members if m.telegram_id == target_id)
+        armor_block = squad_armor_bonus.get(target_id, 0) * 2 + armor_defense(target_member)
         incoming = max(3, enemy_damage_base + random.randint(0, 7) - armor_block)
         squad_hp[target_id] = max(0, squad_hp[target_id] - incoming)
         if squad_hp[target_id] == 0 and target_id not in wounds:
@@ -6126,12 +6172,14 @@ def resolve_smuggling_if_pending(storage: Storage, telegram_id: int) -> str | No
     penalty = random.randint(SMUGGLING_FAIL_PENALTY_MIN, SMUGGLING_FAIL_PENALTY_MAX)
     durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=5, armor_loss=3)
     storage.change_money(telegram_id, -penalty)
-    storage.change_health(telegram_id, -12)
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    hp_loss = apply_incoming_damage(12, player, min_damage=1) if player is not None else 12
+    storage.change_health(telegram_id, -hp_loss)
     _add_rating(storage, telegram_id, -RATING_REWARD["smuggle_fail"])
     return (
         f"💀 Ограбили в пути до «{destination}»!\n"
         f"Шанс доставить был {chance}% (бросок {roll}).\n"
-        f"Потери: {penalty} RU и ранение (−12 HP).{durability_text}"
+        f"Потери: {penalty} RU и ранение (−{hp_loss} HP).{durability_text}"
     )
 
 

@@ -27,6 +27,7 @@ from app.game_logic import (
     _spend_quest_resources,
     apply_contract_mission_fail,
     apply_contract_mission_success,
+    apply_incoming_damage,
     effective_max_health,
     equipment_power,
     faction_home_base,
@@ -266,15 +267,18 @@ def _combat_damage(location: str, difficulty: str, character: Character) -> int:
     raw = random.randint(base_lo, base_hi)
     # Снаряга слегка режет урон.
     soak = min(12, equipment_power(character))
-    return max(4, raw - soak)
+    pre_defense = max(4, raw - soak)
+    return apply_incoming_damage(pre_defense, character, min_damage=1)
 
 
-def _hazard_damage(kind: str) -> int:
+def _hazard_damage(kind: str, character: Character) -> int:
     if kind == "scout":
-        return 20
-    if kind == "loot":
-        return 15
-    return 25
+        raw = 20
+    elif kind == "loot":
+        raw = 15
+    else:
+        raw = 25
+    return apply_incoming_damage(raw, character, min_damage=1)
 
 
 def _mission_rating(storage: Storage, telegram_id: int) -> int:
@@ -524,7 +528,7 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
                 f"Аномалия на «{session.location}». Сознание гаснет…\nКонтракт сорван.",
                 payload={"mission_active": False, "mission_dead": True},
             )
-        dmg = _hazard_damage(session.kind)
+        dmg = _hazard_damage(session.kind, player)
         storage.change_health(telegram_id, -dmg)
         # Препятствие/мутант-хазард снимается после контакта.
         session.hazards = [h for h in session.hazards if h != session.player]
