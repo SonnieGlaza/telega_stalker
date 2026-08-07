@@ -802,16 +802,16 @@ FACTION_HOME_BASE: dict[str, str] = {
     "Бандиты": "Свалка",
 }
 
-# Скорость перехода и множитель награды за контракт (если доехал на этом транспорте).
+# Скорость перехода (×) и отдельный множитель награды за контракт, если доехал на этом транспорте.
 TRAVEL_SPEED_FOOT = 1
 TRAVEL_SPEED_BICYCLE = 1.25
 TRAVEL_SPEED_NIVA = 1.5
 TRAVEL_SPEED_TRUCK = 2
 TRANSPORT_QUEST_REWARD_MULT: dict[str, float] = {
     "foot": 1.0,
-    "bicycle": 1.25,
-    "niva": 1.5,
-    "truck": 2.0,
+    "bicycle": 1.5,
+    "niva": 2.0,
+    "truck": 3.0,
 }
 TRANSPORT_QUEST_REWARD_LABELS: dict[str, str] = {
     "foot": "пешком",
