@@ -1362,6 +1362,27 @@ def _add_rating(storage: Storage, telegram_id: int, amount: int) -> None:
     storage.add_player_stat(telegram_id, "rating_points", amount)
 
 
+def _player_rating_rank(storage: Storage, telegram_id: int, *, limit: int = 10) -> int | None:
+    """1-based место в рейтинге (среди топа `limit`), или None если вне топа."""
+    board = storage.get_rating_leaderboard(limit=limit)
+    tid = int(telegram_id)
+    for idx, row in enumerate(board, start=1):
+        try:
+            if int(row.get("telegram_id") or 0) == tid:
+                return idx
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+# Достижения за место в таблице рейтинга: ключ → максимальное допустимое место.
+RATING_TOP_ACHIEVEMENT_RANKS: dict[str, int] = {
+    "rating_top_10": 10,
+    "rating_top_3": 3,
+    "rating_top_1": 1,
+}
+
+
 def _achievement_rules() -> tuple[AchievementRule, ...]:
     return (
         AchievementRule(
@@ -1582,6 +1603,30 @@ def _achievement_rules() -> tuple[AchievementRule, ...]:
             check=lambda stats, _: stats["rating_points"] >= 5000,
         ),
         AchievementRule(
+            key="rating_top_10",
+            title="Десятка Зоны",
+            description="Попади в топ-10 рейтинга",
+            reward_ru=2000,
+            reward_rating=100,
+            check=lambda *_: False,  # проверяется через лидерборд
+        ),
+        AchievementRule(
+            key="rating_top_3",
+            title="Призёры Зоны",
+            description="Попади в топ-3 рейтинга",
+            reward_ru=4000,
+            reward_rating=150,
+            check=lambda *_: False,
+        ),
+        AchievementRule(
+            key="rating_top_1",
+            title="Первый среди сталкеров",
+            description="Займи 1 место в рейтинге",
+            reward_ru=8000,
+            reward_rating=250,
+            check=lambda *_: False,
+        ),
+        AchievementRule(
             key="gear_15",
             title="Бронированный",
             description="Доведи силу снаряжения до 15",
@@ -1648,6 +1693,10 @@ def _progress_and_unlock_achievements(storage: Storage, telegram_id: int) -> str
             continue
         if rule.key == "zone_overlord":
             ok = _faction_controls_all_contestable_points(storage, character.faction)
+        elif rule.key in RATING_TOP_ACHIEVEMENT_RANKS:
+            rank = _player_rating_rank(storage, telegram_id, limit=10)
+            need = RATING_TOP_ACHIEVEMENT_RANKS[rule.key]
+            ok = rank is not None and rank <= need
         else:
             ok = rule.check(stats, character)
         if not ok:

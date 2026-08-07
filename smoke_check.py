@@ -620,6 +620,35 @@ def run_smoke_check() -> None:
         take = withdraw_from_personal_stash(storage, 111, "medkit", 1)
         assert take.ok, take.text
 
+        # Rating top achievements: top-10 / top-3 / top-1.
+        from app.game_logic import (
+            ACHIEVEMENT_BY_KEY,
+            _progress_and_unlock_achievements,
+            _player_rating_rank,
+        )
+
+        assert "rating_top_10" in ACHIEVEMENT_BY_KEY
+        assert "rating_top_3" in ACHIEVEMENT_BY_KEY
+        assert "rating_top_1" in ACHIEVEMENT_BY_KEY
+        # Reset ratings so 111 is clearly #1.
+        for tid, pts in ((111, 9000), (222, 100), (333, 50)):
+            with storage._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO player_stats(telegram_id, rating_points)
+                    VALUES (?, ?)
+                    ON CONFLICT(telegram_id) DO UPDATE SET rating_points = excluded.rating_points
+                    """,
+                    (tid, pts),
+                )
+        assert _player_rating_rank(storage, 111, limit=10) == 1
+        top_text = _progress_and_unlock_achievements(storage, 111)
+        unlocked = storage.get_player_achievement_keys(111)
+        assert "rating_top_10" in unlocked
+        assert "rating_top_3" in unlocked
+        assert "rating_top_1" in unlocked
+        assert "Первый среди сталкеров" in top_text or "rating_top_1" in unlocked
+
         # Keyboard callback sanity (basic non-empty check).
         callbacks = _all_callback_data()
         assert "contract:refresh" in callbacks
