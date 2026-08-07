@@ -804,6 +804,62 @@ def run_smoke_check() -> None:
         assert "war:section:scenario" in callbacks
         assert "war:section:lobby" in callbacks
         assert "war:section:assault" not in callbacks
+
+        # Stolen garage vehicle returns after 30 minutes.
+        import json
+        import random
+        from datetime import datetime, timedelta, timezone
+
+        from app.game_logic import (
+            GARAGE_STOLEN_RETURNS_META,
+            _set_faction_garage,
+            _steal_faction_garage,
+            garage_withdraw_niva,
+            get_faction_garage,
+            process_due_garage_stolen_returns,
+        )
+
+        dolg_garage = get_faction_garage(storage, "Долг")
+        dolg_garage["niva"] = 1
+        dolg_garage["niva_durs"] = [77]
+        _set_faction_garage(storage, "Долг", dolg_garage)
+        bandit_garage = get_faction_garage(storage, "Бандиты")
+        bandit_garage["niva"] = 0
+        bandit_garage["niva_durs"] = []
+        _set_faction_garage(storage, "Бандиты", bandit_garage)
+
+        old_randint = random.randint
+
+        def _force_steal(a: int, b: int) -> int:
+            if a == 1 and b == 100:
+                return 1
+            return old_randint(a, b)
+
+        random.randint = _force_steal
+        try:
+            steal_lines = _steal_faction_garage(storage, "Долг", "Бандиты")
+        finally:
+            random.randint = old_randint
+        assert any("угнан" in line.lower() for line in steal_lines)
+        assert get_faction_garage(storage, "Долг")["niva"] == 0
+        assert get_faction_garage(storage, "Бандиты")["niva"] == 1
+
+        withdraw = garage_withdraw_niva(storage, 333)
+        assert withdraw.ok, withdraw.text
+        assert storage.get_character(333, refresh_energy=False).niva_owned
+        assert get_faction_garage(storage, "Бандиты")["niva"] == 0
+
+        raw_returns = storage.get_meta(GARAGE_STOLEN_RETURNS_META)
+        assert raw_returns
+        entries = json.loads(raw_returns)
+        entries[0]["return_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        storage.set_meta(GARAGE_STOLEN_RETURNS_META, json.dumps(entries))
+        due_returns = process_due_garage_stolen_returns(storage)
+        assert len(due_returns) == 1
+        assert get_faction_garage(storage, "Долг")["niva"] == 1
+        assert get_faction_garage(storage, "Долг")["niva_durs"] == [77]
+        assert not storage.get_character(333, refresh_energy=False).niva_owned
+
         _, _, missing_callbacks = _callback_handler_coverage()
         assert not missing_callbacks, f"Missing callback handlers: {', '.join(missing_callbacks)}"
 

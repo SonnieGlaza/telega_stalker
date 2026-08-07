@@ -867,6 +867,8 @@ DEPOT_RAID_ENERGY_COST = 16
 DEPOT_RAID_MIN_LOOT_PERCENT = 20
 DEPOT_RAID_MAX_LOOT_PERCENT = 50
 DEPOT_RAID_VEHICLE_STEAL_CHANCE = 5  # % шанс угнать 1 машину сверху канистр (только гараж)
+DEPOT_RAID_VEHICLE_RETURN_MINUTES = 30  # угнанная машина возвращается в гараж владельца
+GARAGE_STOLEN_RETURNS_META = "garage:stolen_returns"
 DEPOT_RAID_FAIL_MONEY_PENALTY = 90
 DEPOT_RAID_DEFENSE_POWER_RATIO = 0.55  # доля силы домашней базы цели, обороняющая склад/гараж
 
@@ -5331,7 +5333,17 @@ def _steal_faction_garage(storage: Storage, target_faction: str, attacker_factio
         attacker_durs.append(dur)
         attacker_garage[durs_key] = attacker_durs
         attacker_garage[vehicle_key] = int(attacker_garage.get(vehicle_key, 0) or 0) + 1
-        lines.append(f"• {vehicle_label} (прочность {dur}%): угнан у «{target_faction}» → в гараж «{attacker_faction}»")
+        _schedule_stolen_garage_vehicle_return(
+            storage,
+            vehicle_key=vehicle_key,
+            dur=dur,
+            owner_faction=target_faction,
+            holder_faction=attacker_faction,
+        )
+        lines.append(
+            f"• {vehicle_label} (прочность {dur}%): угнан у «{target_faction}» → в гараж «{attacker_faction}» "
+            f"(вернётся через {DEPOT_RAID_VEHICLE_RETURN_MINUTES} мин)"
+        )
 
     _set_faction_garage(storage, target_faction, garage)
     _set_faction_garage(storage, attacker_faction, attacker_garage)
@@ -5604,7 +5616,8 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
             "🏚 Рейды на склад/гараж врага:\n"
             "• Тактическая карта: зачисти врагов, удерживай клетку склада/гаража.\n"
             f"• Успех — вынос {DEPOT_RAID_MIN_LOOT_PERCENT}–{DEPOT_RAID_MAX_LOOT_PERCENT}% каждого типа ресурса со склада/канистр.\n"
-            f"• Гараж: дополнительно {DEPOT_RAID_VEHICLE_STEAL_CHANCE}% шанс угнать Ниву или грузовик (если есть).\n"
+            f"• Гараж: дополнительно {DEPOT_RAID_VEHICLE_STEAL_CHANCE}% шанс угнать Ниву или грузовик (если есть); "
+            f"угнанная машина возвращается через {DEPOT_RAID_VEHICLE_RETURN_MINUTES} мин.\n"
             "• На базе врага стоят оборонительные боты (Т1, улучшение до Т2 — 50 000 RU из казны).\n"
             f"• Враждебные группировки: {enemies_line}."
         )
@@ -5627,7 +5640,8 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
             f"Участников: {len(member_ids)}/{RAID_MAX_MEMBERS}\n\n"
             f"Состав:\n{members_text or '• Пока пусто'}\n\n"
             f"При запуске — тактическая карта. Вынос: {DEPOT_RAID_MIN_LOOT_PERCENT}–{DEPOT_RAID_MAX_LOOT_PERCENT}% "
-            f"ресурсов, {DEPOT_RAID_VEHICLE_STEAL_CHANCE}% шанс угнать машину (гараж).\n"
+            f"ресурсов, {DEPOT_RAID_VEHICLE_STEAL_CHANCE}% шанс угнать машину (гараж, возврат через "
+            f"{DEPOT_RAID_VEHICLE_RETURN_MINUTES} мин).\n"
             "Отменить рейд может только создатель."
         )
 
@@ -6817,6 +6831,182 @@ def _set_faction_garage(storage: Storage, faction: str, data: dict[str, Any]) ->
     storage.set_meta(_faction_garage_meta_key(faction), json.dumps(payload, ensure_ascii=False))
 
 
+def _load_garage_stolen_returns(storage: Storage) -> list[dict[str, Any]]:
+    raw = storage.get_meta(GARAGE_STOLEN_RETURNS_META)
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for item in parsed:
+        if isinstance(item, dict):
+            cleaned.append(dict(item))
+    return cleaned
+
+
+def _save_garage_stolen_returns(storage: Storage, entries: list[dict[str, Any]]) -> None:
+    storage.set_meta(GARAGE_STOLEN_RETURNS_META, json.dumps(entries, ensure_ascii=False))
+
+
+def _vehicle_label_for_key(vehicle_key: str) -> str:
+    return {"niva": "Нива", "truck": "Грузовик"}.get(vehicle_key, vehicle_key)
+
+
+def _vehicle_durs_key(vehicle_key: str) -> str:
+    return "niva_durs" if vehicle_key == "niva" else "truck_durs"
+
+
+def _remove_vehicle_from_garage_data(
+    garage: dict[str, Any],
+    *,
+    vehicle_key: str,
+    durs_key: str,
+    dur: int | None = None,
+) -> int | None:
+    count = int(garage.get(vehicle_key, 0) or 0)
+    if count <= 0:
+        return None
+    durs = list(garage.get(durs_key) or [])
+    removed_dur: int
+    if dur is not None and dur in durs:
+        durs.remove(dur)
+        removed_dur = dur
+    elif durs:
+        removed_dur = int(durs.pop(0))
+    else:
+        removed_dur = dur if dur is not None else 100
+    garage[vehicle_key] = count - 1
+    garage[durs_key] = durs
+    return removed_dur
+
+
+def _add_vehicle_to_garage_data(garage: dict[str, Any], *, vehicle_key: str, durs_key: str, dur: int) -> None:
+    garage[vehicle_key] = int(garage.get(vehicle_key, 0) or 0) + 1
+    durs = list(garage.get(durs_key) or [])
+    durs.append(max(0, min(100, int(dur))))
+    garage[durs_key] = durs
+
+
+def _schedule_stolen_garage_vehicle_return(
+    storage: Storage,
+    *,
+    vehicle_key: str,
+    dur: int,
+    owner_faction: str,
+    holder_faction: str,
+) -> None:
+    return_at = (datetime.now(timezone.utc) + timedelta(minutes=DEPOT_RAID_VEHICLE_RETURN_MINUTES)).isoformat()
+    entries = _load_garage_stolen_returns(storage)
+    entries.append(
+        {
+            "vehicle_key": vehicle_key,
+            "dur": max(0, min(100, int(dur))),
+            "owner_faction": owner_faction,
+            "holder_faction": holder_faction,
+            "return_at": return_at,
+            "withdrawn_by": None,
+        }
+    )
+    _save_garage_stolen_returns(storage, entries)
+
+
+def _mark_stolen_vehicle_withdrawn(
+    storage: Storage,
+    *,
+    holder_faction: str,
+    vehicle_key: str,
+    dur: int,
+    player_id: int,
+) -> None:
+    entries = _load_garage_stolen_returns(storage)
+    matched = False
+    for entry in entries:
+        if entry.get("withdrawn_by") is not None:
+            continue
+        if (
+            str(entry.get("holder_faction") or "") == holder_faction
+            and str(entry.get("vehicle_key") or "") == vehicle_key
+            and int(entry.get("dur") or -1) == int(dur)
+        ):
+            entry["withdrawn_by"] = int(player_id)
+            matched = True
+            break
+    if not matched:
+        for entry in entries:
+            if entry.get("withdrawn_by") is not None:
+                continue
+            if (
+                str(entry.get("holder_faction") or "") == holder_faction
+                and str(entry.get("vehicle_key") or "") == vehicle_key
+            ):
+                entry["withdrawn_by"] = int(player_id)
+                entry["dur"] = int(dur)
+                break
+    _save_garage_stolen_returns(storage, entries)
+
+
+def process_due_garage_stolen_returns(storage: Storage) -> list[tuple[str, str, str]]:
+    """Возвращает угнанные машины в гараж владельца по истечении срока аренды."""
+    now = datetime.now(timezone.utc)
+    entries = _load_garage_stolen_returns(storage)
+    if not entries:
+        return []
+
+    remaining: list[dict[str, Any]] = []
+    messages: list[tuple[str, str, str]] = []
+    for entry in entries:
+        return_at = _safe_fromiso(str(entry.get("return_at") or ""))
+        if return_at > now:
+            remaining.append(entry)
+            continue
+
+        vehicle_key = str(entry.get("vehicle_key") or "")
+        durs_key = _vehicle_durs_key(vehicle_key)
+        owner_faction = str(entry.get("owner_faction") or "")
+        holder_faction = str(entry.get("holder_faction") or "")
+        dur = max(0, min(100, int(entry.get("dur") or 100)))
+        withdrawn_by = entry.get("withdrawn_by")
+        vehicle_label = _vehicle_label_for_key(vehicle_key)
+
+        if withdrawn_by is not None:
+            player = storage.get_character(int(withdrawn_by), refresh_energy=False)
+            if player is not None:
+                if vehicle_key == "niva" and player.niva_owned:
+                    storage.clear_niva_owned(int(withdrawn_by))
+                elif vehicle_key == "truck" and player.truck_owned:
+                    storage.clear_truck_owned(int(withdrawn_by))
+        else:
+            holder_garage = get_faction_garage(storage, holder_faction)
+            removed_dur = _remove_vehicle_from_garage_data(
+                holder_garage,
+                vehicle_key=vehicle_key,
+                durs_key=durs_key,
+                dur=dur,
+            )
+            if removed_dur is not None:
+                dur = removed_dur
+            _set_faction_garage(storage, holder_faction, holder_garage)
+
+        owner_garage = get_faction_garage(storage, owner_faction)
+        _add_vehicle_to_garage_data(owner_garage, vehicle_key=vehicle_key, durs_key=durs_key, dur=dur)
+        _set_faction_garage(storage, owner_faction, owner_garage)
+        messages.append(
+            (
+                f"🚗 {vehicle_label} (прочность {dur}%) возвращена в гараж «{owner_faction}» "
+                f"после {DEPOT_RAID_VEHICLE_RETURN_MINUTES} мин.",
+                owner_faction,
+                holder_faction,
+            )
+        )
+
+    _save_garage_stolen_returns(storage, remaining)
+    return messages
+
+
 def build_faction_garage_overview(storage: Storage, faction: str) -> str:
     garage = get_faction_garage(storage, faction)
     niva_durs = garage.get("niva_durs") or []
@@ -6927,6 +7117,13 @@ def garage_withdraw_niva(storage: Storage, telegram_id: int) -> ActionResult:
     dur = durs.pop(0) if durs else 100
     garage["niva_durs"] = durs
     _set_faction_garage(storage, player.faction, garage)
+    _mark_stolen_vehicle_withdrawn(
+        storage,
+        holder_faction=player.faction,
+        vehicle_key="niva",
+        dur=dur,
+        player_id=telegram_id,
+    )
     storage.set_niva_owned(telegram_id)
     storage.set_niva_durability(telegram_id, dur)
     return ActionResult(
@@ -6975,6 +7172,13 @@ def garage_withdraw_truck(storage: Storage, telegram_id: int) -> ActionResult:
     dur = durs.pop(0) if durs else 100
     garage["truck_durs"] = durs
     _set_faction_garage(storage, player.faction, garage)
+    _mark_stolen_vehicle_withdrawn(
+        storage,
+        holder_faction=player.faction,
+        vehicle_key="truck",
+        dur=dur,
+        player_id=telegram_id,
+    )
     storage.set_truck_owned(telegram_id)
     storage.set_truck_durability(telegram_id, dur)
     return ActionResult(

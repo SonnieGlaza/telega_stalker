@@ -171,6 +171,7 @@ from app.game_logic import (
     DAILY_CONTRACT_BONUS_PERCENT,
     WEEKLY_CONTRACT_BONUS_PERCENT,
     process_due_travels,
+    process_due_garage_stolen_returns,
     collect_travel_eta_notices,
     process_zone_event_cycle,
     build_players_root_text,
@@ -5609,6 +5610,23 @@ async def run_bot() -> None:
                 apply_controlled_points_income(get_storage())
             except Exception:
                 logger.exception("Points income tick failed")
+            try:
+                storage = get_storage()
+                return_messages = process_due_garage_stolen_returns(storage)
+                for message_text, owner_faction, holder_faction in return_messages:
+                    notify_ids: set[int] = set()
+                    for faction in (owner_faction, holder_faction):
+                        for user_id in storage.list_faction_member_ids(faction):
+                            notify_ids.add(int(user_id))
+                    for user_id in notify_ids:
+                        if not is_notify_enabled(storage, user_id, "faction"):
+                            continue
+                        try:
+                            await bot.send_message(user_id, message_text)
+                        except Exception:
+                            logger.debug("Failed garage return notify to %s", user_id)
+            except Exception:
+                logger.exception("Garage stolen return tick failed")
             try:
                 storage = get_storage()
                 message_text, notify_ids, killed_ids = process_emission_cycle(storage)
