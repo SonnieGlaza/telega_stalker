@@ -322,6 +322,21 @@ def _free_cell(grid: int, forbidden: set[tuple[int, int]]) -> tuple[int, int]:
     return random.choice(opts)
 
 
+def _pick_spawn_cell(candidates: list[tuple[int, int]], forbidden: set[tuple[int, int]]) -> tuple[int, int] | None:
+    opts = [cell for cell in candidates if cell not in forbidden]
+    if not opts:
+        return None
+    return random.choice(opts)
+
+
+def _hostile_move_occupied(session: RaidGridSession) -> set[tuple[int, int]]:
+    """Клетки, которые блокируют ход врага (без укрытий — по ним можно ходить)."""
+    blocked = set(session.hostiles)
+    for pid in session.player_ids:
+        blocked.add(session.pos(pid))
+    return blocked
+
+
 def _hostile_count() -> int:
     return random.randint(RAID_HOSTILE_MIN, RAID_HOSTILE_MAX)
 
@@ -335,17 +350,17 @@ def _spawn_hostiles(
     total = _hostile_count()
     bots = min(bot_count, total)
     mutants = total - bots
-    forbidden = (
-        set(session.cover)
-        | set(session.base_cover)
-        | {session.control_point}
-        | (set([session.loot_zone]) if session.loot_zone else set())
-    )
+    forbidden: set[tuple[int, int]] = {session.control_point}
+    if session.loot_zone:
+        forbidden.add(session.loot_zone)
     for pid in session.player_ids:
         forbidden.add(session.pos(pid))
 
+    cover_opts = [cell for cell in session.cover if cell not in forbidden]
+    base_opts = [cell for cell in session.base_cover if cell not in forbidden]
+
     for _ in range(bots):
-        cell = _free_cell(session.grid, forbidden)
+        cell = _pick_spawn_cell(base_opts, forbidden) or _free_cell(session.grid, forbidden)
         session.hostiles.append(cell)
         session.hostile_types.append("bot")
         session.hostile_kinds.append(pick_npc_kind())
@@ -353,7 +368,7 @@ def _spawn_hostiles(
         forbidden.add(cell)
 
     for _ in range(mutants):
-        cell = _free_cell(session.grid, forbidden)
+        cell = _pick_spawn_cell(cover_opts, forbidden) or _free_cell(session.grid, forbidden)
         session.hostiles.append(cell)
         session.hostile_types.append("mutant")
         session.hostile_kinds.append(pick_mutant_kind())
@@ -364,6 +379,9 @@ def _spawn_hostiles(
 def _build_lair_map(session: RaidGridSession) -> None:
     grid = session.grid
     forbidden: set[tuple[int, int]] = {session.control_point}
+    for y in range(grid):
+        for x in range(grid - 3, grid):
+            session.base_cover.append((x, y))
     for _ in range(random.randint(10, 14)):
         cell = _free_cell(grid, forbidden)
         session.cover.append(cell)
@@ -489,7 +507,7 @@ def _hostile_turn(storage: Storage, session: RaidGridSession) -> list[str]:
     player_chars = {pid: storage.get_character(pid, refresh_energy=False) for pid in alive_ids}
     player_cells = set(player_pos.values())
 
-    occupied = _occupied(session)
+    occupied = _hostile_move_occupied(session)
     moved_hostiles = list(session.hostiles)
     for i, pos in enumerate(session.hostiles):
         if i >= len(session.hostile_types) or session.hostile_types[i] != "bot":
@@ -526,7 +544,7 @@ def _hostile_turn(storage: Storage, session: RaidGridSession) -> list[str]:
             )
         )
 
-    occupied = _occupied(session)
+    occupied = _hostile_move_occupied(session)
     new_hostiles: list[tuple[int, int]] = []
     for i, pos in enumerate(session.hostiles):
         if i < len(session.hostile_types) and session.hostile_types[i] != "mutant":

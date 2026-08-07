@@ -629,6 +629,31 @@ def run_smoke_check() -> None:
         assert bot_session.hostiles[0] not in {(0, 4)}
         assert 0.0 < NPC_MOVE_CHANCE < 1.0
 
+        # Hostiles spawn on cover (mutants) and base_cover (bots), but may move freely later.
+        from app.raid_grid import _build_lair_map, _spawn_hostiles
+
+        spawn_session = RaidGridSession(
+            session_id="spawntest",
+            raid_id=9997,
+            raid_kind="lair",
+            location_label="test",
+            attacker_faction="Долг",
+            player_ids=[111, 222],
+        )
+        spawn_session.set_pos(111, (0, 0))
+        spawn_session.set_pos(222, (1, 0))
+        _build_lair_map(spawn_session)
+        assert spawn_session.base_cover
+        cover_set = set(spawn_session.cover)
+        base_set = set(spawn_session.base_cover)
+        _spawn_hostiles(spawn_session, bot_count=2, bot_tier=1)
+        for i, pos in enumerate(spawn_session.hostiles):
+            htype = spawn_session.hostile_types[i]
+            if htype == "bot":
+                assert pos in base_set, f"bot spawned off base_cover: {pos}"
+            else:
+                assert pos in cover_set, f"mutant spawned off cover: {pos}"
+
         # Stale rgrid session must not block a new raid launch.
         from app.raid_grid import clear_stale_raid_grid_session, start_raid_grid
 
