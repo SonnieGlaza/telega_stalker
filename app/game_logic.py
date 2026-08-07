@@ -30,10 +30,10 @@ class QuestType:
 
 
 QUESTS: dict[str, QuestType] = {
-    "easy": QuestType("easy", "Легко", 75, 10, 945, 1435, 0, 0),
-    "hard": QuestType("hard", "Средне", 65, 16, 1400, 2275, 0, 0),
-    "heavy": QuestType("heavy", "Опасно", 55, 22, 2310, 4200, 2, 1),
-    "impossible": QuestType("impossible", "Невозможно", 45, 28, 2940, 6300, 3, 1),
+    "easy": QuestType("easy", "Легко", 75, 10, 472, 717, 0, 0),
+    "hard": QuestType("hard", "Средне", 65, 16, 700, 1137, 0, 0),
+    "heavy": QuestType("heavy", "Опасно", 55, 22, 1155, 2100, 2, 1),
+    "impossible": QuestType("impossible", "Невозможно", 45, 28, 1470, 3150, 3, 1),
 }
 
 
@@ -78,7 +78,7 @@ QUEST_CONTRACTS: dict[str, QuestContractTemplate] = {
     "hard_valley": QuestContractTemplate(
         "hard_valley",
         "hard",
-        "Рейд в Тёмную долину",
+        "Рейд в Темную долину",
         "Темная долина",
         min_transport="niva",
         mission_kind="clear_mutant",
@@ -97,7 +97,7 @@ QUEST_CONTRACTS: dict[str, QuestContractTemplate] = {
     "heavy_valley": QuestContractTemplate(
         "heavy_valley",
         "heavy",
-        "Зачистка в Тёмной долине",
+        "Зачистка в Темной долине",
         "Темная долина",
         min_transport="niva",
         mission_kind="clear_marauder",
@@ -720,9 +720,9 @@ DAILY_CONTRACTS_META_KEY = "contracts:daily"
 WEEKLY_CONTRACT_META_KEY = "contracts:weekly"
 DAILY_CONTRACTS_COUNT = 3
 DAILY_CONTRACT_BONUS_PERCENT = 50
-DAILY_CONTRACT_RATING_BONUS = 5
+DAILY_CONTRACT_RATING_BONUS = 2
 WEEKLY_CONTRACT_BONUS_PERCENT = 120
-WEEKLY_CONTRACT_RATING_BONUS = 15
+WEEKLY_CONTRACT_RATING_BONUS = 7
 WEEKLY_CONTRACT_DIFFICULTIES: frozenset[str] = frozenset({"heavy", "impossible"})
 CONTRACT_DAILY_DONE_META_PREFIX = "contracts:daily_done:"
 CONTRACT_WEEKLY_DONE_META_PREFIX = "contracts:weekly_done:"
@@ -788,10 +788,10 @@ RATING_REWARD = {
 
 # Рейтинг за задания по сложности (успех / штраф за провал).
 QUEST_RATING_BY_DIFFICULTY: dict[str, tuple[int, int]] = {
-    "easy": (8, 1),
-    "hard": (14, 2),
-    "heavy": (28, 5),
-    "impossible": (40, 8),
+    "easy": (4, 1),
+    "hard": (7, 1),
+    "heavy": (14, 2),
+    "impossible": (20, 4),
 }
 
 DUEL_ENERGY_COST = 10
@@ -1506,6 +1506,7 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
     home = faction_home_base(player.faction)
     storage.set_location(telegram_id, home)
     pop_death_cause(storage, telegram_id)
+    pop_death_killer(storage, telegram_id)
     return ActionResult(
         True,
         f"Сталкеры нашли тебя без сознания и доставили на «{home}».\n"
@@ -6229,9 +6230,11 @@ def _faction_garage_meta_key(faction: str) -> str:
     return f"{FACTION_GARAGE_META_PREFIX}{faction}"
 
 
-def get_faction_garage(storage: Storage, faction: str) -> dict[str, int]:
-    """Гараж группировки: сданные Нивы/грузовики и канистры топлива."""
-    data = {key: 0 for key in FACTION_GARAGE_KEYS}
+def get_faction_garage(storage: Storage, faction: str) -> dict[str, Any]:
+    """Гараж группировки: сданные Нивы/грузовики (с прочностью) и канистры топлива."""
+    data: dict[str, Any] = {key: 0 for key in FACTION_GARAGE_KEYS}
+    data["niva_durs"] = []
+    data["truck_durs"] = []
     raw = storage.get_meta(_faction_garage_meta_key(faction))
     if raw:
         try:
@@ -6244,22 +6247,54 @@ def get_faction_garage(storage: Storage, faction: str) -> dict[str, int]:
                     data[key] = max(0, int(parsed.get(key, 0) or 0))
                 except (TypeError, ValueError):
                     data[key] = 0
+            for dur_key in ("niva_durs", "truck_durs"):
+                raw_durs = parsed.get(dur_key) or []
+                cleaned: list[int] = []
+                if isinstance(raw_durs, list):
+                    for item in raw_durs:
+                        try:
+                            cleaned.append(max(0, min(100, int(item))))
+                        except (TypeError, ValueError):
+                            continue
+                data[dur_key] = cleaned
+    # Старые записи без списка прочности — считаем 100%.
+    for kind, dur_key in (("niva", "niva_durs"), ("truck", "truck_durs")):
+        durs = list(data.get(dur_key) or [])
+        while len(durs) < int(data.get(kind) or 0):
+            durs.append(100)
+        data[dur_key] = durs[: int(data.get(kind) or 0)]
     return data
 
 
-def _set_faction_garage(storage: Storage, faction: str, data: dict[str, int]) -> None:
-    storage.set_meta(_faction_garage_meta_key(faction), json.dumps(data, ensure_ascii=False))
+def _set_faction_garage(storage: Storage, faction: str, data: dict[str, Any]) -> None:
+    payload: dict[str, Any] = {key: int(data.get(key, 0) or 0) for key in FACTION_GARAGE_KEYS}
+    for dur_key in ("niva_durs", "truck_durs"):
+        raw_durs = data.get(dur_key) or []
+        cleaned: list[int] = []
+        if isinstance(raw_durs, list):
+            for item in raw_durs:
+                try:
+                    cleaned.append(max(0, min(100, int(item))))
+                except (TypeError, ValueError):
+                    continue
+        payload[dur_key] = cleaned
+    storage.set_meta(_faction_garage_meta_key(faction), json.dumps(payload, ensure_ascii=False))
 
 
 def build_faction_garage_overview(storage: Storage, faction: str) -> str:
     garage = get_faction_garage(storage, faction)
+    niva_durs = garage.get("niva_durs") or []
+    truck_durs = garage.get("truck_durs") or []
+    niva_note = f" (прочность: {', '.join(f'{d}%' for d in niva_durs)})" if niva_durs else ""
+    truck_note = f" (прочность: {', '.join(f'{d}%' for d in truck_durs)})" if truck_durs else ""
     return (
         f"🏚 Гараж «{faction}»:\n"
-        f"• Нив в гараже: {garage['niva']}\n"
-        f"• Грузовиков в гараже: {garage['truck']}\n"
+        f"• Нив в гараже: {garage['niva']}{niva_note}\n"
+        f"• Грузовиков в гараже: {garage['truck']}{truck_note}\n"
         f"• Канистр бензина (+{FUEL_CAN_GASOLINE_AMOUNT} каждая): {garage['gasoline']}\n"
         f"• Канистр дизеля (+{FUEL_CAN_DIESEL_AMOUNT} каждая): {garage['diesel']}\n\n"
-        "Сдать канистру можно из своего запаса топлива; забрать — с 5 ранга (или лидеру)."
+        "Сдать канистру можно из своего запаса топлива; забрать — с 5 ранга (или лидеру).\n"
+        "Прочность техники при сдаче сохраняется."
     )
 
 
@@ -6324,13 +6359,17 @@ def garage_deposit_niva(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, _dead_block_text())
     if not player.niva_owned:
         return ActionResult(False, "У тебя нет Нивы, чтобы сдать её в гараж.")
+    dur = max(0, min(100, int(player.niva_durability)))
     storage.clear_niva_owned(telegram_id)
     garage = get_faction_garage(storage, player.faction)
-    garage["niva"] = garage.get("niva", 0) + 1
+    garage["niva"] = int(garage.get("niva", 0) or 0) + 1
+    durs = list(garage.get("niva_durs") or [])
+    durs.append(dur)
+    garage["niva_durs"] = durs
     _set_faction_garage(storage, player.faction, garage)
     return ActionResult(
         True,
-        f"Нива сдана в гараж «{player.faction}». В гараже: {garage['niva']} шт.",
+        f"Нива сдана в гараж «{player.faction}» (прочность {dur}%). В гараже: {garage['niva']} шт.",
     )
 
 
@@ -6347,12 +6386,16 @@ def garage_withdraw_niva(storage: Storage, telegram_id: int) -> ActionResult:
     garage = get_faction_garage(storage, player.faction)
     if garage.get("niva", 0) <= 0:
         return ActionResult(False, "В гараже нет свободных Нив.")
-    garage["niva"] -= 1
+    garage["niva"] = int(garage.get("niva", 0) or 0) - 1
+    durs = list(garage.get("niva_durs") or [])
+    dur = durs.pop(0) if durs else 100
+    garage["niva_durs"] = durs
     _set_faction_garage(storage, player.faction, garage)
     storage.set_niva_owned(telegram_id)
+    storage.set_niva_durability(telegram_id, dur)
     return ActionResult(
         True,
-        f"Нива из гаража закреплена за тобой (прочность 100%). В гараже осталось: {garage['niva']} шт.",
+        f"Нива из гаража закреплена за тобой (прочность {dur}%). В гараже осталось: {garage['niva']} шт.",
     )
 
 
@@ -6364,13 +6407,17 @@ def garage_deposit_truck(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, _dead_block_text())
     if not player.truck_owned:
         return ActionResult(False, "У тебя нет грузовика, чтобы сдать его в гараж.")
+    dur = max(0, min(100, int(player.truck_durability)))
     storage.clear_truck_owned(telegram_id)
     garage = get_faction_garage(storage, player.faction)
-    garage["truck"] = garage.get("truck", 0) + 1
+    garage["truck"] = int(garage.get("truck", 0) or 0) + 1
+    durs = list(garage.get("truck_durs") or [])
+    durs.append(dur)
+    garage["truck_durs"] = durs
     _set_faction_garage(storage, player.faction, garage)
     return ActionResult(
         True,
-        f"Грузовик сдан в гараж «{player.faction}». В гараже: {garage['truck']} шт.",
+        f"Грузовик сдан в гараж «{player.faction}» (прочность {dur}%). В гараже: {garage['truck']} шт.",
     )
 
 
@@ -6387,14 +6434,16 @@ def garage_withdraw_truck(storage: Storage, telegram_id: int) -> ActionResult:
     garage = get_faction_garage(storage, player.faction)
     if garage.get("truck", 0) <= 0:
         return ActionResult(False, "В гараже нет свободных грузовиков.")
-    garage["truck"] -= 1
+    garage["truck"] = int(garage.get("truck", 0) or 0) - 1
+    durs = list(garage.get("truck_durs") or [])
+    dur = durs.pop(0) if durs else 100
+    garage["truck_durs"] = durs
     _set_faction_garage(storage, player.faction, garage)
     storage.set_truck_owned(telegram_id)
-    if hasattr(storage, "set_truck_durability"):
-        storage.set_truck_durability(telegram_id, 100)
+    storage.set_truck_durability(telegram_id, dur)
     return ActionResult(
         True,
-        f"Грузовик из гаража закреплён за тобой (прочность 100%). В гараже осталось: {garage['truck']} шт.",
+        f"Грузовик из гаража закреплён за тобой (прочность {dur}%). В гараже осталось: {garage['truck']} шт.",
     )
 
 

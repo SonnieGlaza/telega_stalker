@@ -670,8 +670,12 @@ def _advance_turn(session: CoopMissionSession) -> None:
 def _move_hostile_group(
     session: CoopMissionSession, units: list[tuple[int, int]]
 ) -> list[tuple[int, int]]:
-    """Двигает мутантов/НПС к ближайшему живому игроку, избегая мёртвых клеток."""
-    alive_cells = [session.pos(pid) for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
+    """Двигает мутантов/НПС к ближайшему живому неивакуированному игроку."""
+    alive_cells = [
+        session.pos(pid)
+        for pid in session.player_ids
+        if session.hp.get(str(pid), 0) > 0 and pid not in session.evacuated
+    ]
     if not alive_cells:
         return list(units)
     occupied = _occupied(session)
@@ -723,6 +727,8 @@ def _hostile_attacks(
         for pid in session.player_ids:
             if session.hp.get(str(pid), 0) <= 0:
                 continue
+            if pid in session.evacuated:
+                continue
             if session.pos(pid) == epos:
                 player = storage.get_character(pid, refresh_energy=False)
                 if player is None:
@@ -733,6 +739,8 @@ def _hostile_attacks(
                 if new_hp <= 0:
                     session.death_causes[str(pid)] = cause
                     session.death_killers[str(pid)] = killer_name
+                    # Если нёс раненого — тело падает, другой может поднять.
+                    session.carrying.pop(str(pid), None)
                 notes.append(f"{label} ранит {h(player.nickname)}: −{dmg} HP.")
     return notes
 
@@ -1021,6 +1029,7 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
             kind = session.enemy_kinds[idx] if idx < len(session.enemy_kinds) else ""
             session.death_causes[str(telegram_id)] = "mutant"
             session.death_killers[str(telegram_id)] = killer_label_for_kind(kind, npc=False) if kind else "Мутант"
+            session.carrying.pop(str(telegram_id), None)
         session.enemies.pop(idx)
         if idx < len(session.enemy_kinds):
             session.enemy_kinds.pop(idx)
@@ -1037,6 +1046,7 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
             kind = session.npc_kinds[idx] if idx < len(session.npc_kinds) else ""
             session.death_causes[str(telegram_id)] = "npc"
             session.death_killers[str(telegram_id)] = killer_label_for_kind(kind, npc=True) if kind else "Мародёр"
+            session.carrying.pop(str(telegram_id), None)
         session.npcs.pop(idx)
         if idx < len(session.npc_kinds):
             session.npc_kinds.pop(idx)
@@ -1063,6 +1073,7 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
             if new_hp <= 0:
                 session.death_causes[str(telegram_id)] = "anomaly"
                 session.death_killers[str(telegram_id)] = "Аномалия"
+                session.carrying.pop(str(telegram_id), None)
             session.hazards = [haz for haz in session.hazards if haz != nxt]
             session.log.append(f"Аномалия: −{dmg} HP ({h(player.nickname)}).")
             wipe = _check_team_wipe(storage, session)

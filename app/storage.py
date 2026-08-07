@@ -1637,8 +1637,8 @@ class Storage:
         new_durability = max(0, min(100, int(character.niva_durability) - wear))
         with self._connect() as conn:
             conn.execute(
-                "UPDATE characters SET niva_durability = ?, niva_owned = ? WHERE telegram_id = ?",
-                (new_durability, 1 if new_durability > 0 else 0, telegram_id),
+                "UPDATE characters SET niva_durability = ? WHERE telegram_id = ?",
+                (new_durability, telegram_id),
             )
         self.save_snapshot()
         return new_durability
@@ -1650,8 +1650,8 @@ class Storage:
         value = max(0, min(100, int(durability)))
         with self._connect() as conn:
             conn.execute(
-                "UPDATE characters SET niva_durability = ?, niva_owned = ? WHERE telegram_id = ?",
-                (value, 1 if value > 0 else 0, telegram_id),
+                "UPDATE characters SET niva_durability = ? WHERE telegram_id = ?",
+                (value, telegram_id),
             )
         self.save_snapshot()
         return True
@@ -2440,8 +2440,8 @@ class Storage:
         new_durability = max(0, min(100, int(character.truck_durability) - wear))
         with self._connect() as conn:
             conn.execute(
-                "UPDATE characters SET truck_durability = ?, truck_owned = ? WHERE telegram_id = ?",
-                (new_durability, 1 if new_durability > 0 else 0, telegram_id),
+                "UPDATE characters SET truck_durability = ? WHERE telegram_id = ?",
+                (new_durability, telegram_id),
             )
         self.save_snapshot()
         return new_durability
@@ -2453,8 +2453,8 @@ class Storage:
         value = max(0, min(100, int(durability)))
         with self._connect() as conn:
             conn.execute(
-                "UPDATE characters SET truck_durability = ?, truck_owned = ? WHERE telegram_id = ?",
-                (value, 1 if value > 0 else 0, telegram_id),
+                "UPDATE characters SET truck_durability = ? WHERE telegram_id = ?",
+                (value, telegram_id),
             )
         self.save_snapshot()
         return True
