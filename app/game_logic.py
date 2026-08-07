@@ -870,6 +870,9 @@ DEPOT_RAID_VEHICLE_STEAL_CHANCE = 15  # % шанс угнать 1 машину �
 DEPOT_RAID_FAIL_MONEY_PENALTY = 90
 DEPOT_RAID_DEFENSE_POWER_RATIO = 0.55  # доля силы домашней базы цели, обороняющая склад/гараж
 
+RAID_MIN_MEMBERS = 2
+RAID_MAX_MEMBERS = 5
+
 SURVIVAL_ACTIVE_RADIATION_MIN = 1
 SURVIVAL_ACTIVE_RADIATION_MAX = 3
 SURVIVAL_ACTIVE_HUNGER_INC = 1
@@ -1029,6 +1032,7 @@ class RaidLaunchResult:
     ok: bool
     text: str
     notify_member_ids: tuple[int, ...]
+    tactical_raid: bool = False
 
 
 @dataclass(frozen=True)
@@ -5168,13 +5172,17 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
     member_faction = player.faction
     if not storage.are_factions_allied(host_faction, member_faction) and host_faction != member_faction:
         return ActionResult(False, "К рейду можно присоединяться только своей группировкой или союзниками.")
-    if not storage.add_raid_member(raid_id, telegram_id):
-        return ActionResult(False, "Не удалось присоединиться к рейду.")
     member_ids = storage.get_raid_member_ids(raid_id)
+    if telegram_id not in member_ids:
+        if len(member_ids) >= RAID_MAX_MEMBERS:
+            return ActionResult(False, f"В рейде уже максимум {RAID_MAX_MEMBERS} бойцов.")
+        if not storage.add_raid_member(raid_id, telegram_id):
+            return ActionResult(False, "Не удалось присоединиться к рейду.")
+        member_ids = storage.get_raid_member_ids(raid_id)
     return ActionResult(
         True,
         f"Ты в составе рейда #{raid_id} на логово «{location_name}».\n"
-        f"Состав рейда: {len(member_ids)} бойцов.",
+        f"Состав рейда: {len(member_ids)}/{RAID_MAX_MEMBERS} бойцов.",
     )
 
 
@@ -5261,13 +5269,17 @@ def create_or_join_depot_raid(
     host_faction = str(open_raid["faction"])
     if not storage.are_factions_allied(host_faction, player.faction) and host_faction != player.faction:
         return ActionResult(False, "К рейду можно присоединяться только своей группировкой или союзниками.")
-    if not storage.add_raid_member(raid_id, telegram_id):
-        return ActionResult(False, "Не удалось присоединиться к рейду.")
     member_ids = storage.get_raid_member_ids(raid_id)
+    if telegram_id not in member_ids:
+        if len(member_ids) >= RAID_MAX_MEMBERS:
+            return ActionResult(False, f"В рейде уже максимум {RAID_MAX_MEMBERS} бойцов.")
+        if not storage.add_raid_member(raid_id, telegram_id):
+            return ActionResult(False, "Не удалось присоединиться к рейду.")
+        member_ids = storage.get_raid_member_ids(raid_id)
     return ActionResult(
         True,
         f"Ты в составе рейда #{raid_id} на {label} группировки «{target_faction}».\n"
-        f"Состав рейда: {len(member_ids)} бойцов.",
+        f"Состав рейда: {len(member_ids)}/{RAID_MAX_MEMBERS} бойцов.",
     )
 
 
@@ -5453,13 +5465,13 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
 
     raid_id = int(open_raid["id"])
     member_ids = storage.get_raid_member_ids(raid_id)
-    if len(member_ids) < 2:
-        return RaidLaunchResult(False, "Для отрядного рейда нужно минимум 2 игрока.", ())
+    if len(member_ids) < RAID_MIN_MEMBERS:
+        return RaidLaunchResult(False, f"Для отрядного рейда нужно минимум {RAID_MIN_MEMBERS} игрока.", ())
 
     members = storage.get_characters_by_ids(member_ids)
     allowed_factions = {leader.faction, *storage.list_faction_alliances(leader.faction)}
     members = [member for member in members if member.faction in allowed_factions and member.health > 0]
-    if len(members) < 2:
+    if len(members) < RAID_MIN_MEMBERS:
         return RaidLaunchResult(False, "Недостаточно бойцов с нормальным здоровьем для запуска рейда.", ())
 
     raid_kind = str(open_raid.get("raid_kind") or "lair")
@@ -5470,135 +5482,109 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
         if storage.spend_energy(member.telegram_id, raid_energy_cost):
             ready_members.append(member)
             spent_ids.append(member.telegram_id)
-    if len(ready_members) < 2:
+    if len(ready_members) < RAID_MIN_MEMBERS:
         _refund_spent_energy(storage, spent_ids, raid_energy_cost)
         return RaidLaunchResult(
             False,
-            "У бойцов не хватает энергии для начала рейда. Нужно минимум 2 подготовленных сталкера.",
+            f"У бойцов не хватает энергии для начала рейда. Нужно минимум {RAID_MIN_MEMBERS} подготовленных сталкера.",
             (),
         )
+
+    if len(member_ids) > RAID_MAX_MEMBERS:
+        _refund_spent_energy(storage, spent_ids, raid_energy_cost)
+        return RaidLaunchResult(
+            False,
+            f"В рейде не более {RAID_MAX_MEMBERS} бойцов.",
+            (),
+        )
+
+    member_id_list = [m.telegram_id for m in ready_members]
+    from app.raid_grid import start_raid_grid
 
     if raid_kind in DEPOT_RAID_KINDS:
-        return _launch_depot_raid(
-            storage,
-            leader,
-            open_raid,
-            raid_id,
-            ready_members,
-            member_ids,
-            spent_ids,
-            raid_kind,
-        )
-
-    location_name = str(open_raid["location"])
-    location = storage.get_location(location_name)
-    if location is None:
-        _refund_spent_energy(storage, spent_ids, raid_energy_cost)
-        return RaidLaunchResult(False, "Локация рейда недоступна.", ())
-    if str(location.get("point_type") or "") == "база":
-        _refund_spent_energy(storage, spent_ids, raid_energy_cost)
-        return RaidLaunchResult(
-            False,
-            "Базы штурмуются только через военное лобби.",
-            (),
-        )
-    if _location_is_friendly_to_faction(storage, location, leader.faction):
-        _refund_spent_energy(storage, spent_ids, raid_energy_cost)
-        return RaidLaunchResult(False, "Нельзя рейдить свою или союзническую точку.", ())
-
-    event_modifier = _active_location_event_modifier(storage, location_name)
-    enemy_power = max(10, int(location["npc_power"]) + event_modifier)
-    battle = _simulate_raid_battle(ready_members, enemy_power)
-
-    if battle["success"]:
-        captured_enemy_base = False
-        storage.set_location_control(location_name, leader.faction)
-        treasury_gain = 1400 + len(ready_members) * 180
-        storage.change_faction_treasury(leader.faction, treasury_gain)
-        notes: list[str] = []
-        stash_finds = 0
-        artifacts_given = 0
-        for member in ready_members:
-            durability_text = _apply_durability_decay(
-                storage,
-                member.telegram_id,
-                weapon_loss=6,
-                armor_loss=5,
+        target_faction = str(open_raid.get("target_faction") or "")
+        label = DEPOT_RAID_LABELS.get(raid_kind, "склад")
+        if not target_faction or target_faction == leader.faction:
+            _refund_spent_energy(storage, spent_ids, raid_energy_cost)
+            storage.finish_raid(raid_id, status="cancelled", result_text="Некорректная цель рейда.")
+            return RaidLaunchResult(False, f"Рейд #{raid_id} отменён: некорректная цель.", tuple(member_ids))
+        if target_faction not in list_war_enemy_factions(storage, leader.faction):
+            _refund_spent_energy(storage, spent_ids, raid_energy_cost)
+            return RaidLaunchResult(
+                False,
+                f"Рейд #{raid_id} отменён: с «{target_faction}» заключен мир/союз.",
+                tuple(member_ids),
             )
-            if (
-                enemy_power >= RAID_ARTIFACT_MIN_ENEMY_POWER
-                and random.randint(1, 100) <= RAID_ARTIFACT_DROP_CHANCE
-            ):
-                art_key = pick_weighted_raid_artifact_key()
-                storage.add_item(member.telegram_id, art_key, 1)
-                storage.add_player_stat(member.telegram_id, "artifacts_found", 1)
-                artifacts_given += 1
-            if _maybe_drop_stash(storage, member.telegram_id):
-                stash_finds += 1
-            _add_rating(storage, member.telegram_id, RATING_REWARD["raid_success"])
-            storage.add_player_stat(member.telegram_id, "raids_completed", 1)
-            if captured_enemy_base:
-                storage.add_player_stat(member.telegram_id, "enemy_bases_captured", 1)
-            if member.telegram_id in battle["wounds"]:
-                storage.change_health(member.telegram_id, -14)
-            achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
-            if member.telegram_id == leader.telegram_id:
-                notes.append(durability_text + achievement_text)
-        new_npc_power = max(12, enemy_power - random.randint(4, 10))
-        storage.set_location_npc_power(location_name, new_npc_power)
-        storage.finish_raid(
-            raid_id,
-            status="success",
-            result_text=f"Рейд успешен. Критов: {battle['total_crits']}.",
+        if not _depot_has_loot(storage, target_faction, raid_kind):
+            _refund_spent_energy(storage, spent_ids, raid_energy_cost)
+            storage.finish_raid(raid_id, status="failed", result_text=f"{label.capitalize()} цели уже пуст.")
+            return RaidLaunchResult(
+                False,
+                f"Рейд #{raid_id} отменён: {label} группировки «{target_faction}» уже пуст.",
+                tuple(member_ids),
+            )
+        home_location_name = FACTION_HOME_BASE.get(target_faction)
+        base_power = 60
+        if home_location_name:
+            home_location = storage.get_location(home_location_name)
+            if home_location is not None:
+                base_power = int(home_location["npc_power"])
+        depot_power = max(12, int(base_power * DEPOT_RAID_DEFENSE_POWER_RATIO))
+        location_label = f"{'Склад' if raid_kind == 'warehouse' else 'Гараж'} «{target_faction}»"
+        tactical_result, rgrid_session = start_raid_grid(
+            storage,
+            raid_id=raid_id,
+            raid_kind=raid_kind,
+            location_label=location_label,
+            attacker_faction=leader.faction,
+            player_ids=member_id_list,
+            target_faction=target_faction,
+            enemy_power=depot_power,
+            energy_cost=raid_energy_cost,
         )
-        stash_line = (
-            f"\nТайники найдены у {stash_finds} бойцов."
-            if stash_finds > 0
-            else ""
-        )
-        return RaidLaunchResult(
-            True,
-            f"Рейд #{raid_id} завершен успешно на логове «{location_name}».\n"
-            f"Бойцов: {len(ready_members)}, критические попадания: {battle['total_crits']}.\n"
-            f"Артефакты выпали: {artifacts_given}/{len(ready_members)} "
-            f"(шанс {RAID_ARTIFACT_DROP_CHANCE}% при NPC ≥ {RAID_ARTIFACT_MIN_ENEMY_POWER}).\n"
-            f"В казну группировки: {treasury_gain} RU.\n"
-            f"Раненых: {len(battle['wounds'])}."
-            f"{stash_line}{''.join(notes)}",
-            tuple(member_ids),
+    else:
+        location_name = str(open_raid["location"])
+        location = storage.get_location(location_name)
+        if location is None:
+            _refund_spent_energy(storage, spent_ids, raid_energy_cost)
+            return RaidLaunchResult(False, "Локация рейда недоступна.", ())
+        if str(location.get("point_type") or "") == "база":
+            _refund_spent_energy(storage, spent_ids, raid_energy_cost)
+            return RaidLaunchResult(
+                False,
+                "Базы штурмуются только через военное лобби.",
+                (),
+            )
+        if _location_is_friendly_to_faction(storage, location, leader.faction):
+            _refund_spent_energy(storage, spent_ids, raid_energy_cost)
+            return RaidLaunchResult(False, "Нельзя рейдить свою или союзническую точку.", ())
+        event_modifier = _active_location_event_modifier(storage, location_name)
+        enemy_power = max(10, int(location["npc_power"]) + event_modifier)
+        tactical_result, rgrid_session = start_raid_grid(
+            storage,
+            raid_id=raid_id,
+            raid_kind="lair",
+            location_label=location_name,
+            attacker_faction=leader.faction,
+            player_ids=member_id_list,
+            enemy_power=enemy_power,
+            energy_cost=raid_energy_cost,
         )
 
-    notes: list[str] = []
-    for member in ready_members:
-        durability_text = _apply_durability_decay(
-            storage,
-            member.telegram_id,
-            weapon_loss=7,
-            armor_loss=6,
-        )
-        storage.change_money(member.telegram_id, -110)
-        _add_rating(storage, member.telegram_id, -RATING_REWARD["raid_fail"])
-        storage.add_player_stat(member.telegram_id, "raids_failed", 1)
-        damage_taken = int(battle["member_damage_taken"].get(member.telegram_id, 0))
-        health_penalty = min(30, max(8, damage_taken // 4))
-        storage.change_health(member.telegram_id, -health_penalty)
-        achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
-        if member.telegram_id == leader.telegram_id:
-            notes.append(durability_text + achievement_text)
-    new_npc_power = min(80, enemy_power + random.randint(2, 7))
-    storage.set_location_npc_power(location_name, new_npc_power)
-    storage.finish_raid(
-        raid_id,
-        status="failed",
-        result_text=f"Рейд провален. Остаток силы противника: {battle['enemy_hp_left']}.",
-    )
-    return RaidLaunchResult(
-        False,
-        f"Рейд #{raid_id} провален на логове «{location_name}».\n"
-        f"Сила врага осталась: {battle['enemy_hp_left']}.\n"
-        f"Каждый участник потерял 110 RU и получил ранения.{''.join(notes)}",
-        tuple(member_ids),
-    )
+    if tactical_result.ok and rgrid_session is not None:
+        if storage.start_raid_assault(raid_id):
+            return RaidLaunchResult(
+                True,
+                tactical_result.text,
+                tuple(member_ids),
+                tactical_raid=True,
+            )
+        from app.raid_grid import clear_raid_grid_session
+
+        clear_raid_grid_session(storage, rgrid_session)
+
+    _refund_spent_energy(storage, spent_ids, raid_energy_cost)
+    return RaidLaunchResult(False, tactical_result.text, tuple(member_ids))
 
 
 def build_raids_overview(storage: Storage, telegram_id: int) -> str:
@@ -5611,17 +5597,16 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
         war_enemies = list_war_enemy_factions(storage, player.faction)
         enemies_line = ", ".join(war_enemies) if war_enemies else "нет (со всеми мир или союз)"
         return (
-            "Отрядные рейды:\n"
-            "• Создай рейд на нужное логово.\n"
-            "• Другие бойцы твоей группировки могут присоединиться.\n"
-            "• Для запуска нужно минимум 2 участника.\n"
-            f"• Награды: до {RAID_ARTIFACT_REWARD_CAP} typed-арта за бойца (NPC ≥ {RAID_ARTIFACT_MIN_ENEMY_POWER}, Сила/Живучесть по 3%).\n\n"
+            "Отрядные рейды (тактическая карта 9×9):\n"
+            "• Создай рейд на логово, позови отряд — каждый сам ходит и стреляет.\n"
+            f"• Участников: {RAID_MIN_MEMBERS}–{RAID_MAX_MEMBERS}, на поле 6–10 врагов (мутанты + боты).\n"
+            f"• Награды: до {RAID_ARTIFACT_REWARD_CAP} typed-арта (шанс {RAID_ARTIFACT_DROP_CHANCE}% при NPC ≥ {RAID_ARTIFACT_MIN_ENEMY_POWER}).\n\n"
             "🏚 Рейды на склад/гараж врага:\n"
-            "• Доступны только против враждебных группировок (не в союзе).\n"
-            "• Минимум 2 бойца; на цели должно быть что красть.\n"
-            "• Успех — часть склада/канистр (и, возможно, техника) переходит тебе.\n"
-            "• Провал — потеря денег, здоровья и рейтинга, а обороне капает немного рейтинга.\n"
-            f"• Враждебные группировки сейчас: {enemies_line}."
+            "• Тактическая карта: зачисти врагов, удерживай клетку склада/гаража.\n"
+            f"• Успех — вынос {DEPOT_RAID_MIN_LOOT_PERCENT}–{DEPOT_RAID_MAX_LOOT_PERCENT}% каждого типа ресурса со склада/канистр.\n"
+            f"• Гараж: дополнительно {DEPOT_RAID_VEHICLE_STEAL_CHANCE}% шанс угнать Ниву или грузовик (если есть).\n"
+            "• На базе врага стоят оборонительные боты (Т1, улучшение до Т2 — 50 000 RU из казны).\n"
+            f"• Враждебные группировки: {enemies_line}."
         )
 
     raid_id = int(open_raid["id"])
@@ -5639,9 +5624,11 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
             f"Открытый рейд #{raid_id} на {label} врага 🏚\n"
             f"Цель: {target_faction}\n"
             f"Лидер: {open_raid['leader_id']}\n"
-            f"Участников: {len(member_ids)}\n\n"
+            f"Участников: {len(member_ids)}/{RAID_MAX_MEMBERS}\n\n"
             f"Состав:\n{members_text or '• Пока пусто'}\n\n"
-            "Отменить рейд может только тот, кто его создал."
+            f"При запуске — тактическая карта. Вынос: {DEPOT_RAID_MIN_LOOT_PERCENT}–{DEPOT_RAID_MAX_LOOT_PERCENT}% "
+            f"ресурсов, {DEPOT_RAID_VEHICLE_STEAL_CHANCE}% шанс угнать машину (гараж).\n"
+            "Отменить рейд может только создатель."
         )
 
     location_name = str(open_raid["location"])
@@ -5652,10 +5639,11 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
         f"Открытый рейд #{raid_id}\n"
         f"Логово: {location_name}\n"
         f"Лидер: {open_raid['leader_id']}\n"
-        f"Участников: {len(member_ids)}\n"
+        f"Участников: {len(member_ids)}/{RAID_MAX_MEMBERS}\n"
         f"Сила NPC: {npc_power} (модификатор событий {event_modifier:+d})\n\n"
         f"Состав:\n{members_text or '• Пока пусто'}\n\n"
-        "Отменить рейд может только тот, кто его создал."
+        "При запуске — тактическая карта: 6–10 врагов, каждый ходит сам.\n"
+        "Отменить рейд может только создатель."
     )
 
 
@@ -7038,6 +7026,9 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
         )
 
     garage_overview = build_faction_garage_overview(storage, player.faction)
+    from app.faction_bots import build_faction_bots_overview
+
+    bots_overview = build_faction_bots_overview(storage, player.faction)
 
     return (
         f"Группировка «{player.faction}»\n"
@@ -7046,6 +7037,7 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
         f"{base_line}\n\n"
         f"Склад:\n{chr(10).join(warehouse_lines)}\n\n"
         f"{garage_overview}\n\n"
+        f"{bots_overview}\n\n"
         f"Пассивный доход с точек:\n"
         f"• точка ресурсов: {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч\n"
         f"• база: {BASE_POINT_INCOME_PER_HOUR} RU/ч\n\n"

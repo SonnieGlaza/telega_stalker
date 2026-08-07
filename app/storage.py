@@ -3182,6 +3182,22 @@ class Storage:
             )
         self.save_snapshot()
 
+    def start_raid_assault(self, raid_id: int) -> bool:
+        """Перевести открытый рейд в тактический режим (in_progress)."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE raids
+                SET status = 'in_progress', started_at = ?
+                WHERE id = ? AND status = 'open'
+                """,
+                (utc_now().isoformat(), raid_id),
+            )
+            ok = int(cursor.rowcount or 0) > 0
+        if ok:
+            self.save_snapshot()
+        return ok
+
     def list_open_raids_led_by(self, leader_id: int) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(

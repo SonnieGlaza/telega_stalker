@@ -916,6 +916,14 @@ def faction_group_keyboard(
                 )
             ]
         )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🤖 Улучшить ботов до Т2 (50000 RU)",
+                    callback_data="faction:bots:upgrade",
+                )
+            ]
+        )
         rows.append([InlineKeyboardButton(text="🎖 Назначить звание", callback_data="rank:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -1223,6 +1231,10 @@ def _tactical_grid_keyboard(
 
 def cwar_grid_keyboard(*, is_active_turn: bool, medkit_available: bool) -> InlineKeyboardMarkup:
     return _tactical_grid_keyboard("cwar", is_active_turn=is_active_turn, medkit_available=medkit_available)
+
+
+def rgrid_keyboard(*, is_active_turn: bool, medkit_available: bool) -> InlineKeyboardMarkup:
+    return _tactical_grid_keyboard("rgrid", is_active_turn=is_active_turn, medkit_available=medkit_available)
 
 
 def ncap_grid_keyboard(*, medkit_available: bool) -> InlineKeyboardMarkup:

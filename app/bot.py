@@ -61,6 +61,17 @@ from app.clan_war_grid import (
     render_cwar_frame,
     save_cwar_session,
 )
+from app.raid_grid import (
+    get_raid_grid_session_by_player,
+    process_rgrid_turn_timeouts,
+    render_rgrid_frame,
+    rgrid_forfeit,
+    rgrid_move,
+    rgrid_shoot,
+    rgrid_status_caption,
+    rgrid_use_medkit,
+    save_raid_grid_session,
+)
 from app.neutral_capture import (
     get_ncap_session,
     ncap_forfeit,
@@ -310,6 +321,7 @@ from app.keyboards import (
     duel_challenge_keyboard,
     duel_grid_keyboard,
     cwar_grid_keyboard,
+    rgrid_keyboard,
     ncap_grid_keyboard,
     coop_menu_keyboard,
     coop_lobby_list_keyboard,
@@ -2861,6 +2873,70 @@ async def _handle_cwar_action(bot: Bot, callback: CallbackQuery, result: Any) ->
     await safe_callback_answer(callback, result.text[:CALLBACK_ALERT_MAX_LEN] if len(result.text) <= CALLBACK_ALERT_MAX_LEN else "Готово")
 
 
+async def _broadcast_rgrid_session(
+    bot: Bot,
+    storage: Storage,
+    session: Any,
+    *,
+    note: str | None = None,
+) -> None:
+    for pid in session.player_ids:
+        ch = storage.get_character(pid, refresh_energy=False)
+        is_active = session.active_player() == pid
+        medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(ch)
+        markup = rgrid_keyboard(is_active_turn=is_active, medkit_available=medkit)
+        caption = rgrid_status_caption(storage, session, pid)
+        if note:
+            caption = f"{caption}\n\n{note}" if pid == session.active_player() else f"{caption}\n\n↪ {note}"
+        frame = render_rgrid_frame(storage, session, pid)
+        msg_id = session.message_ids.get(str(pid))
+        new_id = await _upsert_tactical_photo(
+            bot,
+            chat_id=pid,
+            message_id=msg_id,
+            image_bytes=frame,
+            caption=caption,
+            markup=markup,
+        )
+        session.message_ids[str(pid)] = new_id
+    save_raid_grid_session(storage, session)
+
+
+async def _notify_rgrid_finished(bot: Bot, result: Any) -> None:
+    payload = result.payload or {}
+    if not payload.get("rgrid_done"):
+        return
+    await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
+    member_ids = payload.get("member_ids") or []
+    defender_leader_id = payload.get("defender_leader_id")
+    notify_set = set(int(x) for x in member_ids)
+    if defender_leader_id is not None:
+        notify_set.add(int(defender_leader_id))
+    for pid in notify_set:
+        try:
+            await bot.send_message(int(pid), action_result_text(int(pid), result.text))
+        except Exception:
+            logger.exception("Failed rgrid result notify to %s", pid)
+
+
+async def _handle_rgrid_action(bot: Bot, callback: CallbackQuery, result: Any) -> None:
+    storage = get_storage()
+    payload = result.payload or {}
+    if payload.get("rgrid_done"):
+        await _notify_rgrid_finished(bot, result)
+        await safe_callback_answer(callback, "Рейд завершён")
+        return
+    if not result.ok:
+        await reply_action_result(callback, result.text)
+        return
+    session = get_raid_grid_session_by_player(storage, callback.from_user.id)
+    if session is None:
+        await reply_action_result(callback, result.text)
+        return
+    await _broadcast_rgrid_session(bot, storage, session, note=result.text)
+    await safe_callback_answer(callback, result.text[:CALLBACK_ALERT_MAX_LEN] if len(result.text) <= CALLBACK_ALERT_MAX_LEN else "Готово")
+
+
 async def _broadcast_ncap_session(
     bot: Bot,
     storage: Storage,
@@ -3934,6 +4010,45 @@ async def cwar_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
     await callback.answer("Неизвестное действие.", show_alert=True)
 
 
+@router.callback_query(F.data.startswith("rgrid:"))
+async def rgrid_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
+    assert callback.data and callback.from_user
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+    action = (callback.data or "").removeprefix("rgrid:").strip()
+
+    if action == "refresh":
+        session = get_raid_grid_session_by_player(storage, telegram_id)
+        if session is None:
+            await callback.answer("Нет активного рейда.", show_alert=True)
+            return
+        await _broadcast_rgrid_session(bot, storage, session)
+        await safe_callback_answer(callback)
+        return
+
+    if action == "forfeit":
+        result = rgrid_forfeit(storage, telegram_id)
+        await _handle_rgrid_action(bot, callback, result)
+        return
+
+    if action == "medkit":
+        result = rgrid_use_medkit(storage, telegram_id)
+        await _handle_rgrid_action(bot, callback, result)
+        return
+
+    if action.startswith("move:"):
+        result = rgrid_move(storage, telegram_id, action.removeprefix("move:"))
+        await _handle_rgrid_action(bot, callback, result)
+        return
+
+    if action.startswith("shoot:"):
+        result = rgrid_shoot(storage, telegram_id, action.removeprefix("shoot:"))
+        await _handle_rgrid_action(bot, callback, result)
+        return
+
+    await callback.answer("Неизвестное действие.", show_alert=True)
+
+
 @router.callback_query(F.data.startswith("ncap:"))
 async def ncap_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
     assert callback.data and callback.from_user
@@ -4675,6 +4790,20 @@ async def join_raid_as_ally_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "raid:launch")
 async def launch_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
     result = launch_open_raid(get_storage(), callback.from_user.id)
+    if result.ok and result.tactical_raid:
+        storage = get_storage()
+        session = get_raid_grid_session_by_player(storage, callback.from_user.id)
+        if session is not None:
+            await _broadcast_rgrid_session(bot, storage, session, note=result.text)
+            for pid in result.notify_member_ids:
+                if pid == callback.from_user.id:
+                    continue
+                try:
+                    await bot.send_message(pid, action_result_text(pid, result.text))
+                except Exception:
+                    logger.exception("Failed to notify rgrid start to %s", pid)
+            await safe_callback_answer(callback, "Тактический рейд!")
+            return
     await deliver_group_result(callback, bot, result, prefix="📣 Итог рейда:")
 
 
@@ -4981,6 +5110,24 @@ async def faction_base_fortify_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала выбери группировку.", show_alert=True)
         return
     result = upgrade_faction_base(storage, callback.from_user.id)
+    overview = build_faction_group_overview(storage, player.telegram_id)
+    await edit_menu_message(
+        callback,
+        f"{result.text}\n\n{overview}",
+        _faction_group_keyboard_for(player.telegram_id),
+    )
+
+
+@router.callback_query(F.data == "faction:bots:upgrade")
+async def faction_bots_upgrade_callback(callback: CallbackQuery) -> None:
+    from app.faction_bots import upgrade_faction_bots
+
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Персонаж не найден.", show_alert=True)
+        return
+    result = upgrade_faction_bots(storage, callback.from_user.id)
     overview = build_faction_group_overview(storage, player.telegram_id)
     await edit_menu_message(
         callback,
@@ -5602,6 +5749,25 @@ async def run_bot() -> None:
                         await _broadcast_cwar_session(bot, storage, session, note=result.text)
             except Exception:
                 logger.exception("Clan war timeout tick failed")
+            try:
+                rgrid_updates: set[str] = set()
+                rgrid_done_ids: set[str] = set()
+                for pid, result in process_rgrid_turn_timeouts(storage):
+                    payload = result.payload or {}
+                    if payload.get("rgrid_done"):
+                        sid = str(payload.get("session_id") or "")
+                        if sid and sid in rgrid_done_ids:
+                            continue
+                        if sid:
+                            rgrid_done_ids.add(sid)
+                        await _notify_rgrid_finished(bot, result)
+                        continue
+                    session = get_raid_grid_session_by_player(storage, pid)
+                    if session and session.session_id not in rgrid_updates:
+                        rgrid_updates.add(session.session_id)
+                        await _broadcast_rgrid_session(bot, storage, session, note=result.text)
+            except Exception:
+                logger.exception("Raid grid timeout tick failed")
             try:
                 for pid, result in process_ncap_turn_timeouts(storage):
                     payload = result.payload or {}

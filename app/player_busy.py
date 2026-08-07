@@ -19,6 +19,11 @@ def player_busy_reason(storage: Storage, telegram_id: int, *, skip: str | None =
         return "Ты в тактической дуэли — сначала закончи бой."
     if skip != "cwar" and get_cwar_session_by_player(storage, telegram_id):
         return "Ты в тактическом штурме — сначала закончи бой."
+    if skip != "rgrid":
+        from app.raid_grid import get_raid_grid_session_by_player
+
+        if get_raid_grid_session_by_player(storage, telegram_id):
+            return "Ты в тактическом рейде — сначала закончи бой."
     if skip != "ncap" and get_ncap_session(storage, telegram_id):
         return "Ты захватываешь нейтральную точку — сначала закончи."
     if skip != "coop":

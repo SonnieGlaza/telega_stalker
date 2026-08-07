@@ -506,7 +506,14 @@ def run_smoke_check() -> None:
         raid_join = create_or_join_faction_raid(storage, 222, "Янтарь")
         assert raid_join.ok, raid_join.text
         raid_launch = launch_open_raid(storage, 111)
-        assert raid_launch.text
+        assert raid_launch.ok, raid_launch.text
+        assert raid_launch.tactical_raid
+        from app.raid_grid import clear_raid_grid_session, get_raid_grid_session_by_player
+
+        rgrid_session = get_raid_grid_session_by_player(storage, 111)
+        assert rgrid_session is not None
+        clear_raid_grid_session(storage, rgrid_session)
+        storage.finish_raid(int(rgrid_session.raid_id), status="cancelled", result_text="smoke cleanup")
         assert build_raids_overview(storage, 111)
 
         # War lobby.
