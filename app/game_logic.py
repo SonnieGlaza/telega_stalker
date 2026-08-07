@@ -7234,7 +7234,7 @@ def build_players_faction_page_text(
     lines = [
         f"👥 {title}",
         f"Страница {safe_page + 1}/{total_pages} • игроков: {total}",
-        "Нажми «⚔️ Дуэль», чтобы вызвать игрока.",
+        "Нажми «⚔️ Вызвать на дуэль» под списком или /дуэль [telegram_id].",
         "",
     ]
     for row in chunk:

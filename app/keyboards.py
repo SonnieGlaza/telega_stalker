@@ -1326,8 +1326,20 @@ def players_faction_page_keyboard(
     players: list[dict[str, Any]] | None = None,
     self_id: int | None = None,
 ) -> InlineKeyboardMarkup:
-    _ = (players, self_id)  # список ников/ID в тексте сообщения
     rows: list[list[InlineKeyboardButton]] = []
+    for row in players or []:
+        target_id = int(row["telegram_id"])
+        if self_id is not None and target_id == self_id:
+            continue
+        nickname = str(row.get("nickname") or target_id)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"⚔️ Вызвать на дуэль: {nickname}",
+                    callback_data=f"duel:challenge:{target_id}",
+                )
+            ]
+        )
     nav: list[InlineKeyboardButton] = []
     if page > 0:
         nav.append(

@@ -487,7 +487,23 @@ def run_smoke_check() -> None:
             for btn in row
             if (btn.callback_data or "").startswith("duel:challenge:")
         ]
-        assert not duel_cbs
+        assert len(duel_cbs) == 1
+        assert duel_cbs[0].endswith(":222")
+
+        _page_text_b, _k_b, _p_b, _pg_b, bandit_players = build_players_faction_page_text(
+            storage, "Бандиты", 0
+        )
+        kb_bandit = players_faction_page_keyboard(
+            "Бандиты", page=0, total_pages=1, players=bandit_players, self_id=111
+        )
+        bandit_duel_cbs = [
+            btn.callback_data
+            for row in kb_bandit.inline_keyboard
+            for btn in row
+            if (btn.callback_data or "").startswith("duel:challenge:")
+        ]
+        assert len(bandit_duel_cbs) == 1
+        assert bandit_duel_cbs[0].endswith(":333")
 
         # Bandits cannot take home-location easy dump contract.
         from app.game_logic import list_quest_contracts_for_character, list_available_travel_modes
