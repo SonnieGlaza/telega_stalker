@@ -205,7 +205,7 @@ WEAPON_CATALOG: dict[str, dict[str, int | str]] = {
 
 # Сезонные награды топ-3 — не продаются у торговца, выдаются в конце сезона.
 SEASON_REWARD_WEAPONS: dict[str, dict[str, int | str]] = {
-    "weapon_season_champion": {"name": "РВК «Чемпион Зоны»", "sell_price": 12000},
+    "weapon_season_champion": {"name": "РПК «Чемпион Зоны»", "sell_price": 12000},
     "weapon_season_silver": {"name": "ВСС «Серебряный сталкер»", "sell_price": 8000},
 }
 SEASON_REWARD_ARMOR: dict[str, dict[str, int | str]] = {
@@ -214,7 +214,7 @@ SEASON_REWARD_ARMOR: dict[str, dict[str, int | str]] = {
 }
 SEASON_RANK_REWARDS: dict[int, tuple[tuple[str, str], ...]] = {
     1: (
-        ("weapon_season_champion", "РВК «Чемпион Зоны»"),
+        ("weapon_season_champion", "РПК «Чемпион Зоны»"),
         ("armor_season_champion", "Костюм «Чемпион Зоны»"),
     ),
     2: (("weapon_season_silver", "ВСС «Серебряный сталкер»"),),
@@ -268,7 +268,7 @@ WEAPON_RATING_BY_NAME: dict[str, int] = {
     "СВДм-2": 8,
     "РП-74": 8,
     "Гаусс-пушка": 10,
-    "РВК «Чемпион Зоны»": 9,
+    "РПК «Чемпион Зоны»": 9,
     "ВСС «Серебряный сталкер»": 8,
 }
 
@@ -1638,7 +1638,7 @@ def _season_days_left(season: dict[str, Any], now: datetime) -> int:
 def _season_reward_blurb() -> str:
     return (
         "Награды сезона (не продаются у торговца):\n"
-        "🥇 РВК «Чемпион Зоны» + Костюм «Чемпион Зоны»\n"
+        "🥇 РПК «Чемпион Зоны» + Костюм «Чемпион Зоны»\n"
         "🥈 ВСС «Серебряный сталкер»\n"
         "🥉 Бронекостюм «Бронза сезона»"
     )
