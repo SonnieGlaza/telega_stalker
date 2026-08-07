@@ -41,6 +41,12 @@ from app.mutant_assets import (
     mutant_sprite_image,
     pick_mutant_kind,
 )
+from app.mission_icons import (
+    ANOMALY_ICON_KEY,
+    MISSION_ICON_GRID_DIAMETER,
+    OBJECTIVE_ICON_KEY,
+    mission_icon_image,
+)
 from app.npc_assets import (
     MISSION_NPC_GRID_DIAMETER,
     NPC_SPRITE_KEYS,
@@ -611,7 +617,8 @@ def start_or_resume_quest_mission(
         f"{KIND_LABELS.get(template.mission_kind, template.mission_kind)}. "
         f"Энергия −{quest.energy_cost}.\n"
         f"Угрозы ({template.difficulty}): {threat_txt}.\n"
-        "Зелёные точки — цели. Дойди до них и вернись на старт.\n"
+        "Зелёная обводка — ты и цели (собери их). Красная — враги. Аномалии без обводки.\n"
+        "Дойди до целей и вернись на старт (зелёная рамка клетки).\n"
         "Мутанты и НПС с шансом 50% сдвигаются на соседнюю клетку каждый ход.",
         payload={
             "mission_image": image,
@@ -870,6 +877,20 @@ def _glow(img: Image.Image, cx: int, cy: int, color: tuple[int, int, int], radiu
     img.alpha_composite(overlay)
 
 
+def _paste_token_circle(
+    canvas: Image.Image,
+    token: Image.Image,
+    cx: int,
+    cy: int,
+    diameter: int,
+) -> None:
+    """Круглый спрайт без цветной обводки (аномалии)."""
+    token = token.convert("RGBA").resize((diameter, diameter), Image.Resampling.LANCZOS)
+    mask = Image.new("L", (diameter, diameter), 0)
+    ImageDraw.Draw(mask).ellipse((1, 1, diameter - 2, diameter - 2), fill=255)
+    canvas.paste(token, (cx - diameter // 2, cy - diameter // 2), mask)
+
+
 def _draw_enemy_icon(draw: ImageDraw.ImageDraw, cx: int, cy: int, *, marauder: bool) -> None:
     if marauder:
         # Мародёр — тёмная фигура + красный акцент.
@@ -916,13 +937,17 @@ def render_mission_frame(
     for hx, hy in session.hazards:
         cx = margin + hx * cell + cell // 2
         cy = margin + hy * cell + cell // 2
-        # Аномалия — оранжевое свечение.
-        _glow(canvas, cx, cy, (255, 120, 40), 24)
+        sprite = mission_icon_image(ANOMALY_ICON_KEY)
+        if sprite is not None:
+            # Аномалия — спрайт без цветной обводки (не цель и не враг).
+            _paste_token_circle(canvas, sprite, cx, cy, MISSION_ICON_GRID_DIAMETER)
+        else:
+            _glow(canvas, cx, cy, (255, 120, 40), 24)
 
+    enemy_ring = (210, 55, 45)
     for i, (ex, ey) in enumerate(session.enemies):
         cx = margin + ex * cell + cell // 2
         cy = margin + ey * cell + cell // 2
-        _glow(canvas, cx, cy, (90, 200, 70), 18)
         kind = (
             session.enemy_kinds[i]
             if i < len(session.enemy_kinds)
@@ -936,7 +961,7 @@ def render_mission_frame(
                 cx,
                 cy,
                 MISSION_MUTANT_GRID_DIAMETER,
-                ring_color=(120, 200, 80),
+                ring_color=enemy_ring,
                 ring_width=3,
             )
         else:
@@ -945,7 +970,6 @@ def render_mission_frame(
     for i, (nx_, ny_) in enumerate(session.npcs):
         cx = margin + nx_ * cell + cell // 2
         cy = margin + ny_ * cell + cell // 2
-        _glow(canvas, cx, cy, (200, 60, 50), 18)
         kind = (
             session.npc_kinds[i]
             if i < len(session.npc_kinds)
@@ -959,18 +983,31 @@ def render_mission_frame(
                 cx,
                 cy,
                 MISSION_NPC_GRID_DIAMETER,
-                ring_color=(200, 80, 60),
+                ring_color=enemy_ring,
                 ring_width=3,
             )
         else:
             _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=True)
 
+    objective_ring = (72, 220, 90)
     for ox, oy in session.objectives:
         if (ox, oy) in session.collected:
             continue
         cx = margin + ox * cell + cell // 2
         cy = margin + oy * cell + cell // 2
-        _glow(canvas, cx, cy, (70, 230, 110), 22)
+        sprite = mission_icon_image(OBJECTIVE_ICON_KEY)
+        if sprite is not None:
+            _paste_circle(
+                canvas,
+                sprite,
+                cx,
+                cy,
+                MISSION_ICON_GRID_DIAMETER,
+                ring_color=objective_ring,
+                ring_width=4,
+            )
+        else:
+            _glow(canvas, cx, cy, (70, 230, 110), 22)
 
     # Игрок — аватар персонажа в зелёном кольце.
     px, py = session.player
@@ -1038,7 +1075,7 @@ def render_mission_frame(
     if session.objectives_done:
         draw.text((pl + 18, y + 72), ">> Вернись на старт!", fill=(120, 255, 140), font=body)
     else:
-        draw.text((pl + 18, y + 72), "Собери / зачисти поле", fill=(170, 170, 170), font=small)
+        draw.text((pl + 18, y + 72), "Зелёные — цели, красные — враги", fill=(170, 170, 170), font=small)
 
     hp = int(character.health) if character else 0
     max_hp = int(effective_max_health(character)) if character else 100
