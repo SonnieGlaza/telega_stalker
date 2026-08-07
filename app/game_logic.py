@@ -694,6 +694,43 @@ AUCTION_DEFAULT_LOTS: dict[str, tuple[str, int, int]] = {
     "medkit": ("medkit", 2, 420),
 }
 
+# Предметы, которые можно выставить на биржу собственным лотом (не экипировка).
+CUSTOM_EXCHANGE_ITEM_KEYS = {
+    "ammo_pack",
+    "energy_drink",
+    "vodka",
+    "diesel_can",
+    "gasoline_can",
+    "fuel_can",
+    "stash_case",
+}
+CUSTOM_EXCHANGE_ITEM_PREFIXES = ("artifact", "detector_", "medkit")
+
+EXCHANGE_CATEGORIES = ("all", "artifact", "consumable", "fuel", "other")
+EXCHANGE_CATEGORY_LABELS = {
+    "all": "все",
+    "artifact": "артефакты",
+    "consumable": "расходники",
+    "fuel": "топливо",
+    "other": "прочее",
+}
+EXCHANGE_FUEL_ITEM_KEYS = {"diesel_can", "gasoline_can", "fuel_can"}
+EXCHANGE_CONSUMABLE_ITEM_KEYS = {
+    "ammo_pack",
+    "medkit",
+    "medkit_army",
+    "medkit_science",
+    "energy_drink",
+    "vodka",
+    "antirad",
+    "bread",
+    "sausage",
+    "stew",
+    "water_bottle",
+    "mineral_water",
+    "beard_tea",
+}
+
 MARKET_SELL_FEE_PERCENT = 25
 EXCHANGE_SELL_FEE_PERCENT = 30
 TRADER_EQUIPMENT_SELL_RATE = 1 / 3
@@ -5596,6 +5633,25 @@ def _is_equipment_item(item_key: str) -> bool:
     return item_key in WEAPON_CATALOG or item_key in ARMOR_CATALOG
 
 
+def _is_custom_exchange_item(item_key: str) -> bool:
+    """Предметы, которые можно выставить на биржу собственным лотом (не экипировка)."""
+    if _is_equipment_item(item_key):
+        return False
+    if item_key in CUSTOM_EXCHANGE_ITEM_KEYS:
+        return True
+    return item_key.startswith(CUSTOM_EXCHANGE_ITEM_PREFIXES)
+
+
+def _exchange_lot_category(item_key: str) -> str:
+    if item_key.startswith("artifact"):
+        return "artifact"
+    if item_key in EXCHANGE_FUEL_ITEM_KEYS:
+        return "fuel"
+    if item_key in EXCHANGE_CONSUMABLE_ITEM_KEYS:
+        return "consumable"
+    return "other"
+
+
 def _list_open_exchange_lots(storage: Storage) -> list[dict[str, Any]]:
     """Биржа: общие лоты расходников/артефактов (не экипировка)."""
     return [
@@ -5605,18 +5661,85 @@ def _list_open_exchange_lots(storage: Storage) -> list[dict[str, Any]]:
     ]
 
 
+def list_sellable_exchange_items(storage: Storage, telegram_id: int) -> list[dict[str, int | str]]:
+    """Список предметов из инвентаря, доступных для выставления собственным лотом на бирже."""
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return []
+    rows: list[dict[str, int | str]] = []
+    for item_key, owned in sorted(player.inventory.items()):
+        amount = int(owned)
+        if amount <= 0 or not _is_custom_exchange_item(item_key):
+            continue
+        rows.append(
+            {
+                "item_key": item_key,
+                "title": ITEM_LABELS.get(item_key, item_key),
+                "amount": amount,
+            }
+        )
+    return rows
+
+
+def create_custom_exchange_lot(
+    storage: Storage,
+    telegram_id: int,
+    item_key: str,
+    amount: int,
+    price: int,
+) -> ActionResult:
+    """Создает собственный лот биржи с произвольной ценой (не экипировка)."""
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if amount <= 0:
+        return ActionResult(False, "Количество для лота должно быть больше нуля.")
+    if price <= 0:
+        return ActionResult(False, "Цена лота должна быть больше нуля.")
+    if not _is_custom_exchange_item(item_key):
+        return ActionResult(False, "Этот предмет нельзя выставить на биржу (только не экипировка).")
+    item_name = ITEM_LABELS.get(item_key, item_key)
+    if not storage.remove_item(telegram_id, item_key, amount):
+        return ActionResult(False, f"Недостаточно предметов ({item_name}) для лота.")
+    auction_id = storage.create_auction(
+        seller_id=telegram_id,
+        faction=player.faction or "market",
+        item_key=item_key,
+        amount=amount,
+        price=price,
+    )
+    storage.add_player_stat(telegram_id, "trades_done", 1)
+    _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    return ActionResult(
+        True,
+        f"Лот #{auction_id} создан: {item_name} x{amount} за {price} RU.\n"
+        f"Комиссия при продаже: {EXCHANGE_SELL_FEE_PERCENT}%.{achievements_text}",
+    )
+
+
 def build_exchange_lots_overview(
     storage: Storage,
     telegram_id: int,
     limit: int = 12,
+    *,
+    category: str | None = None,
 ) -> tuple[str, list[dict[str, int | str]]]:
     """Список открытых лотов биржи (не экипировка) с id/ценой/предметом."""
     lots = sorted(_list_open_exchange_lots(storage), key=lambda a: int(a["id"]))
+    normalized_category = (category or "all").strip().lower()
+    if normalized_category not in EXCHANGE_CATEGORIES:
+        normalized_category = "all"
+    if normalized_category != "all":
+        lots = [lot for lot in lots if _exchange_lot_category(str(lot["item_key"])) == normalized_category]
     shown = lots[: max(1, limit)]
+    category_label = EXCHANGE_CATEGORY_LABELS.get(normalized_category, "все")
     if not shown:
-        return ("Открытых лотов биржи сейчас нет.", [])
+        return (f"Открытых лотов биржи ({category_label}) сейчас нет.", [])
     rows: list[dict[str, int | str]] = []
-    lines = [f"Биржа: открытые лоты (комиссия {EXCHANGE_SELL_FEE_PERCENT}%):"]
+    lines = [f"Биржа: открытые лоты — {category_label} (комиссия {EXCHANGE_SELL_FEE_PERCENT}%):"]
     for lot in shown:
         item_key = str(lot["item_key"])
         title = ITEM_LABELS.get(item_key, item_key)

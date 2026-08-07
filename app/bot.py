@@ -112,6 +112,7 @@ from app.game_logic import (
     cancel_own_first_auction,
     build_exchange_lots_overview,
     buy_exchange_lot,
+    EXCHANGE_SELL_FEE_PERCENT,
     cancel_own_auction,
     cancel_all_raids_by_leader,
     cancel_raid_by_leader,
@@ -190,6 +191,8 @@ from app.game_logic import (
     build_market_lots_overview,
     list_sellable_market_equipment,
     cancel_own_first_market_lot,
+    list_sellable_exchange_items,
+    create_custom_exchange_lot,
     withdraw_from_faction_warehouse,
     withdraw_from_faction_treasury,
     deposit_to_faction_treasury,
@@ -279,6 +282,7 @@ from app.keyboards import (
     market_lots_keyboard,
     market_create_select_keyboard,
     exchange_lots_keyboard,
+    exchange_custom_select_keyboard,
     war_sections_keyboard,
     players_factions_keyboard,
     players_faction_page_keyboard,
@@ -537,6 +541,7 @@ class Registration(StatesGroup):
     gender = State()
     topup_custom_stars = State()
     market_lot_price = State()
+    auction_lot_price = State()
     treasury_deposit_custom = State()
     treasury_withdraw_custom = State()
 
@@ -809,7 +814,8 @@ def _build_info_text(player: Character) -> str:
         "• 🏕 Вылазка — война, переходы, рейды и 👥 кооп-вылазка (можно эвакуировать раненого напарника).\n"
         "• 👥 Группировка — склад/казна/гараж: сдать может любой; забрать склад/гараж с 5 ранга, "
         "казна — только лидер. В гараже хранятся канистры топлива и сданные Нивы/грузовики.\n"
-        "• 🏦 Экономика — биржа (список открытых лотов расходников/артефактов), рынок снаряжения, перевозка контрабанды.\n"
+        "• 🏦 Экономика — биржа (свои лоты, фильтры по категориям: артефакты/расходники/топливо), "
+        "рынок снаряжения, перевозка контрабанды.\n"
         "• 📋 Задания — контракты с переездом (есть 🗓 контракты дня и 📅 контракт недели "
         f"с бонусом +{DAILY_CONTRACT_BONUS_PERCENT}%/+{WEEKLY_CONTRACT_BONUS_PERCENT}% RU); "
         "контрабанда — рисковый курьерский рейс.\n\n"
@@ -4768,16 +4774,89 @@ async def auction_cancel_mine_callback(callback: CallbackQuery) -> None:
     await reply_action_result(callback, result.text)
 
 
-@router.callback_query(F.data == "eco:auction:list")
-async def auction_list_callback(callback: CallbackQuery) -> None:
+@router.callback_query(F.data == "eco:auction:custom:choose")
+async def auction_custom_choose_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     storage = get_storage()
     player = storage.get_character(callback.from_user.id, refresh_energy=False)
     if player is None:
         await callback.answer("Сначала создай персонажа.", show_alert=True)
         return
-    text, lots = build_exchange_lots_overview(storage, callback.from_user.id, limit=12)
+    options = list_sellable_exchange_items(storage, callback.from_user.id)
+    if not options:
+        await callback.answer("В инвентаре нет подходящих предметов для своего лота на бирже.", show_alert=True)
+        return
+    await edit_menu_message(
+        callback,
+        "Выбери предмет из инвентаря для своего лота на бирже:",
+        exchange_custom_select_keyboard(options),
+    )
+
+
+@router.callback_query(F.data.startswith("eco:auction:custom:"))
+async def auction_custom_create_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    item_key = (callback.data or "").split(":", maxsplit=3)[3]
+    await state.set_state(Registration.auction_lot_price)
+    await state.update_data(auction_item_key=item_key)
+    await edit_menu_message(
+        callback,
+        "Введи цену лота в RU (целое число больше 0).\n"
+        "Пример: 500\n"
+        f"Комиссия биржи {EXCHANGE_SELL_FEE_PERCENT}%: покупатель платит цену лота, продавец получает остаток.",
+        economy_keyboard(),
+    )
+
+
+@router.message(Registration.auction_lot_price)
+async def process_auction_lot_price(message: Message, state: FSMContext) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await state.clear()
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+
+    raw_price = (message.text or "").strip().replace(" ", "")
+    try:
+        lot_price = int(raw_price)
+    except ValueError:
+        await message.answer("Цена должна быть целым числом, например: 500")
+        return
+    if lot_price <= 0:
+        await message.answer("Цена должна быть больше нуля.")
+        return
+
+    data = await state.get_data()
+    item_key = str(data.get("auction_item_key", "")).strip()
+    if not item_key:
+        await state.clear()
+        await message.answer("Не удалось определить предмет для лота. Попробуй снова через Экономику.")
+        return
+
+    result = create_custom_exchange_lot(get_storage(), message.from_user.id, item_key, 1, price=lot_price)
+    await state.clear()
+    await message.answer(action_result_text(message.from_user.id, result.text))
+
+
+@router.callback_query(F.data == "eco:auction:list")
+async def auction_list_callback(callback: CallbackQuery) -> None:
+    await _render_exchange_lots_list(callback, category="all")
+
+
+@router.callback_query(F.data.startswith("eco:auction:list:"))
+async def auction_list_filtered_callback(callback: CallbackQuery) -> None:
+    category = (callback.data or "").split(":", maxsplit=3)[3]
+    await _render_exchange_lots_list(callback, category=category)
+
+
+async def _render_exchange_lots_list(callback: CallbackQuery, *, category: str) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    text, lots = build_exchange_lots_overview(storage, callback.from_user.id, limit=12, category=category)
     menu_text = text if not lots else f"{text}\n\nВыбери лот:"
-    await edit_menu_message(callback, menu_text, exchange_lots_keyboard(lots))
+    await edit_menu_message(callback, menu_text, exchange_lots_keyboard(lots, category=category))
 
 
 @router.callback_query(F.data.startswith("eco:auction:buy:"))

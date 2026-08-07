@@ -908,6 +908,7 @@ def economy_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот арт «Антирад»", callback_data="eco:auction:create:artifact_antirad")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот патроны", callback_data="eco:auction:create:ammo_pack")],
             [InlineKeyboardButton(text="⚖️ Биржа: создать лот аптечки", callback_data="eco:auction:create:medkit")],
+            [InlineKeyboardButton(text="⚖️ Биржа: свой лот", callback_data="eco:auction:custom:choose")],
             [InlineKeyboardButton(text="🛒 Рынок: выставить экипировку", callback_data="eco:market:create:choose")],
             [InlineKeyboardButton(text="🛒 Рынок: список лотов экипировки", callback_data="eco:market:list")],
             [InlineKeyboardButton(text="🛑 Рынок: отменить мой лот", callback_data="eco:market:cancel:mine")],
@@ -965,8 +966,27 @@ def market_lot_keyboard(lots: list[dict[str, str | int]]) -> InlineKeyboardMarku
     return market_lots_keyboard(lots)
 
 
-def exchange_lots_keyboard(lots: list[dict[str, Any]]) -> InlineKeyboardMarkup:
+EXCHANGE_FILTER_BUTTONS: tuple[tuple[str, str], ...] = (
+    ("all", "Все"),
+    ("artifact", "Артефакты"),
+    ("consumable", "Расходники"),
+    ("fuel", "Топливо"),
+)
+
+
+def exchange_lots_keyboard(
+    lots: list[dict[str, Any]],
+    *,
+    category: str = "all",
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    filter_row: list[InlineKeyboardButton] = []
+    for filter_key, label in EXCHANGE_FILTER_BUTTONS:
+        text = f"• {label}" if filter_key == category else label
+        callback_data = "eco:auction:list" if filter_key == "all" else f"eco:auction:list:{filter_key}"
+        filter_row.append(InlineKeyboardButton(text=text, callback_data=callback_data))
+    rows.append(filter_row)
+    lot_rows: list[list[InlineKeyboardButton]] = []
     for lot in lots[:20]:
         lot_id = int(lot["id"])
         title = str(lot["title"])
@@ -974,7 +994,7 @@ def exchange_lots_keyboard(lots: list[dict[str, Any]]) -> InlineKeyboardMarkup:
         amount = int(lot["amount"])
         seller_id = int(lot["seller_id"])
         if lot.get("is_own"):
-            rows.append(
+            lot_rows.append(
                 [
                     InlineKeyboardButton(
                         text=f"🛑 #{lot_id} {title} x{amount} • {price} RU (твой, отменить)",
@@ -983,7 +1003,7 @@ def exchange_lots_keyboard(lots: list[dict[str, Any]]) -> InlineKeyboardMarkup:
                 ]
             )
         else:
-            rows.append(
+            lot_rows.append(
                 [
                     InlineKeyboardButton(
                         text=f"#{lot_id} {title} x{amount} • {price} RU • продавец {seller_id}",
@@ -991,8 +1011,9 @@ def exchange_lots_keyboard(lots: list[dict[str, Any]]) -> InlineKeyboardMarkup:
                     )
                 ]
             )
-    if not rows:
-        rows.append([InlineKeyboardButton(text="Открытых лотов нет", callback_data="alliance:none")])
+    if not lot_rows:
+        lot_rows.append([InlineKeyboardButton(text="Открытых лотов нет", callback_data="alliance:none")])
+    rows.extend(lot_rows)
     rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -1008,6 +1029,26 @@ def market_create_select_keyboard(items: list[dict[str, str | int]]) -> InlineKe
                 InlineKeyboardButton(
                     text=f"{title} (x{amount})",
                     callback_data=f"eco:market:create:{item_key}",
+                )
+            ]
+        )
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Нет подходящих вещей", callback_data="alliance:none")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def exchange_custom_select_keyboard(items: list[dict[str, str | int]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in items[:20]:
+        item_key = str(item["item_key"])
+        title = str(item["title"])
+        amount = int(item["amount"])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{title} (x{amount})",
+                    callback_data=f"eco:auction:custom:{item_key}",
                 )
             ]
         )
