@@ -25,6 +25,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
+from app.fsm_nav import REPLY_NAV_BUTTONS, abort_fsm_if_nav
 from app.artifact_hunt import (
     abandon_artifact_hunt,
     get_hunt_session,
@@ -618,6 +619,7 @@ TREASURY_CUSTOM_MAX_RU = 1_000_000
 WAREHOUSE_CUSTOM_MIN = 1
 WAREHOUSE_CUSTOM_MAX = 10_000
 WAREHOUSE_CUSTOM_ITEM_KEYS = frozenset({"ammo_pack", "medkit", "energy_drink", "artifact"})
+FSM_CANCEL_HINT = "\nОтмена: /cancel или «⬅️ В меню»."
 
 
 def get_storage() -> Storage:
@@ -894,20 +896,21 @@ def _build_info_text(player: Character) -> str:
         "Команды:\n"
         "• /start — создать персонажа или войти.\n"
         "• /menu — главное меню.\n"
+        "• /cancel — отменить ввод суммы/количества.\n"
         "• /info — эта справка.\n"
         f"• /pay [id] [сумма] — перевод (комиссия {TRANSFER_FEE_PERCENT}%).\n"
         "• /дуэль [id] — вызвать на дуэль (ID в КПК → Игроки).\n"
         f"  Проигравший: HP опускается до {DUEL_LOSER_HP_REMAINING}, "
         f"−{DUEL_LOSER_MONEY_PERCENT}% денег (макс. {DUEL_LOSER_MONEY_CAP} RU).\n\n"
         "Механики:\n"
-        "• 🗺 Переходы: 1 игр. мин ≈ 10 сек реально;\n"
+        "• 🗺 Переходы: 1 игровая минута ≈ 10 сек реально;\n"
         f"  пешком ×1, велосипед ×{TRAVEL_SPEED_BICYCLE:g}, "
         f"Нива ×{TRAVEL_SPEED_NIVA:g} + бензин, грузовик ×{TRAVEL_SPEED_TRUCK:g} + дизель. "
         "Награда за контракт (если доехал на этом транспорте): "
         "пешком ×1, велосипед ×1.5, Нива ×2, грузовик ×3. "
         "На арендованной технике нельзя слезть и идти пешком.\n"
-        "• 📋 Контракты: вылазка на сетке — сам обходишь угрозы (аномалии/мутанты/НПС) "
-        "и решаешь, победить или обойти; чем выше сложность, тем больше угроз.\n"
+        "• 📋 Контракты: тактическая вылазка 6×6 — обходишь или побеждаешь аномалии, "
+        "мутантов и НПС; чем выше сложность, тем больше угроз и награда.\n"
         "• 🗓 Контракты дня/недели: ротация в «Заданиях», бонус RU и рейтинга сверху, "
         "1 раз за период на игрока.\n"
         "• ☢️ Выброс: предупреждения за 60 и 30 мин, затем волны убийства по зонам — "
@@ -919,7 +922,9 @@ def _build_info_text(player: Character) -> str:
         f"база {BASE_POINT_INCOME_PER_HOUR} RU/ч.\n"
         f"• 🔗 Реферал: пригласившему +{REFERRAL_INVITER_BONUS_RU} RU.\n"
         "• 🛏 Спальник — ×2 реген энергии.\n"
-        "• 💎 Артефакты — поиск детектором по таблицам локаций.\n"
+        "• 💎 Артефакты — «📡 Поиск артефактов» в инвентаре: тактическая охота на сетке "
+        "(нужен детектор).\n"
+        "• ⚔️ Война: нейтральные точки — соло-захват; чужие — лобби от 5 бойцов (тактический штурм).\n"
         "• 🎖 Скины по рейтингу: 0 / 500 / 2000 / 5000.\n"
         "• 📅 Сезон рейтинга: раз в 14 дней топ-3 получает эксклюзивную снарягу "
         "(🥇 пушка+броня, 🥈 пушка, 🥉 броня; у торговца не продаётся).\n\n"
@@ -952,7 +957,8 @@ async def handle_topup(callback: CallbackQuery, bot: Bot, state: FSMContext) -> 
     if option == "custom":
         await state.set_state(Registration.topup_custom_stars)
         await callback.message.answer(
-            f"Введи количество звезд для пополнения (от {TOPUP_MIN_STARS} до {TOPUP_MAX_STARS})."
+            f"Введи количество звёзд для пополнения (от {TOPUP_MIN_STARS} до {TOPUP_MAX_STARS}).\n"
+            "Отмена: /cancel или «⬅️ В меню»."
         )
         await callback.answer()
         return
@@ -973,6 +979,8 @@ async def handle_topup(callback: CallbackQuery, bot: Bot, state: FSMContext) -> 
 
 @router.message(Registration.topup_custom_stars)
 async def process_custom_topup_stars(message: Message, state: FSMContext, bot: Bot) -> None:
+    if await abort_fsm_if_nav(message, state):
+        return
     player = ensure_character(message)
     if player is None:
         await state.clear()
@@ -983,11 +991,11 @@ async def process_custom_topup_stars(message: Message, state: FSMContext, bot: B
     try:
         stars_amount = int(raw_value)
     except ValueError:
-        await message.answer("Нужно ввести целое число звезд, например: 7")
+        await message.answer("Нужно ввести целое число звёзд, например: 7")
         return
     if stars_amount < TOPUP_MIN_STARS or stars_amount > TOPUP_MAX_STARS:
         await message.answer(
-            f"Некорректное количество. Допустимо от {TOPUP_MIN_STARS} до {TOPUP_MAX_STARS} звезд."
+            f"Некорректное количество. Допустимо от {TOPUP_MIN_STARS} до {TOPUP_MAX_STARS} звёзд."
         )
         return
 
@@ -2461,7 +2469,6 @@ def _quests_menu_payload(storage, player):
 
     contract_buttons: list[tuple[str, str]] = []
     show_work = False
-    show_turnin = False
     show_go_home = False
     show_cancel = bool(active)
 
@@ -2471,7 +2478,6 @@ def _quests_menu_payload(storage, player):
         if stage == "work" and template:
             show_work = player.location == template.work_location and not traveling
         if stage == "return":
-            show_turnin = player.location == home and not traveling
             show_go_home = player.location != home and not traveling
     elif at_home:
         from app.game_logic import (
@@ -2499,14 +2505,13 @@ def _quests_menu_payload(storage, player):
     keyboard = quests_keyboard(
         contract_buttons=contract_buttons,
         show_work=show_work,
-        show_turnin=show_turnin,
         show_go_home=show_go_home,
         show_cancel=show_cancel,
     )
     intro = (
-        "Контракты с переходами: прими на базе, доберись до точки, выполни работу на поле.\n"
-        "Угрозы по сложности: легко — аномалии; средне — аномалии+мутанты; "
-        "опасно — аномалии+мутанты+НПС; невозможно — всё вместе.\n"
+        "Контракты с переходами: прими на базе, доберись до точки, выполни вылазку на поле 6×6.\n"
+        "Угрозы: легко — аномалии; средне — аномалии+мутанты; "
+        "опасно и невозможно — аномалии+мутанты+НПС (сложнее = больше угроз и награда).\n"
         "Мутанты и НПС с шансом 50% сдвигаются на соседнюю клетку.\n"
         "🚚 Контрабанда — отдельная кнопка ниже.\n\n"
     )
@@ -3470,8 +3475,20 @@ async def clan_quest_claim_callback(callback: CallbackQuery) -> None:
     )
 
 
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext) -> None:
+    current = await state.get_state()
+    if current is None:
+        await message.answer("Нечего отменять.")
+        return
+    await state.clear()
+    await message.answer("Ввод отменён.", reply_markup=main_menu_keyboard())
+
+
 @router.message(F.text == "⬅️ В меню")
-async def pda_back_to_menu(message: Message) -> None:
+async def pda_back_to_menu(message: Message, state: FSMContext) -> None:
+    if await state.get_state():
+        await state.clear()
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
@@ -4558,23 +4575,85 @@ async def war_scenario_section_callback(callback: CallbackQuery) -> None:
     alliance_overview = build_alliance_overview(db, player.telegram_id)
     explainer = (
         "Правила войны:\n"
-        "• Захват точек — только через военное лобби (минимум 5 бойцов).\n"
-        "• Базы штурмуются только лобби; рейды — на логова (не базы).\n"
-        "• 🏚 Рейды на склад/гараж врага (раздел «🪖 Рейды») — только против группировок, "
-        "с которыми нет союза; крадут часть склада/канистр/технику.\n"
-        "• Соло-штурм одним игроком отключён.\n"
+        "• Нейтральные точки — соло-захват на тактической сетке "
+        "(«🎯 Захват нейтральных точек»).\n"
+        "• Чужие точки и базы — только военное лобби (минимум 5 бойцов), "
+        "тактический штурм на сетке.\n"
+        "• Лидер на своей точке может передать её союзнику "
+        "(«🎁 Передача точки союзнику»).\n"
+        "• Рейды на логова — в «🪖 Рейды» (мин. 2 бойца); на склад/гараж врага — "
+        "только без союза.\n"
         "• Нельзя штурмовать свои и союзнические точки.\n"
-        "• При успехе контроль получает группировка-хост лобби.\n"
-        "• Точки ресурсов и базы дают контроль и преимущества на карте.\n"
-        "• Точки интереса уменьшают время прибытия.\n"
-        "• Шанс боя: сила отряда / (сила отряда + сила NPC + укрепление базы).\n"
+        "• При успехе лобби контроль получает группировка-хост.\n"
+        "• Точки ресурсов и базы дают контроль; точки интереса ускоряют переходы.\n"
         "• Укрепление базы: лидер, 10000 RU из казны, +1 к защите за уровень.\n"
-        "• Казна и склад — в разделе «👥 Группировка».\n"
+        "• Казна и склад — в «👥 Группировка».\n"
     )
     await edit_menu_message(
         callback,
         explainer + "\n" + alliance_overview,
         alliance_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "war:section:ncap")
+async def war_ncap_section_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or not player_ready(player):
+        await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
+        return
+    neutral = [
+        loc
+        for loc in storage.get_locations()
+        if not str(loc.get("controlled_by") or "").strip()
+    ]
+    if not neutral:
+        await edit_menu_message(
+            callback,
+            "Сейчас нет нейтральных точек для захвата.",
+            war_sections_keyboard(),
+        )
+        return
+    await edit_menu_message(
+        callback,
+        "Выбери нейтральную точку для соло-захвата (тактическая сетка):",
+        locations_keyboard(neutral, mode="war", back_callback="war:section:root"),
+    )
+
+
+@router.callback_query(F.data == "war:section:transfer")
+async def war_transfer_section_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or not player_ready(player):
+        await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
+        return
+    if player.faction is None or storage.get_faction_leader_id(player.faction) != callback.from_user.id:
+        await callback.answer("Передавать точку может только лидер группировки.", show_alert=True)
+        return
+    loc_name = player.location
+    location = storage.get_location(loc_name)
+    if location is None or str(location.get("controlled_by") or "") != player.faction:
+        await edit_menu_message(
+            callback,
+            f"Передача доступна только на точке под контролем «{player.faction}».\n"
+            f"Сейчас ты на «{loc_name}».",
+            war_sections_keyboard(),
+        )
+        return
+    allies = sorted(storage.list_faction_alliances(player.faction))
+    if not allies:
+        await edit_menu_message(
+            callback,
+            f"Точка «{loc_name}» под вашим контролем, но нет союзников для передачи.",
+            war_sections_keyboard(),
+        )
+        return
+    await edit_menu_message(
+        callback,
+        f"Точка «{loc_name}» под контролем «{player.faction}». Кому передать?",
+        war_transfer_keyboard(allies, loc_name),
     )
 
 
@@ -5038,6 +5117,7 @@ async def warehouse_deposit_callback(callback: CallbackQuery, state: FSMContext)
         await callback.message.answer(
             f"Сколько «{label}» сдать на склад?\n"
             f"Введи целое число от {WAREHOUSE_CUSTOM_MIN} до {WAREHOUSE_CUSTOM_MAX}."
+            f"{FSM_CANCEL_HINT}"
         )
     await callback.answer()
 
@@ -5066,6 +5146,7 @@ async def warehouse_withdraw_callback(callback: CallbackQuery, state: FSMContext
         await callback.message.answer(
             f"Сколько «{label}» забрать со склада?\n"
             f"Введи целое число от {WAREHOUSE_CUSTOM_MIN} до {WAREHOUSE_CUSTOM_MAX}."
+            f"{FSM_CANCEL_HINT}"
         )
     await callback.answer()
 
@@ -5191,6 +5272,8 @@ def _parse_warehouse_custom_amount(raw: str) -> int | None:
 
 @router.message(Registration.warehouse_deposit_custom)
 async def process_warehouse_deposit_custom(message: Message, state: FSMContext) -> None:
+    if await abort_fsm_if_nav(message, state):
+        return
     player = ensure_character(message)
     if player is None:
         await state.clear()
@@ -5219,6 +5302,8 @@ async def process_warehouse_deposit_custom(message: Message, state: FSMContext) 
 
 @router.message(Registration.warehouse_withdraw_custom)
 async def process_warehouse_withdraw_custom(message: Message, state: FSMContext) -> None:
+    if await abort_fsm_if_nav(message, state):
+        return
     player = ensure_character(message)
     if player is None:
         await state.clear()
@@ -5260,6 +5345,7 @@ async def treasury_deposit_callback(callback: CallbackQuery, state: FSMContext) 
             await callback.message.answer(
                 "Введи сумму для внесения в казну (целое число RU).\n"
                 f"Допустимо: от {TREASURY_CUSTOM_MIN_RU} до {TREASURY_CUSTOM_MAX_RU}."
+                f"{FSM_CANCEL_HINT}"
             )
         await callback.answer()
         return
@@ -5292,6 +5378,7 @@ async def treasury_withdraw_callback(callback: CallbackQuery, state: FSMContext)
             await callback.message.answer(
                 "Введи сумму для снятия из казны (целое число RU).\n"
                 f"Допустимо: от {TREASURY_CUSTOM_MIN_RU} до {TREASURY_CUSTOM_MAX_RU}."
+                f"{FSM_CANCEL_HINT}"
             )
         await callback.answer()
         return
@@ -5317,6 +5404,8 @@ def _parse_treasury_custom_amount(raw: str) -> int | None:
 
 @router.message(Registration.treasury_deposit_custom)
 async def process_treasury_deposit_custom(message: Message, state: FSMContext) -> None:
+    if await abort_fsm_if_nav(message, state):
+        return
     player = ensure_character(message)
     if player is None:
         await state.clear()
@@ -5339,6 +5428,8 @@ async def process_treasury_deposit_custom(message: Message, state: FSMContext) -
 
 @router.message(Registration.treasury_withdraw_custom)
 async def process_treasury_withdraw_custom(message: Message, state: FSMContext) -> None:
+    if await abort_fsm_if_nav(message, state):
+        return
     player = ensure_character(message)
     if player is None:
         await state.clear()
@@ -5423,6 +5514,11 @@ async def economy_root_callback(callback: CallbackQuery) -> None:
         return
     text = build_economy_overview(get_storage(), player.telegram_id)
     await edit_menu_message(callback, text, economy_keyboard())
+
+
+@router.callback_query(F.data == "rank:leader:info")
+async def rank_leader_info_callback(callback: CallbackQuery) -> None:
+    await callback.answer("Лидеру нельзя назначить звание самому себе.", show_alert=True)
 
 
 @router.callback_query(F.data == "rank:menu")
@@ -5544,6 +5640,8 @@ async def market_create_callback(callback: CallbackQuery, state: FSMContext) -> 
 
 @router.message(Registration.market_lot_price)
 async def process_market_lot_price(message: Message, state: FSMContext) -> None:
+    if await abort_fsm_if_nav(message, state):
+        return
     player = ensure_character(message)
     if player is None:
         await state.clear()
@@ -5655,6 +5753,8 @@ async def auction_custom_create_callback(callback: CallbackQuery, state: FSMCont
 
 @router.message(Registration.auction_lot_price)
 async def process_auction_lot_price(message: Message, state: FSMContext) -> None:
+    if await abort_fsm_if_nav(message, state):
+        return
     player = ensure_character(message)
     if player is None:
         await state.clear()
@@ -5893,7 +5993,7 @@ async def run_bot() -> None:
                     for user_id in storage.list_faction_member_ids(faction):
                         notify_ids.add(int(user_id))
                     for user_id in notify_ids:
-                        if not is_notify_enabled(storage, user_id, "faction"):
+                        if not is_notify_enabled(storage, user_id, "garage"):
                             continue
                         try:
                             await bot.send_message(user_id, message_text)

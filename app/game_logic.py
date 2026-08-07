@@ -1276,7 +1276,7 @@ def append_survival_craving_notice(storage: Storage, telegram_id: int, text: str
 
 
 def _dead_block_text() -> str:
-    return "Персонаж мертв (HP=0). Используй респавн из инвентаря."
+    return "Персонаж мёртв (HP=0). Используй респавн из инвентаря."
 
 
 DEATH_CAUSE_META_PREFIX = "death:last_cause:"
@@ -2699,13 +2699,13 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
             elif stage == "return":
                 if character.location == home and not is_traveling(character):
                     lines.append(
-                        f"   ✅ Ты на базе «{home}» — жми «Сдать отчёт» "
-                        f"(+{CONTRACT_TURN_IN_BONUS_PERCENT}% RU) или просто обнови меню."
+                        f"   ✅ Ты на базе «{home}» — отчёт сдастся при обновлении меню "
+                        f"(+{CONTRACT_TURN_IN_BONUS_PERCENT}% RU)."
                     )
                 else:
                     lines.append(
-                        f"   🗺 Вернись на базу «{home}» — отчёт сдастся при прибытии "
-                        f"(+{CONTRACT_TURN_IN_BONUS_PERCENT}% RU)."
+                        f"   🗺 Вернись на базу «{home}» (кнопка «На базу» или переход) — "
+                        f"отчёт сдастся при прибытии (+{CONTRACT_TURN_IN_BONUS_PERCENT}% RU)."
                     )
         lines.append("")
     else:
@@ -5197,14 +5197,14 @@ def declare_war(storage: Storage, telegram_id: int, target_faction: str) -> Acti
 
 
 def attack_location(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
-    """Сolo-штурм чужих точек отключён; нейтральные — тактический захват."""
+    """Соло-захват нейтральных точек — тактическая сетка; занятые — только лобби."""
     loc = storage.get_location(location_name)
     if loc is None:
         return ActionResult(False, "Локация не найдена.")
     if loc.get("controlled_by"):
         return ActionResult(
             False,
-            f"Сolo-штурм занятой точки отключён. Собери военное лобби минимум из "
+            f"Соло-штурм занятой точки отключён. Собери военное лобби минимум из "
             f"{WAR_MIN_FACTION_MEMBERS} бойцов (раздел «⚔️ Война» → «🪖 Военные лобби»).",
         )
     from app.neutral_capture import start_neutral_capture
@@ -6623,8 +6623,19 @@ def build_market_lots_overview(
         amount = int(lot["amount"])
         price = int(lot["price"])
         seller_id = int(lot["seller_id"])
-        rows.append({"id": lot_id, "title": title, "amount": amount, "price": price, "seller_id": seller_id})
-        lines.append(f"• #{lot_id} {title} x{amount} — {price} RU (продавец {seller_id})")
+        seller = storage.get_character(seller_id, refresh_energy=False)
+        seller_name = seller.nickname if seller else str(seller_id)
+        rows.append(
+            {
+                "id": lot_id,
+                "title": title,
+                "amount": amount,
+                "price": price,
+                "seller_id": seller_id,
+                "seller_name": seller_name,
+            }
+        )
+        lines.append(f"• #{lot_id} {title} x{amount} — {price} RU (продавец {seller_name})")
     return ("\n".join(lines), rows)
 
 
@@ -8557,11 +8568,12 @@ def claim_daily_login(storage: Storage, telegram_id: int) -> ActionResult:
 
 # --- Настройки уведомлений -------------------------------------------------
 
-NOTIFY_PREF_KEYS: tuple[str, ...] = ("emission", "death", "coop")
+NOTIFY_PREF_KEYS: tuple[str, ...] = ("emission", "death", "coop", "garage")
 NOTIFY_PREF_LABELS: dict[str, str] = {
     "emission": "☢️ Выброс",
     "death": "☠️ Смерть",
     "coop": "👥 Совместные вылазки",
+    "garage": "🏚 Гараж (возврат аренды)",
 }
 
 
@@ -8649,6 +8661,23 @@ TUTORIAL_PAGES: tuple[tuple[str, str], ...] = (
         "Смерть и респавн",
         "HP=0 — не конец. За RU персонаж восстанавливается на домашней базе, но часть "
         "рюкзака теряется при гибели. Журнал последних смертей смотри в КПК → «☠️ Смерти».",
+    ),
+    (
+        "Война и рейды",
+        "«🏕 Вылазка» → «⚔️ Война»: нейтральные точки захватываешь соло на тактической сетке; "
+        "чужие — через лобби минимум из 5 бойцов (тактический штурм). "
+        "«🪖 Рейды» — минимум 2 бойца на логово или склад/гараж врага.",
+    ),
+    (
+        "Экономика и гараж",
+        "«🏦 Экономика» — биржа, рынок снаряги, контрабанда. "
+        "«👥 Группировка» — склад, казна, гараж: аренда техники (1–4 ранг запрос, 5+ выдача), "
+        "топливо из гаража или за свой счёт.",
+    ),
+    (
+        "Артефакты и рейтинг",
+        "«📡 Поиск артефактов» в инвентаре — тактическая охота на сетке (нужен детектор). "
+        "«🏆 Рейтинг» — общий и сезонный топ; сезон раз в 14 дней даёт эксклюзивную снарягу.",
     ),
 )
 
