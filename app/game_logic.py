@@ -866,7 +866,7 @@ DEPOT_RAID_LABELS: dict[str, str] = {"warehouse": "склад", "garage": "га�
 DEPOT_RAID_ENERGY_COST = 16
 DEPOT_RAID_MIN_LOOT_PERCENT = 20
 DEPOT_RAID_MAX_LOOT_PERCENT = 50
-DEPOT_RAID_VEHICLE_STEAL_CHANCE = 15  # % шанс угнать 1 машину сверху канистр (только гараж)
+DEPOT_RAID_VEHICLE_STEAL_CHANCE = 5  # % шанс угнать 1 машину сверху канистр (только гараж)
 DEPOT_RAID_FAIL_MONEY_PENALTY = 90
 DEPOT_RAID_DEFENSE_POWER_RATIO = 0.55  # доля силы домашней базы цели, обороняющая склад/гараж
 
