@@ -256,6 +256,15 @@ SNAPSHOT_SYNC_SECONDS = 300
 POINTS_INCOME_TICK_SECONDS = 60
 TRAVEL_ETA_TICK_SECONDS = 1
 TRAVEL_ETA_MSG_META_PREFIX = "travel_eta_msg:"
+_travel_eta_locks: dict[int, asyncio.Lock] = {}
+
+
+def _travel_eta_lock(telegram_id: int) -> asyncio.Lock:
+    lock = _travel_eta_locks.get(telegram_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _travel_eta_locks[telegram_id] = lock
+    return lock
 TOPUP_RATE_RU_PER_STAR = 75
 TOPUP_PAYLOAD_PREFIX = "topup_stars:"
 TOPUP_ALLOWED_AMOUNTS = {1, 5, 10, 25}
@@ -293,24 +302,25 @@ async def upsert_travel_eta_message(bot: Bot, telegram_id: int, text: str) -> No
     clean = (text or "").strip()
     if not clean:
         return
-    message_id = get_travel_eta_message_id(storage, telegram_id)
-    if message_id is not None:
-        try:
-            await bot.edit_message_text(chat_id=telegram_id, message_id=message_id, text=clean)
-            return
-        except TelegramBadRequest as exc:
-            low = str(exc).lower()
-            if "message is not modified" in low:
+    async with _travel_eta_lock(telegram_id):
+        message_id = get_travel_eta_message_id(storage, telegram_id)
+        if message_id is not None:
+            try:
+                await bot.edit_message_text(chat_id=telegram_id, message_id=message_id, text=clean)
                 return
-            # Сообщение удалили / нельзя править — шлём новое.
-            logger.debug("Travel ETA edit failed for %s: %s", telegram_id, exc)
+            except TelegramBadRequest as exc:
+                low = str(exc).lower()
+                if "message is not modified" in low:
+                    return
+                logger.debug("Travel ETA edit failed for %s: %s", telegram_id, exc)
+            except Exception:
+                logger.debug("Travel ETA edit error for %s", telegram_id, exc_info=True)
+            clear_travel_eta_message_id(storage, telegram_id)
+        try:
+            sent = await bot.send_message(telegram_id, clean)
+            set_travel_eta_message_id(storage, telegram_id, sent.message_id)
         except Exception:
-            logger.debug("Travel ETA edit error for %s", telegram_id, exc_info=True)
-    try:
-        sent = await bot.send_message(telegram_id, clean)
-        set_travel_eta_message_id(storage, telegram_id, sent.message_id)
-    except Exception:
-        logger.debug("Travel ETA send failed for %s", telegram_id, exc_info=True)
+            logger.debug("Travel ETA send failed for %s", telegram_id, exc_info=True)
 
 
 async def publish_travel_live_eta(bot: Bot, telegram_id: int) -> None:
@@ -3152,10 +3162,11 @@ async def show_travel(message: Message) -> None:
     db = get_storage()
     locations = db.get_locations()
     traveling = is_traveling(player)
-    status = travel_status_with_smuggle(db, player.telegram_id) or travel_status_text(player)
-    if traveling and status:
+    if traveling:
+        loc = format_location_display(player)
         text = (
-            f"{status}\n\n"
+            f"{loc}\n"
+            "⏱ Отсчёт времени — в отдельном сообщении с таймером.\n\n"
             "Пока идёт переход, другие действия на точке недоступны."
         )
     else:
@@ -3248,6 +3259,7 @@ async def travel_go_callback(callback: CallbackQuery, bot: Bot) -> None:
         await callback.message.answer(action_result_text(callback.from_user.id, result.text))
     else:
         await bot.send_message(callback.from_user.id, action_result_text(callback.from_user.id, result.text))
+    clear_travel_eta_message_id(get_storage(), callback.from_user.id)
     await publish_travel_live_eta(bot, callback.from_user.id)
 
 
@@ -4111,6 +4123,7 @@ async def smuggle_go_callback(callback: CallbackQuery, bot: Bot) -> None:
             await callback.message.answer(action_result_text(callback.from_user.id, result.text))
         else:
             await bot.send_message(callback.from_user.id, action_result_text(callback.from_user.id, result.text))
+        clear_travel_eta_message_id(get_storage(), callback.from_user.id)
         await publish_travel_live_eta(bot, callback.from_user.id)
         return
     await reply_action_result(callback, result.text, bot=bot)

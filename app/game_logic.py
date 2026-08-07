@@ -1983,14 +1983,9 @@ def format_location_display(character: Character) -> str:
     if is_traveling(character):
         transport = character.travel_transport or "пешком"
         labels = {"foot": "пешком", "bicycle": "на велосипеде", "niva": "на Ниве", "truck": "на грузовике"}
-        remaining = (
-            format_remaining_travel(character.travel_arrives_at)
-            if character.travel_arrives_at is not None
-            else "скоро"
-        )
         return (
-            f"В пути → «{character.travel_destination}» ({labels.get(transport, transport)}), "
-            f"осталось {remaining}"
+            f"В пути → «{character.travel_destination}» "
+            f"({labels.get(transport, transport)})"
         )
     return character.location
 
@@ -2101,6 +2096,9 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
         f"• Локация: {format_location_display(character)}",
         "",
     ]
+    if is_traveling(character):
+        lines.append("⏱ Отсчёт времени в пути — в отдельном сообщении с таймером.")
+        lines.append("")
     active = storage.get_active_contract(character.telegram_id)
     if active:
         template = QUEST_CONTRACTS.get(str(active.get("template_key", "")))
@@ -6191,9 +6189,8 @@ def build_smuggling_overview(storage: Storage, telegram_id: int) -> str:
         chance = int(active.get("success_chance") or 0)
         if is_traveling(player):
             lines.append(
-                f"В пути с грузом → «{dest}». "
-                f"Шанс доставить без ограбления ~{chance}%.\n"
-                f"Прибытие: {format_travel_eta(player)}"
+                f"Рейс на «{dest}» (шанс доставить ~{chance}%). "
+                f"Отсчёт времени — в отдельном сообщении ниже."
             )
         elif player.location == dest:
             lines.append(
