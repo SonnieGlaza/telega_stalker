@@ -15,7 +15,7 @@ FACTION_BOT_DEFAULT_COUNT = 3
 FACTION_BOT_MAX_COUNT = 5
 
 BOT_T1_WEAPONS: tuple[str, ...] = ("ПМ", "Фора-12", "Обрез")
-BOT_T2_WEAPONS: tuple[str, ...] = ("Гадюка-5", "Chaser-13", "АКС-74У")
+BOT_T2_WEAPONS: tuple[str, ...] = ("Гадюка-5", "Чейзер-13", "АКС-74У")
 BOT_T1_ARMOR = "Кожаная куртка"
 BOT_T2_ARMOR = "Сталкерский бронежилет"
 

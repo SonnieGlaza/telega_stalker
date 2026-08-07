@@ -188,12 +188,12 @@ WEAPON_CATALOG: dict[str, dict[str, int | str]] = {
     "weapon_pm": {"name": "ПМ", "buy_price": 1470, "sell_price": 690},
     "weapon_fort12": {"name": "Фора-12", "buy_price": 2130, "sell_price": 1010},
     "weapon_sawedoff": {"name": "Обрез", "buy_price": 1960, "sell_price": 920},
-    "weapon_chaser13": {"name": "Chaser-13", "buy_price": 4090, "sell_price": 1960},
+    "weapon_chaser13": {"name": "Чейзер-13", "buy_price": 4090, "sell_price": 1960},
     "weapon_spas12": {"name": "СПАС-12", "buy_price": 6380, "sell_price": 3110},
     "weapon_mp5": {"name": "Гадюка-5", "buy_price": 3600, "sell_price": 1720},
     "weapon_aks74u": {"name": "АКС-74У", "buy_price": 4250, "sell_price": 1960},
     "weapon_ak74": {"name": "АК-74", "buy_price": 5560, "sell_price": 2620},
-    "weapon_lr300": {"name": "TRs 301", "buy_price": 8180, "sell_price": 3930},
+    "weapon_lr300": {"name": "ТРс-301", "buy_price": 8180, "sell_price": 3930},
     "weapon_il86": {"name": "ИЛ86", "buy_price": 8510, "sell_price": 4090},
     "weapon_gp37": {"name": "ГП37", "buy_price": 12930, "sell_price": 6380},
     "weapon_an94": {"name": "АН-94", "buy_price": 8510, "sell_price": 4090},
@@ -256,11 +256,11 @@ WEAPON_RATING_BY_NAME: dict[str, int] = {
     "Фора-12": 2,
     "Обрез": 2,
     "Гадюка-5": 3,
-    "Chaser-13": 3,
+    "Чейзер-13": 3,
     "АКС-74У": 3,
     "АК-74": 5,
     "СПАС-12": 5,
-    "TRs 301": 7,
+    "ТРс-301": 7,
     "ИЛ86": 7,
     "АН-94": 7,
     "ГП37": 8,
@@ -345,12 +345,12 @@ ITEM_LABELS = {
     "weapon_fort12": "Фора-12",
     "weapon_fora12": "Фора-12",
     "weapon_sawedoff": "Обрез",
-    "weapon_chaser13": "Chaser-13",
+    "weapon_chaser13": "Чейзер-13",
     "weapon_spas12": "СПАС-12",
     "weapon_mp5": "Гадюка-5",
     "weapon_aks74u": "АКС-74У",
     "weapon_ak74": "АК-74",
-    "weapon_lr300": "TRs 301",
+    "weapon_lr300": "ТРс-301",
     "weapon_il86": "ИЛ86",
     "weapon_gp37": "ГП37",
     "weapon_an94": "АН-94",
@@ -4973,7 +4973,7 @@ def propose_alliance(storage: Storage, telegram_id: int, target_faction: str) ->
             (
                 int(target_leader_id),
                 f"🤝 {h(player.faction)} предлагает союз.\n"
-                f"Открой «⚔️ Война» → дипломатия → «Подтвердить союз».",
+                f"Открой «⚔️ Война» → «📘 Правила и дипломатия» → «Подтвердить входящий договор».",
             ),
         )
     return ActionResult(
@@ -8253,7 +8253,7 @@ NOTIFY_PREF_KEYS: tuple[str, ...] = ("emission", "death", "coop")
 NOTIFY_PREF_LABELS: dict[str, str] = {
     "emission": "☢️ Выброс",
     "death": "☠️ Смерть",
-    "coop": "👥 Кооп",
+    "coop": "👥 Совместные вылазки",
 }
 
 
@@ -8323,8 +8323,8 @@ TUTORIAL_PAGES: tuple[tuple[str, str], ...] = (
         "работы, выполни задание и вернись сдать отчёт — награда придёт автоматически.",
     ),
     (
-        "Кооп",
-        "«🏕 Вылазка» → «👥 Кооп-вылазка» — собери команду и вместе зачищайте точку. "
+        "Совместная вылазка",
+        "«🏕 Вылазка» → «👥 Совместная вылазка» — собери команду и вместе зачищайте точку. "
         "Раненого напарника можно эвакуировать, если бой пошёл не по плану.",
     ),
     (

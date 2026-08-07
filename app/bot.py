@@ -4166,7 +4166,7 @@ async def show_sortie(message: Message) -> None:
     )
 
 
-@router.message(F.text == "👥 Кооп-вылазка")
+@router.message(F.text == "👥 Совместная вылазка")
 async def show_coop_menu(message: Message, bot: Bot) -> None:
     player = ensure_character(message)
     if player is None:
@@ -4495,7 +4495,7 @@ async def war_scenario_section_callback(callback: CallbackQuery) -> None:
         return
     alliance_overview = build_alliance_overview(db, player.telegram_id)
     explainer = (
-        "Сценарий войны:\n"
+        "Правила войны:\n"
         "• Захват точек — только через военное лобби (минимум 5 бойцов).\n"
         "• Базы штурмуются только лобби; рейды — на логова (не базы).\n"
         "• 🏚 Рейды на склад/гараж врага (раздел «🪖 Рейды») — только против группировок, "
