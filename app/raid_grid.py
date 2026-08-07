@@ -20,7 +20,6 @@ from app.game_logic import (
     RATING_REWARD,
     RAID_ARTIFACT_DROP_CHANCE,
     RAID_ARTIFACT_MIN_ENEMY_POWER,
-    _active_location_event_modifier,
     _add_rating,
     _apply_durability_decay,
     _maybe_drop_stash,
