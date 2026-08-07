@@ -877,13 +877,10 @@ def faction_group_keyboard(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="🏛 Клановые задачи", callback_data="clanquest:open")],
-        [InlineKeyboardButton(text="📦 Склад группировки", callback_data="faction:warehouse:view")],
         [InlineKeyboardButton(text="📥 Сдать патрон (1 шт.)", callback_data="eco:warehouse:deposit:ammo_pack")],
         [InlineKeyboardButton(text="📥 Сдать аптечку (1 шт.)", callback_data="eco:warehouse:deposit:medkit")],
         [InlineKeyboardButton(text="📥 Сдать энергетик (1 шт.)", callback_data="eco:warehouse:deposit:energy_drink")],
         [InlineKeyboardButton(text="📥 Сдать артефакт (1 шт.)", callback_data="eco:warehouse:deposit:artifact")],
-        [InlineKeyboardButton(text="💰 Внести 500 RU в казну", callback_data="eco:treasury:deposit:500")],
-        [InlineKeyboardButton(text="💰 Внести 1000 RU в казну", callback_data="eco:treasury:deposit:1000")],
         [InlineKeyboardButton(text="💰 Внести своё количество", callback_data="eco:treasury:deposit:custom")],
         [InlineKeyboardButton(text="🏚 Гараж: сдать канистру бензина", callback_data="faction:garage:deposit:gasoline")],
         [InlineKeyboardButton(text="🏚 Гараж: сдать канистру дизеля", callback_data="faction:garage:deposit:diesel")],
@@ -922,8 +919,6 @@ def faction_group_keyboard(
     if can_withdraw_treasury:
         rows.extend(
             [
-                [InlineKeyboardButton(text="🏦 Вывести 500 RU из казны", callback_data="eco:treasury:withdraw:500")],
-                [InlineKeyboardButton(text="🏦 Вывести 1000 RU из казны", callback_data="eco:treasury:withdraw:1000")],
                 [InlineKeyboardButton(text="🏦 Снять своё количество", callback_data="eco:treasury:withdraw:custom")],
             ]
         )
