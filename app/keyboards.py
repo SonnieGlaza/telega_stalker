@@ -911,6 +911,7 @@ def economy_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🛑 Рынок: отменить мой лот", callback_data="eco:market:cancel:mine")],
             [InlineKeyboardButton(text="⚖️ Биржа: купить старейший лот", callback_data="eco:auction:buy:first")],
             [InlineKeyboardButton(text="🛑 Биржа: отменить мой старейший лот", callback_data="eco:auction:cancel:mine")],
+            [InlineKeyboardButton(text="⚖️ Биржа: список лотов", callback_data="eco:auction:list")],
             [InlineKeyboardButton(text="🚚 Контрабанда: перевозка", callback_data="eco:smuggle:menu")],
         ]
     )
@@ -960,6 +961,38 @@ def market_lots_keyboard(lots: list[dict[str, str | int]]) -> InlineKeyboardMark
 
 def market_lot_keyboard(lots: list[dict[str, str | int]]) -> InlineKeyboardMarkup:
     return market_lots_keyboard(lots)
+
+
+def exchange_lots_keyboard(lots: list[dict[str, Any]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for lot in lots[:20]:
+        lot_id = int(lot["id"])
+        title = str(lot["title"])
+        price = int(lot["price"])
+        amount = int(lot["amount"])
+        seller_id = int(lot["seller_id"])
+        if lot.get("is_own"):
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"🛑 #{lot_id} {title} x{amount} • {price} RU (твой, отменить)",
+                        callback_data=f"eco:auction:cancel:{lot_id}",
+                    )
+                ]
+            )
+        else:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"#{lot_id} {title} x{amount} • {price} RU • продавец {seller_id}",
+                        callback_data=f"eco:auction:buy:{lot_id}",
+                    )
+                ]
+            )
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Открытых лотов нет", callback_data="alliance:none")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def market_create_select_keyboard(items: list[dict[str, str | int]]) -> InlineKeyboardMarkup:

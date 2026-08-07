@@ -5370,6 +5370,116 @@ def _list_open_exchange_lots(storage: Storage) -> list[dict[str, Any]]:
     ]
 
 
+def build_exchange_lots_overview(
+    storage: Storage,
+    telegram_id: int,
+    limit: int = 12,
+) -> tuple[str, list[dict[str, int | str]]]:
+    """Список открытых лотов биржи (не экипировка) с id/ценой/предметом."""
+    lots = sorted(_list_open_exchange_lots(storage), key=lambda a: int(a["id"]))
+    shown = lots[: max(1, limit)]
+    if not shown:
+        return ("Открытых лотов биржи сейчас нет.", [])
+    rows: list[dict[str, int | str]] = []
+    lines = [f"Биржа: открытые лоты (комиссия {EXCHANGE_SELL_FEE_PERCENT}%):"]
+    for lot in shown:
+        item_key = str(lot["item_key"])
+        title = ITEM_LABELS.get(item_key, item_key)
+        lot_id = int(lot["id"])
+        amount = int(lot["amount"])
+        price = int(lot["price"])
+        seller_id = int(lot["seller_id"])
+        is_own = seller_id == telegram_id
+        rows.append(
+            {
+                "id": lot_id,
+                "title": title,
+                "amount": amount,
+                "price": price,
+                "seller_id": seller_id,
+                "is_own": is_own,
+            }
+        )
+        own_note = " (твой лот)" if is_own else ""
+        lines.append(f"• #{lot_id} {title} x{amount} — {price} RU (продавец {seller_id}){own_note}")
+    return ("\n".join(lines), rows)
+
+
+def buy_exchange_lot(storage: Storage, telegram_id: int, lot_id: int) -> ActionResult:
+    """Покупка конкретного лота биржи по id (аналог рыночной покупки, с биржевой комиссией)."""
+    buyer = storage.get_character(telegram_id, refresh_energy=False)
+    if buyer is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(buyer):
+        return ActionResult(False, _dead_block_text())
+    lot = storage.get_open_auction(lot_id)
+    if lot is None:
+        return ActionResult(False, "Лот не найден или уже закрыт.")
+    if _is_equipment_item(str(lot["item_key"])):
+        return ActionResult(False, "Этот лот относится к рынку экипировки, а не к бирже.")
+    seller_id = int(lot["seller_id"])
+    if seller_id == telegram_id:
+        return ActionResult(False, "Нельзя выкупить собственный лот.")
+    price = int(lot["price"])
+    item_key = str(lot["item_key"])
+    amount = int(lot["amount"])
+    fee = max(1, int(round(price * (EXCHANGE_SELL_FEE_PERCENT / 100))))
+    seller_income = max(0, price - fee)
+    if not storage.complete_auction_sale(
+        lot_id,
+        buyer_id=telegram_id,
+        seller_id=seller_id,
+        price=price,
+        seller_income=seller_income,
+        item_key=item_key,
+        amount=amount,
+    ):
+        return ActionResult(False, "Недостаточно денег или лот уже недоступен.")
+    storage.add_player_stat(telegram_id, "trades_done", 1)
+    storage.add_player_stat(seller_id, "trades_done", 1)
+    _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
+    _add_rating(storage, seller_id, RATING_REWARD["trade_action"])
+    storage.add_player_stat(seller_id, "money_earned", seller_income)
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    seller_achievements = _progress_and_unlock_achievements(storage, seller_id)
+    buyer_name = h(buyer.nickname)
+    item_name = ITEM_LABELS.get(item_key, item_key)
+    seller_msg = (
+        f"🛒 {buyer_name} купил(а) твой лот #{lot_id}: "
+        f"{item_name} x{amount} за {price} RU.\n"
+        f"На баланс: +{seller_income} RU (комиссия {fee} RU).{seller_achievements}"
+    )
+    return ActionResult(
+        True,
+        f"Куплен лот #{lot_id}: {item_name} x{amount} за {price} RU.\n"
+        f"Продавец получил {seller_income} RU (комиссия {fee} RU).{achievements_text}",
+        payload={"notify": [(seller_id, seller_msg)]},
+    )
+
+
+def cancel_own_auction(storage: Storage, telegram_id: int, lot_id: int) -> ActionResult:
+    """Отмена своего конкретного лота биржи по id."""
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    lot = storage.get_open_auction(lot_id)
+    if lot is None:
+        return ActionResult(False, "Лот не найден или уже закрыт.")
+    if int(lot["seller_id"]) != telegram_id:
+        return ActionResult(False, "Отменить можно только свой лот.")
+    item_key = str(lot["item_key"])
+    amount = int(lot["amount"])
+    if not storage.close_auction(lot_id, buyer_id=None, status="cancelled"):
+        return ActionResult(False, "Не удалось отменить лот.")
+    storage.add_item(telegram_id, item_key, amount)
+    return ActionResult(
+        True,
+        f"Лот #{lot_id} отменен, предметы возвращены: {ITEM_LABELS.get(item_key, item_key)} x{amount}.",
+    )
+
+
 def _equipment_sell_price(base_sell_price: int, durability: int | None = None) -> int:
     base = max(1, int(round(base_sell_price * TRADER_EQUIPMENT_SELL_RATE)))
     if durability is None:

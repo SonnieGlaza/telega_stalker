@@ -110,6 +110,9 @@ from app.game_logic import (
     buy_item,
     buy_first_faction_auction,
     cancel_own_first_auction,
+    build_exchange_lots_overview,
+    buy_exchange_lot,
+    cancel_own_auction,
     cancel_all_raids_by_leader,
     cancel_raid_by_leader,
     create_faction_auction,
@@ -270,6 +273,7 @@ from app.keyboards import (
     war_transfer_keyboard,
     market_lots_keyboard,
     market_create_select_keyboard,
+    exchange_lots_keyboard,
     war_sections_keyboard,
     players_factions_keyboard,
     players_faction_page_keyboard,
@@ -4730,6 +4734,42 @@ async def auction_buy_first_callback(callback: CallbackQuery, bot: Bot) -> None:
 @router.callback_query(F.data == "eco:auction:cancel:mine")
 async def auction_cancel_mine_callback(callback: CallbackQuery) -> None:
     result = cancel_own_first_auction(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "eco:auction:list")
+async def auction_list_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    text, lots = build_exchange_lots_overview(storage, callback.from_user.id, limit=12)
+    menu_text = text if not lots else f"{text}\n\nВыбери лот:"
+    await edit_menu_message(callback, menu_text, exchange_lots_keyboard(lots))
+
+
+@router.callback_query(F.data.startswith("eco:auction:buy:"))
+async def auction_buy_by_id_callback(callback: CallbackQuery, bot: Bot) -> None:
+    lot_id = (callback.data or "").split(":", maxsplit=3)[3]
+    try:
+        auction_id = int(lot_id)
+    except ValueError:
+        await callback.answer("Некорректный ID лота.", show_alert=True)
+        return
+    result = buy_exchange_lot(get_storage(), callback.from_user.id, auction_id)
+    await finish_callback_action(callback, result, bot)
+
+
+@router.callback_query(F.data.startswith("eco:auction:cancel:"))
+async def auction_cancel_by_id_callback(callback: CallbackQuery) -> None:
+    lot_id = (callback.data or "").split(":", maxsplit=3)[3]
+    try:
+        auction_id = int(lot_id)
+    except ValueError:
+        await callback.answer("Некорректный ID лота.", show_alert=True)
+        return
+    result = cancel_own_auction(get_storage(), callback.from_user.id, auction_id)
     await reply_action_result(callback, result.text)
 
 
