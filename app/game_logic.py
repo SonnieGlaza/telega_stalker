@@ -81,7 +81,7 @@ QUEST_CONTRACTS: dict[str, QuestContractTemplate] = {
         "Рейд в Тёмную долину",
         "Темная долина",
         min_transport="niva",
-        mission_kind="clear_marauder",
+        mission_kind="clear_mutant",
     ),
     "heavy_boloto": QuestContractTemplate(
         "heavy_boloto", "heavy", "Опасный сбор на Болоте", "Болото", mission_kind="collect"
@@ -100,7 +100,7 @@ QUEST_CONTRACTS: dict[str, QuestContractTemplate] = {
         "Зачистка в Тёмной долине",
         "Темная долина",
         min_transport="niva",
-        mission_kind="clear_mutant",
+        mission_kind="clear_marauder",
     ),
     "impossible_radar": QuestContractTemplate(
         "impossible_radar",

@@ -69,6 +69,14 @@ DIFFICULTY_DANGER_BONUS: dict[str, int] = {
     "impossible": 3,
 }
 
+# Сложность → состав угроз на поле: аномалии / мутанты / НПС.
+DIFFICULTY_THREATS: dict[str, tuple[bool, bool, bool]] = {
+    "easy": (True, False, False),
+    "hard": (True, True, False),
+    "heavy": (True, False, True),
+    "impossible": (True, True, True),
+}
+
 KIND_LABELS: dict[str, str] = {
     "collect": "Сбор",
     "scout": "Разведка",
@@ -77,6 +85,8 @@ KIND_LABELS: dict[str, str] = {
     "clear_marauder": "Зачистка мародёров",
     "anomaly": "Аномалии",
 }
+
+HOSTILE_MOVE_CHANCE = 0.5
 
 
 @dataclass
@@ -90,8 +100,9 @@ class QuestMissionSession:
     start: tuple[int, int]
     objectives: list[tuple[int, int]]
     collected: list[tuple[int, int]] = field(default_factory=list)
-    hazards: list[tuple[int, int]] = field(default_factory=list)  # аномалии / препятствия
-    enemies: list[tuple[int, int]] = field(default_factory=list)  # мутанты / мародёры
+    hazards: list[tuple[int, int]] = field(default_factory=list)  # аномалии
+    enemies: list[tuple[int, int]] = field(default_factory=list)  # мутанты
+    npcs: list[tuple[int, int]] = field(default_factory=list)  # мародёры / НПС
     moves: int = 0
     max_moves: int = MAX_MOVES
     grid: int = GRID_SIZE
@@ -111,6 +122,7 @@ class QuestMissionSession:
             "collected": [list(p) for p in self.collected],
             "hazards": [list(p) for p in self.hazards],
             "enemies": [list(p) for p in self.enemies],
+            "npcs": [list(p) for p in self.npcs],
             "moves": self.moves,
             "max_moves": self.max_moves,
             "grid": self.grid,
@@ -132,6 +144,7 @@ class QuestMissionSession:
             collected=[(int(p[0]), int(p[1])) for p in (raw.get("collected") or [])],
             hazards=[(int(p[0]), int(p[1])) for p in (raw.get("hazards") or [])],
             enemies=[(int(p[0]), int(p[1])) for p in (raw.get("enemies") or [])],
+            npcs=[(int(p[0]), int(p[1])) for p in (raw.get("npcs") or [])],
             moves=int(raw.get("moves") or 0),
             max_moves=int(raw.get("max_moves") or MAX_MOVES),
             grid=int(raw.get("grid") or GRID_SIZE),
@@ -172,6 +185,16 @@ def _location_danger(location: str, difficulty: str) -> int:
     return LOCATION_DANGER.get(location, 2) + DIFFICULTY_DANGER_BONUS.get(difficulty, 0)
 
 
+def _difficulty_threat_flags(difficulty: str, kind: str) -> tuple[bool, bool, bool]:
+    """Аномалии / мутанты / НПС по сложности (+ принудительно для зачисток)."""
+    anom, mutants, npcs = DIFFICULTY_THREATS.get(difficulty, (True, False, False))
+    if kind == "clear_mutant":
+        mutants = True
+    if kind == "clear_marauder":
+        npcs = True
+    return anom, mutants, npcs
+
+
 def _free_cell(grid: int, forbidden: set[tuple[int, int]]) -> tuple[int, int]:
     free = [(x, y) for x in range(grid) for y in range(grid) if (x, y) not in forbidden]
     if not free:
@@ -179,9 +202,32 @@ def _free_cell(grid: int, forbidden: set[tuple[int, int]]) -> tuple[int, int]:
     return random.choice(free)
 
 
+def _adjacent_cells(pos: tuple[int, int], grid: int) -> list[tuple[int, int]]:
+    x, y = pos
+    cells: list[tuple[int, int]] = []
+    for dx, dy in MOVE_DELTAS.values():
+        nx, ny = x + dx, y + dy
+        if 0 <= nx < grid and 0 <= ny < grid:
+            cells.append((nx, ny))
+    return cells
+
+
+def _spawn_n(
+    n: int,
+    grid: int,
+    forbidden: set[tuple[int, int]],
+    into: list[tuple[int, int]],
+) -> None:
+    for _ in range(max(0, n)):
+        cell = _free_cell(grid, forbidden)
+        into.append(cell)
+        forbidden.add(cell)
+
+
 def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMissionSession:
     kind = template.mission_kind
-    danger = _location_danger(template.work_location, template.difficulty)
+    difficulty = template.difficulty
+    danger = _location_danger(template.work_location, difficulty)
     grid = GRID_SIZE
     start = (random.randrange(grid), random.randrange(grid))
     forbidden: set[tuple[int, int]] = {start}
@@ -189,76 +235,111 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
     objectives: list[tuple[int, int]] = []
     hazards: list[tuple[int, int]] = []
     enemies: list[tuple[int, int]] = []
+    npcs: list[tuple[int, int]] = []
 
-    if kind in {"collect", "anomaly"}:
-        obj_n = 2 if kind == "collect" and template.difficulty == "easy" else 3
-        if kind == "anomaly":
-            obj_n = 3
-        haz_n = 3 + danger if kind == "anomaly" else 2 + danger // 2
-        for _ in range(obj_n):
-            cell = _free_cell(grid, forbidden)
-            objectives.append(cell)
-            forbidden.add(cell)
-        for _ in range(haz_n):
-            cell = _free_cell(grid, forbidden)
-            hazards.append(cell)
-            forbidden.add(cell)
+    # Цели задания — по типу контракта.
+    if kind in {"clear_mutant", "clear_marauder"}:
+        pass  # цель = зачистить соответствующих врагов
     elif kind == "scout":
         objectives.append(_free_cell(grid, forbidden))
         forbidden.add(objectives[0])
-        for _ in range(2 + danger):
-            cell = _free_cell(grid, forbidden)
-            # Смесь аномалий и «мутантов» как hazards (урон, не смерть).
-            hazards.append(cell)
-            forbidden.add(cell)
+    elif kind == "anomaly":
+        _spawn_n(3, grid, forbidden, objectives)
     elif kind == "loot":
-        obj_n = 2 + (1 if danger >= 3 else 0)
-        for _ in range(obj_n):
-            cell = _free_cell(grid, forbidden)
-            objectives.append(cell)
-            forbidden.add(cell)
-        for _ in range(3 + danger):
-            cell = _free_cell(grid, forbidden)
-            hazards.append(cell)
-            forbidden.add(cell)
-    elif kind in {"clear_mutant", "clear_marauder"}:
-        enemy_n = 2 + danger
-        for _ in range(enemy_n):
-            cell = _free_cell(grid, forbidden)
-            enemies.append(cell)
-            forbidden.add(cell)
+        _spawn_n(2 + (1 if danger >= 3 else 0), grid, forbidden, objectives)
     else:
-        # fallback collect
-        for _ in range(2):
-            cell = _free_cell(grid, forbidden)
-            objectives.append(cell)
-            forbidden.add(cell)
-        for _ in range(3):
-            cell = _free_cell(grid, forbidden)
-            hazards.append(cell)
-            forbidden.add(cell)
+        # collect / fallback
+        obj_n = 2 if difficulty == "easy" else 3
+        _spawn_n(obj_n, grid, forbidden, objectives)
+
+    # Угрозы — строго по сложности (+ добор для зачисток).
+    want_anom, want_mut, want_npc = _difficulty_threat_flags(difficulty, kind)
+    base_n = 2 + max(0, danger // 2)
+    if want_anom:
+        anom_n = base_n + (1 if kind == "anomaly" else 0)
+        _spawn_n(anom_n, grid, forbidden, hazards)
+    if want_mut:
+        mut_n = base_n + (1 if kind == "clear_mutant" else 0)
+        _spawn_n(mut_n, grid, forbidden, enemies)
+    if want_npc:
+        npc_n = base_n + (1 if kind == "clear_marauder" else 0)
+        _spawn_n(npc_n, grid, forbidden, npcs)
 
     return QuestMissionSession(
         contract_key=template.key,
         title=template.title,
         location=template.work_location,
         kind=kind,
-        difficulty=template.difficulty,
+        difficulty=difficulty,
         player=start,
         start=start,
         objectives=objectives,
         hazards=hazards,
         enemies=enemies,
+        npcs=npcs,
         max_moves=MAX_MOVES + danger,
         resources_spent=False,
     )
 
 
 def _objectives_complete(session: QuestMissionSession) -> bool:
-    if session.kind in {"clear_mutant", "clear_marauder"}:
+    if session.kind == "clear_mutant":
         return len(session.enemies) == 0
+    if session.kind == "clear_marauder":
+        return len(session.npcs) == 0
     remaining = [p for p in session.objectives if p not in session.collected]
     return len(remaining) == 0
+
+
+def _occupied_for_hostile_move(session: QuestMissionSession) -> set[tuple[int, int]]:
+    """Клетки, на которые врагам лучше не становиться (кроме клетки игрока)."""
+    blocked: set[tuple[int, int]] = set(session.hazards)
+    blocked.update(session.enemies)
+    blocked.update(session.npcs)
+    return blocked
+
+
+def _move_hostile_units(
+    units: list[tuple[int, int]],
+    session: QuestMissionSession,
+) -> tuple[list[tuple[int, int]], int]:
+    """С шансом HOSTILE_MOVE_CHANCE сдвинуть юнит на соседнюю клетку. Возвращает (новые позиции, сколько сдвинулось)."""
+    moved = 0
+    result: list[tuple[int, int]] = []
+    # Работаем с копией занятости, обновляя по мере ходов.
+    occupied = _occupied_for_hostile_move(session)
+    for pos in units:
+        occupied.discard(pos)
+        if random.random() >= HOSTILE_MOVE_CHANCE:
+            result.append(pos)
+            occupied.add(pos)
+            continue
+        candidates = [
+            cell
+            for cell in _adjacent_cells(pos, session.grid)
+            if cell not in occupied or cell == session.player
+        ]
+        if not candidates:
+            result.append(pos)
+            occupied.add(pos)
+            continue
+        nxt = random.choice(candidates)
+        result.append(nxt)
+        occupied.add(nxt)
+        if nxt != pos:
+            moved += 1
+    return result, moved
+
+
+def _maybe_move_hostiles(session: QuestMissionSession) -> list[str]:
+    notes: list[str] = []
+    session.enemies, mut_moved = _move_hostile_units(list(session.enemies), session)
+    session.npcs, npc_moved = _move_hostile_units(list(session.npcs), session)
+    if mut_moved:
+        notes.append(f"Мутанты сдвинулись ({mut_moved}).")
+    if npc_moved:
+        notes.append(f"НПС сдвинулись ({npc_moved}).")
+    return notes
 
 
 def _combat_damage(location: str, difficulty: str, character: Character) -> int:
@@ -309,9 +390,19 @@ def mission_status_caption(session: QuestMissionSession, character: Character | 
         f"{kind_label} · «{session.location}»",
         f"Ход {session.moves}/{session.max_moves}",
     ]
-    if session.kind in {"clear_mutant", "clear_marauder"}:
-        label = "Мутанты" if session.kind == "clear_mutant" else "Мародёры"
-        lines.append(f"{label}: осталось {len(session.enemies)}")
+    threat_bits: list[str] = []
+    if session.hazards:
+        threat_bits.append(f"аномалии {len(session.hazards)}")
+    if session.enemies:
+        threat_bits.append(f"мутанты {len(session.enemies)}")
+    if session.npcs:
+        threat_bits.append(f"НПС {len(session.npcs)}")
+    if threat_bits:
+        lines.append("Угрозы: " + ", ".join(threat_bits))
+    if session.kind == "clear_mutant":
+        lines.append(f"Зачистка: мутанты осталось {len(session.enemies)}")
+    elif session.kind == "clear_marauder":
+        lines.append(f"Зачистка: НПС осталось {len(session.npcs)}")
     else:
         left = len([p for p in session.objectives if p not in session.collected])
         lines.append(f"Цели: {len(session.collected)}/{len(session.objectives)} (осталось {left})")
@@ -412,13 +503,23 @@ def start_or_resume_quest_mission(
     save_mission_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = _render_for_player(storage, telegram_id, session, player)
+    want_anom, want_mut, want_npc = _difficulty_threat_flags(template.difficulty, template.mission_kind)
+    threat_parts: list[str] = []
+    if want_anom:
+        threat_parts.append("аномалии")
+    if want_mut:
+        threat_parts.append("мутанты")
+    if want_npc:
+        threat_parts.append("НПС")
+    threat_txt = ", ".join(threat_parts) if threat_parts else "без угроз"
     return ActionResult(
         True,
         f"Вылазка: «{template.title}» на «{template.work_location}».\n"
         f"{KIND_LABELS.get(template.mission_kind, template.mission_kind)}. "
         f"Энергия −{quest.energy_cost}.\n"
+        f"Угрозы ({template.difficulty}): {threat_txt}.\n"
         "Зелёные точки — цели. Дойди до них и вернись на старт.\n"
-        "Опасности наносят урон; аномалии на сборе могут убить.",
+        "Мутанты и НПС с шансом 50% сдвигаются на соседнюю клетку каждый ход.",
         payload={
             "mission_image": image,
             "mission_active": True,
@@ -522,12 +623,14 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
         session.collected.append(session.player)
         notes.append("Цель отмечена.")
 
-    # Враг.
-    if session.player in session.enemies:
+    def _fight_on_cell(label: str, unit_attr: str) -> ActionResult | None:
+        nonlocal player, notes
+        units: list[tuple[int, int]] = getattr(session, unit_attr)
+        if session.player not in units:
+            return None
         dmg = _combat_damage(session.location, session.difficulty, player)
         storage.change_health(telegram_id, -dmg)
-        session.enemies = [e for e in session.enemies if e != session.player]
-        label = "мутанта" if session.kind == "clear_mutant" else "мародёра"
+        setattr(session, unit_attr, [e for e in units if e != session.player])
         notes.append(f"Бой с {label}: −{dmg} HP.")
         player = storage.get_character(telegram_id, refresh_energy=False) or player
         if player.health <= 0:
@@ -538,8 +641,16 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
                 f"Ты пал в бою на «{session.location}».\nКонтракт сорван.",
                 payload={"mission_active": False, "mission_dead": True},
             )
+        return None
 
-    # Опасность / аномалия.
+    dead = _fight_on_cell("мутанта", "enemies")
+    if dead is not None:
+        return dead
+    dead = _fight_on_cell("НПС", "npcs")
+    if dead is not None:
+        return dead
+
+    # Аномалия.
     if session.player in session.hazards:
         if session.kind in {"collect", "anomaly"}:
             clear_mission_session(storage, telegram_id)
@@ -552,9 +663,8 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
             )
         dmg = _hazard_damage(session.kind, player)
         storage.change_health(telegram_id, -dmg)
-        # Препятствие/мутант-хазард снимается после контакта.
         session.hazards = [h for h in session.hazards if h != session.player]
-        notes.append(f"Опасность: −{dmg} HP.")
+        notes.append(f"Аномалия: −{dmg} HP.")
         player = storage.get_character(telegram_id, refresh_energy=False) or player
         if player.health <= 0:
             clear_mission_session(storage, telegram_id)
@@ -564,6 +674,17 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
                 f"Раны оказались смертельными на «{session.location}».\nКонтракт сорван.",
                 payload={"mission_active": False, "mission_dead": True},
             )
+
+    # Мутанты и НПС: 50% сдвиг на соседнюю клетку.
+    notes.extend(_maybe_move_hostiles(session))
+
+    # Если враг зашёл на клетку игрока после хода — бой.
+    dead = _fight_on_cell("мутанта", "enemies")
+    if dead is not None:
+        return dead
+    dead = _fight_on_cell("НПС", "npcs")
+    if dead is not None:
+        return dead
 
     if _objectives_complete(session):
         session.objectives_done = True
@@ -686,27 +807,20 @@ def render_mission_frame(
     for hx, hy in session.hazards:
         cx = margin + hx * cell + cell // 2
         cy = margin + hy * cell + cell // 2
-        if session.kind in {"collect", "anomaly"}:
-            _glow(canvas, cx, cy, (255, 120, 40), 24)
-        elif session.kind == "scout":
-            # Аномалия/мутант-пинг.
-            _glow(canvas, cx, cy, (255, 90, 50), 20)
-            _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=False)
-        else:
-            # Препятствие — серый шип.
-            d = ImageDraw.Draw(canvas)
-            d.polygon(
-                [(cx, cy - 18), (cx + 16, cy + 14), (cx - 16, cy + 14)],
-                fill=(90, 90, 95),
-                outline=(40, 40, 45),
-            )
+        # Аномалия — оранжевое свечение.
+        _glow(canvas, cx, cy, (255, 120, 40), 24)
 
     for ex, ey in session.enemies:
         cx = margin + ex * cell + cell // 2
         cy = margin + ey * cell + cell // 2
-        marauder = session.kind == "clear_marauder"
-        _glow(canvas, cx, cy, (200, 60, 50) if marauder else (90, 200, 70), 18)
-        _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=marauder)
+        _glow(canvas, cx, cy, (90, 200, 70), 18)
+        _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=False)
+
+    for nx_, ny_ in session.npcs:
+        cx = margin + nx_ * cell + cell // 2
+        cy = margin + ny_ * cell + cell // 2
+        _glow(canvas, cx, cy, (200, 60, 50), 18)
+        _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=True)
 
     for ox, oy in session.objectives:
         if (ox, oy) in session.collected:
@@ -759,18 +873,29 @@ def render_mission_frame(
     draw.text((pl + 18, pt + 158), KIND_LABELS.get(session.kind, session.kind), fill=(180, 200, 150), font=body)
 
     y = pt + 190
-    if session.kind in {"clear_mutant", "clear_marauder"}:
-        label = "Мутанты" if session.kind == "clear_mutant" else "Мародёры"
-        draw.text((pl + 18, y), f"{label}: {len(session.enemies)}", fill=(230, 180, 160), font=body)
+    if session.kind == "clear_mutant":
+        draw.text((pl + 18, y), f"Мутанты: {len(session.enemies)}", fill=(230, 180, 160), font=body)
+    elif session.kind == "clear_marauder":
+        draw.text((pl + 18, y), f"НПС: {len(session.npcs)}", fill=(230, 180, 160), font=body)
     else:
         done = len(session.collected)
         total = len(session.objectives)
         draw.text((pl + 18, y), f"Цели: {done}/{total}", fill=(150, 230, 170), font=body)
-    draw.text((pl + 18, y + 28), f"Ход {session.moves}/{session.max_moves}", fill=(200, 200, 200), font=small)
+    threat_y = y + 26
+    bits: list[str] = []
+    if session.hazards:
+        bits.append(f"ан.{len(session.hazards)}")
+    if session.enemies:
+        bits.append(f"мут.{len(session.enemies)}")
+    if session.npcs:
+        bits.append(f"нпс.{len(session.npcs)}")
+    if bits:
+        draw.text((pl + 18, threat_y), " ".join(bits), fill=(200, 170, 140), font=small)
+    draw.text((pl + 18, y + 48), f"Ход {session.moves}/{session.max_moves}", fill=(200, 200, 200), font=small)
     if session.objectives_done:
-        draw.text((pl + 18, y + 52), ">> Вернись на старт!", fill=(120, 255, 140), font=body)
+        draw.text((pl + 18, y + 72), ">> Вернись на старт!", fill=(120, 255, 140), font=body)
     else:
-        draw.text((pl + 18, y + 52), "Собери / зачисти поле", fill=(170, 170, 170), font=small)
+        draw.text((pl + 18, y + 72), "Собери / зачисти поле", fill=(170, 170, 170), font=small)
 
     hp = int(character.health) if character else 0
     max_hp = int(effective_max_health(character)) if character else 100
@@ -780,7 +905,7 @@ def render_mission_frame(
     if character is not None:
         meds = sum(int(character.inventory.get(k, 0)) for k in ("medkit", "medkit_army", "medkit_science"))
 
-    bar_top = y + 100
+    bar_top = y + 120
     # HP bar
     draw.rounded_rectangle((pl + 18, bar_top, pr - 18, bar_top + 28), radius=8, fill=(30, 30, 34), outline=(90, 90, 95))
     fill_w = int((pr - pl - 44) * (hp / max(1, max_hp)))

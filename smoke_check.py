@@ -316,8 +316,44 @@ def run_smoke_check() -> None:
         assert session is not None
         assert session.kind == "collect"
         assert len(session.objectives) >= 1
+        # Easy: только аномалии, без мутантов/НПС.
+        assert session.difficulty == "easy"
+        assert len(session.hazards) >= 1
+        assert len(session.enemies) == 0
+        assert len(session.npcs) == 0
         png = render_mission_frame(session, storage.get_character(111, refresh_energy=False))
         assert len(png) > 1000
+
+        # Hard: аномалии + мутанты.
+        from app.quest_mission import _build_session, _difficulty_threat_flags, _maybe_move_hostiles
+        from app.game_logic import QUEST_CONTRACTS, QUESTS
+
+        hard_tpl = QUEST_CONTRACTS["hard_forest"]
+        hard_sess = _build_session(hard_tpl, QUESTS["hard"])
+        assert _difficulty_threat_flags("hard", hard_tpl.mission_kind) == (True, True, False)
+        assert len(hard_sess.hazards) >= 1
+        assert len(hard_sess.enemies) >= 1
+        assert len(hard_sess.npcs) == 0
+
+        # Heavy: аномалии + НПС.
+        heavy_tpl = QUEST_CONTRACTS["heavy_valley"]
+        heavy_sess = _build_session(heavy_tpl, QUESTS["heavy"])
+        assert heavy_tpl.mission_kind == "clear_marauder"
+        assert len(heavy_sess.hazards) >= 1
+        assert len(heavy_sess.npcs) >= 1
+
+        # Impossible: всё вместе.
+        imp_tpl = QUEST_CONTRACTS["impossible_radar"]
+        imp_sess = _build_session(imp_tpl, QUESTS["impossible"])
+        assert len(imp_sess.hazards) >= 1
+        assert len(imp_sess.enemies) >= 1
+        assert len(imp_sess.npcs) >= 1
+
+        # Hostile move: 50% chance path doesn't crash and keeps count.
+        before = len(imp_sess.enemies) + len(imp_sess.npcs)
+        _maybe_move_hostiles(imp_sess)
+        assert len(imp_sess.enemies) + len(imp_sess.npcs) == before
+
         # Forced finish for smoke.
         session.collected = list(session.objectives)
         session.objectives_done = True
