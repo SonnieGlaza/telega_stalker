@@ -2487,7 +2487,7 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
         lines.append(
             f"• {template.title}{badge}{transport_note}\n"
             f"  {quest.title} → «{template.work_location}» | поле 6×6 | "
-            f"RU {quest.reward_min}–{quest.reward_max} | рейтинг +{rating_gain}"
+        f"Базовая награда за успех миссии (уже на поле): RU {quest.reward_min}–{quest.reward_max} | рейтинг +{rating_gain}"
         )
     lines.extend(["", "🚚 Контрабанда — отдельная активность."])
     return "\n".join(lines)
