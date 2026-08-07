@@ -19,7 +19,6 @@ from app.game_logic import (
     ActionResult,
     _add_rating,
     apply_incoming_damage,
-    equipment_power,
     h,
 )
 from app.storage import Character, Storage
@@ -28,7 +27,6 @@ from app.tactical_combat import (
     MOVE_DELTAS,
     NPC_WEAPONS,
     cover_blocks_shot,
-    extra_armor_from_cell,
     random_hostile_shots,
     ray_cast_first_hit,
     weapon_shoot_range,
@@ -103,7 +101,14 @@ class ClanWarGridSession:
     message_ids: dict[str, int] = field(default_factory=dict)
 
     def active_player(self) -> int:
-        return self.turn_order[self.active_index % len(self.turn_order)]
+        if not self.turn_order:
+            return 0
+        for _ in range(len(self.turn_order)):
+            pid = self.turn_order[self.active_index % len(self.turn_order)]
+            if self.hp.get(str(pid), 0) > 0:
+                return pid
+            self.active_index += 1
+        return self.turn_order[0]
 
     def pos(self, player_id: int) -> tuple[int, int]:
         raw = self.positions.get(str(player_id), [0, 0])
@@ -207,6 +212,7 @@ def clear_cwar_session(storage: Storage, session: ClanWarGridSession) -> None:
     storage.delete_meta(_session_key(session.session_id))
     for pid in session.player_ids:
         storage.delete_meta(_player_key(pid))
+    _unregister_active(storage, session.session_id)
 
 
 def _register_active(storage: Storage, session_id: str) -> None:
@@ -291,20 +297,22 @@ def _defender_damage(weapon: str) -> int:
     return max(4, weapon_shoot_range(weapon) * 3 + random.randint(0, 4))
 
 
-def _hostile_turn(session: ClanWarGridSession) -> list[str]:
+def _hostile_turn(storage: Storage, session: ClanWarGridSession) -> list[str]:
     cover_set = set(session.cover)
     base_set = set(session.base_cover)
-    player_pos = {pid: session.pos(pid) for pid in session.player_ids if session.hp.get(str(pid), 0) > 0}
+    alive_ids = [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
+    player_pos = {pid: session.pos(pid) for pid in alive_ids}
+    player_chars = {pid: storage.get_character(pid, refresh_energy=False) for pid in alive_ids}
     return random_hostile_shots(
         session.defenders,
         session.defender_weapons,
         grid=session.grid,
         player_positions=player_pos,
         player_hp=session.hp,
+        player_characters=player_chars,
         cover=cover_set,
         base_cover=base_set,
         damage_fn=_defender_damage,
-        armor_fn=lambda _pid, cell: extra_armor_from_cell(cell, base_set),
     )
 
 
@@ -353,7 +361,7 @@ def _finalize_fail(storage: Storage, session: ClanWarGridSession, reason: str) -
 def _end_session(storage: Storage, session: ClanWarGridSession, result: ActionResult) -> ActionResult:
     for pid in session.player_ids:
         hp_val = session.hp.get(str(pid))
-        if hp_val is not None and hp_val > 0:
+        if hp_val is not None:
             sync_session_hp_to_db(storage, pid, int(hp_val))
     message_ids = dict(session.message_ids)
     session.finished = True
@@ -378,10 +386,14 @@ def start_clan_war_grid(
 
     members: list[Character] = []
     for pid in player_ids:
+        if get_cwar_session_by_player(storage, pid):
+            ch = storage.get_character(pid, refresh_energy=False)
+            name = h(ch.nickname) if ch else str(pid)
+            return ActionResult(False, f"{name} уже в тактическом штурме."), None
         ch = storage.get_character(pid, refresh_energy=False)
         if ch is None or ch.health <= 0:
             return ActionResult(False, "Не все бойцы доступны."), None
-        busy = player_busy_reason(storage, pid, skip="cwar")
+        busy = player_busy_reason(storage, pid)
         if busy:
             return ActionResult(False, f"{h(ch.nickname)}: {busy}"), None
         members.append(ch)
@@ -406,7 +418,7 @@ def start_clan_war_grid(
         f"база справа (+{BASE_COVER_ARMOR_BONUS} брони). Таймер {CWAR_MATCH_SECONDS // 60} мин."
     )
     save_cwar_session(storage, session)
-    _register_active(session_id)
+    _register_active(storage, session_id)
     text = (
         f"⚔️ Тактический штурм «{location_name}»!\n"
         f"Бойцов: {len(player_ids)}. Захвати центр ({CWAR_CAPTURE_TURNS} хода на точке).\n"
@@ -416,20 +428,22 @@ def start_clan_war_grid(
     return ActionResult(True, text, payload={"cwar_started": True, "session_id": session_id}), session
 
 
-def _player_damage(attacker: Character) -> int:
-    base = max(4, equipment_power(attacker) * 2)
-    return random.randint(max(1, base - 2), base + 2)
-
-
-def _check_end(storage: Storage, session: ClanWarGridSession) -> ActionResult | None:
+def _check_squad_wiped(storage: Storage, session: ClanWarGridSession) -> ActionResult | None:
     alive = [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
     if not alive:
         return _end_session(storage, session, _finalize_fail(storage, session, "Все бойцы выведены из строя."))
-    if not session.defenders and _check_capture(session):
-        return _end_session(storage, session, _finalize_success(storage, session))
+    return None
+
+
+def _check_end(storage: Storage, session: ClanWarGridSession) -> ActionResult | None:
+    wiped = _check_squad_wiped(storage, session)
+    if wiped:
+        return wiped
     deadline = _parse_deadline(session.match_deadline)
     if deadline and _utc_now() > deadline:
         return _end_session(storage, session, _finalize_fail(storage, session, "Время штурма истекло."))
+    if not session.defenders and _check_capture(session):
+        return _end_session(storage, session, _finalize_success(storage, session))
     if _check_capture(session):
         return _end_session(storage, session, _finalize_success(storage, session))
     return None
@@ -450,13 +464,20 @@ def _save_turn(storage: Storage, session: ClanWarGridSession, expected_seq: int)
 
 
 def _advance(session: ClanWarGridSession) -> None:
+    if not session.turn_order:
+        return
     session.active_index = (session.active_index + 1) % len(session.turn_order)
+    for _ in range(len(session.turn_order)):
+        pid = session.turn_order[session.active_index % len(session.turn_order)]
+        if session.hp.get(str(pid), 0) > 0:
+            break
+        session.active_index = (session.active_index + 1) % len(session.turn_order)
     session.turn_seq += 1
     session.turn_deadline = _deadline_iso(CWAR_TURN_SECONDS)
 
 
 def _after_player_turn(storage: Storage, session: ClanWarGridSession) -> ActionResult | None:
-    session.log.extend(_hostile_turn(session))
+    session.log.extend(_hostile_turn(storage, session))
     return _check_end(storage, session)
 
 
@@ -487,7 +508,7 @@ def cwar_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         dmg = apply_incoming_damage(random.randint(8, 14), ch, min_damage=3)
         session.hp[str(telegram_id)] = max(0, session.hp.get(str(telegram_id), 0) - dmg)
         session.log.append(f"{h(ch.nickname)} схватился с защитником: −{dmg} HP.")
-    done = _check_end(storage, session)
+    done = _check_squad_wiped(storage, session)
     if done:
         return done
     _advance(session)
@@ -533,7 +554,7 @@ def cwar_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
                 note = "Попадание!"
     else:
         session.log.append(f"{h(attacker.nickname)} промахнулся.")
-    done = _check_end(storage, session)
+    done = _check_squad_wiped(storage, session)
     if done:
         return done
     _advance(session)
@@ -613,8 +634,8 @@ def process_cwar_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
         if done:
             outcomes.append((active, done))
             continue
+        still.append(str(sid))
         if _save_turn(storage, session, turn_seq):
-            still.append(str(sid))
             outcomes.append((active, ActionResult(True, "Ход пропущен.", payload={"cwar_active": True})))
     storage.set_meta(ACTIVE_IDS_KEY, json.dumps(still, ensure_ascii=False))
     return outcomes

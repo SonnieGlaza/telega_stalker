@@ -2206,6 +2206,8 @@ class Storage:
         }
 
     def add_item(self, telegram_id: int, item_key: str, amount: int = 1) -> None:
+        if amount <= 0:
+            return
         character = self.get_character(telegram_id, refresh_energy=False)
         if character is None:
             return
@@ -3111,6 +3113,22 @@ class Storage:
             result = dict(row)
         self.save_snapshot()
         return result
+
+    def start_war_lobby_assault(self, war_id: int) -> bool:
+        """Перевести открытое лобби в тактический штурм (in_progress)."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE war_lobbies
+                SET status = 'in_progress', started_at = ?
+                WHERE id = ? AND status = 'open'
+                """,
+                (utc_now().isoformat(), war_id),
+            )
+            ok = int(cursor.rowcount or 0) > 0
+        if ok:
+            self.save_snapshot()
+        return ok
 
     def finish_war_lobby(self, war_id: int, status: str, result_text: str) -> None:
         with self._connect() as conn:

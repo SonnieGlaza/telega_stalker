@@ -5074,14 +5074,22 @@ async def faction_rank_set_callback(callback: CallbackQuery, bot: Bot) -> None:
 
 @router.callback_query(F.data.startswith("eco:auction:create:"))
 async def auction_create_callback(callback: CallbackQuery) -> None:
-    lot_key = (callback.data or "").split(":", maxsplit=3)[3]
+    parts = (callback.data or "").split(":", maxsplit=3)
+    if len(parts) < 4:
+        await callback.answer("Некорректный лот.", show_alert=True)
+        return
+    lot_key = parts[3]
     result = create_faction_auction(get_storage(), callback.from_user.id, lot_key)
     await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data.startswith("eco:market:create:"))
 async def market_create_callback(callback: CallbackQuery, state: FSMContext) -> None:
-    item_key = (callback.data or "").split(":", maxsplit=3)[3]
+    parts = (callback.data or "").split(":", maxsplit=3)
+    if len(parts) < 4:
+        await callback.answer("Некорректный предмет.", show_alert=True)
+        return
+    item_key = parts[3]
     if item_key == "choose":
         await state.clear()
         storage = get_storage()
@@ -5307,6 +5315,9 @@ async def smuggle_menu_callback(callback: CallbackQuery) -> None:
     overview = build_smuggling_overview(storage, callback.from_user.id)
     active = get_active_smuggling(storage, callback.from_user.id)
     destinations = list_smuggling_destinations(storage, callback.from_user.id)
+    if callback.message is None:
+        await callback.answer("Сообщение недоступно.", show_alert=True)
+        return
     await callback.message.answer(
         overview,
         reply_markup=smuggling_keyboard(destinations, has_active=bool(active)),
@@ -5317,6 +5328,9 @@ async def smuggle_menu_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "eco:smuggle:status")
 async def smuggle_status_callback(callback: CallbackQuery) -> None:
     overview = build_smuggling_overview(get_storage(), callback.from_user.id)
+    if callback.message is None:
+        await callback.answer(overview[:CALLBACK_ALERT_MAX_LEN], show_alert=True)
+        return
     await callback.message.answer(overview)
     await callback.answer()
 

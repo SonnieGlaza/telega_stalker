@@ -176,6 +176,7 @@ def save_ncap_session(storage: Storage, session: NeutralCaptureSession) -> None:
 def clear_ncap_session(storage: Storage, session: NeutralCaptureSession) -> None:
     storage.delete_meta(_session_key(session.session_id))
     storage.delete_meta(_player_key(session.telegram_id))
+    _unregister_active(storage, session.session_id)
 
 
 def _register_active(storage: Storage, session_id: str) -> None:
@@ -237,19 +238,20 @@ def _hostile_damage(weapon: str) -> int:
     return max(3, weapon_shoot_range(weapon) * 2 + random.randint(0, 3))
 
 
-def _hostile_shoot_turn(session: NeutralCaptureSession) -> list[str]:
+def _hostile_shoot_turn(storage: Storage, session: NeutralCaptureSession) -> list[str]:
     cover_set = set(session.cover)
     player_pos = {session.telegram_id: session.player_pos}
+    player = storage.get_character(session.telegram_id, refresh_energy=False)
     return random_hostile_shots(
         session.hostiles,
         session.hostile_weapons,
         grid=session.grid,
         player_positions=player_pos,
         player_hp={str(session.telegram_id): session.hp},
+        player_characters={session.telegram_id: player},
         cover=cover_set,
         base_cover=set(),
         damage_fn=_hostile_damage,
-        armor_fn=lambda _pid, _cell: 0,
     )
 
 
@@ -277,8 +279,7 @@ def _finalize_fail(storage: Storage, session: NeutralCaptureSession, reason: str
 
 
 def _end_session(storage: Storage, session: NeutralCaptureSession, result: ActionResult) -> ActionResult:
-    if session.hp > 0:
-        sync_session_hp_to_db(storage, session.telegram_id, session.hp)
+    sync_session_hp_to_db(storage, session.telegram_id, session.hp)
     msg_id = session.message_id
     session.finished = True
     save_ncap_session(storage, session)
@@ -331,7 +332,7 @@ def start_neutral_capture(
         f"Дойди до центра и удержи {NCAP_CAPTURE_TURNS} хода."
     )
     save_ncap_session(storage, session)
-    _register_active(session_id)
+    _register_active(storage, session_id)
     text = (
         f"🎯 Захват нейтральной точки «{location_name}»!\n"
         f"Поле {NCAP_GRID_SIZE}×{NCAP_GRID_SIZE}, враги стреляют наугад.\n"
@@ -349,14 +350,21 @@ def _check_capture(session: NeutralCaptureSession) -> bool:
     return False
 
 
-def _check_end(storage: Storage, session: NeutralCaptureSession) -> ActionResult | None:
+def _check_player_dead(storage: Storage, session: NeutralCaptureSession) -> ActionResult | None:
     if session.hp <= 0:
         return _end_session(storage, session, _finalize_fail(storage, session, "Ты выведен из строя."))
-    if not session.hostiles and _check_capture(session):
-        return _end_session(storage, session, _finalize_success(storage, session))
+    return None
+
+
+def _check_end(storage: Storage, session: NeutralCaptureSession) -> ActionResult | None:
+    dead = _check_player_dead(storage, session)
+    if dead:
+        return dead
     deadline = _parse_deadline(session.match_deadline)
     if deadline and _utc_now() > deadline:
         return _end_session(storage, session, _finalize_fail(storage, session, "Время вышло."))
+    if not session.hostiles and _check_capture(session):
+        return _end_session(storage, session, _finalize_success(storage, session))
     if _check_capture(session):
         return _end_session(storage, session, _finalize_success(storage, session))
     return None
@@ -368,7 +376,7 @@ def _advance(session: NeutralCaptureSession) -> None:
 
 
 def _after_turn(storage: Storage, session: NeutralCaptureSession) -> ActionResult | None:
-    session.log.extend(_hostile_shoot_turn(session))
+    session.log.extend(_hostile_shoot_turn(storage, session))
     return _check_end(storage, session)
 
 
@@ -416,7 +424,7 @@ def ncap_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         session.hp = max(0, session.hp - dmg)
         label = "Бандит" if kind == "bandit" else "Мутант"
         session.log.append(f"{label} в ближнем бою: −{dmg} HP.")
-    done = _check_end(storage, session)
+    done = _check_player_dead(storage, session)
     if done:
         return done
     _advance(session)
@@ -461,7 +469,7 @@ def ncap_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
             note = "Попал!"
     else:
         session.log.append("Промах.")
-    done = _check_end(storage, session)
+    done = _check_player_dead(storage, session)
     if done:
         return done
     _advance(session)
@@ -544,8 +552,8 @@ def process_ncap_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
         if done:
             outcomes.append((session.telegram_id, done))
             continue
+        still.append(str(sid))
         if _save_turn(storage, session, turn_seq):
-            still.append(str(sid))
             outcomes.append((session.telegram_id, ActionResult(True, "Ход пропущен.", payload={"ncap_active": True})))
     storage.set_meta(ACTIVE_IDS_KEY, json.dumps(still, ensure_ascii=False))
     return outcomes

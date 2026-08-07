@@ -3280,7 +3280,9 @@ def transfer_money_with_fee(storage: Storage, sender_id: int, target_id: int, am
     total = amount + fee
     if not storage.change_money(sender_id, -total):
         return ActionResult(False, f"Недостаточно денег. Нужно {total} RU (включая комиссию {fee} RU).")
-    storage.change_money(target_id, amount)
+    if not storage.change_money(target_id, amount):
+        storage.change_money(sender_id, total)
+        return ActionResult(False, "Не удалось зачислить перевод получателю — деньги возвращены.")
     return ActionResult(
         True,
         f"Перевод выполнен: {amount} RU игроку {h(target.nickname)}.\nКомиссия: {fee} RU.\nСписано: {total} RU.",
@@ -6537,64 +6539,18 @@ def dissolve_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
     )
 
 
-def launch_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
-    leader = storage.get_character(telegram_id, refresh_energy=False)
-    if leader is None:
-        return WarLobbyResult(False, "Сначала создай персонажа.")
-    if _is_dead(leader):
-        return WarLobbyResult(False, _dead_block_text())
-    if leader.faction is None:
-        return WarLobbyResult(False, "Сначала выбери группировку.")
-    lobby = storage.get_open_war_lobby_for_faction(leader.faction)
-    if lobby is None:
-        return WarLobbyResult(False, "У твоей группировки нет открытого военного лобби.")
-    if int(lobby["leader_id"]) != telegram_id:
-        return WarLobbyResult(False, "Запускать лобби может только лидер, который его создал.")
-    war_id = int(lobby["id"])
-    location_name = str(lobby["location"])
-    host_faction = str(lobby.get("host_faction") or leader.faction)
-    member_ids = tuple(storage.get_war_lobby_member_ids(war_id))
-    members = [m for m in storage.get_characters_by_ids(member_ids) if m.health > 0 and m.faction]
-    if len(members) < WAR_MIN_FACTION_MEMBERS:
-        return WarLobbyResult(
-            False,
-            f"Для запуска нужно минимум {WAR_MIN_FACTION_MEMBERS} живых бойцов.",
-        )
-    active: list[Character] = []
-    spent_ids: list[int] = []
-    for member in members:
-        if storage.spend_energy(member.telegram_id, 24):
-            active.append(member)
-            spent_ids.append(member.telegram_id)
-    if len(active) < WAR_MIN_FACTION_MEMBERS:
-        _refund_spent_energy(storage, spent_ids, 24)
-        return WarLobbyResult(False, "Недостаточно энергии у бойцов лобби.")
+def _resolve_war_lobby_rng(
+    storage: Storage,
+    *,
+    war_id: int,
+    location_name: str,
+    host_faction: str,
+    target: dict[str, Any],
+    active: list[Character],
+    member_ids: tuple[int, ...],
+    telegram_id: int,
+) -> WarLobbyResult:
     winner = host_faction
-    target = storage.get_location(location_name)
-    if target is None:
-        _refund_spent_energy(storage, spent_ids, 24)
-        return WarLobbyResult(False, "Локация лобби не найдена.")
-    if _location_is_friendly_to_faction(storage, target, host_faction):
-        _refund_spent_energy(storage, spent_ids, 24)
-        return WarLobbyResult(False, "Нельзя штурмовать свою или союзническую точку.")
-    member_id_list = [m.telegram_id for m in active]
-    from app.clan_war_grid import start_clan_war_grid
-
-    tactical_result, cwar_session = start_clan_war_grid(
-        storage,
-        war_id=war_id,
-        location_name=location_name,
-        host_faction=host_faction,
-        player_ids=member_id_list,
-    )
-    if tactical_result.ok and cwar_session is not None:
-        return WarLobbyResult(
-            True,
-            tactical_result.text,
-            tuple(member_id_list),
-            tactical_cwar=True,
-        )
-    # Fallback: старая RNG-система, если тактический штурм не удалось запустить.
     enemy_power = int(target["npc_power"]) + max(0, int(target.get("defense_bonus") or 0))
     total_power = sum(equipment_power(member) for member in active)
     chance = int(round((total_power / (total_power + enemy_power + 10)) * 100))
@@ -6645,6 +6601,81 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
         f"Штурм лобби #{war_id} провален (шанс {chance}%).\n"
         f"Потери: −{RATING_REWARD['war_fail']} рейтинга каждому участнику.",
         member_ids,
+    )
+
+
+def launch_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
+    leader = storage.get_character(telegram_id, refresh_energy=False)
+    if leader is None:
+        return WarLobbyResult(False, "Сначала создай персонажа.")
+    if _is_dead(leader):
+        return WarLobbyResult(False, _dead_block_text())
+    if leader.faction is None:
+        return WarLobbyResult(False, "Сначала выбери группировку.")
+    lobby = storage.get_open_war_lobby_for_faction(leader.faction)
+    if lobby is None:
+        return WarLobbyResult(False, "У твоей группировки нет открытого военного лобби.")
+    if int(lobby["leader_id"]) != telegram_id:
+        return WarLobbyResult(False, "Запускать лобби может только лидер, который его создал.")
+    war_id = int(lobby["id"])
+    location_name = str(lobby["location"])
+    host_faction = str(lobby.get("host_faction") or leader.faction)
+    member_ids = tuple(storage.get_war_lobby_member_ids(war_id))
+    members = [m for m in storage.get_characters_by_ids(member_ids) if m.health > 0 and m.faction]
+    if len(members) < WAR_MIN_FACTION_MEMBERS:
+        return WarLobbyResult(
+            False,
+            f"Для запуска нужно минимум {WAR_MIN_FACTION_MEMBERS} живых бойцов.",
+        )
+    active: list[Character] = []
+    spent_ids: list[int] = []
+    for member in members:
+        if storage.spend_energy(member.telegram_id, 24):
+            active.append(member)
+            spent_ids.append(member.telegram_id)
+    if len(active) < WAR_MIN_FACTION_MEMBERS:
+        _refund_spent_energy(storage, spent_ids, 24)
+        return WarLobbyResult(False, "Недостаточно энергии у бойцов лобби.")
+    target = storage.get_location(location_name)
+    if target is None:
+        _refund_spent_energy(storage, spent_ids, 24)
+        return WarLobbyResult(False, "Локация лобби не найдена.")
+    if _location_is_friendly_to_faction(storage, target, host_faction):
+        _refund_spent_energy(storage, spent_ids, 24)
+        return WarLobbyResult(False, "Нельзя штурмовать свою или союзническую точку.")
+    member_id_list = [m.telegram_id for m in active]
+    from app.clan_war_grid import start_clan_war_grid
+
+    tactical_result, cwar_session = start_clan_war_grid(
+        storage,
+        war_id=war_id,
+        location_name=location_name,
+        host_faction=host_faction,
+        player_ids=member_id_list,
+    )
+    if tactical_result.ok and cwar_session is not None:
+        if storage.start_war_lobby_assault(war_id):
+            return WarLobbyResult(
+                True,
+                tactical_result.text,
+                tuple(member_id_list),
+                tactical_cwar=True,
+            )
+        from app.clan_war_grid import clear_cwar_session
+
+        clear_cwar_session(storage, cwar_session)
+    if not tactical_result.ok:
+        _refund_spent_energy(storage, spent_ids, 24)
+        return WarLobbyResult(False, tactical_result.text)
+    return _resolve_war_lobby_rng(
+        storage,
+        war_id=war_id,
+        location_name=location_name,
+        host_faction=host_faction,
+        target=target,
+        active=active,
+        member_ids=member_ids,
+        telegram_id=telegram_id,
     )
 
 

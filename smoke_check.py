@@ -490,6 +490,19 @@ def run_smoke_check() -> None:
             assert join_extra.ok, join_extra.text
         war_launch = launch_war_lobby(storage, 111)
         assert war_launch.text
+        if war_launch.tactical_cwar:
+            from app.clan_war_grid import clear_cwar_session, get_cwar_session_by_player
+
+            seen: set[str] = set()
+            for pid in war_launch.notify_member_ids:
+                sess = get_cwar_session_by_player(storage, pid)
+                if sess and sess.session_id not in seen:
+                    seen.add(sess.session_id)
+                    clear_cwar_session(storage, sess)
+            with storage._connect() as conn:
+                conn.execute(
+                    "UPDATE war_lobbies SET status = 'cancelled', finished_at = datetime('now') WHERE status = 'in_progress'"
+                )
         solo_assault = attack_location(storage, 111, "Свалка")
         assert not solo_assault.ok, solo_assault.text
 

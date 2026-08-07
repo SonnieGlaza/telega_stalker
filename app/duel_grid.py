@@ -43,6 +43,7 @@ DUEL_MATCH_SECONDS = 3 * 60
 DUEL_COVER_HIT_CHANCE = COVER_HIT_CHANCE
 DUEL_WAVE_MUTANT_SPAWN = 3
 DUEL_WAVE_MUTANT_STEPS = 2
+DUEL_WAVE_MUTANT_MAX = 14
 
 DUEL_SESSION_PREFIX = "duel:grid:session:"
 DUEL_PLAYER_PREFIX = "duel:grid:player:"
@@ -377,8 +378,8 @@ def _check_hp_end(storage: Storage, session: DuelGridSession) -> ActionResult | 
             loser_id,
             f"{h(storage.get_character(winner_id).nickname if storage.get_character(winner_id) else str(winner_id))} победил — HP противника 0.",
         )
-    if len(alive) == 0 and session.wave_mode:
-        return _end_duel_wave(storage, session, "Оба бойца пали под волной мутантов.")
+    if len(alive) == 0:
+        return _end_duel_wave(storage, session, "Оба бойца пали.")
     return None
 
 
@@ -399,8 +400,11 @@ def _advance_turn(session: DuelGridSession) -> None:
 
 
 def _spawn_wave_mutants(session: DuelGridSession) -> None:
+    if len(session.mutants) >= DUEL_WAVE_MUTANT_MAX:
+        return
     forbidden = _occupied(session)
-    new_spawns = spawn_edge_positions(session.grid, DUEL_WAVE_MUTANT_SPAWN, forbidden)
+    slots = DUEL_WAVE_MUTANT_MAX - len(session.mutants)
+    new_spawns = spawn_edge_positions(session.grid, min(DUEL_WAVE_MUTANT_SPAWN, slots), forbidden)
     session.mutants.extend(new_spawns)
 
 

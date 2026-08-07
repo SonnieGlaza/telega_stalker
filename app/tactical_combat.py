@@ -6,6 +6,7 @@ import random
 from typing import Callable
 
 from app.game_logic import _weapon_rating, apply_incoming_damage
+from app.storage import Character
 
 MOVE_DELTAS: dict[str, tuple[int, int]] = {
     "up": (0, -1),
@@ -105,10 +106,10 @@ def random_hostile_shots(
     grid: int,
     player_positions: dict[int, tuple[int, int]],
     player_hp: dict[str, int],
+    player_characters: dict[int, Character | None],
     cover: set[tuple[int, int]],
     base_cover: set[tuple[int, int]],
     damage_fn: Callable[[str], int],
-    armor_fn: Callable[[int, tuple[int, int]], int],
 ) -> list[str]:
     """«Танчики»: каждый враждебный юнит с шансом стреляет в случайном направлении."""
     notes: list[str] = []
@@ -137,7 +138,12 @@ def random_hostile_shots(
         pid = int(hit_kind)
         raw = damage_fn(weapon)
         extra = extra_armor_from_cell(hit_cell, base_cover)
-        dmg = apply_armor_bonus(raw, extra)
+        pre = apply_armor_bonus(raw, extra)
+        character = player_characters.get(pid)
+        if character is not None:
+            dmg = apply_incoming_damage(pre, character, min_damage=1)
+        else:
+            dmg = pre
         key = str(pid)
         player_hp[key] = max(0, player_hp.get(key, 0) - dmg)
         notes.append(f"Вражеский огонь ({weapon}): −{dmg} HP.")
