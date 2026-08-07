@@ -10,9 +10,8 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
-from app.artifact_hunt import FONT_CANDIDATES, _paste_circle
 from app.game_logic import (
     RATING_REWARD,
     WAR_SUCCESS_PAY_RU,
@@ -21,7 +20,9 @@ from app.game_logic import (
     apply_incoming_damage,
     h,
 )
+from app.npc_assets import NPC_SPRITE_KEYS, pick_npc_kind
 from app.storage import Character, Storage
+from app.tactical_render import load_tactical_font, paste_npc_sprite, paste_player_avatar
 from app.tactical_combat import (
     BASE_COVER_ARMOR_BONUS,
     MOVE_DELTAS,
@@ -85,6 +86,7 @@ class ClanWarGridSession:
     base_cover: list[tuple[int, int]] = field(default_factory=list)
     defenders: list[tuple[int, int]] = field(default_factory=list)
     defender_weapons: list[str] = field(default_factory=list)
+    defender_kinds: list[str] = field(default_factory=list)
     control_point: tuple[int, int] = (4, 4)
     positions: dict[str, list[int]] = field(default_factory=dict)
     hp: dict[str, int] = field(default_factory=dict)
@@ -129,6 +131,7 @@ class ClanWarGridSession:
             "base_cover": [list(p) for p in self.base_cover],
             "defenders": [list(p) for p in self.defenders],
             "defender_weapons": self.defender_weapons,
+            "defender_kinds": self.defender_kinds,
             "control_point": list(self.control_point),
             "positions": self.positions,
             "hp": self.hp,
@@ -159,6 +162,7 @@ class ClanWarGridSession:
             base_cover=[(int(p[0]), int(p[1])) for p in (raw.get("base_cover") or [])],
             defenders=[(int(p[0]), int(p[1])) for p in (raw.get("defenders") or [])],
             defender_weapons=[str(w) for w in (raw.get("defender_weapons") or [])],
+            defender_kinds=[str(k) for k in (raw.get("defender_kinds") or [])],
             control_point=(int(cp[0]), int(cp[1])),
             positions={str(k): list(v) for k, v in (raw.get("positions") or {}).items()},
             hp={str(k): int(v) for k, v in (raw.get("hp") or {}).items()},
@@ -184,6 +188,13 @@ def _player_key(tid: int) -> str:
     return f"{PLAYER_PREFIX}{int(tid)}"
 
 
+def _ensure_defender_kinds(session: ClanWarGridSession) -> None:
+    while len(session.defender_kinds) < len(session.defenders):
+        session.defender_kinds.append(pick_npc_kind())
+    if len(session.defender_kinds) > len(session.defenders):
+        session.defender_kinds = session.defender_kinds[: len(session.defenders)]
+
+
 def get_cwar_session_by_player(storage: Storage, telegram_id: int) -> ClanWarGridSession | None:
     sid = storage.get_meta(_player_key(telegram_id))
     if not sid:
@@ -199,6 +210,7 @@ def get_cwar_session_by_player(storage: Storage, telegram_id: int) -> ClanWarGri
         return None
     if session.finished:
         return None
+    _ensure_defender_kinds(session)
     return session
 
 
@@ -267,6 +279,7 @@ def _build_map(session: ClanWarGridSession) -> None:
         cell = _free_cell(grid, forbidden | set(session.base_cover))
         session.defenders.append(cell)
         session.defender_weapons.append(random.choice(NPC_WEAPONS))
+        session.defender_kinds.append(pick_npc_kind())
         forbidden.add(cell)
     spawn_cols = list(range(0, 3))
     for pid in session.player_ids:
@@ -505,6 +518,8 @@ def cwar_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         session.defenders.pop(idx)
         if idx < len(session.defender_weapons):
             session.defender_weapons.pop(idx)
+        if idx < len(session.defender_kinds):
+            session.defender_kinds.pop(idx)
         dmg = apply_incoming_damage(random.randint(8, 14), ch, min_damage=3)
         session.hp[str(telegram_id)] = max(0, session.hp.get(str(telegram_id), 0) - dmg)
         session.log.append(f"{h(ch.nickname)} схватился с защитником: −{dmg} HP.")
@@ -550,6 +565,8 @@ def cwar_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
                 session.defenders.pop(idx)
                 if idx < len(session.defender_weapons):
                     session.defender_weapons.pop(idx)
+                if idx < len(session.defender_kinds):
+                    session.defender_kinds.pop(idx)
                 session.log.append(f"{h(attacker.nickname)} снял защитника ({weapon}).")
                 note = "Попадание!"
     else:
@@ -658,21 +675,14 @@ def cwar_status_caption(storage: Storage, session: ClanWarGridSession, viewer_id
         if pid == viewer_id:
             mark += " (ты)"
         lines.append(f"{name}{mark}: HP {hp}")
+    lines.append("🔷 голубой квадрат на карте = вы")
     if session.log:
         lines.append(session.log[-1][:80])
     return "\n".join(lines)
 
 
-def _load_font(size: int) -> ImageFont.ImageFont:
-    for path in FONT_CANDIDATES:
-        try:
-            return ImageFont.truetype(path, size=size)
-        except Exception:
-            continue
-    return ImageFont.load_default()
-
-
 def render_cwar_frame(storage: Storage, session: ClanWarGridSession, viewer_id: int) -> bytes:
+    _ensure_defender_kinds(session)
     cell = 64
     grid = session.grid
     grid_px = grid * cell
@@ -709,35 +719,55 @@ def render_cwar_frame(storage: Storage, session: ClanWarGridSession, viewer_id: 
         left = margin + bx * cell + 2
         top = margin + by * cell + 2
         draw.rectangle((left, top, left + cell - 4, top + cell - 4), outline=(80, 100, 140), width=1)
-    for dx, dy in session.defenders:
+    for i, (dx, dy) in enumerate(session.defenders):
         cxp = margin + dx * cell + cell // 2
         cyp = margin + dy * cell + cell // 2
-        draw.ellipse((cxp - 18, cyp - 18, cxp + 18, cyp + 18), fill=(140, 50, 50), outline=(220, 80, 80), width=2)
+        kind = session.defender_kinds[i] if i < len(session.defender_kinds) else NPC_SPRITE_KEYS[i % len(NPC_SPRITE_KEYS)]
+        paste_npc_sprite(canvas, draw, cx=cxp, cy=cyp, kind=kind, diameter=52)
     for i, pid in enumerate(session.player_ids):
         px, py = session.pos(pid)
         cxp = margin + px * cell + cell // 2
         cyp = margin + py * cell + cell // 2
         ring = PLAYER_COLORS[i % len(PLAYER_COLORS)]
-        if pid == session.active_player():
-            draw.ellipse((cxp - 26, cyp - 26, cxp + 26, cyp + 26), outline=(255, 230, 80), width=3)
-        if pid == viewer_id:
-            draw.rectangle(
-                (margin + px * cell, margin + py * cell, margin + (px + 1) * cell - 1, margin + (py + 1) * cell - 1),
-                outline=(80, 230, 255),
-                width=2,
-            )
-        token = Image.new("RGBA", (56, 56), (0, 0, 0, 0))
-        td = ImageDraw.Draw(token)
-        td.ellipse((4, 4, 52, 52), fill=tuple(c // 2 for c in ring))
-        _paste_circle(canvas, token, cxp, cyp, 46, ring_color=ring, ring_width=3)
+        viewer_cell = (margin, cell, px, py) if pid == viewer_id else None
+        paste_player_avatar(
+            canvas,
+            draw,
+            storage,
+            pid=pid,
+            cx=cxp,
+            cy=cyp,
+            diameter=46,
+            ring_color=ring,
+            hp=session.hp.get(str(pid), 0),
+            is_active=pid == session.active_player(),
+            viewer_cell=viewer_cell,
+        )
     pl = margin + grid_px + 12
     draw.rounded_rectangle((pl, margin, width - margin, height - margin), radius=12, fill=(44, 46, 50), outline=(90, 94, 100), width=2)
-    small = _load_font(12)
+    small = load_tactical_font(12)
     y = margin + 12
-    draw.text((pl + 10, y), f"Штурм {session.location_name[:18]}", fill=(240, 240, 240))
+    draw.text((pl + 10, y), f"Штурм {session.location_name[:18]}", fill=(240, 240, 240), font=small)
     y += 22
-    for line in cwar_status_caption(storage, session, viewer_id).split("\n")[1:6]:
-        draw.text((pl + 10, y), line[:38], fill=(180, 180, 180), font=small)
+    deadline = _parse_deadline(session.match_deadline)
+    if deadline:
+        secs = max(0, int((deadline - _utc_now()).total_seconds()))
+        draw.text((pl + 10, y), f"Осталось: {secs // 60}:{secs % 60:02d}", fill=(200, 200, 120), font=small)
+        y += 15
+    draw.text((pl + 10, y), f"Захват: {session.capture_progress}/{CWAR_CAPTURE_TURNS}", fill=(180, 180, 180), font=small)
+    y += 15
+    draw.text((pl + 10, y), f"Защитников: {len(session.defenders)}", fill=(180, 180, 180), font=small)
+    y += 15
+    draw.text((pl + 10, y), "Голубой квадрат = вы", fill=(120, 200, 230), font=small)
+    y += 15
+    for pid in session.player_ids[:5]:
+        ch = storage.get_character(pid, refresh_energy=False)
+        name = ch.nickname if ch else str(pid)
+        hp = session.hp.get(str(pid), 0)
+        mark = " <" if pid == session.active_player() else ""
+        if pid == viewer_id:
+            mark += " (ты)"
+        draw.text((pl + 10, y), f"{h(name)}{mark}: HP {hp}"[:38], fill=(180, 180, 180), font=small)
         y += 15
     buf = BytesIO()
     canvas.save(buf, format="PNG")

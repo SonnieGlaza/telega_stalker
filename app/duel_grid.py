@@ -8,9 +8,8 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
-from app.artifact_hunt import FONT_CANDIDATES, _paste_circle
 from app.game_logic import (
     DUEL_LOSER_HP_REMAINING,
     DUEL_LOSER_MONEY_CAP,
@@ -35,7 +34,9 @@ from app.tactical_combat import (
     spawn_edge_positions,
     weapon_shoot_range,
 )
+from app.mutant_assets import pick_mutant_kind
 from app.tactical_hp import sync_session_hp_to_db, use_tactical_medkit
+from app.tactical_render import load_tactical_font, paste_mutant_sprite, paste_player_avatar
 
 DUEL_GRID_SIZE = 8
 DUEL_TURN_SECONDS = 10
@@ -84,6 +85,7 @@ class DuelGridSession:
     grid: int = DUEL_GRID_SIZE
     cover: list[tuple[int, int]] = field(default_factory=list)
     mutants: list[tuple[int, int]] = field(default_factory=list)
+    mutant_kinds: list[str] = field(default_factory=list)
     positions: dict[str, list[int]] = field(default_factory=dict)
     hp: dict[str, int] = field(default_factory=dict)
     medkits_used: dict[str, bool] = field(default_factory=dict)
@@ -120,6 +122,7 @@ class DuelGridSession:
             "grid": self.grid,
             "cover": [list(p) for p in self.cover],
             "mutants": [list(p) for p in self.mutants],
+            "mutant_kinds": list(self.mutant_kinds),
             "positions": self.positions,
             "hp": self.hp,
             "medkits_used": self.medkits_used,
@@ -145,6 +148,7 @@ class DuelGridSession:
             grid=int(raw.get("grid") or DUEL_GRID_SIZE),
             cover=[(int(p[0]), int(p[1])) for p in (raw.get("cover") or [])],
             mutants=[(int(p[0]), int(p[1])) for p in (raw.get("mutants") or [])],
+            mutant_kinds=[str(k) for k in (raw.get("mutant_kinds") or [])],
             positions={str(k): list(v) for k, v in (raw.get("positions") or {}).items()},
             hp={str(k): int(v) for k, v in (raw.get("hp") or {}).items()},
             medkits_used={str(k): bool(v) for k, v in (raw.get("medkits_used") or {}).items()},
@@ -185,6 +189,7 @@ def get_duel_session_by_player(storage: Storage, telegram_id: int) -> DuelGridSe
         return None
     if session.finished:
         return None
+    _ensure_mutant_kinds(session)
     return session
 
 
@@ -399,6 +404,22 @@ def _advance_turn(session: DuelGridSession) -> None:
     session.turn_deadline = _deadline_iso()
 
 
+def _ensure_mutant_kinds(session: DuelGridSession) -> None:
+    while len(session.mutant_kinds) < len(session.mutants):
+        session.mutant_kinds.append(pick_mutant_kind())
+    if len(session.mutant_kinds) > len(session.mutants):
+        session.mutant_kinds = session.mutant_kinds[: len(session.mutants)]
+
+
+def _remove_mutant_at(session: DuelGridSession, pos: tuple[int, int]) -> None:
+    if pos not in session.mutants:
+        return
+    idx = session.mutants.index(pos)
+    session.mutants.pop(idx)
+    if idx < len(session.mutant_kinds):
+        session.mutant_kinds.pop(idx)
+
+
 def _spawn_wave_mutants(session: DuelGridSession) -> None:
     if len(session.mutants) >= DUEL_WAVE_MUTANT_MAX:
         return
@@ -406,6 +427,7 @@ def _spawn_wave_mutants(session: DuelGridSession) -> None:
     slots = DUEL_WAVE_MUTANT_MAX - len(session.mutants)
     new_spawns = spawn_edge_positions(session.grid, min(DUEL_WAVE_MUTANT_SPAWN, slots), forbidden)
     session.mutants.extend(new_spawns)
+    session.mutant_kinds.extend(pick_mutant_kind() for _ in new_spawns)
 
 
 def _move_mutants(session: DuelGridSession) -> None:
@@ -468,6 +490,7 @@ def _start_wave_mode(session: DuelGridSession) -> None:
         return
     session.wave_mode = True
     session.mutants.clear()
+    session.mutant_kinds.clear()
     _spawn_wave_mutants(session)
     session.log.append("⏱ Время вышло! Бесконечная волна мутантов — бегите или погибните!")
 
@@ -568,7 +591,7 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
 
     if hit_kind == "mutant":
         if hit_cell in session.mutants and not session.wave_mode:
-            session.mutants.remove(hit_cell)
+            _remove_mutant_at(session, hit_cell)
         session.log.append(f"{h(attacker.nickname)} попал в мутанта.")
         note = "Мутант поражён." if not session.wave_mode else "Мутант снова встанет в волне."
     else:
@@ -737,15 +760,6 @@ def unregister_active_duel(storage: Storage, duel_id: str) -> None:
     storage.set_meta("duel:grid:active_ids", json.dumps(ids, ensure_ascii=False))
 
 
-def _load_font(size: int) -> ImageFont.ImageFont:
-    for path in FONT_CANDIDATES:
-        try:
-            return ImageFont.truetype(path, size=size)
-        except Exception:
-            continue
-    return ImageFont.load_default()
-
-
 def _match_seconds_left(session: DuelGridSession) -> int | None:
     if session.wave_mode:
         return 0
@@ -760,6 +774,7 @@ def render_duel_frame(
     session: DuelGridSession,
     viewer_id: int,
 ) -> bytes:
+    _ensure_mutant_kinds(session)
     cell = 72
     grid = session.grid
     grid_px = grid * cell
@@ -769,6 +784,7 @@ def render_duel_frame(
     height = max(margin + grid_px + margin, 640)
     canvas = Image.new("RGBA", (width, height), (18, 20, 22, 255))
     draw = ImageDraw.Draw(canvas)
+    cover_font = load_tactical_font(11)
     for gy in range(grid):
         for gx in range(grid):
             left = margin + gx * cell
@@ -786,43 +802,60 @@ def render_duel_frame(
             outline=(110, 95, 70),
             width=2,
         )
-        draw.text((left + 8, top + cell // 2 - 16), "УКР", fill=(180, 160, 120))
-    for mx, my in session.mutants:
+        draw.text((left + 8, top + cell // 2 - 8), "УКР", fill=(180, 160, 120), font=cover_font)
+    for i, (mx, my) in enumerate(session.mutants):
         cx = margin + mx * cell + cell // 2
         cy = margin + my * cell + cell // 2
-        color = (180, 60, 40) if session.wave_mode else (60, 90, 45)
-        outline = (255, 120, 80) if session.wave_mode else (130, 200, 80)
-        draw.ellipse((cx - 22, cy - 22, cx + 22, cy + 22), fill=color, outline=outline, width=2)
+        kind = session.mutant_kinds[i] if i < len(session.mutant_kinds) else None
+        paste_mutant_sprite(
+            canvas,
+            draw,
+            cx=cx,
+            cy=cy,
+            kind=kind,
+            diameter=56,
+            wave=session.wave_mode,
+        )
     colors = {session.challenger_id: (80, 200, 255), session.target_id: (255, 120, 90)}
     for pid in (session.challenger_id, session.target_id):
         px, py = session.pos(pid)
         cx = margin + px * cell + cell // 2
         cy = margin + py * cell + cell // 2
         ring = colors.get(pid, (200, 200, 200))
-        if pid == session.active_player():
-            draw.ellipse((cx - 30, cy - 30, cx + 30, cy + 30), outline=(255, 230, 80), width=3)
-        token = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        td = ImageDraw.Draw(token)
-        td.ellipse((4, 4, 60, 60), fill=(ring[0] // 2, ring[1] // 2, ring[2] // 2))
-        _paste_circle(canvas, token, cx, cy, 52, ring_color=ring, ring_width=3)
+        viewer_cell = (margin, cell, px, py) if pid == viewer_id else None
+        paste_player_avatar(
+            canvas,
+            draw,
+            storage,
+            pid=pid,
+            cx=cx,
+            cy=cy,
+            diameter=52,
+            ring_color=ring,
+            hp=session.hp.get(str(pid), 0),
+            is_active=pid == session.active_player(),
+            viewer_cell=viewer_cell,
+        )
     pl = margin + grid_px + 16
     draw.rounded_rectangle((pl, margin, width - margin, height - margin), radius=14, fill=(44, 46, 50), outline=(90, 94, 100), width=2)
-    body = _load_font(16)
-    small = _load_font(13)
+    body = load_tactical_font(16)
+    small = load_tactical_font(13)
     y = margin + 16
-    draw.text((pl + 14, y), "⚔️ Тактическая дуэль", fill=(240, 240, 240), font=body)
+    draw.text((pl + 14, y), "Тактическая дуэль", fill=(240, 240, 240), font=body)
     y += 28
     secs = _match_seconds_left(session)
     if session.wave_mode:
-        draw.text((pl + 14, y), "🌊 ВОЛНА МУТАНТОВ", fill=(255, 100, 80), font=small)
+        draw.text((pl + 14, y), "ВОЛНА МУТАНТОВ", fill=(255, 100, 80), font=small)
     elif secs is not None:
-        draw.text((pl + 14, y), f"⏱ До волны: {secs // 60}:{secs % 60:02d}", fill=(200, 200, 120), font=small)
+        draw.text((pl + 14, y), f"До волны: {secs // 60}:{secs % 60:02d}", fill=(200, 200, 120), font=small)
     y += 20
+    draw.text((pl + 14, y), "Голубой квадрат = вы", fill=(120, 200, 230), font=small)
+    y += 18
     for pid in (session.challenger_id, session.target_id):
         ch = storage.get_character(pid, refresh_energy=False)
         name = ch.nickname if ch else str(pid)
         hp = session.hp.get(str(pid), 0)
-        mark = " ◀ ход" if pid == session.active_player() else ""
+        mark = " < ход" if pid == session.active_player() else ""
         draw.text((pl + 14, y), f"{h(name)}{mark}: HP {hp}", fill=(210, 210, 210), font=small)
         y += 20
     y += 8

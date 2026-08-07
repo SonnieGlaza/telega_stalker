@@ -2695,6 +2695,7 @@ def _duel_status_caption(storage: Storage, session: Any, viewer_id: int) -> str:
         if dl:
             secs = max(0, int((dl - _utc_now()).total_seconds()))
             lines.append(f"⏱ До волны: {secs // 60}:{secs % 60:02d}")
+    lines.append("🔷 голубой квадрат на карте = вы")
     if session.log:
         lines.append(session.log[-1][:80])
     return "\n".join(lines)

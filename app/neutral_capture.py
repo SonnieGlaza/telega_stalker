@@ -10,9 +10,8 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
-from app.artifact_hunt import FONT_CANDIDATES, _paste_circle
 from app.game_logic import (
     RATING_REWARD,
     ActionResult,
@@ -30,7 +29,9 @@ from app.tactical_combat import (
     ray_cast_first_hit,
     weapon_shoot_range,
 )
-from app.tactical_hp import sync_session_hp_to_db, use_tactical_medkit
+from app.mutant_assets import pick_mutant_kind
+from app.npc_assets import pick_npc_kind
+from app.tactical_render import hostile_kind_to_sprite, load_tactical_font, paste_mutant_sprite, paste_npc_sprite, paste_player_avatar
 
 NCAP_GRID_SIZE = 6
 NCAP_TURN_SECONDS = 10
@@ -221,7 +222,7 @@ def _build_map(session: NeutralCaptureSession) -> None:
         cell = _free_cell(grid, forbidden)
         session.hostiles.append(cell)
         kind = "bandit" if random.random() < 0.65 else "mutant"
-        session.hostile_kinds.append(kind)
+        session.hostile_kinds.append(pick_npc_kind() if kind == "bandit" else pick_mutant_kind())
         if kind == "bandit":
             session.hostile_weapons.append(random.choice(NPC_WEAPONS))
         else:
@@ -422,7 +423,7 @@ def ncap_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
             session.hostile_kinds.pop(idx)
         dmg = apply_incoming_damage(random.randint(6, 12), player, min_damage=2)
         session.hp = max(0, session.hp - dmg)
-        label = "Бандит" if kind == "bandit" else "Мутант"
+        label = "Бандит" if kind in ("bandit", "maloy", "mercenary", "soldier") else "Мутант"
         session.log.append(f"{label} в ближнем бою: −{dmg} HP.")
     done = _check_player_dead(storage, session)
     if done:
@@ -569,18 +570,10 @@ def ncap_status_caption(session: NeutralCaptureSession, player: Character | None
     if player:
         weapon = str(player.equipment.get("weapon", "Нож"))
         lines.append(f"HP {session.hp} · дальность {weapon_shoot_range(weapon)}")
+    lines.append("🔷 голубой квадрат на карте = вы")
     if session.log:
         lines.append(session.log[-1][:80])
     return "\n".join(lines)
-
-
-def _load_font(size: int) -> ImageFont.ImageFont:
-    for path in FONT_CANDIDATES:
-        try:
-            return ImageFont.truetype(path, size=size)
-        except Exception:
-            continue
-    return ImageFont.load_default()
 
 
 def render_ncap_frame(storage: Storage, session: NeutralCaptureSession) -> bytes:
@@ -614,30 +607,51 @@ def render_ncap_frame(storage: Storage, session: NeutralCaptureSession) -> bytes
         cx = margin + hx * cell + cell // 2
         cy = margin + hy * cell + cell // 2
         kind = session.hostile_kinds[i] if i < len(session.hostile_kinds) else "bandit"
-        if kind == "mutant":
-            draw.ellipse((cx - 22, cy - 22, cx + 22, cy + 22), fill=(60, 90, 45), outline=(130, 200, 80), width=2)
+        sprite_key, is_npc = hostile_kind_to_sprite(kind)
+        if is_npc:
+            paste_npc_sprite(canvas, draw, cx=cx, cy=cy, kind=sprite_key, diameter=56)
         else:
-            draw.ellipse((cx - 22, cy - 22, cx + 22, cy + 22), fill=(120, 50, 50), outline=(200, 80, 80), width=2)
+            paste_mutant_sprite(canvas, draw, cx=cx, cy=cy, kind=sprite_key, diameter=56)
     px, py = session.player_pos
     pcx = margin + px * cell + cell // 2
     pcy = margin + py * cell + cell // 2
-    draw.rectangle(
-        (margin + px * cell, margin + py * cell, margin + (px + 1) * cell - 1, margin + (py + 1) * cell - 1),
-        outline=(80, 230, 255),
-        width=3,
+    paste_player_avatar(
+        canvas,
+        draw,
+        storage,
+        pid=session.telegram_id,
+        cx=pcx,
+        cy=pcy,
+        diameter=52,
+        ring_color=(80, 200, 255),
+        hp=session.hp,
+        is_active=True,
+        viewer_cell=(margin, cell, px, py),
     )
-    token = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    td = ImageDraw.Draw(token)
-    td.ellipse((4, 4, 60, 60), fill=(40, 100, 120))
-    _paste_circle(canvas, token, pcx, pcy, 52, ring_color=(80, 200, 255), ring_width=3)
     pl = margin + grid_px + 16
     draw.rounded_rectangle((pl, margin, width - margin, height - margin), radius=14, fill=(44, 46, 50), outline=(90, 94, 100), width=2)
-    small = _load_font(13)
+    small = load_tactical_font(13)
     y = margin + 16
     player = storage.get_character(session.telegram_id, refresh_energy=False)
-    for line in ncap_status_caption(session, player).split("\n"):
-        draw.text((pl + 14, y), line[:40], fill=(200, 200, 200), font=small)
+    deadline = _parse_deadline(session.match_deadline)
+    draw.text((pl + 14, y), f"Захват {session.location_name[:16]}", fill=(220, 220, 220), font=small)
+    y += 18
+    if deadline:
+        secs = max(0, int((deadline - _utc_now()).total_seconds()))
+        draw.text((pl + 14, y), f"Осталось: {secs // 60}:{secs % 60:02d}", fill=(200, 200, 120), font=small)
         y += 18
+    draw.text((pl + 14, y), f"Врагов: {len(session.hostiles)}", fill=(200, 200, 200), font=small)
+    y += 18
+    draw.text((pl + 14, y), f"Захват: {session.capture_progress}/{NCAP_CAPTURE_TURNS}", fill=(200, 200, 200), font=small)
+    y += 18
+    if player:
+        weapon = str(player.equipment.get("weapon", "Нож"))
+        draw.text((pl + 14, y), f"HP {session.hp} · дальн. {weapon_shoot_range(weapon)}", fill=(200, 200, 200), font=small)
+        y += 18
+    draw.text((pl + 14, y), "Голубой квадрат = вы", fill=(120, 200, 230), font=small)
+    y += 18
+    if session.log:
+        draw.text((pl + 14, y), session.log[-1][:40], fill=(170, 170, 170), font=small)
     buf = BytesIO()
     canvas.save(buf, format="PNG")
     return buf.getvalue()
