@@ -709,6 +709,9 @@ EMISSION_WARN_30_MINUTES = 30
 EMISSION_META_AT = "emission_at"
 EMISSION_META_WARN60 = "emission_warn60_sent"
 EMISSION_META_WARN30 = "emission_warn30_sent"
+EMISSION_META_PHASE = "emission_phase"
+EMISSION_META_WAVE_AT = "emission_wave_at"
+EMISSION_WAVE_GAP_MINUTES = 7
 ZONE_EVENT_META_NEXT_AT = "zone_event_next_at"
 ZONE_EVENT_INTERVAL_MIN_MINUTES = 30
 ZONE_EVENT_INTERVAL_MAX_MINUTES = 90
@@ -6432,14 +6435,115 @@ def _parse_meta_datetime(raw: str | None, fallback: datetime) -> datetime:
     return parsed
 
 
+EMISSION_WAVE1_LOCATIONS: frozenset[str] = frozenset({"Радар", "Рыжий лес", "Янтарь"})
+EMISSION_WAVE2_LOCATIONS: frozenset[str] = frozenset({"Болото", "НИИ Агропром"})
+EMISSION_WAVE_LABELS: dict[str, str] = {
+    "wave1": "1-я волна (опасные зоны: Радар, Рыжий лес, Янтарь)",
+    "wave2": "2-я волна (средние зоны: Болото, НИИ Агропром)",
+    "wave3": "3-я волна (остальная территория Зоны)",
+}
+
+
+def _emission_wave_locations(phase: str, storage: Storage) -> set[str]:
+    all_names = {str(location["name"]) for location in storage.get_locations()}
+    safe_bases = _safe_base_location_names(storage)
+    non_base = all_names - safe_bases
+    if phase == "wave1":
+        return non_base & EMISSION_WAVE1_LOCATIONS
+    if phase == "wave2":
+        return non_base & EMISSION_WAVE2_LOCATIONS
+    return non_base - EMISSION_WAVE1_LOCATIONS - EMISSION_WAVE2_LOCATIONS
+
+
+def _kill_players_in_locations(
+    storage: Storage,
+    targets: set[str],
+    safe_bases: set[str],
+) -> tuple[list[str], list[int]]:
+    killed: list[str] = []
+    killed_ids: list[int] = []
+    for telegram_id in storage.list_player_ids():
+        character = storage.get_character(telegram_id, refresh_energy=False)
+        if character is None or int(character.health) <= 0:
+            continue
+        if character.location not in targets:
+            continue
+        if is_traveling(character) and character.travel_destination in safe_bases:
+            continue
+        storage.change_health(telegram_id, -int(character.health))
+        remember_death_cause(storage, telegram_id, "emission")
+        killed.append(character.nickname or str(telegram_id))
+        killed_ids.append(telegram_id)
+    return killed, killed_ids
+
+
+def _execute_emission_wave(
+    storage: Storage,
+    phase: str,
+    now: datetime,
+    notify_ids: list[int],
+) -> tuple[str, list[int], list[int]]:
+    safe_bases = _safe_base_location_names(storage)
+    targets = _emission_wave_locations(phase, storage)
+    killed, killed_ids = _kill_players_in_locations(storage, targets, safe_bases)
+
+    locations_text = ", ".join(sorted(targets)) if targets else "нет целей на этом этапе"
+    killed_text = (
+        ", ".join(killed[:20]) + ("…" if len(killed) > 20 else "")
+        if killed
+        else "никто не пострадал"
+    )
+    wave_label = EMISSION_WAVE_LABELS.get(phase, phase)
+
+    next_phase = {"wave1": "wave2", "wave2": "wave3", "wave3": "resolve"}[phase]
+    if next_phase == "resolve":
+        next_at = now + timedelta(hours=EMISSION_INTERVAL_HOURS)
+        storage.set_meta(EMISSION_META_AT, next_at.isoformat())
+        storage.set_meta(EMISSION_META_WARN60, "0")
+        storage.set_meta(EMISSION_META_WARN30, "0")
+        storage.set_meta(EMISSION_META_PHASE, "calm")
+        storage.delete_meta(EMISSION_META_WAVE_AT)
+        message = (
+            f"💥 ВЫБРОС — {wave_label} прошла!\n"
+            f"Локации: {locations_text}.\n"
+            f"Погибшие: {killed_text}.\n\n"
+            f"☢️ Выброс полностью завершён. Следующий примерно через {EMISSION_INTERVAL_HOURS} ч."
+        )
+    else:
+        next_wave_at = now + timedelta(minutes=EMISSION_WAVE_GAP_MINUTES)
+        storage.set_meta(EMISSION_META_PHASE, next_phase)
+        storage.set_meta(EMISSION_META_WAVE_AT, next_wave_at.isoformat())
+        message = (
+            f"💥 ВЫБРОС — {wave_label} прошла!\n"
+            f"Локации: {locations_text}.\n"
+            f"Погибшие: {killed_text}.\n"
+            f"Следующая волна через ~{EMISSION_WAVE_GAP_MINUTES} мин. "
+            f"Уходи на базу, если ещё в опасной зоне."
+        )
+    return (message, notify_ids, killed_ids)
+
+
 def process_emission_cycle(storage: Storage) -> tuple[str, list[int], list[int]]:
-    """Цикл Выброса: предупреждения за 60/30 мин, убийство вне базы.
+    """Цикл Выброса: предупреждения за 60/30 мин, затем волны убийства по зонам.
+
+    Вместо мгновенного глобального килла Выброс идёт волнами: сначала опасные
+    локации (Радар/Рыжий лес/Янтарь), затем средние (Болото/НИИ Агропром), затем
+    остальная территория. Между волнами пауза EMISSION_WAVE_GAP_MINUTES.
 
     Возвращает (текст оповещения, telegram_id для рассылки, telegram_id убитых Выбросом).
     Пустой текст — нечего слать.
     """
     now = datetime.now(timezone.utc)
     notify_ids = storage.list_player_ids()
+    phase = storage.get_meta(EMISSION_META_PHASE) or "calm"
+
+    if phase in ("wave1", "wave2", "wave3"):
+        raw_wave_at = storage.get_meta(EMISSION_META_WAVE_AT)
+        wave_at = _parse_meta_datetime(raw_wave_at, now)
+        if now < wave_at:
+            return ("", [], [])
+        return _execute_emission_wave(storage, phase, now, notify_ids)
+
     raw_at = storage.get_meta(EMISSION_META_AT)
     warn60 = storage.get_meta(EMISSION_META_WARN60) == "1"
     warn30 = storage.get_meta(EMISSION_META_WARN30) == "1"
@@ -6463,7 +6567,7 @@ def process_emission_cycle(storage: Storage) -> tuple[str, list[int], list[int]]
         storage.set_meta(EMISSION_META_WARN60, "1")
         return (
             "⚠️ ВЫБРОС через 60 минут!\n"
-            "Если ты не на базе к моменту Выброса — персонаж погибнет.\n"
+            "Если ты не на базе к моменту Выброса — персонаж погибнет, когда волна дойдёт до твоей зоны.\n"
             f"Безопасные базы: {base_names}.",
             notify_ids,
             [],
@@ -6476,7 +6580,7 @@ def process_emission_cycle(storage: Storage) -> tuple[str, list[int], list[int]]
             storage.set_meta(EMISSION_META_WARN30, "1")
             return (
                 "☢️ ВЫБРОС через 30 минут!\n"
-                "Срочно уходи на базу — вне базы Выброс убивает.\n"
+                "Срочно уходи на базу — Выброс пойдёт волнами по зонам, начиная с самых опасных.\n"
                 f"Безопасные базы: {base_names}.",
                 notify_ids,
                 [],
@@ -6486,48 +6590,30 @@ def process_emission_cycle(storage: Storage) -> tuple[str, list[int], list[int]]
     if minutes_left > 0:
         return ("", [], [])
 
-    safe_bases = _safe_base_location_names(storage)
-    killed: list[str] = []
-    killed_ids: list[int] = []
-    for telegram_id in storage.list_player_ids():
-        character = storage.get_character(telegram_id, refresh_energy=False)
-        if character is None or int(character.health) <= 0:
-            continue
-        if character.location in safe_bases:
-            continue
-        if is_traveling(character) and character.travel_destination in safe_bases:
-            continue
-        storage.change_health(telegram_id, -int(character.health))
-        remember_death_cause(storage, telegram_id, "emission")
-        killed.append(character.nickname or str(telegram_id))
-        killed_ids.append(telegram_id)
-
-    next_at = now + timedelta(hours=EMISSION_INTERVAL_HOURS)
-    storage.set_meta(EMISSION_META_AT, next_at.isoformat())
-    storage.set_meta(EMISSION_META_WARN60, "0")
-    storage.set_meta(EMISSION_META_WARN30, "0")
-
-    killed_text = (
-        ", ".join(killed[:20]) + ("…" if len(killed) > 20 else "")
-        if killed
-        else "никто не пострадал (все были на базах)"
-    )
-    return (
-        f"💥 ВЫБРОС прошел по Зоне!\n"
-        f"Погибшие вне баз: {killed_text}.\n"
-        f"Следующий Выброс примерно через {EMISSION_INTERVAL_HOURS} ч.",
-        notify_ids,
-        killed_ids,
-    )
+    # Старт волн: первая волна выполняется сразу этим тиком.
+    return _execute_emission_wave(storage, "wave1", now, notify_ids)
 
 
 def build_emission_status(storage: Storage) -> str:
     now = datetime.now(timezone.utc)
+    phase = storage.get_meta(EMISSION_META_PHASE) or "calm"
+    if phase in ("wave1", "wave2", "wave3"):
+        raw_wave_at = storage.get_meta(EMISSION_META_WAVE_AT)
+        wave_at = _parse_meta_datetime(raw_wave_at, now)
+        minutes_left = max(0, int((wave_at - now).total_seconds() // 60))
+        wave_label = EMISSION_WAVE_LABELS.get(phase, phase)
+        bases = ", ".join(sorted(_safe_base_location_names(storage))) or "базы"
+        return (
+            f"☢️ ВЫБРОС ИДЁТ: {wave_label}.\n"
+            f"Следующая волна через ~{minutes_left} мин.\n"
+            f"Безопасно только на базах: {bases}."
+        )
     raw_at = storage.get_meta(EMISSION_META_AT)
     if raw_at is None:
         return (
             f"Выброс: расписание ещё не запущено "
-            f"(цикл раз в {EMISSION_INTERVAL_HOURS} ч., предупреждения за 60 и 30 мин)."
+            f"(цикл раз в {EMISSION_INTERVAL_HOURS} ч., предупреждения за 60 и 30 мин, "
+            "затем волны по зонам)."
         )
     emission_at = _parse_meta_datetime(raw_at, now + timedelta(hours=EMISSION_INTERVAL_HOURS))
     minutes_left = max(0, int((emission_at - now).total_seconds() // 60))
@@ -6536,7 +6622,7 @@ def build_emission_status(storage: Storage) -> str:
     bases = ", ".join(sorted(_safe_base_location_names(storage))) or "базы"
     return (
         f"Выброс через ~{hours_left} ч. {mins} мин.\n"
-        f"Вне базы ({bases}) Выброс убивает персонажа.\n"
+        f"Вне базы ({bases}) Выброс убивает волнами: сначала опасные зоны, потом остальные.\n"
         "Оповещения: за 60 и 30 минут."
     )
 
