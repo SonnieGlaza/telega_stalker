@@ -2638,6 +2638,26 @@ class Storage:
             )
         self.save_snapshot()
 
+    def set_meta_if_absent(self, key: str, value: str) -> bool:
+        """Записать meta только если ключа ещё нет. True — ключ создан, False — уже был."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS meta_kv (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO meta_kv(key, value) VALUES (?, ?)",
+                (key, value),
+            )
+            inserted = int(cur.rowcount or 0) > 0
+        if inserted:
+            self.save_snapshot()
+        return inserted
+
     def delete_meta(self, key: str) -> None:
         with self._connect() as conn:
             conn.execute(
