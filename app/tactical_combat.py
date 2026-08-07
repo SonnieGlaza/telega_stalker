@@ -177,3 +177,36 @@ def spawn_edge_positions(grid: int, count: int, forbidden: set[tuple[int, int]])
                 edges.append(cell)
     random.shuffle(edges)
     return edges[:count]
+
+
+def manhattan_distance(a: tuple[int, int], b: tuple[int, int]) -> int:
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+def iter_adjacent_cells(pos: tuple[int, int], grid: int):
+    for dx, dy in MOVE_DELTAS.values():
+        nx, ny = pos[0] + dx, pos[1] + dy
+        if 0 <= nx < grid and 0 <= ny < grid:
+            yield (nx, ny)
+
+
+def best_step_toward(
+    origin: tuple[int, int],
+    target: tuple[int, int],
+    *,
+    grid: int,
+    blocked: set[tuple[int, int]],
+    forbidden: set[tuple[int, int]] | None = None,
+) -> tuple[int, int]:
+    """Один шаг к цели, не заходя на forbidden (клетки игроков)."""
+    forbidden = forbidden or set()
+    best = origin
+    best_dist = manhattan_distance(origin, target)
+    for nxt in iter_adjacent_cells(origin, grid):
+        if nxt in forbidden or nxt in blocked:
+            continue
+        dist_new = manhattan_distance(nxt, target)
+        if dist_new < best_dist:
+            best_dist = dist_new
+            best = nxt
+    return best

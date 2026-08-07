@@ -580,6 +580,30 @@ def run_smoke_check() -> None:
         clear_raid_grid_session(storage, depot_session)
         storage.finish_raid(int(depot_session.raid_id), status="cancelled", result_text="smoke depot cleanup")
 
+        # Mutants must not occupy player cells (melee from adjacent, lunge and return).
+        from app.raid_grid import RaidGridSession, _hostile_turn
+
+        mutant_session = RaidGridSession(
+            session_id="mutest",
+            raid_id=9999,
+            raid_kind="lair",
+            location_label="test",
+            attacker_faction="Долг",
+            player_ids=[111, 222],
+        )
+        mutant_session.grid = 9
+        mutant_session.set_pos(111, (4, 4))
+        mutant_session.set_pos(222, (6, 6))
+        mutant_session.hp = {"111": 100, "222": 100}
+        mutant_session.hostiles = [(4, 5)]
+        mutant_session.hostile_types = ["mutant"]
+        mutant_session.hostile_kinds = ["boar"]
+        mutant_session.hostile_weapons = [""]
+        _hostile_turn(storage, mutant_session)
+        player_cells = {mutant_session.pos(111), mutant_session.pos(222)}
+        assert all(hpos not in player_cells for hpos in mutant_session.hostiles)
+        assert mutant_session.hostiles == [(4, 5)]
+
         # Stale rgrid session must not block a new raid launch.
         from app.raid_grid import clear_stale_raid_grid_session, start_raid_grid
 

@@ -28,7 +28,9 @@ from app.storage import Character, Storage
 from app.tactical_combat import (
     COVER_HIT_CHANCE,
     MOVE_DELTAS,
+    best_step_toward,
     cover_blocks_shot,
+    manhattan_distance,
     move_toward,
     ray_cast_first_hit,
     spawn_edge_positions,
@@ -436,26 +438,23 @@ def _move_mutants(session: DuelGridSession) -> None:
     occupied = _occupied(session)
     new_positions: list[tuple[int, int]] = []
     steps = DUEL_WAVE_MUTANT_STEPS if session.wave_mode else 1
+    player_cells = {session.pos(session.challenger_id), session.pos(session.target_id)}
     for pos in session.mutants:
-        occupied.discard(pos)
-        players = [session.pos(session.challenger_id), session.pos(session.target_id)]
-        target = min(players, key=lambda p: abs(p[0] - pos[0]) + abs(p[1] - pos[1]))
-        current = pos
+        origin = pos
+        occupied.discard(origin)
+        target = min(player_cells, key=lambda p: manhattan_distance(origin, p))
+        current = origin
         for _ in range(steps):
-            candidates = []
-            for dx, dy in MOVE_DELTAS.values():
-                nx, ny = current[0] + dx, current[1] + dy
-                if 0 <= nx < session.grid and 0 <= ny < session.grid:
-                    nxt = (nx, ny)
-                    if nxt not in occupied or nxt in players:
-                        candidates.append(nxt)
-            if not candidates:
-                break
-            best = min(
-                candidates,
-                key=lambda c: abs(c[0] - target[0]) + abs(c[1] - target[1]),
+            step = best_step_toward(
+                current,
+                target,
+                grid=session.grid,
+                blocked=occupied,
+                forbidden=player_cells,
             )
-            current = best
+            if step == current:
+                break
+            current = step
         new_positions.append(current)
         occupied.add(current)
     session.mutants = new_positions
@@ -468,14 +467,16 @@ def _mutants_attack(session: DuelGridSession, storage: Storage) -> list[str]:
     wave_dmg = (14, 22) if session.wave_mode else (6, 12)
     for mpos in session.mutants:
         for pid in (session.challenger_id, session.target_id):
-            if session.pos(pid) == mpos:
-                player = storage.get_character(pid, refresh_energy=False)
-                if player is None:
-                    continue
-                dmg = apply_incoming_damage(random.randint(*wave_dmg), player, min_damage=2)
-                session.hp[str(pid)] = max(0, session.hp.get(str(pid), 0) - dmg)
-                label = "Волна мутантов" if session.wave_mode else "Мутант"
-                notes.append(f"{label} ранит {h(player.nickname)}: −{dmg} HP.")
+            ppos = session.pos(pid)
+            if manhattan_distance(mpos, ppos) != 1:
+                continue
+            player = storage.get_character(pid, refresh_energy=False)
+            if player is None:
+                continue
+            dmg = apply_incoming_damage(random.randint(*wave_dmg), player, min_damage=2)
+            session.hp[str(pid)] = max(0, session.hp.get(str(pid), 0) - dmg)
+            label = "Волна мутантов" if session.wave_mode else "Мутант"
+            notes.append(f"{label} ранит {h(player.nickname)}: −{dmg} HP.")
     return notes
 
 

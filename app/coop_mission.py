@@ -43,6 +43,7 @@ from app.npc_assets import (
     pick_npc_kind,
 )
 from app.quest_mission import LOCATION_DANGER, MOVE_DELTAS, _draw_enemy_icon
+from app.tactical_combat import best_step_toward, manhattan_distance
 from app.storage import Character, Storage
 
 COOP_MAX_PLAYERS = 3
@@ -678,25 +679,22 @@ def _move_hostile_group(
     ]
     if not alive_cells:
         return list(units)
+    player_cells = set(alive_cells)
     occupied = _occupied(session)
     new_positions: list[tuple[int, int]] = []
     for pos in units:
-        occupied.discard(pos)
-        target = min(alive_cells, key=lambda p: abs(p[0] - pos[0]) + abs(p[1] - pos[1]))
-        candidates = []
-        for dx, dy in MOVE_DELTAS.values():
-            nx, ny = pos[0] + dx, pos[1] + dy
-            if 0 <= nx < session.grid and 0 <= ny < session.grid:
-                nxt = (nx, ny)
-                if nxt not in occupied or nxt in alive_cells:
-                    candidates.append(nxt)
-        if not candidates:
-            new_positions.append(pos)
-            occupied.add(pos)
-            continue
-        best = min(candidates, key=lambda c: abs(c[0] - target[0]) + abs(c[1] - target[1]))
-        new_positions.append(best)
-        occupied.add(best)
+        origin = pos
+        occupied.discard(origin)
+        target = min(player_cells, key=lambda p: manhattan_distance(origin, p))
+        step = best_step_toward(
+            origin,
+            target,
+            grid=session.grid,
+            blocked=occupied,
+            forbidden=player_cells,
+        )
+        new_positions.append(step)
+        occupied.add(step)
     return new_positions
 
 
@@ -729,7 +727,8 @@ def _hostile_attacks(
                 continue
             if pid in session.evacuated:
                 continue
-            if session.pos(pid) == epos:
+            if manhattan_distance(session.pos(pid), epos) != 1:
+                continue
                 player = storage.get_character(pid, refresh_energy=False)
                 if player is None:
                     continue

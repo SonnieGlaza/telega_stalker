@@ -36,7 +36,9 @@ from app.storage import Character, Storage
 from app.tactical_combat import (
     BASE_COVER_ARMOR_BONUS,
     MOVE_DELTAS,
+    best_step_toward,
     cover_blocks_shot,
+    manhattan_distance,
     random_hostile_shots,
     ray_cast_first_hit,
     weapon_shoot_range,
@@ -457,6 +459,26 @@ def _hostile_damage(weapon: str) -> int:
     return max(4, weapon_shoot_range(weapon) * 3 + random.randint(0, 4))
 
 
+def _mutant_melee_hit(
+    storage: Storage,
+    session: RaidGridSession,
+    *,
+    player_chars: dict[int, Character | None],
+    alive_ids: list[int],
+    target_pos: tuple[int, int],
+    notes: list[str],
+) -> None:
+    for pid in alive_ids:
+        if session.pos(pid) != target_pos:
+            continue
+        ch = player_chars.get(pid)
+        if ch is None:
+            continue
+        dmg = apply_incoming_damage(random.randint(6, 14), ch, min_damage=2)
+        session.hp[str(pid)] = max(0, session.hp.get(str(pid), 0) - dmg)
+        notes.append(f"Мутант ранит {h(ch.nickname)}: −{dmg} HP.")
+
+
 def _hostile_turn(storage: Storage, session: RaidGridSession) -> list[str]:
     notes: list[str] = []
     cover_set = set(session.cover)
@@ -464,6 +486,7 @@ def _hostile_turn(storage: Storage, session: RaidGridSession) -> list[str]:
     alive_ids = [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
     player_pos = {pid: session.pos(pid) for pid in alive_ids}
     player_chars = {pid: storage.get_character(pid, refresh_energy=False) for pid in alive_ids}
+    player_cells = set(player_pos.values())
 
     bot_pos, bot_weapons = _bot_shooters(session)
     if bot_pos:
@@ -487,33 +510,50 @@ def _hostile_turn(storage: Storage, session: RaidGridSession) -> list[str]:
         if i < len(session.hostile_types) and session.hostile_types[i] != "mutant":
             new_hostiles.append(pos)
             continue
-        occupied.discard(pos)
+        origin = pos
+        occupied.discard(origin)
         if not alive_ids:
-            new_hostiles.append(pos)
-            occupied.add(pos)
+            new_hostiles.append(origin)
+            occupied.add(origin)
             continue
-        targets = [session.pos(pid) for pid in alive_ids]
-        target = min(targets, key=lambda p: abs(p[0] - pos[0]) + abs(p[1] - pos[1]))
-        current = pos
-        for dx, dy in MOVE_DELTAS.values():
-            nx, ny = current[0] + dx, current[1] + dy
-            if 0 <= nx < session.grid and 0 <= ny < session.grid:
-                nxt = (nx, ny)
-                if nxt not in occupied or nxt in targets:
-                    dist_old = abs(current[0] - target[0]) + abs(current[1] - target[1])
-                    dist_new = abs(nxt[0] - target[0]) + abs(nxt[1] - target[1])
-                    if dist_new < dist_old:
-                        current = nxt
-        new_hostiles.append(current)
-        occupied.add(current)
-        for pid in alive_ids:
-            if session.pos(pid) == current:
-                ch = player_chars.get(pid)
-                if ch is None:
-                    continue
-                dmg = apply_incoming_damage(random.randint(6, 14), ch, min_damage=2)
-                session.hp[str(pid)] = max(0, session.hp.get(str(pid), 0) - dmg)
-                notes.append(f"Мутант ранит {h(ch.nickname)}: −{dmg} HP.")
+        target = min(player_cells, key=lambda p: manhattan_distance(origin, p))
+        if manhattan_distance(origin, target) == 1:
+            _mutant_melee_hit(
+                storage,
+                session,
+                player_chars=player_chars,
+                alive_ids=alive_ids,
+                target_pos=target,
+                notes=notes,
+            )
+            new_hostiles.append(origin)
+            occupied.add(origin)
+            continue
+        step = best_step_toward(
+            origin,
+            target,
+            grid=session.grid,
+            blocked=occupied,
+            forbidden=player_cells,
+        )
+        if step != origin and manhattan_distance(step, target) == 1:
+            _mutant_melee_hit(
+                storage,
+                session,
+                player_chars=player_chars,
+                alive_ids=alive_ids,
+                target_pos=target,
+                notes=notes,
+            )
+            new_hostiles.append(origin)
+            occupied.add(origin)
+            continue
+        if step != origin:
+            new_hostiles.append(step)
+            occupied.add(step)
+            continue
+        new_hostiles.append(origin)
+        occupied.add(origin)
     session.hostiles = new_hostiles
     return notes
 
