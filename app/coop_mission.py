@@ -439,7 +439,20 @@ def join_coop_lobby(storage: Storage, telegram_id: int, lobby_id: str) -> Action
         return ActionResult(False, f"Нужно минимум {COOP_ENERGY_COST} энергии.")
     lobby.member_ids.append(telegram_id)
     save_coop_lobby(storage, lobby)
-    return ActionResult(True, f"Ты в группе ({len(lobby.member_ids)}/{COOP_MAX_PLAYERS}).")
+    notify: list[list[Any]] = []
+    join_note = (
+        f"👥 {h(player.nickname)} присоединился к кооп-группе "
+        f"({len(lobby.member_ids)}/{COOP_MAX_PLAYERS}) на «{lobby.location}»."
+    )
+    for pid in lobby.member_ids:
+        if pid == telegram_id:
+            continue
+        notify.append([pid, join_note])
+    return ActionResult(
+        True,
+        f"Ты в группе ({len(lobby.member_ids)}/{COOP_MAX_PLAYERS}).",
+        payload={"notify": notify} if notify else None,
+    )
 
 
 def leave_coop_lobby(storage: Storage, telegram_id: int) -> ActionResult:

@@ -26,6 +26,10 @@ from app.game_logic import (
     travel_block_text,
 )
 from app.storage import Character, Storage
+from app.mission_icons import ANOMALY_ICON_KEY, mission_icon_image
+
+# Диаметр иконки аномалии на поле охоты (клетка 118px).
+HUNT_ANOMALY_ICON_DIAMETER = 88
 
 
 HUNT_META_PREFIX = "artifact_hunt:"
@@ -676,6 +680,17 @@ def _draw_rock_cell(
     draw.line((left + 1, top + 1, left + 1, top + size - 2), fill=(90, 90, 88))
 
 
+def _paste_anomaly_icon(canvas: Image.Image, cx: int, cy: int, *, diameter: int = HUNT_ANOMALY_ICON_DIAMETER) -> None:
+    sprite = mission_icon_image(ANOMALY_ICON_KEY)
+    if sprite is not None:
+        token = sprite.convert("RGBA").resize((diameter, diameter), Image.Resampling.LANCZOS)
+        mask = Image.new("L", (diameter, diameter), 0)
+        ImageDraw.Draw(mask).ellipse((1, 1, diameter - 2, diameter - 2), fill=255)
+        canvas.paste(token, (cx - diameter // 2, cy - diameter // 2), mask)
+        return
+    _draw_glow_orb_layer(canvas, cx, cy, 28, (255, 120, 40))
+
+
 def _paste_circle(
     canvas: Image.Image,
     token: Image.Image,
@@ -812,7 +827,7 @@ def render_hunt_frame(
     for ax, ay in session.anomalies:
         cx = margin + ax * cell + cell // 2
         cy = margin + ay * cell + cell // 2
-        _draw_glow_orb_layer(canvas, cx, cy, 28, _anomaly_color((ax, ay), session.artifact))
+        _paste_anomaly_icon(canvas, cx, cy)
 
     # Близкий арт — бледный пинг на поле.
     if session.circles_filled >= max(1, session.circles_needed - 1):
@@ -962,14 +977,3 @@ def render_hunt_frame(
     buf = BytesIO()
     out.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
-
-
-def _anomaly_color(pos: tuple[int, int], artifact: tuple[int, int]) -> tuple[int, int, int]:
-    palette = [
-        (255, 145, 45),
-        (255, 95, 35),
-        (70, 220, 95),
-        (230, 230, 235),
-        (255, 185, 70),
-    ]
-    return palette[(pos[0] * 3 + pos[1] * 5) % len(palette)]

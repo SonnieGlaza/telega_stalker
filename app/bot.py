@@ -3501,6 +3501,7 @@ async def coop_callback(callback: CallbackQuery, bot: Bot) -> None:
         if not result.ok:
             await reply_action_result(callback, result.text)
             return
+        await apply_action_notifies(bot, result)
         lobby = get_coop_lobby_by_player(storage, telegram_id)
         await edit_menu_message(
             callback,
