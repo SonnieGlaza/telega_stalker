@@ -41,18 +41,18 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def pda_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🧾 Профиль"), KeyboardButton(text="💬 Чаты")],
-            [KeyboardButton(text="🏆 Рейтинг"), KeyboardButton(text="🗺 Карта")],
-            [KeyboardButton(text="🎖 Достижения"), KeyboardButton(text="📊 Статистика")],
-            [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="📣 Сбор")],
-            [KeyboardButton(text="🔗 Реферальная система")],
-            [KeyboardButton(text="⬅️ В меню")],
-        ],
-        resize_keyboard=True,
-    )
+def pda_keyboard(*, is_leader: bool = False) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = [
+        [KeyboardButton(text="🧾 Профиль"), KeyboardButton(text="💬 Чаты")],
+        [KeyboardButton(text="🏆 Рейтинг"), KeyboardButton(text="🗺 Карта")],
+        [KeyboardButton(text="🎖 Достижения"), KeyboardButton(text="📊 Статистика")],
+        [KeyboardButton(text="👥 Игроки")],
+    ]
+    if is_leader:
+        rows[-1].append(KeyboardButton(text="📣 Сбор"))
+    rows.append([KeyboardButton(text="🔗 Реферальная система")])
+    rows.append([KeyboardButton(text="⬅️ В меню")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def sortie_keyboard() -> ReplyKeyboardMarkup:

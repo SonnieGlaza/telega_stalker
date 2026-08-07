@@ -1718,7 +1718,13 @@ async def show_profile(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
-    await send_profile_snapshot(message, player, reply_markup=pda_keyboard())
+    if player.health <= 0:
+        await message.answer(
+            build_dead_character_text(player, storage=get_storage()),
+            reply_markup=dead_character_keyboard(),
+        )
+        return
+    await send_profile_snapshot(message, player, reply_markup=_pda_keyboard_for(player))
 
 
 @router.message(F.text == "🛒 Торговец")
@@ -1726,6 +1732,12 @@ async def show_trader(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
+        return
+    if player.health <= 0:
+        await message.answer(
+            build_dead_character_text(player, storage=get_storage()),
+            reply_markup=dead_character_keyboard(),
+        )
         return
     await message.answer(
         "Торговец на связи. Выбери раздел:",
@@ -2690,21 +2702,28 @@ async def _notify_coop_finished(bot: Bot, result: Any) -> None:
     storage = get_storage()
     notify_ids = [int(x) for x in (payload.get("notify_all") or [])]
     death_where = payload.get("death_location")
-    death_cause = str(payload.get("death_cause") or "coop")
+    death_causes = {
+        str(k): str(v) for k, v in (payload.get("death_causes") or {}).items()
+    }
+    default_cause = str(payload.get("death_cause") or "coop")
     for pid in notify_ids:
         player = storage.get_character(pid, refresh_energy=False)
         try:
-            if player is not None and player.health <= 0 and not payload.get("coop_success"):
+            if player is not None and player.health <= 0:
+                cause = death_causes.get(str(pid), default_cause)
                 await bot.send_message(
                     pid,
                     build_battle_death_text(
                         player,
                         where=str(death_where or player.location),
-                        cause=death_cause,
+                        cause=cause,
                         storage=storage,
                     ),
                     reply_markup=dead_character_keyboard(),
                 )
+                # На успешном коопе живые видят награду; погибшему — только смерть.
+                if payload.get("coop_success"):
+                    continue
             else:
                 await bot.send_message(pid, action_result_text(pid, result.text))
         except Exception:
@@ -2852,7 +2871,7 @@ async def show_achievements(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     text = build_achievements_overview(get_storage(), player.telegram_id)
-    await message.answer(text, reply_markup=pda_keyboard())
+    await message.answer(text, reply_markup=_pda_keyboard_for(player))
 
 
 @router.message(F.text == "📊 Статистика")
@@ -2862,7 +2881,7 @@ async def show_character_stats(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     text = build_character_stats_overview(get_storage(), player.telegram_id)
-    await message.answer(text, reply_markup=pda_keyboard())
+    await message.answer(text, reply_markup=_pda_keyboard_for(player))
 
 
 @router.message(F.text == "📟 КПК")
@@ -2874,7 +2893,7 @@ async def show_pda(message: Message) -> None:
     await message.answer(
         "📟 КПК сталкера\n"
         "Профиль, связь, рейтинг, карта, игроки и рефералка.",
-        reply_markup=pda_keyboard(),
+        reply_markup=_pda_keyboard_for(player),
     )
 
 
@@ -2893,7 +2912,7 @@ async def show_referral_system(message: Message, bot: Bot) -> None:
         logger.exception("Failed to resolve bot username for referral link")
     await message.answer(
         _build_referral_system_text(referral_link=referral_link),
-        reply_markup=pda_keyboard(),
+        reply_markup=_pda_keyboard_for(player),
     )
 
 
@@ -2903,7 +2922,7 @@ async def show_pda_chats(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
-    await message.answer(_build_pda_chats_text(player), reply_markup=pda_keyboard())
+    await message.answer(_build_pda_chats_text(player), reply_markup=_pda_keyboard_for(player))
 
 
 @router.message(F.text == "⬅️ В меню")
@@ -2940,7 +2959,7 @@ async def show_zone_map(message: Message) -> None:
     await message.answer_photo(
         photo=image,
         caption="Карта Зоны: точки, типы и текущий контроль.",
-        reply_markup=pda_keyboard(),
+        reply_markup=_pda_keyboard_for(player),
     )
 
 
@@ -4152,6 +4171,14 @@ async def cancel_one_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
         await deliver_group_result(callback, bot, group, prefix="📣")
     else:
         await reply_action_result(callback, result.text, bot=bot)
+
+
+def _pda_keyboard_for(player: Character | None):
+    is_leader = False
+    if player is not None and player.faction:
+        storage = get_storage()
+        is_leader = storage.get_faction_leader_id(player.faction) == player.telegram_id
+    return pda_keyboard(is_leader=is_leader)
 
 
 def _faction_group_keyboard_for(telegram_id: int):
