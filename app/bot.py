@@ -2735,17 +2735,22 @@ async def _notify_coop_finished(bot: Bot, result: Any) -> None:
     death_causes = {
         str(k): str(v) for k, v in (payload.get("death_causes") or {}).items()
     }
+    death_killers = {
+        str(k): str(v) for k, v in (payload.get("death_killers") or {}).items()
+    }
     default_cause = str(payload.get("death_cause") or "coop")
     for pid in notify_ids:
         player = storage.get_character(pid, refresh_energy=False)
         try:
             if player is not None and player.health <= 0:
                 cause = death_causes.get(str(pid), default_cause)
+                killer_name = death_killers.get(str(pid))
                 death_text = build_battle_death_text(
                     player,
                     where=str(death_where or player.location),
                     cause=cause,
                     storage=storage,
+                    killer_name=killer_name,
                 )
                 append_death_log(storage, pid, death_text)
                 await bot.send_message(
