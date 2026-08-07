@@ -90,6 +90,7 @@ from app.game_logic import (
     accept_quest_contract,
     cancel_quest_contract,
     turn_in_quest_contract,
+    try_auto_turn_in_contract,
     run_contract_work,
     is_traveling,
     travel_status_text,
@@ -1364,6 +1365,8 @@ def action_result_text(telegram_id: int, text: str) -> str:
     arrival = storage.pop_arrival_notice(telegram_id)
     encounter = roll_arrival_encounter(storage, telegram_id, arrival) if arrival else None
     smuggle_text = resolve_smuggling_if_pending(storage, telegram_id)
+    # Отчёт по контракту сдаётся сам при прибытии на базу.
+    auto_turnin = try_auto_turn_in_contract(storage, telegram_id) if arrival else None
     body = (text or "").strip()
     parts: list[str] = []
     if arrival:
@@ -1372,6 +1375,8 @@ def action_result_text(telegram_id: int, text: str) -> str:
         parts.append(encounter)
     if smuggle_text:
         parts.append(smuggle_text.strip())
+    if auto_turnin:
+        parts.append(auto_turnin)
     if body:
         parts.append(body)
     combined = "\n\n".join(parts)
@@ -2312,7 +2317,11 @@ async def show_quests(message: Message) -> None:
         return
 
     storage = get_storage()
+    auto = try_auto_turn_in_contract(storage, player.telegram_id)
+    player = storage.get_character(player.telegram_id, refresh_energy=False) or player
     text, keyboard = _quests_menu_payload(storage, player)
+    if auto:
+        text = f"{auto}\n\n{text}"
     await message.answer(text, reply_markup=keyboard)
 
 
@@ -2323,7 +2332,11 @@ async def refresh_quests_menu(callback: CallbackQuery) -> None:
     if player is None or not player_ready(player):
         await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
         return
+    auto = try_auto_turn_in_contract(storage, player.telegram_id)
+    player = storage.get_character(player.telegram_id, refresh_energy=False) or player
     text, keyboard = _quests_menu_payload(storage, player)
+    if auto:
+        text = f"{auto}\n\n{text}"
     await edit_menu_message(callback, text, keyboard)
 
 
@@ -2468,6 +2481,18 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
 
     if payload.get("mission_done") or not payload.get("mission_active"):
         await reply_action_result(callback, result.text)
+        # После миссии показать меню заданий (кнопка сдачи отчёта / автосдача на базе).
+        player = storage.get_character(telegram_id, refresh_energy=False)
+        if player is not None and callback.message is not None:
+            auto = try_auto_turn_in_contract(storage, telegram_id)
+            player = storage.get_character(telegram_id, refresh_energy=False) or player
+            text, keyboard = _quests_menu_payload(storage, player)
+            if auto:
+                text = f"{auto}\n\n{text}"
+            try:
+                await callback.message.answer(text, reply_markup=keyboard)
+            except Exception:
+                pass
         return
 
     image = payload.get("mission_image")

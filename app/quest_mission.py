@@ -31,6 +31,7 @@ from app.game_logic import (
     effective_max_health,
     equipment_power,
     faction_home_base,
+    try_auto_turn_in_contract,
     use_medkit_item,
 )
 from app.storage import Character, Storage
@@ -353,10 +354,19 @@ def _finish_success(storage: Storage, telegram_id: int, session: QuestMissionSes
             },
         )
         home = faction_home_base(character.faction if character else None)
+        # Если уже на базе (редкий случай) — сразу закрываем отчёт.
+        auto = try_auto_turn_in_contract(storage, telegram_id)
+        if auto:
+            return ActionResult(
+                True,
+                result.text + "\n\n" + auto,
+                payload={"mission_active": False, "mission_done": True, "reward": reward, "turned_in": True},
+            )
         return ActionResult(
             True,
             result.text
-            + f"\n\nВернись на «{home}» и сдай отчёт (+{CONTRACT_TURN_IN_BONUS_PERCENT}% RU).",
+            + f"\n\nВернись на «{home}» — отчёт сдастся автоматически при прибытии "
+            + f"(+{CONTRACT_TURN_IN_BONUS_PERCENT}% RU).",
             payload={"mission_active": False, "mission_done": True, "reward": reward},
         )
     storage.set_active_contract(telegram_id, None)

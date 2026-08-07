@@ -325,7 +325,39 @@ def run_smoke_check() -> None:
         save_mission_session(storage, 111, session)
         done = _finish_success(storage, 111, session)
         assert done.ok, done.text
-        assert storage.get_active_contract(111) is not None  # stage return
+        active_after = storage.get_active_contract(111)
+        assert active_after is not None  # stage return
+        assert str(active_after.get("stage")) == "return"
+
+        # Turn-in: return home → auto-complete report.
+        from app.game_logic import turn_in_quest_contract, try_auto_turn_in_contract
+
+        storage.set_location(111, faction_home_base("Долг"))
+        auto = try_auto_turn_in_contract(storage, 111)
+        assert auto is not None and "сдан" in auto.lower(), auto
+        assert storage.get_active_contract(111) is None
+
+        # Manual turn-in path still works if auto didn't run yet.
+        storage.set_location(111, faction_home_base("Долг"))
+        storage.set_active_contract(
+            111,
+            {"template_key": "easy_boloto", "stage": "return", "pending_reward": 1000},
+        )
+        manual = turn_in_quest_contract(storage, 111)
+        assert manual.ok, manual.text
+        assert "100" in manual.text or "+100" in manual.text  # 10% of 1000
+        assert storage.get_active_contract(111) is None
+
+        # Turn-in blocked off-base.
+        storage.set_active_contract(
+            111,
+            {"template_key": "easy_boloto", "stage": "return", "pending_reward": 500},
+        )
+        storage.set_location(111, "Болото")
+        blocked = turn_in_quest_contract(storage, 111)
+        assert not blocked.ok
+        assert storage.get_active_contract(111) is not None
+        storage.set_active_contract(111, None)
 
         # Bicycle quest mult only after bike arrival (and then consumed).
         from app.game_logic import BICYCLE_QUEST_REWARD_MULT, build_players_faction_page_text

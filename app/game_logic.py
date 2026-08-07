@@ -2074,7 +2074,16 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
                 else:
                     lines.append(f"   🗺 Доберись до «{template.work_location}».")
             elif stage == "return":
-                lines.append(f"   🗺 Вернись на базу «{home}» и сдай отчёт (+{CONTRACT_TURN_IN_BONUS_PERCENT}% RU).")
+                if character.location == home and not is_traveling(character):
+                    lines.append(
+                        f"   ✅ Ты на базе «{home}» — жми «Сдать отчёт» "
+                        f"(+{CONTRACT_TURN_IN_BONUS_PERCENT}% RU) или просто обнови меню."
+                    )
+                else:
+                    lines.append(
+                        f"   🗺 Вернись на базу «{home}» — отчёт сдастся при прибытии "
+                        f"(+{CONTRACT_TURN_IN_BONUS_PERCENT}% RU)."
+                    )
         lines.append("")
     else:
         lines.append("Нет активного контракта — выбери ниже (только на домашней базе).")
@@ -2415,10 +2424,10 @@ def turn_in_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
     if character.location != home:
         return ActionResult(
             False,
-            f"Сдать отчёт можно только на базе «{home}».",
+            f"Сдать отчёт можно только на базе «{home}». Сейчас ты в «{character.location}».",
         )
 
-    pending = int(active.get("pending_reward", 0))
+    pending = int(active.get("pending_reward", 0) or 0)
     bonus = max(0, int(round(pending * CONTRACT_TURN_IN_BONUS_PERCENT / 100)))
     if bonus > 0:
         storage.change_money(telegram_id, bonus)
@@ -2427,8 +2436,26 @@ def turn_in_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
     return ActionResult(
         True,
         f"Отчёт по «{template.title}» сдан на «{home}».\n"
-        f"Бонус за доставку данных: +{bonus} RU.",
+        f"Бонус за доставку данных: +{bonus} RU.\n"
+        "Контракт закрыт.",
     )
+
+
+def try_auto_turn_in_contract(storage: Storage, telegram_id: int) -> str | None:
+    """Автосдача отчёта, если этап return и игрок уже на домашней базе."""
+    # Подтянуть просроченный переход, чтобы локация была актуальной.
+    storage.resolve_travel_if_due(telegram_id)
+    character = storage.get_character(telegram_id, refresh_energy=False)
+    if character is None or is_traveling(character):
+        return None
+    active = storage.get_active_contract(telegram_id)
+    if not active or str(active.get("stage", "")) != "return":
+        return None
+    home = faction_home_base(character.faction)
+    if character.location != home:
+        return None
+    result = turn_in_quest_contract(storage, telegram_id)
+    return result.text if result.ok else None
 
 
 def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResult:
