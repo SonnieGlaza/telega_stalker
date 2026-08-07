@@ -293,6 +293,7 @@ def get_hunt_session(storage: Storage, telegram_id: int) -> HuntSession | None:
     try:
         return HuntSession.from_dict(data)
     except Exception:
+        storage.delete_meta(_hunt_meta_key(telegram_id))
         return None
 
 
@@ -413,6 +414,11 @@ def start_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, blocked)
     if is_traveling(player):
         return ActionResult(False, "Нельзя искать арты в пути.")
+    from app.player_busy import player_busy_reason
+
+    busy = player_busy_reason(storage, telegram_id, skip="hunt")
+    if busy:
+        return ActionResult(False, busy)
     if get_hunt_session(storage, telegram_id) is not None:
         session = get_hunt_session(storage, telegram_id)
         assert session is not None

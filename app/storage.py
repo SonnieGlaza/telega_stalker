@@ -1512,7 +1512,7 @@ class Storage:
                     (destination, telegram_id),
                 )
                 completed.append((telegram_id, destination))
-                self._pending_arrival_notices.pop(telegram_id, None)
+                self._pending_arrival_notices[int(telegram_id)] = destination
                 if transport:
                     # set_meta открывает своё соединение — после цикла ок
                     self._pending_arrival_transports = getattr(self, "_pending_arrival_transports", {})

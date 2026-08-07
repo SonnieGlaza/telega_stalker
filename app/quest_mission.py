@@ -224,6 +224,7 @@ def get_mission_session(storage: Storage, telegram_id: int) -> QuestMissionSessi
     try:
         return QuestMissionSession.from_dict(data)
     except Exception:
+        storage.delete_meta(_meta_key(telegram_id))
         return None
 
 
@@ -580,17 +581,26 @@ def start_or_resume_quest_mission(
         return ActionResult(False, _dead_block_text())
 
     existing = get_mission_session(storage, telegram_id)
-    if existing is not None and existing.contract_key == template.key:
-        image = _render_for_player(storage, telegram_id, existing, player)
-        return ActionResult(
-            True,
-            "Продолжай вылазку по контракту.",
-            payload={
-                "mission_image": image,
-                "mission_active": True,
-                "caption": mission_status_caption(existing, player),
-            },
-        )
+    if existing is not None:
+        if existing.contract_key != template.key:
+            clear_mission_session(storage, telegram_id)
+        else:
+            image = _render_for_player(storage, telegram_id, existing, player)
+            return ActionResult(
+                True,
+                "Продолжай вылазку по контракту.",
+                payload={
+                    "mission_image": image,
+                    "mission_active": True,
+                    "caption": mission_status_caption(existing, player),
+                },
+            )
+
+    from app.player_busy import player_busy_reason
+
+    busy = player_busy_reason(storage, telegram_id, skip="quest")
+    if busy:
+        return ActionResult(False, busy)
 
     # Новая миссия — списываем ресурсы один раз.
     spend_err = _spend_quest_resources(storage, telegram_id, quest)

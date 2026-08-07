@@ -12,7 +12,6 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.artifact_hunt import FONT_CANDIDATES, _paste_circle
 from app.game_logic import (
-    DUEL_ENERGY_COST,
     DUEL_LOSER_HP_REMAINING,
     DUEL_LOSER_MONEY_CAP,
     DUEL_LOSER_MONEY_PERCENT,
@@ -21,15 +20,14 @@ from app.game_logic import (
     RATING_REWARD,
     ActionResult,
     _add_rating,
-    _is_dead,
     _weapon_rating,
     apply_incoming_damage,
     effective_max_health,
     equipment_power,
     h,
-    use_medkit_item,
 )
 from app.storage import Character, Storage
+from app.tactical_hp import sync_session_hp_to_db, use_tactical_medkit
 
 DUEL_GRID_SIZE = 8
 DUEL_TURN_SECONDS = 10
@@ -99,6 +97,7 @@ class DuelGridSession:
     medkits_used: dict[str, bool] = field(default_factory=dict)
     turn_order: list[int] = field(default_factory=list)
     active_index: int = 0
+    turn_seq: int = 0
     turn_deadline: str | None = None
     finished: bool = False
     winner_id: int | None = None
@@ -132,6 +131,7 @@ class DuelGridSession:
             "medkits_used": self.medkits_used,
             "turn_order": self.turn_order,
             "active_index": self.active_index,
+            "turn_seq": self.turn_seq,
             "turn_deadline": self.turn_deadline,
             "finished": self.finished,
             "winner_id": self.winner_id,
@@ -154,6 +154,7 @@ class DuelGridSession:
             medkits_used={str(k): bool(v) for k, v in (raw.get("medkits_used") or {}).items()},
             turn_order=[int(x) for x in (raw.get("turn_order") or [])],
             active_index=int(raw.get("active_index") or 0),
+            turn_seq=int(raw.get("turn_seq") or 0),
             turn_deadline=raw.get("turn_deadline"),
             finished=bool(raw.get("finished")),
             winner_id=int(raw["winner_id"]) if raw.get("winner_id") is not None else None,
@@ -182,6 +183,7 @@ def get_duel_session_by_player(storage: Storage, telegram_id: int) -> DuelGridSe
     try:
         session = DuelGridSession.from_dict(json.loads(raw))
     except Exception:
+        storage.delete_meta(_player_key(telegram_id))
         return None
     if session.finished:
         return None
@@ -202,7 +204,23 @@ def clear_duel_session(storage: Storage, session: DuelGridSession) -> None:
 
 def _free_cell(grid: int, forbidden: set[tuple[int, int]]) -> tuple[int, int]:
     opts = [(x, y) for x in range(grid) for y in range(grid) if (x, y) not in forbidden]
-    return random.choice(opts) if opts else (0, 0)
+    if not opts:
+        raise RuntimeError("duel grid full")
+    return random.choice(opts)
+
+
+def _save_if_turn_ok(storage: Storage, session: DuelGridSession, expected_seq: int) -> bool:
+    raw = storage.get_meta(_session_key(session.duel_id))
+    if not raw:
+        return False
+    try:
+        fresh = DuelGridSession.from_dict(json.loads(raw))
+    except Exception:
+        return False
+    if fresh.finished or fresh.turn_seq != expected_seq:
+        return False
+    save_duel_session(storage, session)
+    return True
 
 
 def _build_duel_map(session: DuelGridSession) -> None:
@@ -273,6 +291,13 @@ def start_duel_grid(
     if get_duel_session_by_player(storage, challenger_id) or get_duel_session_by_player(storage, target_id):
         return ActionResult(False, "Один из бойцов уже в дуэли."), None
 
+    from app.player_busy import player_busy_reason
+
+    for pid in (challenger_id, target_id):
+        busy = player_busy_reason(storage, pid, skip="duel")
+        if busy:
+            return ActionResult(False, busy), None
+
     duel_id = uuid.uuid4().hex[:12]
     session = DuelGridSession(
         duel_id=duel_id,
@@ -304,12 +329,17 @@ def start_duel_grid(
 
 
 def _end_duel(storage: Storage, session: DuelGridSession, winner_id: int, loser_id: int, note: str) -> ActionResult:
+    for pid in (session.challenger_id, session.target_id):
+        hp_val = session.hp.get(str(pid))
+        if hp_val is not None:
+            sync_session_hp_to_db(storage, pid, int(hp_val))
     session.finished = True
     session.winner_id = winner_id
     session.loser_id = loser_id
     session.log.append(note)
     save_duel_session(storage, session)
     win_text, lose_text = _finalize_duel_rewards(storage, winner_id, loser_id)
+    message_ids = {str(k): int(v) for k, v in session.message_ids.items()}
     clear_duel_session(storage, session)
     unregister_active_duel(storage, session.duel_id)
     winner = storage.get_character(winner_id, refresh_energy=False)
@@ -322,6 +352,8 @@ def _end_duel(storage: Storage, session: DuelGridSession, winner_id: int, loser_
         "loser_text": lose_text,
         "winner_name": winner.nickname if winner else str(winner_id),
         "loser_name": loser.nickname if loser else str(loser_id),
+        "message_ids": message_ids,
+        "duel_id": session.duel_id,
     }
     return ActionResult(True, note, payload=payload)
 
@@ -353,6 +385,7 @@ def _occupied(session: DuelGridSession, *, exclude: int | None = None) -> set[tu
 
 def _advance_turn(session: DuelGridSession) -> None:
     session.active_index = (session.active_index + 1) % len(session.turn_order)
+    session.turn_seq += 1
     session.turn_deadline = _deadline_iso()
 
 
@@ -403,6 +436,7 @@ def duel_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         return ActionResult(False, "Активной дуэли нет.")
     if session.active_player() != telegram_id:
         return ActionResult(False, "Сейчас ход соперника.")
+    turn_seq = session.turn_seq
     delta = MOVE_DELTAS.get(direction)
     if delta is None:
         return ActionResult(False, "Некорректное направление.")
@@ -431,7 +465,8 @@ def duel_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
     done = _check_hp_end(storage, session)
     if done:
         return done
-    save_duel_session(storage, session)
+    if not _save_if_turn_ok(storage, session, turn_seq):
+        return ActionResult(False, "Ход уже выполнен.")
     return ActionResult(True, "Сделал шаг.", payload={"duel_active": True, "duel_id": session.duel_id})
 
 
@@ -441,6 +476,7 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
         return ActionResult(False, "Активной дуэли нет.")
     if session.active_player() != telegram_id:
         return ActionResult(False, "Сейчас ход соперника.")
+    turn_seq = session.turn_seq
     delta = MOVE_DELTAS.get(direction)
     if delta is None:
         return ActionResult(False, "Некорректный выстрел.")
@@ -469,7 +505,11 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
         _advance_turn(session)
         _move_mutants(session)
         session.log.extend(_mutants_attack(session, storage))
-        save_duel_session(storage, session)
+        done = _check_hp_end(storage, session)
+        if done:
+            return done
+        if not _save_if_turn_ok(storage, session, turn_seq):
+            return ActionResult(False, "Ход уже выполнен.")
         return ActionResult(True, "Промах — пуля не нашла цель.", payload={"duel_active": True})
 
     if hit_kind == "mutant":
@@ -486,7 +526,12 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
             session.log.append(f"{h(defender.nickname)} укрылся — промах!")
             _advance_turn(session)
             _move_mutants(session)
-            save_duel_session(storage, session)
+            session.log.extend(_mutants_attack(session, storage))
+            done = _check_hp_end(storage, session)
+            if done:
+                return done
+            if not _save_if_turn_ok(storage, session, turn_seq):
+                return ActionResult(False, "Ход уже выполнен.")
             return ActionResult(True, "Промах — цель за укрытием.", payload={"duel_active": True})
         raw = _duel_damage(attacker)
         dmg = apply_incoming_damage(raw, defender, min_damage=1)
@@ -503,7 +548,8 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     done = _check_hp_end(storage, session)
     if done:
         return done
-    save_duel_session(storage, session)
+    if not _save_if_turn_ok(storage, session, turn_seq):
+        return ActionResult(False, "Ход уже выполнен.")
     return ActionResult(True, note, payload={"duel_active": True, "duel_id": session.duel_id})
 
 
@@ -513,31 +559,28 @@ def duel_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Активной дуэли нет.")
     if session.active_player() != telegram_id:
         return ActionResult(False, "Сейчас ход соперника.")
+    turn_seq = session.turn_seq
     if session.medkits_used.get(str(telegram_id)):
         return ActionResult(False, "Аптечку в этой дуэли уже использовал.")
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Персонаж не найден.")
-    for key in ("medkit_science", "medkit_army", "medkit"):
-        if int(player.inventory.get(key, 0)) <= 0:
-            continue
-        result = use_medkit_item(storage, telegram_id, key)
-        if not result.ok:
-            continue
-        refreshed = storage.get_character(telegram_id, refresh_energy=False)
-        if refreshed:
-            session.hp[str(telegram_id)] = int(refreshed.health)
-        session.medkits_used[str(telegram_id)] = True
-        session.log.append(f"{h(player.nickname)} использовал аптечку.")
-        _advance_turn(session)
-        _move_mutants(session)
-        session.log.extend(_mutants_attack(session, storage))
-        done = _check_hp_end(storage, session)
-        if done:
-            return done
-        save_duel_session(storage, session)
-        return ActionResult(True, result.text, payload={"duel_active": True})
-    return ActionResult(False, "Нет аптечки в инвентаре.")
+    current_hp = session.hp.get(str(telegram_id), int(player.health))
+    result, new_hp = use_tactical_medkit(storage, telegram_id, int(current_hp))
+    if not result.ok:
+        return result
+    session.hp[str(telegram_id)] = new_hp
+    session.medkits_used[str(telegram_id)] = True
+    session.log.append(f"{h(player.nickname)} использовал аптечку.")
+    _advance_turn(session)
+    _move_mutants(session)
+    session.log.extend(_mutants_attack(session, storage))
+    done = _check_hp_end(storage, session)
+    if done:
+        return done
+    if not _save_if_turn_ok(storage, session, turn_seq):
+        return ActionResult(False, "Ход уже выполнен.")
+    return ActionResult(True, result.text, payload={"duel_active": True})
 
 
 def duel_forfeit(storage: Storage, telegram_id: int) -> ActionResult:
@@ -568,6 +611,7 @@ def process_duel_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
     if not isinstance(duel_ids, list):
         return outcomes
     still_active: list[str] = []
+    finished: set[str] = set()
     for duel_id in duel_ids:
         raw_s = storage.get_meta(_session_key(str(duel_id)))
         if not raw_s:
@@ -584,17 +628,20 @@ def process_duel_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
             continue
         active = session.active_player()
         player = storage.get_character(active, refresh_energy=False)
+        turn_seq = session.turn_seq
         session.log.append(f"Тайм-аут хода {h(player.nickname) if player else active}.")
         _advance_turn(session)
         _move_mutants(session)
         session.log.extend(_mutants_attack(session, storage))
         done = _check_hp_end(storage, session)
         if done:
-            outcomes.append((active, done))
-            outcomes.append((session.opponent_of(active), done))
+            if str(duel_id) not in finished:
+                finished.add(str(duel_id))
+                outcomes.append((active, done))
             continue
-        session.turn_deadline = _deadline_iso()
-        save_duel_session(storage, session)
+        if not _save_if_turn_ok(storage, session, turn_seq):
+            still_active.append(str(duel_id))
+            continue
         still_active.append(str(duel_id))
         outcomes.append(
             (

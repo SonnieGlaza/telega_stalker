@@ -1971,7 +1971,7 @@ def collect_travel_eta_notices(storage: Storage) -> list[tuple[int, str]]:
 
 
 def build_travel_arrival_live_text(destination: str) -> str:
-    return f"🚐 Прибыл в «{destination}».\nОсталось ехать: 0 сек"
+    return f"🚐 Прибыл в «{destination}»."
 
 
 def process_due_travels(storage: Storage) -> list[tuple[int, str]]:
@@ -2105,12 +2105,11 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
         stage = str(active.get("stage", "work"))
         if template:
             quest = QUESTS.get(template.difficulty)
-            chance = calculate_quest_success_for_quest(character, quest).chance if quest else 0
             lines.append(f"📌 Активный контракт: {template.title}")
             lines.append(f"   Точка работы: «{template.work_location}» | этап: {stage}")
             if quest:
                 lines.append(
-                    f"   Сложность {quest.title}: шанс ~{chance}%, "
+                    f"   Сложность {quest.title}: полевая вылазка 6×6, "
                     f"энергия {quest.energy_cost}, патр {quest.ammo_required}, "
                     f"апт {quest.medkit_required}"
                 )
@@ -2140,12 +2139,11 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
         quest = QUESTS.get(template.difficulty)
         if quest is None:
             continue
-        chance = calculate_quest_success_for_quest(character, quest).chance
         rating_gain = QUEST_RATING_BY_DIFFICULTY.get(template.difficulty, (12, 2))[0]
         transport_note = _transport_requirement_text(template.min_transport)
         lines.append(
             f"• {template.title}{transport_note}\n"
-            f"  {quest.title} → «{template.work_location}» | шанс ~{chance}% | "
+            f"  {quest.title} → «{template.work_location}» | поле 6×6 | "
             f"RU {quest.reward_min}–{quest.reward_max} | рейтинг +{rating_gain}"
         )
     lines.extend(["", "🚚 Контрабанда — отдельная активность."])
@@ -2224,6 +2222,9 @@ def cancel_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа.")
     if not storage.get_active_contract(telegram_id):
         return ActionResult(False, "Нет активного контракта.")
+    from app.quest_mission import clear_mission_session
+
+    clear_mission_session(storage, telegram_id)
     home = faction_home_base(character.faction)
     left_base = is_traveling(character) or character.location != home
     storage.set_active_contract(telegram_id, None)
@@ -2934,6 +2935,14 @@ def create_duel_challenge(
             None,
         )
 
+    from app.player_busy import player_busy_reason
+
+    for pid, who in ((challenger_id, "Ты"), (target_id, h(target.nickname))):
+        busy = player_busy_reason(storage, pid)
+        if busy:
+            label = "Ты занят" if pid == challenger_id else f"{who} занят"
+            return ActionResult(False, f"{label}: {busy.lower()}"), None
+
     existing_out = storage.get_meta(_duel_out_key(challenger_id))
     if existing_out:
         try:
@@ -2963,20 +2972,18 @@ def create_duel_challenge(
 
     my_power = equipment_power(challenger)
     their_power = equipment_power(target)
-    chance = calculate_duel_challenger_chance(my_power, their_power)
-    target_chance = 100 - chance
     conditions = _duel_conditions_text()
     challenger_msg = (
         f"Вызов на дуэль отправлен: {h(target.nickname)} ({target_id}).\n"
-        f"Сила: ты {my_power} vs {their_power}.\n"
-        f"Твой шанс победы ~{chance}% (если примут).\n"
+        f"Сила снаряги: ты {my_power} vs {their_power}.\n"
+        f"Бой на тактическом поле — исход решает игра, не RNG.\n"
         f"{conditions}\n"
         f"Ожидание ответа до {DUEL_PENDING_TTL_SECONDS // 60} мин."
     )
     target_msg = (
         f"⚔️ Тебя вызвал на дуэль {h(challenger.nickname)} (id {challenger_id}).\n"
         f"Сила снаряги: {h(challenger.nickname)} {my_power} vs ты {their_power}.\n"
-        f"Шанс победы вызывающего ~{chance}%, твой ~{target_chance}%.\n"
+        f"Тактическое поле 8×8 — ход, выстрел, укрытия.\n"
         f"{conditions}"
     )
     return ActionResult(True, challenger_msg), target_msg
@@ -3004,7 +3011,7 @@ def accept_duel(
     target_id: int,
     challenger_id: int,
 ) -> tuple[ActionResult, str | None]:
-    """Принятие дуэли: ролл шанса, штраф проигравшему, уведомление вызывающему."""
+    """Принятие дуэли: тактическое поле, штраф проигравшему."""
     pending = get_pending_duel_challenger(storage, target_id)
     if pending is None or pending != challenger_id:
         return ActionResult(False, "Этот вызов на дуэль уже неактивен."), None
@@ -3020,6 +3027,15 @@ def accept_duel(
     if challenger.energy < DUEL_ENERGY_COST or target.energy < DUEL_ENERGY_COST:
         _clear_duel_meta(storage, challenger_id, target_id)
         return ActionResult(False, f"Не хватает энергии (нужно {DUEL_ENERGY_COST} у каждого)."), None
+
+    from app.player_busy import player_busy_reason
+
+    for pid, who in ((challenger_id, "Вызывающий"), (target_id, "Ты")):
+        busy = player_busy_reason(storage, pid, skip="duel")
+        if busy:
+            _clear_duel_meta(storage, challenger_id, target_id)
+            prefix = busy if pid == target_id else f"{who}: {busy.lower()}"
+            return ActionResult(False, prefix), None
 
     if not storage.spend_energy(challenger_id, DUEL_ENERGY_COST):
         _clear_duel_meta(storage, challenger_id, target_id)
@@ -4143,6 +4159,11 @@ def travel_to(
         return ActionResult(False, _dead_block_text())
     if is_traveling(character):
         return ActionResult(False, travel_block_text(character) or "Ты уже в пути.")
+    from app.player_busy import player_busy_reason
+
+    busy = player_busy_reason(storage, telegram_id)
+    if busy:
+        return ActionResult(False, busy)
     if character.location == destination:
         return ActionResult(False, f"Ты уже находишься в локации «{destination}».")
 

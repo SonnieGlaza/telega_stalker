@@ -159,7 +159,6 @@ from app.game_logic import (
     use_mineralka,
     use_beard_tea,
     open_stash,
-    search_artifacts,
     transfer_money_with_fee,
     create_duel_challenge,
     accept_duel,
@@ -2410,15 +2409,16 @@ async def contract_work_callback(callback: CallbackQuery) -> None:
         )
         return
     await reply_action_result(callback, result.text)
-    if result.ok or not result.ok:
-        storage = get_storage()
-        player = storage.get_character(callback.from_user.id, refresh_energy=False)
-        if player is not None:
-            text, keyboard = _quests_menu_payload(storage, player)
-            try:
-                await edit_menu_message(callback, text, keyboard, answer_callback=False)
-            except TelegramBadRequest:
-                pass
+    if not result.ok:
+        return
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is not None:
+        text, keyboard = _quests_menu_payload(storage, player)
+        try:
+            await edit_menu_message(callback, text, keyboard, answer_callback=False)
+        except TelegramBadRequest:
+            pass
 
 
 async def _send_or_edit_quest_mission_frame(
@@ -2499,7 +2499,7 @@ async def _upsert_tactical_photo(
     message_id: int | None,
     image_bytes: bytes,
     caption: str,
-    markup: InlineKeyboardMarkup,
+    markup: InlineKeyboardMarkup | None,
 ) -> int:
     media = BufferedInputFile(image_bytes, filename="tactical.png")
     if message_id is not None:
@@ -2517,12 +2517,23 @@ async def _upsert_tactical_photo(
     return sent.message_id
 
 
+async def _clear_tactical_keyboards(bot: Bot, message_ids: dict[str, int]) -> None:
+    for pid_raw, msg_id in message_ids.items():
+        try:
+            await bot.edit_message_reply_markup(chat_id=int(pid_raw), message_id=int(msg_id), reply_markup=None)
+        except TelegramBadRequest:
+            pass
+        except Exception:
+            logger.debug("Failed to clear tactical keyboard for %s", pid_raw, exc_info=True)
+
+
 async def _broadcast_duel_session(
     bot: Bot,
     storage: Storage,
     session: Any,
     *,
     note: str | None = None,
+    notes: dict[int, str] | None = None,
 ) -> None:
     for pid in (session.challenger_id, session.target_id):
         ch = storage.get_character(pid, refresh_energy=False)
@@ -2530,8 +2541,9 @@ async def _broadcast_duel_session(
         medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(ch)
         markup = duel_grid_keyboard(is_active_turn=is_active, medkit_available=medkit)
         caption = _duel_status_caption(storage, session, pid)
-        if note and is_active:
-            caption = f"{caption}\n\n{note}"
+        action_note = (notes or {}).get(pid) or note
+        if action_note:
+            caption = f"{caption}\n\n{action_note}" if pid == session.active_player() else f"{caption}\n\n↪ {action_note}"
         frame = render_duel_frame(storage, session, pid)
         msg_id = session.message_ids.get(str(pid))
         new_id = await _upsert_tactical_photo(
@@ -2550,6 +2562,7 @@ async def _notify_duel_finished(bot: Bot, result: Any) -> None:
     payload = result.payload or {}
     if not payload.get("duel_done"):
         return
+    await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
     winner_id = int(payload.get("winner_id") or 0)
     loser_id = int(payload.get("loser_id") or 0)
     for pid, key in ((winner_id, "winner_text"), (loser_id, "loser_text")):
@@ -2564,6 +2577,7 @@ async def _handle_duel_action(bot: Bot, callback: CallbackQuery, result: Any) ->
     storage = get_storage()
     payload = result.payload or {}
     if payload.get("duel_done"):
+        await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
         await _notify_duel_finished(bot, result)
         await safe_callback_answer(callback, "Дуэль завершена")
         return
@@ -2591,8 +2605,8 @@ async def _broadcast_coop_session(
         medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(ch)
         markup = coop_mission_keyboard(is_active_turn=is_active, medkit_available=medkit)
         caption = coop_status_caption(session, storage, pid)
-        if note and is_active:
-            caption = f"{caption}\n\n{note}"
+        if note:
+            caption = f"{caption}\n\n{note}" if pid == session.active_player() else f"{caption}\n\n↪ {note}"
         frame = render_coop_frame(storage, session, pid)
         msg_id = session.message_ids.get(str(pid))
         new_id = await _upsert_tactical_photo(
@@ -2611,6 +2625,7 @@ async def _notify_coop_finished(bot: Bot, result: Any) -> None:
     payload = result.payload or {}
     if not payload.get("coop_done"):
         return
+    await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
     notify_ids = [int(x) for x in (payload.get("notify_all") or [])]
     for pid in notify_ids:
         try:
@@ -2623,6 +2638,7 @@ async def _handle_coop_action(bot: Bot, callback: CallbackQuery, result: Any) ->
     storage = get_storage()
     payload = result.payload or {}
     if payload.get("coop_done"):
+        await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
         await _notify_coop_finished(bot, result)
         await safe_callback_answer(callback, "Вылазка завершена")
         return
@@ -3313,11 +3329,12 @@ async def duel_accept_callback(callback: CallbackQuery, bot: Bot) -> None:
             await callback.message.edit_reply_markup(reply_markup=None)
         except TelegramBadRequest:
             pass
-    await _broadcast_duel_session(bot, storage, session, note=result.text)
-    if challenger_text:
-        challenger_session = get_duel_session_by_player(storage, challenger_id)
-        if challenger_session is not None:
-            await _broadcast_duel_session(bot, storage, challenger_session, note=challenger_text)
+    await _broadcast_duel_session(
+        bot,
+        storage,
+        session,
+        notes={target_id: result.text, challenger_id: challenger_text or result.text},
+    )
 
 
 @router.callback_query(F.data.startswith("dgrid:"))
@@ -3402,7 +3419,7 @@ async def show_sortie(message: Message) -> None:
 
 
 @router.message(F.text == "👥 Кооп-вылазка")
-async def show_coop_menu(message: Message) -> None:
+async def show_coop_menu(message: Message, bot: Bot) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
@@ -3411,14 +3428,21 @@ async def show_coop_menu(message: Message) -> None:
     session = get_coop_session_by_player(storage, player.telegram_id)
     if session is not None:
         frame = render_coop_frame(storage, session, player.telegram_id)
-        media = BufferedInputFile(frame, filename="coop_mission.png")
         is_active = session.active_player() == player.telegram_id
         medkit = not session.medkits_used.get(str(player.telegram_id), False) and _player_has_medkit(player)
-        await message.answer_photo(
-            photo=media,
-            caption=coop_status_caption(session, storage, player.telegram_id),
-            reply_markup=coop_mission_keyboard(is_active_turn=is_active, medkit_available=medkit),
+        markup = coop_mission_keyboard(is_active_turn=is_active, medkit_available=medkit)
+        caption = coop_status_caption(session, storage, player.telegram_id)
+        msg_id = session.message_ids.get(str(player.telegram_id))
+        new_id = await _upsert_tactical_photo(
+            bot,
+            chat_id=player.telegram_id,
+            message_id=msg_id,
+            image_bytes=frame,
+            caption=caption,
+            markup=markup,
         )
+        session.message_ids[str(player.telegram_id)] = new_id
+        save_coop_session(storage, session)
         return
     lobby = get_coop_lobby_by_player(storage, player.telegram_id)
     text = coop_menu_text(storage, player.telegram_id)
@@ -3486,6 +3510,7 @@ async def coop_callback(callback: CallbackQuery, bot: Bot) -> None:
 
     if action == "leave":
         result = leave_coop_lobby(storage, telegram_id)
+        await apply_action_notifies(bot, result)
         await reply_action_result(callback, result.text)
         if result.ok:
             await edit_menu_message(
@@ -3590,7 +3615,12 @@ async def travel_status_callback(callback: CallbackQuery) -> None:
     if not status:
         await callback.answer("Сейчас ты никуда не едешь.", show_alert=True)
         return
-    await callback.answer(status, show_alert=True)
+    if len(status) <= CALLBACK_ALERT_MAX_LEN:
+        await callback.answer(status, show_alert=True)
+        return
+    await safe_callback_answer(callback)
+    if callback.message:
+        await callback.message.answer(status)
 
 
 @router.callback_query(F.data == "travel:back")
@@ -4654,9 +4684,15 @@ async def run_bot() -> None:
             storage = get_storage()
             try:
                 duel_updates: set[str] = set()
+                duel_done_ids: set[str] = set()
                 for pid, result in process_duel_turn_timeouts(storage):
                     payload = result.payload or {}
                     if payload.get("duel_done"):
+                        did = str(payload.get("duel_id") or "")
+                        if did and did in duel_done_ids:
+                            continue
+                        if did:
+                            duel_done_ids.add(did)
                         await _notify_duel_finished(bot, result)
                         continue
                     session = get_duel_session_by_player(storage, pid)
@@ -4667,9 +4703,15 @@ async def run_bot() -> None:
                 logger.exception("Duel timeout tick failed")
             try:
                 coop_updates: set[str] = set()
+                coop_done_ids: set[str] = set()
                 for pid, result in process_coop_turn_timeouts(storage):
                     payload = result.payload or {}
                     if payload.get("coop_done"):
+                        sid = str(payload.get("session_id") or "")
+                        if sid and sid in coop_done_ids:
+                            continue
+                        if sid:
+                            coop_done_ids.add(sid)
                         await _notify_coop_finished(bot, result)
                         continue
                     session = get_coop_session_by_player(storage, pid)

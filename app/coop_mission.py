@@ -18,11 +18,10 @@ from app.game_logic import (
     _dead_block_text,
     _is_dead,
     apply_incoming_damage,
-    effective_max_health,
     equipment_power,
     h,
-    use_medkit_item,
 )
+from app.tactical_hp import sync_session_hp_to_db, use_tactical_medkit
 from app.mission_icons import (
     ANOMALY_ICON_KEY,
     MISSION_ICON_GRID_DIAMETER,
@@ -131,6 +130,7 @@ class CoopMissionSession:
     enemy_kinds: list[str] = field(default_factory=list)
     turn_order: list[int] = field(default_factory=list)
     active_index: int = 0
+    turn_seq: int = 0
     turn_deadline: str | None = None
     finished: bool = False
     success: bool = False
@@ -165,6 +165,7 @@ class CoopMissionSession:
             "enemy_kinds": list(self.enemy_kinds),
             "turn_order": self.turn_order,
             "active_index": self.active_index,
+            "turn_seq": self.turn_seq,
             "turn_deadline": self.turn_deadline,
             "finished": self.finished,
             "success": self.success,
@@ -191,6 +192,7 @@ class CoopMissionSession:
             enemy_kinds=[str(x) for x in (raw.get("enemy_kinds") or [])],
             turn_order=[int(x) for x in (raw.get("turn_order") or [])],
             active_index=int(raw.get("active_index") or 0),
+            turn_seq=int(raw.get("turn_seq") or 0),
             turn_deadline=raw.get("turn_deadline"),
             finished=bool(raw.get("finished")),
             success=bool(raw.get("success")),
@@ -237,6 +239,7 @@ def get_coop_session_by_player(storage: Storage, telegram_id: int) -> CoopMissio
     try:
         session = CoopMissionSession.from_dict(json.loads(raw))
     except Exception:
+        storage.delete_meta(_player_key(telegram_id))
         return None
     if session.finished:
         return None
@@ -343,15 +346,22 @@ def list_open_coop_lobbies(storage: Storage, location: str) -> list[tuple[str, s
     if not isinstance(ids, list):
         return []
     result: list[tuple[str, str, int]] = []
+    stale: list[str] = []
     for lobby_id in ids:
         lobby = get_coop_lobby(storage, str(lobby_id))
         if lobby is None:
+            stale.append(str(lobby_id))
             continue
         if lobby.location != location:
             continue
         host = storage.get_character(lobby.host_id, refresh_energy=False)
         host_name = host.nickname if host else str(lobby.host_id)
         result.append((lobby.lobby_id, host_name, len(lobby.member_ids)))
+    if stale:
+        storage.set_meta(
+            OPEN_LOBBIES_KEY,
+            json.dumps([str(x) for x in ids if str(x) not in stale], ensure_ascii=False),
+        )
     return result
 
 
@@ -397,6 +407,11 @@ def create_coop_lobby(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    from app.player_busy import player_busy_reason
+
+    busy = player_busy_reason(storage, telegram_id, skip="coop")
+    if busy:
+        return ActionResult(False, busy)
     if get_coop_session_by_player(storage, telegram_id) or get_coop_lobby_by_player(storage, telegram_id):
         return ActionResult(False, "Ты уже в кооп-группе или вылазке.")
     if player.energy < COOP_ENERGY_COST:
@@ -426,6 +441,11 @@ def join_coop_lobby(storage: Storage, telegram_id: int, lobby_id: str) -> Action
         return ActionResult(False, _dead_block_text())
     if get_coop_session_by_player(storage, telegram_id) or get_coop_lobby_by_player(storage, telegram_id):
         return ActionResult(False, "Сначала выйди из текущей группы.")
+    from app.player_busy import player_busy_reason
+
+    busy = player_busy_reason(storage, telegram_id, skip="coop")
+    if busy:
+        return ActionResult(False, busy)
     lobby = get_coop_lobby(storage, lobby_id)
     if lobby is None:
         return ActionResult(False, "Группа не найдена.")
@@ -459,6 +479,9 @@ def leave_coop_lobby(storage: Storage, telegram_id: int) -> ActionResult:
     lobby = get_coop_lobby_by_player(storage, telegram_id)
     if lobby is None:
         return ActionResult(False, "Ты не в кооп-группе.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    leaving_name = h(player.nickname) if player else str(telegram_id)
+    remaining_before = [x for x in lobby.member_ids if x != telegram_id]
     if telegram_id in lobby.member_ids:
         lobby.member_ids = [x for x in lobby.member_ids if x != telegram_id]
     storage.delete_meta(_player_key(telegram_id))
@@ -468,12 +491,39 @@ def leave_coop_lobby(storage: Storage, telegram_id: int) -> ActionResult:
     if lobby.host_id == telegram_id:
         lobby.host_id = lobby.member_ids[0]
     save_coop_lobby(storage, lobby)
-    return ActionResult(True, "Ты вышел из группы.")
+    notify: list[list[Any]] = []
+    leave_note = (
+        f"👥 {leaving_name} вышел из кооп-группы "
+        f"({len(lobby.member_ids)}/{COOP_MAX_PLAYERS}) на «{lobby.location}»."
+    )
+    for pid in remaining_before:
+        notify.append([pid, leave_note])
+    return ActionResult(
+        True,
+        "Ты вышел из группы.",
+        payload={"notify": notify} if notify else None,
+    )
 
 
 def _free_cell(grid: int, forbidden: set[tuple[int, int]]) -> tuple[int, int]:
     opts = [(x, y) for x in range(grid) for y in range(grid) if (x, y) not in forbidden]
-    return random.choice(opts) if opts else (0, 0)
+    if not opts:
+        raise RuntimeError("coop grid full")
+    return random.choice(opts)
+
+
+def _save_if_turn_ok(storage: Storage, session: CoopMissionSession, expected_seq: int) -> bool:
+    raw = storage.get_meta(_session_key(session.session_id))
+    if not raw:
+        return False
+    try:
+        fresh = CoopMissionSession.from_dict(json.loads(raw))
+    except Exception:
+        return False
+    if fresh.finished or fresh.turn_seq != expected_seq:
+        return False
+    save_coop_session(storage, session)
+    return True
 
 
 def _build_coop_map(session: CoopMissionSession) -> None:
@@ -529,6 +579,7 @@ def _occupied(session: CoopMissionSession, *, exclude: int | None = None) -> set
 
 def _advance_turn(session: CoopMissionSession) -> None:
     session.active_index = (session.active_index + 1) % len(session.turn_order)
+    session.turn_seq += 1
     session.turn_deadline = _deadline_iso()
 
 
@@ -577,15 +628,13 @@ def _objectives_complete(session: CoopMissionSession) -> bool:
 def _sync_coop_hp_to_characters(storage: Storage, session: CoopMissionSession) -> None:
     for pid in session.player_ids:
         hp_val = session.hp.get(str(pid))
-        if hp_val is None:
-            continue
-        ch = storage.get_character(pid, refresh_energy=False)
-        if ch is None:
-            continue
-        max_hp = effective_max_health(ch)
-        delta = int(hp_val) - int(ch.health)
-        if delta != 0:
-            storage.change_health(pid, delta, max_health=max_hp)
+        if hp_val is not None:
+            sync_session_hp_to_db(storage, pid, int(hp_val))
+
+
+def _refund_coop_energy(storage: Storage, player_ids: list[int]) -> None:
+    for pid in player_ids:
+        storage.restore_energy(pid, COOP_ENERGY_COST)
 
 
 def _reward_players(storage: Storage, session: CoopMissionSession) -> str:
@@ -604,24 +653,48 @@ def _reward_players(storage: Storage, session: CoopMissionSession) -> str:
 
 def _finish_success(storage: Storage, session: CoopMissionSession) -> ActionResult:
     _sync_coop_hp_to_characters(storage, session)
+    message_ids = {str(k): int(v) for k, v in session.message_ids.items()}
     session.finished = True
     session.success = True
     text = _reward_players(storage, session)
     session.log.append("Миссия выполнена!")
     save_coop_session(storage, session)
+    player_ids = list(session.player_ids)
     clear_coop_session(storage, session)
-    return ActionResult(True, text, payload={"coop_done": True, "coop_success": True, "notify_all": session.player_ids})
+    return ActionResult(
+        True,
+        text,
+        payload={
+            "coop_done": True,
+            "coop_success": True,
+            "notify_all": player_ids,
+            "message_ids": message_ids,
+            "session_id": session.session_id,
+        },
+    )
 
 
 def _finish_fail(storage: Storage, session: CoopMissionSession, reason: str) -> ActionResult:
     _sync_coop_hp_to_characters(storage, session)
+    _refund_coop_energy(storage, session.player_ids)
+    message_ids = {str(k): int(v) for k, v in session.message_ids.items()}
     session.finished = True
     session.success = False
     session.log.append(reason)
     save_coop_session(storage, session)
     player_ids = list(session.player_ids)
     clear_coop_session(storage, session)
-    return ActionResult(False, reason, payload={"coop_done": True, "coop_success": False, "notify_all": player_ids})
+    return ActionResult(
+        False,
+        reason,
+        payload={
+            "coop_done": True,
+            "coop_success": False,
+            "notify_all": player_ids,
+            "message_ids": message_ids,
+            "session_id": session.session_id,
+        },
+    )
 
 
 def _check_team_wipe(storage: Storage, session: CoopMissionSession) -> ActionResult | None:
@@ -637,8 +710,17 @@ def start_coop_mission(storage: Storage, host_id: int) -> ActionResult:
         return ActionResult(False, "Кооп-группа не найдена.")
     if lobby.host_id != host_id:
         return ActionResult(False, "Запускать может только лидер группы.")
-    if len(lobby.member_ids) < 1:
-        return ActionResult(False, "Нужен хотя бы один игрок.")
+    if len(lobby.member_ids) < 2:
+        return ActionResult(False, "Нужно минимум 2 игрока для кооп-вылазки.")
+
+    from app.player_busy import player_busy_reason
+
+    for pid in lobby.member_ids:
+        busy = player_busy_reason(storage, pid, skip="coop")
+        if busy:
+            ch = storage.get_character(pid, refresh_energy=False)
+            who = h(ch.nickname) if ch else str(pid)
+            return ActionResult(False, f"{who}: {busy.lower()}")
 
     spent: list[int] = []
     for pid in lobby.member_ids:
@@ -692,6 +774,7 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         return ActionResult(False, "Активной кооп-вылазки нет.")
     if session.active_player() != telegram_id:
         return ActionResult(False, "Сейчас ход другого игрока.")
+    turn_seq = session.turn_seq
     delta = MOVE_DELTAS.get(direction)
     if delta is None:
         return ActionResult(False, "Некорректное направление.")
@@ -706,6 +789,7 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
     for other in session.player_ids:
         if other != telegram_id and session.pos(other) == nxt:
             return ActionResult(False, "Клетка занята напарником.")
+    moved = False
     if nxt in session.enemies:
         dmg = _combat_damage(session.location, player)
         session.hp[str(telegram_id)] = max(0, session.hp.get(str(telegram_id), 0) - dmg)
@@ -719,19 +803,21 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
             return wipe
     else:
         session.set_pos(telegram_id, nxt)
+        moved = True
 
-    if nxt in session.objectives and nxt not in session.collected:
-        session.collected.append(nxt)
-        session.log.append(f"{h(player.nickname)} отметил цель.")
+    if moved:
+        if nxt in session.objectives and nxt not in session.collected:
+            session.collected.append(nxt)
+            session.log.append(f"{h(player.nickname)} отметил цель.")
 
-    if nxt in session.hazards:
-        dmg = _hazard_damage(player)
-        session.hp[str(telegram_id)] = max(0, session.hp.get(str(telegram_id), 0) - dmg)
-        session.hazards = [haz for haz in session.hazards if haz != nxt]
-        session.log.append(f"Аномалия: −{dmg} HP ({h(player.nickname)}).")
-        wipe = _check_team_wipe(storage, session)
-        if wipe:
-            return wipe
+        if nxt in session.hazards:
+            dmg = _hazard_damage(player)
+            session.hp[str(telegram_id)] = max(0, session.hp.get(str(telegram_id), 0) - dmg)
+            session.hazards = [haz for haz in session.hazards if haz != nxt]
+            session.log.append(f"Аномалия: −{dmg} HP ({h(player.nickname)}).")
+            wipe = _check_team_wipe(storage, session)
+            if wipe:
+                return wipe
 
     if _objectives_complete(session):
         return _finish_success(storage, session)
@@ -743,7 +829,8 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
     if wipe:
         return wipe
 
-    save_coop_session(storage, session)
+    if not _save_if_turn_ok(storage, session, turn_seq):
+        return ActionResult(False, "Ход уже выполнен.")
     return ActionResult(True, "Ход сделан.", payload={"coop_active": True, "notify_all": session.player_ids})
 
 
@@ -753,31 +840,28 @@ def coop_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Активной кооп-вылазки нет.")
     if session.active_player() != telegram_id:
         return ActionResult(False, "Сейчас ход другого игрока.")
+    turn_seq = session.turn_seq
     if session.medkits_used.get(str(telegram_id)):
         return ActionResult(False, "Аптечку в этой вылазке уже использовал.")
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Персонаж не найден.")
-    for key in ("medkit_science", "medkit_army", "medkit"):
-        if int(player.inventory.get(key, 0)) <= 0:
-            continue
-        result = use_medkit_item(storage, telegram_id, key)
-        if not result.ok:
-            continue
-        refreshed = storage.get_character(telegram_id, refresh_energy=False)
-        if refreshed:
-            session.hp[str(telegram_id)] = int(refreshed.health)
-        session.medkits_used[str(telegram_id)] = True
-        session.log.append(f"{h(player.nickname)} использовал аптечку.")
-        _advance_turn(session)
-        _move_enemies(session)
-        session.log.extend(_enemy_attacks(session, storage))
-        wipe = _check_team_wipe(storage, session)
-        if wipe:
-            return wipe
-        save_coop_session(storage, session)
-        return ActionResult(True, result.text, payload={"coop_active": True, "notify_all": session.player_ids})
-    return ActionResult(False, "Нет аптечки.")
+    current_hp = session.hp.get(str(telegram_id), int(player.health))
+    result, new_hp = use_tactical_medkit(storage, telegram_id, int(current_hp))
+    if not result.ok:
+        return result
+    session.hp[str(telegram_id)] = new_hp
+    session.medkits_used[str(telegram_id)] = True
+    session.log.append(f"{h(player.nickname)} использовал аптечку.")
+    _advance_turn(session)
+    _move_enemies(session)
+    session.log.extend(_enemy_attacks(session, storage))
+    wipe = _check_team_wipe(storage, session)
+    if wipe:
+        return wipe
+    if not _save_if_turn_ok(storage, session, turn_seq):
+        return ActionResult(False, "Ход уже выполнен.")
+    return ActionResult(True, result.text, payload={"coop_active": True, "notify_all": session.player_ids})
 
 
 def coop_forfeit(storage: Storage, telegram_id: int) -> ActionResult:
@@ -801,6 +885,7 @@ def process_coop_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
     if not isinstance(session_ids, list):
         return outcomes
     still_active: list[str] = []
+    finished: set[str] = set()
     now = _utc_now()
     for session_id in session_ids:
         raw_s = storage.get_meta(_session_key(str(session_id)))
@@ -818,25 +903,31 @@ def process_coop_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
             continue
         active = session.active_player()
         player = storage.get_character(active, refresh_energy=False)
+        turn_seq = session.turn_seq
         session.log.append(f"Тайм-аут хода {h(player.nickname) if player else active}.")
         _advance_turn(session)
         _move_enemies(session)
         session.log.extend(_enemy_attacks(session, storage))
         wipe = _check_team_wipe(storage, session)
         if wipe:
-            for pid in session.player_ids:
-                outcomes.append((pid, wipe))
+            if str(session_id) not in finished:
+                finished.add(str(session_id))
+                outcomes.append((active, wipe))
             continue
-        session.turn_deadline = _deadline_iso()
-        save_coop_session(storage, session)
+        if not _save_if_turn_ok(storage, session, turn_seq):
+            still_active.append(str(session_id))
+            continue
         still_active.append(str(session_id))
-        result = ActionResult(
-            True,
-            "Время вышло — ход пропущен.",
-            payload={"coop_active": True, "notify_all": session.player_ids},
+        outcomes.append(
+            (
+                active,
+                ActionResult(
+                    True,
+                    "Время вышло — ход пропущен.",
+                    payload={"coop_active": True, "notify_all": session.player_ids},
+                ),
+            )
         )
-        for pid in session.player_ids:
-            outcomes.append((pid, result))
     storage.set_meta(ACTIVE_SESSIONS_KEY, json.dumps(still_active, ensure_ascii=False))
     return outcomes
 
