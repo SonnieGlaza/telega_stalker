@@ -118,7 +118,10 @@ from app.game_logic import (
     cancel_raid_by_leader,
     create_faction_auction,
     create_or_join_faction_raid,
+    create_or_join_depot_raid,
     launch_open_raid,
+    list_war_enemy_factions,
+    DEPOT_RAID_KINDS,
     build_quest_overview,
     accept_quest_contract,
     cancel_quest_contract,
@@ -226,6 +229,17 @@ from app.game_logic import (
     unequip_armor_upgrade,
     build_equip_root_text,
     build_equip_slot_page,
+    claim_daily_login,
+    get_notify_prefs,
+    toggle_notify_pref,
+    is_notify_enabled,
+    build_notify_prefs_text,
+    build_tutorial_page,
+    claim_tutorial_completion,
+    build_clan_quest_overview,
+    claim_clan_quest,
+    can_claim_clan_quest,
+    maybe_daily_login_hint,
 )
 from app.keyboards import (
     economy_keyboard,
@@ -287,6 +301,9 @@ from app.keyboards import (
     players_factions_keyboard,
     players_faction_page_keyboard,
     rating_page_keyboard,
+    notify_prefs_keyboard,
+    tutorial_keyboard,
+    clan_quest_keyboard,
 )
 from app.export_players import (
     build_players_export_files,
@@ -643,8 +660,9 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject,
                 reply_markup=faction_keyboard(),
             )
             return
+        hint = maybe_daily_login_hint(db, telegram_id)
         await message.answer(
-            f"С возвращением, {player.nickname}! Добро пожаловать в Зону.",
+            f"С возвращением, {player.nickname}! Добро пожаловать в Зону.{hint}",
             reply_markup=main_menu_keyboard(),
         )
         return
@@ -2541,7 +2559,8 @@ async def _push_offline_survival_deaths(bot: Bot, storage: Storage) -> None:
             try:
                 text = build_dead_character_text(after, storage=storage)
                 append_death_log(storage, telegram_id, text)
-                await bot.send_message(telegram_id, text, reply_markup=dead_character_keyboard())
+                if is_notify_enabled(storage, telegram_id, "death"):
+                    await bot.send_message(telegram_id, text, reply_markup=dead_character_keyboard())
             except Exception:
                 logger.debug("Failed offline survival death push to %s", telegram_id)
         if index % SURVIVAL_DEATH_CHECK_YIELD_EVERY == 0:
@@ -2567,6 +2586,8 @@ async def _send_battle_death_notice(
         storage=storage,
     )
     append_death_log(storage, user_id, text)
+    if not is_notify_enabled(storage, user_id, "death"):
+        return
     try:
         await bot.send_message(user_id, text, reply_markup=dead_character_keyboard())
     except Exception:
@@ -2803,15 +2824,16 @@ async def _notify_coop_finished(bot: Bot, result: Any) -> None:
                     killer_name=killer_name,
                 )
                 append_death_log(storage, pid, death_text)
-                await bot.send_message(
-                    pid,
-                    death_text,
-                    reply_markup=dead_character_keyboard(),
-                )
+                if is_notify_enabled(storage, pid, "death"):
+                    await bot.send_message(
+                        pid,
+                        death_text,
+                        reply_markup=dead_character_keyboard(),
+                    )
                 # На успешном коопе живые видят награду; погибшему — только смерть.
                 if payload.get("coop_success"):
                     continue
-            else:
+            elif is_notify_enabled(storage, pid, "coop"):
                 await bot.send_message(pid, action_result_text(pid, result.text))
         except Exception:
             logger.exception("Failed coop result notify to %s", pid)
@@ -3043,6 +3065,125 @@ async def show_pda_chats(message: Message) -> None:
     if await reject_if_dead(message, player):
         return
     await message.answer(_build_pda_chats_text(player), reply_markup=_pda_keyboard_for(player))
+
+
+@router.message(F.text == "📅 Ежедневка")
+async def show_daily_login(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
+        return
+    result = claim_daily_login(get_storage(), player.telegram_id)
+    await message.answer(result.text, reply_markup=_pda_keyboard_for(player))
+
+
+@router.message(F.text == "🔔 Уведомления")
+async def show_notify_prefs(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
+        return
+    prefs = get_notify_prefs(get_storage(), player.telegram_id)
+    await message.answer(build_notify_prefs_text(prefs), reply_markup=notify_prefs_keyboard(prefs))
+
+
+@router.callback_query(F.data.startswith("notify:toggle:"))
+async def notify_toggle_callback(callback: CallbackQuery) -> None:
+    key = (callback.data or "").removeprefix("notify:toggle:").strip()
+    storage = get_storage()
+    prefs = toggle_notify_pref(storage, callback.from_user.id, key)
+    await safe_callback_answer(callback, "Готово")
+    if callback.message is not None:
+        try:
+            await callback.message.edit_text(
+                build_notify_prefs_text(prefs),
+                reply_markup=notify_prefs_keyboard(prefs),
+            )
+        except TelegramBadRequest:
+            pass
+
+
+@router.message(F.text == "📘 Обучение")
+async def show_tutorial(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
+        return
+    text, page, total = build_tutorial_page(0)
+    await message.answer(text, reply_markup=tutorial_keyboard(page, total))
+
+
+@router.callback_query(F.data.startswith("tutorial:page:"))
+async def tutorial_page_callback(callback: CallbackQuery) -> None:
+    raw_page = (callback.data or "").removeprefix("tutorial:page:").strip()
+    try:
+        requested_page = int(raw_page)
+    except ValueError:
+        requested_page = 0
+    text, page, total = build_tutorial_page(requested_page)
+    bonus_note = ""
+    if page == total - 1:
+        bonus_note = claim_tutorial_completion(get_storage(), callback.from_user.id)
+    await safe_callback_answer(callback)
+    if callback.message is not None:
+        try:
+            await callback.message.edit_text(
+                f"{text}{bonus_note}",
+                reply_markup=tutorial_keyboard(page, total),
+            )
+        except TelegramBadRequest:
+            pass
+
+
+@router.message(F.text == "🏛 Клановые задачи")
+async def show_clan_quest(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
+        return
+    storage = get_storage()
+    text = build_clan_quest_overview(storage, player.telegram_id)
+    await message.answer(
+        text,
+        reply_markup=clan_quest_keyboard(can_claim=can_claim_clan_quest(storage, player.telegram_id)),
+    )
+
+
+@router.callback_query(F.data == "clanquest:open")
+async def clan_quest_open_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    text = build_clan_quest_overview(storage, callback.from_user.id)
+    can_claim = can_claim_clan_quest(storage, callback.from_user.id)
+    await safe_callback_answer(callback)
+    await edit_menu_message(
+        callback,
+        text,
+        clan_quest_keyboard(can_claim=can_claim),
+        answer_callback=False,
+    )
+
+
+@router.callback_query(F.data == "clanquest:claim")
+async def clan_quest_claim_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    result = claim_clan_quest(storage, callback.from_user.id)
+    await reply_action_result(callback, result.text)
+    text = build_clan_quest_overview(storage, callback.from_user.id)
+    can_claim = can_claim_clan_quest(storage, callback.from_user.id)
+    await edit_menu_message(
+        callback,
+        text,
+        clan_quest_keyboard(can_claim=can_claim),
+        answer_callback=False,
+    )
 
 
 @router.message(F.text == "⬅️ В меню")
@@ -4209,9 +4350,10 @@ async def show_raids(message: Message) -> None:
     db = get_storage()
     text = build_raids_overview(db, player.telegram_id)
     led_raids = db.list_open_raids_led_by(player.telegram_id)
+    war_enemies = list_war_enemy_factions(db, player.faction) if player.faction else []
     await message.answer(
         text,
-        reply_markup=raid_keyboard(db.get_locations(), led_raids=led_raids),
+        reply_markup=raid_keyboard(db.get_locations(), led_raids=led_raids, war_enemy_factions=war_enemies),
     )
 
 
@@ -4219,6 +4361,17 @@ async def show_raids(message: Message) -> None:
 async def create_raid_callback(callback: CallbackQuery) -> None:
     location = (callback.data or "").split(":", maxsplit=2)[2]
     result = create_or_join_faction_raid(get_storage(), callback.from_user.id, location)
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data.startswith("raid:depot:"))
+async def create_depot_raid_callback(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":", maxsplit=3)
+    if len(parts) != 4 or parts[2] not in DEPOT_RAID_KINDS:
+        await callback.answer("Некорректный запрос рейда.", show_alert=True)
+        return
+    depot_kind, target_faction = parts[2], parts[3]
+    result = create_or_join_depot_raid(get_storage(), callback.from_user.id, target_faction, depot=depot_kind)
     await reply_action_result(callback, result.text)
 
 
@@ -4232,7 +4385,16 @@ async def join_raid_callback(callback: CallbackQuery) -> None:
     if open_raid is None:
         await callback.answer("Открытых рейдов нет.", show_alert=True)
         return
-    result = create_or_join_faction_raid(get_storage(), callback.from_user.id, str(open_raid["location"]))
+    raid_kind = str(open_raid.get("raid_kind") or "lair")
+    if raid_kind in DEPOT_RAID_KINDS:
+        result = create_or_join_depot_raid(
+            get_storage(),
+            callback.from_user.id,
+            str(open_raid.get("target_faction") or ""),
+            depot=raid_kind,
+        )
+    else:
+        result = create_or_join_faction_raid(get_storage(), callback.from_user.id, str(open_raid["location"]))
     await reply_action_result(callback, result.text)
 
 
@@ -4253,7 +4415,16 @@ async def join_raid_as_ally_callback(callback: CallbackQuery) -> None:
     if open_raid is None:
         await callback.answer("Открытых рейдов союзников нет.", show_alert=True)
         return
-    result = create_or_join_faction_raid(storage, callback.from_user.id, str(open_raid["location"]))
+    raid_kind = str(open_raid.get("raid_kind") or "lair")
+    if raid_kind in DEPOT_RAID_KINDS:
+        result = create_or_join_depot_raid(
+            storage,
+            callback.from_user.id,
+            str(open_raid.get("target_faction") or ""),
+            depot=raid_kind,
+        )
+    else:
+        result = create_or_join_faction_raid(storage, callback.from_user.id, str(open_raid["location"]))
     await reply_action_result(callback, result.text)
 
 
@@ -5038,6 +5209,8 @@ async def run_bot() -> None:
                 message_text, notify_ids, killed_ids = process_emission_cycle(storage)
                 if message_text:
                     for user_id in notify_ids:
+                        if not is_notify_enabled(storage, user_id, "emission"):
+                            continue
                         try:
                             await bot.send_message(user_id, message_text)
                         except Exception:

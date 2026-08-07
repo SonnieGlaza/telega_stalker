@@ -47,6 +47,8 @@ def pda_keyboard(*, is_leader: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🏆 Рейтинг"), KeyboardButton(text="🗺 Карта")],
         [KeyboardButton(text="🎖 Достижения"), KeyboardButton(text="📊 Статистика")],
         [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="☠️ Смерти")],
+        [KeyboardButton(text="📅 Ежедневка"), KeyboardButton(text="🔔 Уведомления")],
+        [KeyboardButton(text="📘 Обучение"), KeyboardButton(text="🏛 Клановые задачи")],
     ]
     if is_leader:
         rows[-1].append(KeyboardButton(text="📣 Сбор"))
@@ -775,6 +777,7 @@ def raid_keyboard(
     locations: list[dict[str, str | int | None]],
     *,
     led_raids: list[dict[str, Any]] | None = None,
+    war_enemy_factions: list[str] | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="➕ Присоединиться к открытому рейду", callback_data="raid:join")],
@@ -802,6 +805,23 @@ def raid_keyboard(
             continue
         name = str(location["name"])
         rows.append([InlineKeyboardButton(text=f"Создать рейд на логово: {name}", callback_data=f"raid:create:{name}")])
+    for enemy in war_enemy_factions or []:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"🏚 Рейд на склад врага: {enemy}",
+                    callback_data=f"raid:depot:warehouse:{enemy}",
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"🏚 Рейд на гараж врага: {enemy}",
+                    callback_data=f"raid:depot:garage:{enemy}",
+                )
+            ]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -852,6 +872,7 @@ def faction_group_keyboard(
     can_withdraw_treasury: bool = False,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="🏛 Клановые задачи", callback_data="clanquest:open")],
         [InlineKeyboardButton(text="📦 Склад группировки", callback_data="faction:warehouse:view")],
         [InlineKeyboardButton(text="📥 Сдать 1 патроны на склад", callback_data="eco:warehouse:deposit:ammo_pack")],
         [InlineKeyboardButton(text="📥 Сдать 1 аптечку на склад", callback_data="eco:warehouse:deposit:medkit")],
@@ -1344,4 +1365,44 @@ def faction_rank_pick_keyboard(target_id: int, ranks: list[tuple[str, str]]) -> 
         )
     rows.append([InlineKeyboardButton(text="⬅️ К списку бойцов", callback_data="rank:menu")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад в группировку", callback_data="faction:menu:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+NOTIFY_PREF_TOGGLE_LABELS: dict[str, str] = {
+    "emission": "☢️ Выброс",
+    "death": "☠️ Смерть",
+    "coop": "👥 Кооп",
+}
+
+
+def notify_prefs_keyboard(prefs: dict[str, bool]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for key, label in NOTIFY_PREF_TOGGLE_LABELS.items():
+        mark = "✅" if prefs.get(key, True) else "🔕"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{mark} {label}",
+                    callback_data=f"notify:toggle:{key}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def tutorial_keyboard(page: int, total: int) -> InlineKeyboardMarkup:
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"tutorial:page:{page - 1}"))
+    nav.append(InlineKeyboardButton(text=f"{page + 1}/{total}", callback_data=f"tutorial:page:{page}"))
+    if page + 1 < total:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"tutorial:page:{page + 1}"))
+    return InlineKeyboardMarkup(inline_keyboard=[nav])
+
+
+def clan_quest_keyboard(*, can_claim: bool) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if can_claim:
+        rows.append([InlineKeyboardButton(text="🎁 Забрать награду", callback_data="clanquest:claim")])
+    rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="clanquest:open")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

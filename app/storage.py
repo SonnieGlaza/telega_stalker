@@ -265,6 +265,7 @@ class Storage:
         if not characters:
             return
 
+        self._ensure_raids_schema(conn)
         for row in factions:
             conn.execute(
                 """
@@ -410,8 +411,9 @@ class Storage:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO raids(
-                    id, faction, location, leader_id, status, created_at, started_at, finished_at, result_text
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, faction, location, leader_id, status, created_at, started_at, finished_at, result_text,
+                    raid_kind, target_faction
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(row.get("id")),
@@ -423,6 +425,8 @@ class Storage:
                     row.get("started_at"),
                     row.get("finished_at"),
                     row.get("result_text"),
+                    row.get("raid_kind") or "lair",
+                    row.get("target_faction"),
                 ),
             )
         for row in raid_members:
@@ -710,10 +714,13 @@ class Storage:
                     created_at TEXT NOT NULL,
                     started_at TEXT,
                     finished_at TEXT,
-                    result_text TEXT
+                    result_text TEXT,
+                    raid_kind TEXT NOT NULL DEFAULT 'lair',
+                    target_faction TEXT
                 )
                 """
             )
+            self._ensure_raids_schema(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS raid_members (
@@ -1090,6 +1097,28 @@ class Storage:
             )
             """
         )
+
+    def _ensure_raids_schema(self, conn: DbConnection) -> None:
+        """Рейды на логова + рейды на склад/гараж вражеской группировки (raid_kind, target_faction)."""
+        column_names = self._table_columns(conn, "raids")
+        add_columns = [
+            ("raid_kind", "ALTER TABLE raids ADD COLUMN raid_kind TEXT NOT NULL DEFAULT 'lair'"),
+            ("target_faction", "ALTER TABLE raids ADD COLUMN target_faction TEXT"),
+        ]
+        for col_name, ddl in add_columns:
+            if col_name in column_names:
+                continue
+            sp = f"sp_raid_add_{col_name}"
+            try:
+                conn.savepoint(sp)
+                conn.execute(ddl)
+                conn.release_savepoint(sp)
+                column_names.add(col_name)
+            except Exception:
+                try:
+                    conn.rollback_to_savepoint(sp)
+                except Exception:
+                    pass
 
     def has_referral_claim(self, invitee_id: int) -> bool:
         with self._connect() as conn:
@@ -2903,7 +2932,8 @@ class Storage:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, faction, location, leader_id, status, created_at, started_at, finished_at, result_text
+                SELECT id, faction, location, leader_id, status, created_at, started_at, finished_at, result_text,
+                       raid_kind, target_faction
                 FROM raids
                 WHERE faction = ? AND status = 'open'
                 ORDER BY id DESC
@@ -2915,16 +2945,23 @@ class Storage:
             return None
         return dict(row)
 
-    def create_raid(self, faction: str, location: str, leader_id: int) -> int:
+    def create_raid(
+        self,
+        faction: str,
+        location: str,
+        leader_id: int,
+        raid_kind: str = "lair",
+        target_faction: str | None = None,
+    ) -> int:
         now_iso = utc_now().isoformat()
         with self._connect() as conn:
             raid_id = self._insert_returning_id(
                 conn,
                 """
-                INSERT INTO raids(faction, location, leader_id, status, created_at)
-                VALUES (?, ?, ?, 'open', ?)
+                INSERT INTO raids(faction, location, leader_id, status, created_at, raid_kind, target_faction)
+                VALUES (?, ?, ?, 'open', ?, ?, ?)
                 """,
-                (faction, location, leader_id, now_iso),
+                (faction, location, leader_id, now_iso, raid_kind, target_faction),
             )
             conn.execute(
                 """
@@ -2964,7 +3001,8 @@ class Storage:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, faction, location, leader_id, status, created_at, started_at, finished_at, result_text
+                SELECT id, faction, location, leader_id, status, created_at, started_at, finished_at, result_text,
+                       raid_kind, target_faction
                 FROM raids
                 WHERE id = ?
                 """,
@@ -3110,7 +3148,7 @@ class Storage:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, faction, location, leader_id, status, created_at
+                SELECT id, faction, location, leader_id, status, created_at, raid_kind, target_faction
                 FROM raids
                 WHERE leader_id = ? AND status = 'open'
                 ORDER BY id DESC

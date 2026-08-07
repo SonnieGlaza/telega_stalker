@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 from math import dist
@@ -816,6 +817,9 @@ RATING_REWARD = {
     "war_fail": 6,
     "raid_success": 26,
     "raid_fail": 8,
+    "depot_raid_success": 20,
+    "depot_raid_fail": 6,
+    "depot_raid_defense": 5,
     "smuggle_success": 13,
     "smuggle_fail": 3,
     "trade_action": 4,
@@ -855,6 +859,16 @@ RAID_ARTIFACT_MIN_ENEMY_POWER = 35
 RAID_ARTIFACT_DROP_CHANCE = 5  # % шанс арта участнику при успехе (NPC ≥ порога)
 WAR_MIN_FACTION_MEMBERS = 5
 MAX_FACTION_ALLIANCES = 2
+
+# Рейды на склад/гараж вражеской группировки (не логова, не базы).
+DEPOT_RAID_KINDS: tuple[str, ...] = ("warehouse", "garage")
+DEPOT_RAID_LABELS: dict[str, str] = {"warehouse": "склад", "garage": "гараж"}
+DEPOT_RAID_ENERGY_COST = 16
+DEPOT_RAID_MIN_LOOT_PERCENT = 20
+DEPOT_RAID_MAX_LOOT_PERCENT = 50
+DEPOT_RAID_VEHICLE_STEAL_CHANCE = 15  # % шанс угнать 1 машину сверху канистр (только гараж)
+DEPOT_RAID_FAIL_MONEY_PENALTY = 90
+DEPOT_RAID_DEFENSE_POWER_RATIO = 0.55  # доля силы домашней базы цели, обороняющая склад/гараж
 
 SURVIVAL_ACTIVE_RADIATION_MIN = 1
 SURVIVAL_ACTIVE_RADIATION_MAX = 3
@@ -4863,6 +4877,25 @@ def break_alliance(storage: Storage, telegram_id: int, target_faction: str) -> A
     )
 
 
+def list_war_enemy_factions(storage: Storage, faction: str) -> list[str]:
+    """Враждебные группировки для рейдов на склад/гараж.
+
+    Войны в игре не хранятся отдельной таблицей: `declare_war` лишь разрывает союз
+    и шлёт уведомление. Поэтому признак вражды — отсутствие действующего союза
+    (любая группировка, которая не является собой и не в списке союзников).
+    """
+    if not faction:
+        return []
+    allies = set(storage.list_faction_alliances(faction))
+    enemies: list[str] = []
+    for row in storage.get_factions():
+        name = str(row.get("name") or "")
+        if not name or name == faction or name in allies:
+            continue
+        enemies.append(name)
+    return enemies
+
+
 def declare_war(storage: Storage, telegram_id: int, target_faction: str) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
@@ -5093,6 +5126,264 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
     )
 
 
+def _depot_has_loot(storage: Storage, target_faction: str, depot: str) -> bool:
+    if depot == "warehouse":
+        warehouse = storage.get_faction_warehouse(target_faction)
+        return any(int(amount or 0) > 0 for amount in warehouse.values())
+    garage = get_faction_garage(storage, target_faction)
+    return any(int(garage.get(key, 0) or 0) > 0 for key in ("gasoline", "diesel", "niva", "truck"))
+
+
+def create_or_join_depot_raid(
+    storage: Storage,
+    telegram_id: int,
+    target_faction: str,
+    depot: str = "warehouse",
+) -> ActionResult:
+    """Рейд отрядом своей группировки на склад или гараж вражеской группировки."""
+    if depot not in DEPOT_RAID_KINDS:
+        return ActionResult(False, "Неизвестный тип рейда на склад/гараж.")
+    label = DEPOT_RAID_LABELS[depot]
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+
+    target_faction = str(target_faction or "").strip()
+    if not target_faction or target_faction == player.faction:
+        return ActionResult(False, f"Нельзя рейдить {label} собственной группировки.")
+    if storage.get_faction_leader_id(target_faction) is None:
+        return ActionResult(False, f"Группировка «{target_faction}» не найдена.")
+    if target_faction not in list_war_enemy_factions(storage, player.faction):
+        return ActionResult(
+            False,
+            f"Рейд на {label} возможен только против враждебной группировки.\n"
+            f"С «{target_faction}» сейчас союз или мир — сначала разорви союз/объяви войну "
+            "(раздел «⚔️ Война» → «🕊️ Дипломатия»).",
+        )
+    if not _depot_has_loot(storage, target_faction, depot):
+        return ActionResult(False, f"На {label}е группировки «{target_faction}» сейчас нечего красть.")
+
+    open_raid = storage.get_open_raid_for_faction(player.faction)
+    if open_raid is None:
+        for ally in storage.list_faction_alliances(player.faction):
+            ally_open = storage.get_open_raid_for_faction(ally)
+            if (
+                ally_open is not None
+                and str(ally_open.get("raid_kind") or "lair") == depot
+                and str(ally_open.get("target_faction") or "") == target_faction
+            ):
+                open_raid = ally_open
+                break
+
+    if open_raid is None:
+        location_label = f"{'Склад' if depot == 'warehouse' else 'Гараж'} «{target_faction}»"
+        raid_id = storage.create_raid(
+            player.faction,
+            location_label,
+            telegram_id,
+            raid_kind=depot,
+            target_faction=target_faction,
+        )
+        return ActionResult(
+            True,
+            f"Создан рейд #{raid_id} на {label} группировки «{target_faction}».\n"
+            "Позови товарищей по группировке и нажми «Запустить».",
+        )
+
+    open_kind = str(open_raid.get("raid_kind") or "lair")
+    open_target = str(open_raid.get("target_faction") or "")
+    if open_kind != depot or open_target != target_faction:
+        current_label = DEPOT_RAID_LABELS.get(open_kind, "логово")
+        current_target = f" ({open_target})" if open_target else ""
+        return ActionResult(
+            False,
+            f"У твоей группировки уже есть открытый рейд #{open_raid['id']} на {current_label}{current_target}.\n"
+            "Сначала запусти или закрой его.",
+        )
+
+    raid_id = int(open_raid["id"])
+    host_faction = str(open_raid["faction"])
+    if not storage.are_factions_allied(host_faction, player.faction) and host_faction != player.faction:
+        return ActionResult(False, "К рейду можно присоединяться только своей группировкой или союзниками.")
+    if not storage.add_raid_member(raid_id, telegram_id):
+        return ActionResult(False, "Не удалось присоединиться к рейду.")
+    member_ids = storage.get_raid_member_ids(raid_id)
+    return ActionResult(
+        True,
+        f"Ты в составе рейда #{raid_id} на {label} группировки «{target_faction}».\n"
+        f"Состав рейда: {len(member_ids)} бойцов.",
+    )
+
+
+def _steal_faction_warehouse(storage: Storage, target_faction: str, attacker_faction: str) -> list[str]:
+    warehouse = storage.get_faction_warehouse(target_faction)
+    lines: list[str] = []
+    for item_key, amount in sorted(warehouse.items()):
+        amount = int(amount or 0)
+        if amount <= 0:
+            continue
+        percent = random.randint(DEPOT_RAID_MIN_LOOT_PERCENT, DEPOT_RAID_MAX_LOOT_PERCENT)
+        stolen = min(amount, max(1, (amount * percent) // 100))
+        if stolen <= 0:
+            continue
+        storage.change_faction_warehouse_item(target_faction, item_key, -stolen)
+        storage.change_faction_warehouse_item(attacker_faction, item_key, stolen)
+        label = ITEM_LABELS.get(item_key, item_key)
+        lines.append(f"• {label}: −{stolen} у «{target_faction}» → +{stolen} складу «{attacker_faction}»")
+    return lines
+
+
+def _steal_faction_garage(storage: Storage, target_faction: str, attacker_faction: str) -> list[str]:
+    garage = get_faction_garage(storage, target_faction)
+    attacker_garage = get_faction_garage(storage, attacker_faction)
+    lines: list[str] = []
+    for fuel_type, fuel_label in (("gasoline", "канистр бензина"), ("diesel", "канистр дизеля")):
+        amount = int(garage.get(fuel_type, 0) or 0)
+        if amount <= 0:
+            continue
+        percent = random.randint(DEPOT_RAID_MIN_LOOT_PERCENT, DEPOT_RAID_MAX_LOOT_PERCENT)
+        stolen = min(amount, max(1, (amount * percent) // 100))
+        if stolen <= 0:
+            continue
+        garage[fuel_type] = amount - stolen
+        attacker_garage[fuel_type] = int(attacker_garage.get(fuel_type, 0) or 0) + stolen
+        lines.append(f"• {fuel_label}: −{stolen} у «{target_faction}» → +{stolen} гаражу «{attacker_faction}»")
+
+    for vehicle_key, durs_key, vehicle_label in (("niva", "niva_durs", "Нива"), ("truck", "truck_durs", "Грузовик")):
+        count = int(garage.get(vehicle_key, 0) or 0)
+        if count <= 0:
+            continue
+        if random.randint(1, 100) > DEPOT_RAID_VEHICLE_STEAL_CHANCE:
+            continue
+        durs = list(garage.get(durs_key) or [])
+        dur = durs.pop(0) if durs else 100
+        garage[durs_key] = durs
+        garage[vehicle_key] = count - 1
+        attacker_durs = list(attacker_garage.get(durs_key) or [])
+        attacker_durs.append(dur)
+        attacker_garage[durs_key] = attacker_durs
+        attacker_garage[vehicle_key] = int(attacker_garage.get(vehicle_key, 0) or 0) + 1
+        lines.append(f"• {vehicle_label} (прочность {dur}%): угнан у «{target_faction}» → в гараж «{attacker_faction}»")
+
+    _set_faction_garage(storage, target_faction, garage)
+    _set_faction_garage(storage, attacker_faction, attacker_garage)
+    return lines
+
+
+def _launch_depot_raid(
+    storage: Storage,
+    leader: Character,
+    open_raid: dict[str, Any],
+    raid_id: int,
+    ready_members: list[Character],
+    member_ids: list[int],
+    spent_ids: list[int],
+    raid_kind: str,
+) -> RaidLaunchResult:
+    label = DEPOT_RAID_LABELS.get(raid_kind, "склад")
+    target_faction = str(open_raid.get("target_faction") or "")
+
+    if not target_faction or target_faction == leader.faction:
+        _refund_spent_energy(storage, spent_ids, DEPOT_RAID_ENERGY_COST)
+        storage.finish_raid(raid_id, status="cancelled", result_text="Некорректная цель рейда.")
+        return RaidLaunchResult(False, f"Рейд #{raid_id} отменён: некорректная цель.", tuple(member_ids))
+
+    if target_faction not in list_war_enemy_factions(storage, leader.faction):
+        _refund_spent_energy(storage, spent_ids, DEPOT_RAID_ENERGY_COST)
+        storage.finish_raid(raid_id, status="cancelled", result_text="Цель больше не враждебна.")
+        return RaidLaunchResult(
+            False,
+            f"Рейд #{raid_id} отменён: с «{target_faction}» заключен мир/союз, рейд невозможен.",
+            tuple(member_ids),
+        )
+
+    if not _depot_has_loot(storage, target_faction, raid_kind):
+        _refund_spent_energy(storage, spent_ids, DEPOT_RAID_ENERGY_COST)
+        storage.finish_raid(raid_id, status="failed", result_text=f"{label.capitalize()} цели уже пуст.")
+        return RaidLaunchResult(
+            False,
+            f"Рейд #{raid_id} отменён: {label} группировки «{target_faction}» уже пуст.",
+            tuple(member_ids),
+        )
+
+    home_location_name = FACTION_HOME_BASE.get(target_faction)
+    base_power = REGULAR_LOCATION_NPC_POWER
+    if home_location_name:
+        home_location = storage.get_location(home_location_name)
+        if home_location is not None:
+            base_power = int(home_location["npc_power"])
+    depot_power = max(12, int(base_power * DEPOT_RAID_DEFENSE_POWER_RATIO))
+    battle = _simulate_raid_battle(ready_members, depot_power)
+    defender_leader_id = storage.get_faction_leader_id(target_faction)
+
+    if battle["success"]:
+        loot_lines = (
+            _steal_faction_warehouse(storage, target_faction, leader.faction)
+            if raid_kind == "warehouse"
+            else _steal_faction_garage(storage, target_faction, leader.faction)
+        )
+        notes: list[str] = []
+        for member in ready_members:
+            durability_text = _apply_durability_decay(storage, member.telegram_id, weapon_loss=5, armor_loss=4)
+            _add_rating(storage, member.telegram_id, RATING_REWARD["depot_raid_success"])
+            storage.add_player_stat(member.telegram_id, "raids_completed", 1)
+            if member.telegram_id in battle["wounds"]:
+                storage.change_health(member.telegram_id, -10)
+            achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
+            if member.telegram_id == leader.telegram_id:
+                notes.append(durability_text + achievement_text)
+        storage.finish_raid(
+            raid_id,
+            status="success",
+            result_text=f"Рейд на {label} «{target_faction}» успешен. Критов: {battle['total_crits']}.",
+        )
+        loot_text = "\n".join(loot_lines) if loot_lines else "Трофеев не найдено."
+        result_text = (
+            f"🏚 Рейд #{raid_id} отряда «{leader.faction}» на {label} группировки «{target_faction}» "
+            "завершён успешно!\n"
+            f"Бойцов: {len(ready_members)}, критических попаданий: {battle['total_crits']}.\n"
+            f"Добыча:\n{loot_text}\n"
+            f"Раненых: {len(battle['wounds'])}.{''.join(notes)}"
+        )
+        notify_ids = list(dict.fromkeys(member_ids))
+        if defender_leader_id is not None and int(defender_leader_id) not in notify_ids:
+            notify_ids.append(int(defender_leader_id))
+        return RaidLaunchResult(True, result_text, tuple(notify_ids))
+
+    notes = []
+    for member in ready_members:
+        durability_text = _apply_durability_decay(storage, member.telegram_id, weapon_loss=6, armor_loss=5)
+        storage.change_money(member.telegram_id, -DEPOT_RAID_FAIL_MONEY_PENALTY)
+        _add_rating(storage, member.telegram_id, -RATING_REWARD["depot_raid_fail"])
+        storage.add_player_stat(member.telegram_id, "raids_failed", 1)
+        damage_taken = int(battle["member_damage_taken"].get(member.telegram_id, 0))
+        health_penalty = min(24, max(6, damage_taken // 5))
+        storage.change_health(member.telegram_id, -health_penalty)
+        achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
+        if member.telegram_id == leader.telegram_id:
+            notes.append(durability_text + achievement_text)
+    if defender_leader_id is not None:
+        _add_rating(storage, int(defender_leader_id), RATING_REWARD["depot_raid_defense"])
+    storage.finish_raid(
+        raid_id,
+        status="failed",
+        result_text=f"Рейд на {label} «{target_faction}» провален. Остаток обороны: {battle['enemy_hp_left']}.",
+    )
+    result_text = (
+        f"🏚 Рейд #{raid_id} отряда «{leader.faction}» на {label} группировки «{target_faction}» провален.\n"
+        f"Оборона выстояла (остаток {battle['enemy_hp_left']}).\n"
+        f"Каждый участник потерял {DEPOT_RAID_FAIL_MONEY_PENALTY} RU и получил ранения.{''.join(notes)}"
+    )
+    notify_ids = list(dict.fromkeys(member_ids))
+    if defender_leader_id is not None and int(defender_leader_id) not in notify_ids:
+        notify_ids.append(int(defender_leader_id))
+    return RaidLaunchResult(False, result_text, tuple(notify_ids))
+
+
 def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
     leader = storage.get_character(telegram_id, refresh_energy=False)
     if leader is None:
@@ -5119,7 +5410,8 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
     if len(members) < 2:
         return RaidLaunchResult(False, "Недостаточно бойцов с нормальным здоровьем для запуска рейда.", ())
 
-    raid_energy_cost = 18
+    raid_kind = str(open_raid.get("raid_kind") or "lair")
+    raid_energy_cost = DEPOT_RAID_ENERGY_COST if raid_kind in DEPOT_RAID_KINDS else 18
     ready_members: list[Character] = []
     spent_ids: list[int] = []
     for member in members:
@@ -5132,6 +5424,18 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
             False,
             "У бойцов не хватает энергии для начала рейда. Нужно минимум 2 подготовленных сталкера.",
             (),
+        )
+
+    if raid_kind in DEPOT_RAID_KINDS:
+        return _launch_depot_raid(
+            storage,
+            leader,
+            open_raid,
+            raid_id,
+            ready_members,
+            member_ids,
+            spent_ids,
+            raid_kind,
         )
 
     location_name = str(open_raid["location"])
@@ -5252,20 +5556,42 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
 
     open_raid = storage.get_open_raid_for_faction(player.faction)
     if open_raid is None:
+        war_enemies = list_war_enemy_factions(storage, player.faction)
+        enemies_line = ", ".join(war_enemies) if war_enemies else "нет (со всеми мир или союз)"
         return (
             "Отрядные рейды:\n"
             "• Создай рейд на нужное логово.\n"
             "• Другие бойцы твоей группировки могут присоединиться.\n"
             "• Для запуска нужно минимум 2 участника.\n"
-            f"• Награды: до {RAID_ARTIFACT_REWARD_CAP} typed-арта за бойца (NPC ≥ {RAID_ARTIFACT_MIN_ENEMY_POWER}, Сила/Живучесть по 3%)."
+            f"• Награды: до {RAID_ARTIFACT_REWARD_CAP} typed-арта за бойца (NPC ≥ {RAID_ARTIFACT_MIN_ENEMY_POWER}, Сила/Живучесть по 3%).\n\n"
+            "🏚 Рейды на склад/гараж врага:\n"
+            "• Доступны только против враждебных группировок (не в союзе).\n"
+            "• Минимум 2 бойца; на цели должно быть что красть.\n"
+            "• Успех — часть склада/канистр (и, возможно, техника) переходит тебе.\n"
+            "• Провал — потеря денег, здоровья и рейтинга, а обороне капает немного рейтинга.\n"
+            f"• Враждебные группировки сейчас: {enemies_line}."
         )
 
     raid_id = int(open_raid["id"])
+    raid_kind = str(open_raid.get("raid_kind") or "lair")
     member_ids = storage.get_raid_member_ids(raid_id)
     members = storage.get_characters_by_ids(member_ids)
     members_text = "\n".join(
         f"• {h(member.nickname)} (сила {equipment_power(member)}, HP {member.health})" for member in members
     )
+
+    if raid_kind in DEPOT_RAID_KINDS:
+        label = DEPOT_RAID_LABELS.get(raid_kind, "склад")
+        target_faction = str(open_raid.get("target_faction") or "?")
+        return (
+            f"Открытый рейд #{raid_id} на {label} врага 🏚\n"
+            f"Цель: {target_faction}\n"
+            f"Лидер: {open_raid['leader_id']}\n"
+            f"Участников: {len(member_ids)}\n\n"
+            f"Состав:\n{members_text or '• Пока пусто'}\n\n"
+            "Отменить рейд может только тот, кто его создал."
+        )
+
     location_name = str(open_raid["location"])
     location = storage.get_location(location_name)
     npc_power = int(location["npc_power"]) if location else 0
@@ -7449,3 +7775,365 @@ def build_events_overview(storage: Storage) -> str:
             f"• {location}: {event.get('description')} (мод {modifier:+d}, NPC {npc_power}, ~{minutes_left} мин)"
         )
     return "\n".join(lines)
+
+
+# --- Ежедневный вход (стрик) ---------------------------------------------
+
+DAILY_LOGIN_STREAK_DISPLAY_CAP = 30
+DAILY_LOGIN_MEDKIT_EVERY = 7
+
+
+def _daily_login_key(telegram_id: int) -> str:
+    return f"login:streak:{int(telegram_id)}"
+
+
+def _daily_login_reward(streak: int) -> tuple[int, list[tuple[str, int]]]:
+    """Награда за конкретный день стрика: (RU, [(item_key, qty), ...])."""
+    if streak <= 1:
+        return 150, []
+    if streak == 2:
+        return 200, []
+    if streak == 3:
+        return 300, [("ammo_pack", 1)]
+    if streak == 4:
+        return 400, []
+    items: list[tuple[str, int]] = []
+    if streak % DAILY_LOGIN_MEDKIT_EVERY == 0:
+        items.append(("medkit", 1))
+    return 500, items
+
+
+def get_daily_login_state(storage: Storage, telegram_id: int) -> dict[str, Any]:
+    raw = storage.get_meta(_daily_login_key(telegram_id))
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return {"last": data.get("last"), "streak": int(data.get("streak") or 0)}
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    return {"last": None, "streak": 0}
+
+
+def has_claimed_daily_login_today(storage: Storage, telegram_id: int, now: datetime | None = None) -> bool:
+    today_str = (now or _utc_now()).date().isoformat()
+    return get_daily_login_state(storage, telegram_id).get("last") == today_str
+
+
+def _daily_login_hint_key(telegram_id: int) -> str:
+    return f"login:hint_shown:{int(telegram_id)}"
+
+
+def maybe_daily_login_hint(storage: Storage, telegram_id: int) -> str:
+    """Одноразовая мягкая подсказка про «📅 Ежедневка» на /start (если награда не собрана сегодня)."""
+    if has_claimed_daily_login_today(storage, telegram_id):
+        return ""
+    key = _daily_login_hint_key(telegram_id)
+    if storage.get_meta(key):
+        return ""
+    storage.set_meta(key, "1")
+    return "\n\n💡 Не забудь забрать ежедневную награду: 📟 КПК → «📅 Ежедневка»."
+
+
+def claim_daily_login(storage: Storage, telegram_id: int) -> ActionResult:
+    """Ежедневная награда за вход. Стрик рвётся, если пропущен хотя бы один день."""
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+
+    today = _utc_now().date()
+    today_str = today.isoformat()
+    state = get_daily_login_state(storage, telegram_id)
+    last_str = state.get("last")
+    streak = int(state.get("streak") or 0)
+
+    if last_str == today_str:
+        capped = min(streak, DAILY_LOGIN_STREAK_DISPLAY_CAP)
+        return ActionResult(
+            False,
+            f"📅 Ежедневная награда уже получена сегодня.\n"
+            f"Твой стрик: {capped} дн. подряд. Возвращайся завтра!",
+        )
+
+    yesterday_str = (today - timedelta(days=1)).isoformat()
+    streak = streak + 1 if last_str == yesterday_str else 1
+
+    reward_ru, reward_items = _daily_login_reward(streak)
+    storage.change_money(telegram_id, reward_ru)
+    for item_key, qty in reward_items:
+        storage.add_item(telegram_id, item_key, qty)
+    storage.set_meta(
+        _daily_login_key(telegram_id),
+        json.dumps({"last": today_str, "streak": streak}, ensure_ascii=False),
+    )
+
+    capped_streak = min(streak, DAILY_LOGIN_STREAK_DISPLAY_CAP)
+    items_note = "".join(f", {ITEM_LABELS.get(k, k)} x{q}" for k, q in reward_items)
+    cap_note = " (макс. для отображения)" if streak > DAILY_LOGIN_STREAK_DISPLAY_CAP else ""
+    return ActionResult(
+        True,
+        "📅 Ежедневная награда получена!\n"
+        f"Стрик: {capped_streak} дн. подряд{cap_note}.\n"
+        f"Награда: +{reward_ru} RU{items_note}.",
+    )
+
+
+# --- Настройки уведомлений -------------------------------------------------
+
+NOTIFY_PREF_KEYS: tuple[str, ...] = ("emission", "death", "coop")
+NOTIFY_PREF_LABELS: dict[str, str] = {
+    "emission": "☢️ Выброс",
+    "death": "☠️ Смерть",
+    "coop": "👥 Кооп",
+}
+
+
+def _notify_prefs_key(telegram_id: int) -> str:
+    return f"notify:prefs:{int(telegram_id)}"
+
+
+def get_notify_prefs(storage: Storage, telegram_id: int) -> dict[str, bool]:
+    prefs = {key: True for key in NOTIFY_PREF_KEYS}
+    raw = storage.get_meta(_notify_prefs_key(telegram_id))
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                for key in NOTIFY_PREF_KEYS:
+                    if key in data:
+                        prefs[key] = bool(data[key])
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    return prefs
+
+
+def set_notify_pref(storage: Storage, telegram_id: int, key: str, value: bool) -> dict[str, bool]:
+    prefs = get_notify_prefs(storage, telegram_id)
+    if key in NOTIFY_PREF_KEYS:
+        prefs[key] = bool(value)
+    storage.set_meta(_notify_prefs_key(telegram_id), json.dumps(prefs, ensure_ascii=False))
+    return prefs
+
+
+def toggle_notify_pref(storage: Storage, telegram_id: int, key: str) -> dict[str, bool]:
+    prefs = get_notify_prefs(storage, telegram_id)
+    return set_notify_pref(storage, telegram_id, key, not prefs.get(key, True))
+
+
+def is_notify_enabled(storage: Storage, telegram_id: int, key: str) -> bool:
+    return get_notify_prefs(storage, telegram_id).get(key, True)
+
+
+def build_notify_prefs_text(prefs: dict[str, bool]) -> str:
+    lines = ["🔔 Настройки уведомлений", ""]
+    for key in NOTIFY_PREF_KEYS:
+        state = "✅ включены" if prefs.get(key, True) else "🔕 выключены"
+        lines.append(f"{NOTIFY_PREF_LABELS.get(key, key)}: {state}")
+    lines.append("")
+    lines.append("Нажми на пункт ниже, чтобы переключить.")
+    return "\n".join(lines)
+
+
+# --- Мини-обучение (PDA) ----------------------------------------------------
+
+TUTORIAL_PAGES: tuple[tuple[str, str], ...] = (
+    (
+        "Регистрация",
+        "Ты попал в Зону. Через /start задаёшь имя, пол и группировку — так рождается "
+        "твой сталкер. Всё сохраняется по Telegram ID, поэтому персонаж не потеряется "
+        "даже после перезапуска бота.",
+    ),
+    (
+        "База",
+        "У каждой группировки есть домашняя база (её видно в 📟 КПК → 🗺 Карта). "
+        "На базе безопасно: лечись, бери контракты, сдавай отчёты и пополняй схрон.",
+    ),
+    (
+        "Контракты",
+        "«📋 Задания» — контракты с переходом: прими контракт на базе, доберись до точки "
+        "работы, выполни задание и вернись сдать отчёт — награда придёт автоматически.",
+    ),
+    (
+        "Кооп",
+        "«🏕 Вылазка» → «👥 Кооп-вылазка» — собери команду и вместе зачищайте точку. "
+        "Раненого напарника можно эвакуировать, если бой пошёл не по плану.",
+    ),
+    (
+        "Торговля",
+        "«🛒 Торговец» — покупай снаряжение и расходники, продавай трофеи. Оружие и броня "
+        "изнашиваются со временем, поэтому следи за прочностью и ремонтируй вовремя.",
+    ),
+    (
+        "Выброс",
+        "Периодически в Зоне случается Выброс — если ты не в укрытии, есть риск получить "
+        "урон или погибнуть. Бот предупреждает заранее (можно настроить в «🔔 Уведомления»).",
+    ),
+    (
+        "Смерть и респавн",
+        "HP=0 — не конец. За RU персонаж восстанавливается на домашней базе, но часть "
+        "рюкзака теряется при гибели. Журнал последних смертей смотри в КПК → «☠️ Смерти».",
+    ),
+)
+
+TUTORIAL_COMPLETE_REWARD_RU = 100
+
+
+def _tutorial_seen_key(telegram_id: int) -> str:
+    return f"tutorial:seen:{int(telegram_id)}"
+
+
+def has_seen_tutorial(storage: Storage, telegram_id: int) -> bool:
+    return bool(storage.get_meta(_tutorial_seen_key(telegram_id)))
+
+
+def build_tutorial_page(page: int) -> tuple[str, int, int]:
+    """Возвращает (текст, номер_страницы(0-based), всего_страниц)."""
+    total = len(TUTORIAL_PAGES)
+    page = max(0, min(page, total - 1))
+    title, body = TUTORIAL_PAGES[page]
+    text = f"📘 Обучение · {page + 1}/{total} · {title}\n\n{body}"
+    return text, page, total
+
+
+def claim_tutorial_completion(storage: Storage, telegram_id: int) -> str:
+    """Отмечает обучение пройденным и один раз выдаёт бонус RU. Возвращает строку-приписку."""
+    key = _tutorial_seen_key(telegram_id)
+    if storage.get_meta(key):
+        return ""
+    storage.set_meta(key, "1")
+    if not storage.change_money(telegram_id, TUTORIAL_COMPLETE_REWARD_RU):
+        return ""
+    return f"\n\n🎓 Обучение пройдено! Награда: +{TUTORIAL_COMPLETE_REWARD_RU} RU."
+
+
+# --- Клановые задачи (контроль точек) --------------------------------------
+
+CLAN_QUEST_POOL: tuple[str, ...] = (
+    "Янтарь",
+    "Болото",
+    "НИИ Агропром",
+    "Темная долина",
+    "Рыжий лес",
+    "Радар",
+)
+CLAN_QUEST_TREASURY_REWARD_MIN = 200
+CLAN_QUEST_TREASURY_REWARD_MAX = 500
+CLAN_QUEST_PERSONAL_REWARD_MIN = 100
+CLAN_QUEST_PERSONAL_REWARD_MAX = 200
+CLAN_QUEST_RATING_REWARD = 2
+
+
+def _clan_quest_date_str(now: datetime | None = None) -> str:
+    return (now or _utc_now()).strftime("%Y-%m-%d")
+
+
+def clan_quest_daily_target(faction: str, now: datetime | None = None) -> str:
+    """Детерминированная ежедневная ротация цели по группировке+дате."""
+    date_str = _clan_quest_date_str(now)
+    digest = hashlib.sha256(f"{faction}:{date_str}".encode("utf-8")).hexdigest()
+    index = int(digest, 16) % len(CLAN_QUEST_POOL)
+    return CLAN_QUEST_POOL[index]
+
+
+def _clan_quest_personal_key(faction: str, date_str: str, telegram_id: int) -> str:
+    return f"clan_quest:claim:{faction}:{date_str}:{int(telegram_id)}"
+
+
+def _clan_quest_treasury_key(faction: str, date_str: str) -> str:
+    return f"clan_quest:done:{faction}:{date_str}"
+
+
+def build_clan_quest_overview(storage: Storage, telegram_id: int) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return "Сначала создай персонажа через /start."
+    if not player.faction:
+        return "🏛 Клановые задачи доступны после выбора группировки."
+
+    date_str = _clan_quest_date_str()
+    target = clan_quest_daily_target(player.faction)
+    location = storage.get_location(target) or {}
+    owner = str(location.get("controlled_by") or "нейтрал")
+    controlled = owner == player.faction
+    claimed = bool(storage.get_meta(_clan_quest_personal_key(player.faction, date_str, telegram_id)))
+
+    status = (
+        "✅ точка под контролем — можно забрать награду"
+        if controlled
+        else f"❌ точка не под контролем (сейчас: {owner})"
+    )
+    lines = [
+        "🏛 Клановое задание дня",
+        "",
+        f"Группировка: {player.faction}",
+        f"Цель: удерживать «{target}»",
+        f"Статус: {status}",
+    ]
+    if claimed:
+        lines.append("")
+        lines.append("Награда сегодня уже получена.")
+    else:
+        lines.append("")
+        lines.append(
+            f"Награда: +{CLAN_QUEST_PERSONAL_REWARD_MIN}–{CLAN_QUEST_PERSONAL_REWARD_MAX} RU лично, "
+            f"+{CLAN_QUEST_TREASURY_REWARD_MIN}–{CLAN_QUEST_TREASURY_REWARD_MAX} RU в казну, "
+            f"+{CLAN_QUEST_RATING_REWARD} рейтинга."
+        )
+    return "\n".join(lines)
+
+
+def can_claim_clan_quest(storage: Storage, telegram_id: int) -> bool:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or not player.faction or _is_dead(player):
+        return False
+    date_str = _clan_quest_date_str()
+    target = clan_quest_daily_target(player.faction)
+    location = storage.get_location(target) or {}
+    owner = str(location.get("controlled_by") or "")
+    if owner != player.faction:
+        return False
+    return not bool(storage.get_meta(_clan_quest_personal_key(player.faction, date_str, telegram_id)))
+
+
+def claim_clan_quest(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if not player.faction:
+        return ActionResult(False, "Сначала выбери группировку.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+
+    date_str = _clan_quest_date_str()
+    target = clan_quest_daily_target(player.faction)
+    location = storage.get_location(target) or {}
+    owner = str(location.get("controlled_by") or "")
+    if owner != player.faction:
+        return ActionResult(
+            False,
+            f"«{target}» пока не под контролем «{player.faction}». Захватите точку и возвращайтесь.",
+        )
+
+    personal_key = _clan_quest_personal_key(player.faction, date_str, telegram_id)
+    if storage.get_meta(personal_key):
+        return ActionResult(False, "Ты уже получил награду за клановое задание сегодня.")
+
+    personal_reward = random.randint(CLAN_QUEST_PERSONAL_REWARD_MIN, CLAN_QUEST_PERSONAL_REWARD_MAX)
+    storage.change_money(telegram_id, personal_reward)
+    _add_rating(storage, telegram_id, CLAN_QUEST_RATING_REWARD)
+    storage.set_meta(personal_key, "1")
+
+    treasury_note = ""
+    treasury_key = _clan_quest_treasury_key(player.faction, date_str)
+    if not storage.get_meta(treasury_key):
+        treasury_reward = random.randint(CLAN_QUEST_TREASURY_REWARD_MIN, CLAN_QUEST_TREASURY_REWARD_MAX)
+        storage.change_faction_treasury(player.faction, treasury_reward)
+        storage.set_meta(treasury_key, "1")
+        treasury_note = f" В казну «{player.faction}» зачислено +{treasury_reward} RU (бонус первого сдавшего сегодня)."
+
+    return ActionResult(
+        True,
+        f"🏛 Клановое задание выполнено!\n"
+        f"«{target}» под контролем «{player.faction}».\n"
+        f"Награда: +{personal_reward} RU, +{CLAN_QUEST_RATING_REWARD} рейтинга.{treasury_note}",
+    )
