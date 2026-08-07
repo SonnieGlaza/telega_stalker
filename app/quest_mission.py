@@ -93,7 +93,7 @@ DIFFICULTY_DANGER_BONUS: dict[str, int] = {
 DIFFICULTY_THREATS: dict[str, tuple[bool, bool, bool]] = {
     "easy": (True, False, False),
     "hard": (True, True, False),
-    "heavy": (True, False, True),
+    "heavy": (True, True, True),
     "impossible": (True, True, True),
 }
 
@@ -442,6 +442,59 @@ def _maybe_move_hostiles(session: QuestMissionSession) -> list[str]:
     return notes
 
 
+def _resolve_hostile_contact(
+    storage: Storage,
+    telegram_id: int,
+    session: QuestMissionSession,
+    player: Character,
+    label: str,
+    unit_attr: str,
+    *,
+    kinds_attr: str | None = None,
+) -> tuple[Character, str | None, ActionResult | None]:
+    """Бой на клетке игрока с юнитами unit_attr. Возвращает (player, заметку, результат смерти или None)."""
+    units: list[tuple[int, int]] = getattr(session, unit_attr)
+    if session.player not in units:
+        return player, None, None
+    dmg = _combat_damage(session.location, session.difficulty, player)
+    storage.change_health(telegram_id, -dmg)
+    kinds: list[str] | None = getattr(session, kinds_attr) if kinds_attr else None
+    if kinds is not None and len(kinds) == len(units):
+        new_units: list[tuple[int, int]] = []
+        new_kinds: list[str] = []
+        for pos, kind in zip(units, kinds):
+            if pos != session.player:
+                new_units.append(pos)
+                new_kinds.append(kind)
+        setattr(session, unit_attr, new_units)
+        setattr(session, kinds_attr, new_kinds)
+    else:
+        setattr(session, unit_attr, [e for e in units if e != session.player])
+    note = f"Бой с {label}: −{dmg} HP."
+    player = storage.get_character(telegram_id, refresh_energy=False) or player
+    if player.health <= 0:
+        clear_mission_session(storage, telegram_id)
+        storage.set_active_contract(telegram_id, None)
+        from app.game_logic import remember_death_cause
+
+        remember_death_cause(storage, telegram_id, "combat")
+        return (
+            player,
+            note,
+            ActionResult(
+                False,
+                f"Ты пал в бою на «{session.location}».\nКонтракт сорван.",
+                payload={
+                    "mission_active": False,
+                    "mission_dead": True,
+                    "death_location": session.location,
+                    "death_cause": "combat",
+                },
+            ),
+        )
+    return player, note, None
+
+
 def _combat_damage(location: str, difficulty: str, character: Character) -> int:
     danger = _location_danger(location, difficulty)
     base_lo = 6 + danger * 4
@@ -681,15 +734,32 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return result
+    notes = [result.text]
+    if result.ok:
+        # Аптечка не бесплатна по времени: враги на поле ходят, как при обычном шаге.
+        notes.extend(_maybe_move_hostiles(session))
+        for label, unit_attr, kinds_attr in (
+            ("мутанта", "enemies", "enemy_kinds"),
+            ("НПС", "npcs", "npc_kinds"),
+        ):
+            player, note, dead_result = _resolve_hostile_contact(
+                storage, telegram_id, session, player, label, unit_attr, kinds_attr=kinds_attr
+            )
+            if note is not None:
+                notes.append(note)
+            if dead_result is not None:
+                return dead_result
+        save_mission_session(storage, telegram_id, session)
     image = _render_for_player(storage, telegram_id, session, player)
+    note_text = " ".join(notes)
     return ActionResult(
         result.ok,
-        result.text,
+        note_text,
         payload={
             "mission_image": image,
             "mission_active": True,
             "caption": mission_status_caption(session, player),
-            "move_note": result.text,
+            "move_note": note_text,
         },
     )
 
@@ -740,42 +810,12 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
         kinds_attr: str | None = None,
     ) -> ActionResult | None:
         nonlocal player, notes
-        units: list[tuple[int, int]] = getattr(session, unit_attr)
-        if session.player not in units:
-            return None
-        dmg = _combat_damage(session.location, session.difficulty, player)
-        storage.change_health(telegram_id, -dmg)
-        kinds: list[str] | None = getattr(session, kinds_attr) if kinds_attr else None
-        if kinds is not None and len(kinds) == len(units):
-            new_units: list[tuple[int, int]] = []
-            new_kinds: list[str] = []
-            for pos, kind in zip(units, kinds):
-                if pos != session.player:
-                    new_units.append(pos)
-                    new_kinds.append(kind)
-            setattr(session, unit_attr, new_units)
-            setattr(session, kinds_attr, new_kinds)
-        else:
-            setattr(session, unit_attr, [e for e in units if e != session.player])
-        notes.append(f"Бой с {label}: −{dmg} HP.")
-        player = storage.get_character(telegram_id, refresh_energy=False) or player
-        if player.health <= 0:
-            clear_mission_session(storage, telegram_id)
-            storage.set_active_contract(telegram_id, None)
-            from app.game_logic import remember_death_cause
-
-            remember_death_cause(storage, telegram_id, "combat")
-            return ActionResult(
-                False,
-                f"Ты пал в бою на «{session.location}».\nКонтракт сорван.",
-                payload={
-                    "mission_active": False,
-                    "mission_dead": True,
-                    "death_location": session.location,
-                    "death_cause": "combat",
-                },
-            )
-        return None
+        player, note, dead_result = _resolve_hostile_contact(
+            storage, telegram_id, session, player, label, unit_attr, kinds_attr=kinds_attr
+        )
+        if note is not None:
+            notes.append(note)
+        return dead_result
 
     dead = _fight_on_cell("мутанта", "enemies", kinds_attr="enemy_kinds")
     if dead is not None:

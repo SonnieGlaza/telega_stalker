@@ -329,10 +329,11 @@ def start_duel_grid(
 
 
 def _end_duel(storage: Storage, session: DuelGridSession, winner_id: int, loser_id: int, note: str) -> ActionResult:
-    for pid in (session.challenger_id, session.target_id):
-        hp_val = session.hp.get(str(pid))
-        if hp_val is not None:
-            sync_session_hp_to_db(storage, pid, int(hp_val))
+    # Не синхронизируем HP проигравшего в БД здесь: на поле оно часто 0, а change_health(0)
+    # засчитает ложную смерть ещё до того, как _finalize_duel_rewards выставит "живой" остаток HP.
+    winner_hp = session.hp.get(str(winner_id))
+    if winner_hp is not None:
+        sync_session_hp_to_db(storage, winner_id, int(winner_hp))
     session.finished = True
     session.winner_id = winner_id
     session.loser_id = loser_id

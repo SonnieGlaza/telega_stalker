@@ -108,7 +108,6 @@ class Storage:
 
         requested = Path(snapshot_path) if snapshot_path else default_snapshot
         self.snapshot_path = self._resolve_writable_snapshot_path(requested)
-        self._pending_arrival_notices: dict[int, str] = {}
 
     @staticmethod
     def _resolve_writable_snapshot_path(preferred: Path) -> Path:
@@ -1391,6 +1390,14 @@ class Storage:
             self.delete_meta(key)
         return value
 
+    @staticmethod
+    def _arrival_notice_key(telegram_id: int) -> str:
+        return f"arrival_notice:{int(telegram_id)}"
+
+    def _set_pending_arrival_notice(self, telegram_id: int, destination: str) -> None:
+        """Пережить рестарт бота: пишем в meta_kv, а не только в память процесса."""
+        self.set_meta(self._arrival_notice_key(telegram_id), str(destination))
+
     def set_faction_rank(self, telegram_id: int, rank_key: str | None) -> bool:
         character = self.get_character(telegram_id, refresh_energy=False)
         if character is None or character.faction is None:
@@ -1425,7 +1432,11 @@ class Storage:
         self.save_snapshot()
 
     def pop_arrival_notice(self, telegram_id: int) -> str | None:
-        return self._pending_arrival_notices.pop(int(telegram_id), None)
+        key = self._arrival_notice_key(telegram_id)
+        value = self.get_meta(key)
+        if value is not None:
+            self.delete_meta(key)
+        return value
 
     def resolve_travel_if_due(self, telegram_id: int) -> str | None:
         """Завершить переход, если время прибытия наступило. Возвращает локацию или None."""
@@ -1468,7 +1479,7 @@ class Storage:
                 (dest, telegram_id),
             )
         self.save_snapshot()
-        self._pending_arrival_notices[int(telegram_id)] = dest
+        self._set_pending_arrival_notice(telegram_id, dest)
         if transport:
             self.set_last_arrival_transport(telegram_id, str(transport))
         return dest
@@ -1513,13 +1524,16 @@ class Storage:
                     (destination, telegram_id),
                 )
                 completed.append((telegram_id, destination))
-                self._pending_arrival_notices[int(telegram_id)] = destination
                 if transport:
                     # set_meta открывает своё соединение — после цикла ок
                     self._pending_arrival_transports = getattr(self, "_pending_arrival_transports", {})
                     self._pending_arrival_transports[telegram_id] = str(transport)
         if completed:
             self.save_snapshot()
+            # Пишем уведомления о прибытии в meta_kv (переживает рестарт бота),
+            # а не только в память процесса.
+            for tid, destination in completed:
+                self._set_pending_arrival_notice(tid, destination)
             pending_t = getattr(self, "_pending_arrival_transports", {})
             for tid, mode in list(pending_t.items()):
                 self.set_last_arrival_transport(tid, mode)
@@ -1683,7 +1697,7 @@ class Storage:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT radiation, hunger, thirst, health, needs_updated_at, survival_damage_at
+                SELECT radiation, hunger, thirst, health, needs_updated_at, survival_damage_at, equipment_json
                 FROM characters
                 WHERE telegram_id = ?
                 """,
@@ -1759,7 +1773,17 @@ class Storage:
             if not changed:
                 return
 
-            final_health = max(0, min(100, health))
+            try:
+                from app.game_logic import effective_max_health
+                from types import SimpleNamespace
+
+                equipment = json.loads(self._row_get(row, "equipment_json", "{}") or "{}")
+                if not isinstance(equipment, dict):
+                    equipment = {}
+                max_health = int(effective_max_health(SimpleNamespace(equipment=equipment)))
+            except Exception:
+                max_health = 100
+            final_health = max(0, min(max_health, health))
             conn.execute(
                 """
                 UPDATE characters
@@ -1837,6 +1861,19 @@ class Storage:
         self.save_snapshot()
         if died:
             self.add_player_stat(telegram_id, "deaths", 1)
+            try:
+                from app.game_logic import remember_death_cause
+
+                scores = {
+                    "hunger": new_hunger,
+                    "thirst": new_thirst,
+                    "radiation": new_radiation,
+                }
+                cause = max(scores, key=lambda k: scores[k])
+                if scores[cause] >= SURVIVAL_CRITICAL_NEED:
+                    remember_death_cause(self, telegram_id, cause)
+            except Exception:
+                pass
         return True
 
     def recover_energy(self, telegram_id: int) -> None:

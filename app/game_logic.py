@@ -2261,6 +2261,20 @@ def accept_quest_contract(storage: Storage, telegram_id: int, contract_key: str)
     )
 
 
+def _apply_money_penalty(storage: Storage, telegram_id: int, penalty: int) -> int:
+    """Списать штраф в RU, не давая уйти от него из-за нехватки денег: минимум — весь баланс."""
+    if penalty <= 0:
+        return 0
+    if storage.change_money(telegram_id, -penalty):
+        return penalty
+    character = storage.get_character(telegram_id, refresh_energy=False)
+    balance = int(character.money) if character is not None else 0
+    if balance <= 0:
+        return 0
+    storage.change_money(telegram_id, -balance)
+    return balance
+
+
 def cancel_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
     character = storage.get_character(telegram_id, refresh_energy=False)
     if character is None:
@@ -2275,12 +2289,12 @@ def cancel_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
     storage.set_active_contract(telegram_id, None)
     if not left_base:
         return ActionResult(True, "Контракт отменён.")
-    storage.change_money(telegram_id, -CONTRACT_CANCEL_PENALTY_RU)
+    taken = _apply_money_penalty(storage, telegram_id, CONTRACT_CANCEL_PENALTY_RU)
     _add_rating(storage, telegram_id, -CONTRACT_CANCEL_RATING_PENALTY)
     return ActionResult(
         True,
         f"Контракт отменён после выезда с базы.\n"
-        f"Штраф: −{CONTRACT_CANCEL_PENALTY_RU} RU, −{CONTRACT_CANCEL_RATING_PENALTY} рейтинга.",
+        f"Штраф: −{taken} RU, −{CONTRACT_CANCEL_RATING_PENALTY} рейтинга.",
     )
 
 
@@ -2398,14 +2412,14 @@ def apply_contract_mission_fail(
     )
     min_penalty, max_penalty = QUEST_FAIL_PENALTY_RANGE.get(quest.key, (50, 120))
     penalty = random.randint(min_penalty, max_penalty)
-    storage.change_money(telegram_id, -penalty)
+    taken = _apply_money_penalty(storage, telegram_id, penalty)
     _add_rating(storage, telegram_id, -rating_fail)
     storage.add_player_stat(telegram_id, "quests_failed", 1)
     note = f"\n{reason}" if reason else ""
     return ActionResult(
         False,
         f"Провал «{title}» на «{work_location}».{note}\n"
-        f"Потери: {penalty} RU, рейтинг −{rating_fail}.{durability_text}",
+        f"Потери: {taken} RU, рейтинг −{rating_fail}.{durability_text}",
     )
 
 
@@ -3361,6 +3375,16 @@ def _inventory_qty_for_sell_key(character: Character, item_key: str) -> int:
     return qty
 
 
+def _remove_inventory_for_sell(storage: Storage, telegram_id: int, item_key: str) -> bool:
+    """Снять 1 шт. из инвентаря по ключу продажи, пробуя алиасы того же предмета."""
+    if storage.remove_item(telegram_id, item_key, 1):
+        return True
+    for alias in _SELL_KEY_ALIASES.get(item_key, ()):
+        if storage.remove_item(telegram_id, alias, 1):
+            return True
+    return False
+
+
 def player_owns_sellable_item(character: Character, item_key: str) -> bool:
     """Есть ли у игрока предмет для продажи торговцу (инвентарь / экип / флаги)."""
     item_key = normalize_shop_item_key(item_key)
@@ -3495,7 +3519,7 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
             weapon_durability = _durability_percent(character, "weapon")
             final_sell_price = _price_with_durability(sell_price, weapon_durability)
             storage.set_equipment_item(telegram_id, "weapon", "Нож")
-        elif not storage.remove_item(telegram_id, item_key, 1):
+        elif not _remove_inventory_for_sell(storage, telegram_id, item_key):
             return ActionResult(False, f"У тебя нет оружия: {weapon_name}.")
         storage.change_money(telegram_id, final_sell_price)
         if final_sell_price != sell_price:
@@ -3515,7 +3539,7 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
             returned = _return_armor_upgrades_to_inventory(storage, telegram_id, character)
             storage.set_equipment_item(telegram_id, "armor", "Куртка новичка")
             upgrade_note = f"\nУлучшения брони сняты в инвентарь: ×{returned}." if returned else ""
-        elif not storage.remove_item(telegram_id, item_key, 1):
+        elif not _remove_inventory_for_sell(storage, telegram_id, item_key):
             return ActionResult(False, f"У тебя нет брони: {armor_name}.")
         else:
             upgrade_note = ""
@@ -6015,10 +6039,10 @@ def _parse_meta_datetime(raw: str | None, fallback: datetime) -> datetime:
     return parsed
 
 
-def process_emission_cycle(storage: Storage) -> tuple[str, list[int]]:
+def process_emission_cycle(storage: Storage) -> tuple[str, list[int], list[int]]:
     """Цикл Выброса: предупреждения за 60/30 мин, убийство вне базы.
 
-    Возвращает (текст оповещения, telegram_id для рассылки).
+    Возвращает (текст оповещения, telegram_id для рассылки, telegram_id убитых Выбросом).
     Пустой текст — нечего слать.
     """
     now = datetime.now(timezone.utc)
@@ -6032,13 +6056,13 @@ def process_emission_cycle(storage: Storage) -> tuple[str, list[int]]:
         storage.set_meta(EMISSION_META_AT, emission_at.isoformat())
         storage.set_meta(EMISSION_META_WARN60, "0")
         storage.set_meta(EMISSION_META_WARN30, "0")
-        return ("", [])
+        return ("", [], [])
 
     emission_at = _parse_meta_datetime(raw_at, now + timedelta(hours=EMISSION_INTERVAL_HOURS))
     minutes_left = (emission_at - now).total_seconds() / 60.0
 
     if minutes_left > EMISSION_WARN_60_MINUTES:
-        return ("", [])
+        return ("", [], [])
 
     base_names = ", ".join(sorted(_safe_base_location_names(storage))) or "базы группировок"
 
@@ -6049,6 +6073,7 @@ def process_emission_cycle(storage: Storage) -> tuple[str, list[int]]:
             "Если ты не на базе к моменту Выброса — персонаж погибнет.\n"
             f"Безопасные базы: {base_names}.",
             notify_ids,
+            [],
         )
 
     if 0 < minutes_left <= EMISSION_WARN_30_MINUTES:
@@ -6061,24 +6086,28 @@ def process_emission_cycle(storage: Storage) -> tuple[str, list[int]]:
                 "Срочно уходи на базу — вне базы Выброс убивает.\n"
                 f"Безопасные базы: {base_names}.",
                 notify_ids,
+                [],
             )
-        return ("", [])
+        return ("", [], [])
 
     if minutes_left > 0:
-        return ("", [])
+        return ("", [], [])
 
     safe_bases = _safe_base_location_names(storage)
     killed: list[str] = []
-    for row in storage.list_players(limit=500):
-        if int(row.get("health") or 0) <= 0:
+    killed_ids: list[int] = []
+    for telegram_id in storage.list_player_ids():
+        character = storage.get_character(telegram_id, refresh_energy=False)
+        if character is None or int(character.health) <= 0:
             continue
-        location = str(row.get("location") or "")
-        if location in safe_bases:
+        if character.location in safe_bases:
             continue
-        telegram_id = int(row["telegram_id"])
-        storage.change_health(telegram_id, -int(row["health"]))
+        if is_traveling(character) and character.travel_destination in safe_bases:
+            continue
+        storage.change_health(telegram_id, -int(character.health))
         remember_death_cause(storage, telegram_id, "emission")
-        killed.append(str(row.get("nickname") or telegram_id))
+        killed.append(character.nickname or str(telegram_id))
+        killed_ids.append(telegram_id)
 
     next_at = now + timedelta(hours=EMISSION_INTERVAL_HOURS)
     storage.set_meta(EMISSION_META_AT, next_at.isoformat())
@@ -6095,6 +6124,7 @@ def process_emission_cycle(storage: Storage) -> tuple[str, list[int]]:
         f"Погибшие вне баз: {killed_text}.\n"
         f"Следующий Выброс примерно через {EMISSION_INTERVAL_HOURS} ч.",
         notify_ids,
+        killed_ids,
     )
 
 
@@ -6392,7 +6422,7 @@ def resolve_smuggling_if_pending(storage: Storage, telegram_id: int) -> str | No
 
     penalty = random.randint(SMUGGLING_FAIL_PENALTY_MIN, SMUGGLING_FAIL_PENALTY_MAX)
     durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=5, armor_loss=3)
-    storage.change_money(telegram_id, -penalty)
+    taken = _apply_money_penalty(storage, telegram_id, penalty)
     player = storage.get_character(telegram_id, refresh_energy=False)
     hp_loss = apply_incoming_damage(12, player, min_damage=1) if player is not None else 12
     storage.change_health(telegram_id, -hp_loss)
@@ -6400,7 +6430,7 @@ def resolve_smuggling_if_pending(storage: Storage, telegram_id: int) -> str | No
     return (
         f"💀 Ограбили в пути до «{destination}»!\n"
         f"Шанс доставить был {chance}% (бросок {roll}).\n"
-        f"Потери: {penalty} RU и ранение (−{hp_loss} HP).{durability_text}"
+        f"Потери: {taken} RU и ранение (−{hp_loss} HP).{durability_text}"
     )
 
 

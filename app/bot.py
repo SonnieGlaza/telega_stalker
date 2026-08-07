@@ -93,7 +93,6 @@ from app.game_logic import (
     DUEL_LOSER_HP_REMAINING,
     TRANSFER_FEE_PERCENT,
     TRAVEL_SPEED_BICYCLE,
-    QUESTS,
     RESOURCE_POINT_INCOME_PER_HOUR,
     BASE_POINT_INCOME_PER_HOUR,
     build_achievements_overview,
@@ -128,7 +127,6 @@ from app.game_logic import (
     process_emission_cycle,
     process_due_travels,
     collect_travel_eta_notices,
-    build_travel_arrival_live_text,
     process_zone_event_cycle,
     build_players_root_text,
     build_players_faction_page_text,
@@ -784,10 +782,6 @@ def _build_referral_system_text(*, referral_link: str | None = None) -> str:
 
 
 def _build_info_text(player: Character) -> str:
-    easy = QUESTS["easy"]
-    hard = QUESTS["hard"]
-    heavy = QUESTS["heavy"]
-    impossible = QUESTS["impossible"]
     return (
         "ℹ️ Информация по игре\n\n"
         "Разделы меню:\n"
@@ -808,8 +802,8 @@ def _build_info_text(player: Character) -> str:
         "• 🗺 Переходы: 1 игр. мин ≈ 10 сек реально;\n"
         f"  пешком ×1, велосипед ×{TRAVEL_SPEED_BICYCLE:g}, "
         "Нива ×2 + бензин, грузовик ×5 + дизель.\n"
-        f"• 📋 Контракты: Легко до {easy.max_success}%; Средне до {hard.max_success}%; "
-        f"Опасно до {heavy.max_success}%; Невозможно до {impossible.max_success}%.\n"
+        "• 📋 Контракты: вылазка на сетке — сам обходишь угрозы (аномалии/мутанты/НПС) "
+        "и решаешь, победить или обойти; чем выше сложность, тем больше угроз.\n"
         "• 🚚 Контрабанда: перевозка, ограбление в пути = провал; лут важнее чистого RU.\n"
         f"• 💰 Пассив казны: ресурсы {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч, "
         f"база {BASE_POINT_INCOME_PER_HOUR} RU/ч.\n"
@@ -1452,7 +1446,10 @@ async def show_inventory(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     if player.health <= 0:
-        await message.answer(build_dead_character_text(player), reply_markup=dead_character_keyboard())
+        await message.answer(
+            build_dead_character_text(player, storage=get_storage()),
+            reply_markup=dead_character_keyboard(),
+        )
         return
     await message.answer(
         action_result_text(
@@ -1476,7 +1473,7 @@ async def open_inventory_callback(callback: CallbackQuery) -> None:
     if player.health <= 0:
         await edit_menu_message(
             callback,
-            build_dead_character_text(player),
+            build_dead_character_text(player, storage=get_storage()),
             dead_character_keyboard(),
         )
         return
@@ -1500,7 +1497,7 @@ async def open_inventory_consumables_callback(callback: CallbackQuery) -> None:
     if player.health <= 0:
         await edit_menu_message(
             callback,
-            build_dead_character_text(player),
+            build_dead_character_text(player, storage=get_storage()),
             dead_character_keyboard(),
         )
         return
@@ -1538,7 +1535,7 @@ async def stash_menu_callback(callback: CallbackQuery) -> None:
     if player.health <= 0:
         await edit_menu_message(
             callback,
-            build_dead_character_text(player),
+            build_dead_character_text(player, storage=storage),
             dead_character_keyboard(),
         )
         return
@@ -1710,7 +1707,7 @@ async def show_respawn_menu_callback(callback: CallbackQuery) -> None:
         return
     await edit_menu_message(
         callback,
-        build_dead_character_text(player),
+        build_dead_character_text(player, storage=get_storage()),
         dead_character_keyboard(),
     )
 
@@ -2005,7 +2002,7 @@ async def equip_root_callback(callback: CallbackQuery) -> None:
     if player.health <= 0:
         await edit_menu_message(
             callback,
-            build_dead_character_text(player),
+            build_dead_character_text(player, storage=get_storage()),
             dead_character_keyboard(),
         )
         return
@@ -2434,6 +2431,31 @@ async def _dismiss_battle_map(callback: CallbackQuery) -> None:
             await message.edit_reply_markup(reply_markup=None)
         except TelegramBadRequest:
             pass
+
+
+SURVIVAL_DEATH_CHECK_EVERY_TICKS = 5  # ~раз в 5 мин при POINTS_INCOME_TICK_SECONDS=60
+SURVIVAL_DEATH_CHECK_YIELD_EVERY = 50
+
+
+async def _push_offline_survival_deaths(bot: Bot, storage: Storage) -> None:
+    """Прогнать refresh_survival по всем игрокам и толкнуть тем, кто умер оффлайн от голода/жажды/радиации."""
+    for index, telegram_id in enumerate(storage.list_player_ids(), start=1):
+        try:
+            before = storage.get_character(telegram_id, refresh_energy=False)
+            if before is None or before.health <= 0:
+                continue
+            after = storage.get_character(telegram_id, refresh_energy=True)
+        except Exception:
+            logger.exception("Survival refresh failed for %s", telegram_id)
+            continue
+        if after is not None and after.health <= 0:
+            try:
+                text = build_dead_character_text(after, storage=storage)
+                await bot.send_message(telegram_id, text, reply_markup=dead_character_keyboard())
+            except Exception:
+                logger.debug("Failed offline survival death push to %s", telegram_id)
+        if index % SURVIVAL_DEATH_CHECK_YIELD_EVERY == 0:
+            await asyncio.sleep(0)
 
 
 async def _send_battle_death_notice(
@@ -4687,21 +4709,37 @@ async def run_bot() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
+    zone_tick_counter = {"n": 0}
+
     async def periodic_zone_systems() -> None:
         while True:
             await asyncio.sleep(POINTS_INCOME_TICK_SECONDS)
+            zone_tick_counter["n"] += 1
             try:
                 apply_controlled_points_income(get_storage())
             except Exception:
                 logger.exception("Points income tick failed")
             try:
-                message_text, notify_ids = process_emission_cycle(get_storage())
+                storage = get_storage()
+                message_text, notify_ids, killed_ids = process_emission_cycle(storage)
                 if message_text:
                     for user_id in notify_ids:
                         try:
                             await bot.send_message(user_id, message_text)
                         except Exception:
                             logger.debug("Failed emission notify to %s", user_id)
+                for killed_id in killed_ids:
+                    try:
+                        killed_player = storage.get_character(killed_id, refresh_energy=False)
+                        if killed_player is not None:
+                            await _send_battle_death_notice(
+                                bot,
+                                killed_id,
+                                killed_player,
+                                cause="emission",
+                            )
+                    except Exception:
+                        logger.debug("Failed emission death notice to %s", killed_id)
             except Exception:
                 logger.exception("Emission cycle tick failed")
             try:
@@ -4714,6 +4752,11 @@ async def run_bot() -> None:
                             logger.debug("Failed zone event notify to %s", user_id)
             except Exception:
                 logger.exception("Zone event cycle tick failed")
+            if zone_tick_counter["n"] % SURVIVAL_DEATH_CHECK_EVERY_TICKS == 0:
+                try:
+                    await _push_offline_survival_deaths(bot, get_storage())
+                except Exception:
+                    logger.exception("Offline survival death tick failed")
 
     async def periodic_travel_live_eta() -> None:
         """Каждую секунду правит сообщение «сколько осталось ехать»."""
@@ -4721,12 +4764,10 @@ async def run_bot() -> None:
             await asyncio.sleep(TRAVEL_ETA_TICK_SECONDS)
             storage = get_storage()
             try:
-                for user_id, destination in process_due_travels(storage):
-                    # Один раз: прибытие + энкаунтер/контрабанда через action_result_text.
-                    arrival_body = action_result_text(
-                        user_id,
-                        build_travel_arrival_live_text(destination),
-                    )
+                for user_id, _destination in process_due_travels(storage):
+                    # Один раз: прибытие ("Прибыл в …") + энкаунтер/контрабанда — всё через
+                    # action_result_text (иначе строка прибытия дублируется).
+                    arrival_body = action_result_text(user_id, "")
                     try:
                         await upsert_travel_eta_message(bot, user_id, arrival_body)
                     except Exception:
