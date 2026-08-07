@@ -318,7 +318,7 @@ async def publish_travel_live_eta(bot: Bot, telegram_id: int) -> None:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or not is_traveling(player):
         return
-    status = travel_status_text(player)
+    status = travel_status_with_smuggle(storage, telegram_id) or travel_status_text(player)
     if status:
         await upsert_travel_eta_message(bot, telegram_id, status)
 
@@ -3155,7 +3155,6 @@ async def show_travel(message: Message) -> None:
     status = travel_status_with_smuggle(db, player.telegram_id) or travel_status_text(player)
     if traveling and status:
         text = (
-            "Ты уже в пути.\n"
             f"{status}\n\n"
             "Пока идёт переход, другие действия на точке недоступны."
         )

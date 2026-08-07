@@ -1958,16 +1958,15 @@ def travel_status_text(character: Character) -> str | None:
 def collect_travel_eta_notices(storage: Storage) -> list[tuple[int, str]]:
     """Снимок ETA для всех активных переходов (для live-редактирования в чате)."""
     notices: list[tuple[int, str]] = []
-    labels = {"foot": "пешком", "bicycle": "на велосипеде", "niva": "на Ниве", "truck": "на грузовике"}
-    for telegram_id, destination, arrives_at, transport in storage.list_active_travels():
-        remaining = format_remaining_travel(arrives_at)
-        mode = labels.get(transport, transport)
-        notices.append(
-            (
-                telegram_id,
-                f"🚐 Едешь → «{destination}» ({mode})\nОсталось ехать: {remaining}",
-            )
-        )
+    seen: set[int] = set()
+    for telegram_id, _destination, _arrives_at, _transport in storage.list_active_travels():
+        tid = int(telegram_id)
+        if tid in seen:
+            continue
+        seen.add(tid)
+        status = travel_status_with_smuggle(storage, tid)
+        if status:
+            notices.append((tid, status))
     return notices
 
 
@@ -4247,13 +4246,11 @@ def travel_to(
         "niva": "на Ниве (×2)",
         "truck": "на грузовике (×5)",
     }
-    eta = format_arrival_eta(arrives_at)
     note_text = f"\n{foot_note}" if foot_note else ""
     return ActionResult(
         True,
         f"Выехал из «{character.location}» → «{destination}» {transport_labels[transport_mode]}.\n"
-        f"Затрачено энергии: {energy_cost}.\n"
-        f"Время в пути: ~{travel_minutes} мин ({real_seconds} сек), прибытие {eta}."
+        f"Затрачено энергии: {energy_cost}."
         f"{fuel_text}{truck_wear_text}{note_text}",
     )
 
