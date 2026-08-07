@@ -1,0 +1,952 @@
+from __future__ import annotations
+
+import json
+import random
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from io import BytesIO
+from typing import Any
+
+from PIL import Image, ImageDraw, ImageFont
+
+from app.artifact_hunt import FONT_CANDIDATES, _paste_circle
+from app.game_logic import (
+    RATING_REWARD,
+    ActionResult,
+    _add_rating,
+    _dead_block_text,
+    _is_dead,
+    apply_incoming_damage,
+    effective_max_health,
+    equipment_power,
+    h,
+    use_medkit_item,
+)
+from app.mission_icons import (
+    ANOMALY_ICON_KEY,
+    MISSION_ICON_GRID_DIAMETER,
+    OBJECTIVE_ICON_KEY,
+    mission_icon_image,
+)
+from app.mutant_assets import (
+    MISSION_MUTANT_GRID_DIAMETER,
+    MUTANT_SPRITE_KEYS,
+    mutant_sprite_image,
+    pick_mutant_kind,
+)
+from app.quest_mission import LOCATION_DANGER, MOVE_DELTAS
+from app.storage import Character, Storage
+
+COOP_MAX_PLAYERS = 3
+COOP_GRID_SIZE = 6
+COOP_TURN_SECONDS = 10
+COOP_ENERGY_COST = 14
+
+LOBBY_PREFIX = "coop:lobby:"
+SESSION_PREFIX = "coop:session:"
+PLAYER_PREFIX = "coop:player:"
+OPEN_LOBBIES_KEY = "coop:open_lobbies"
+ACTIVE_SESSIONS_KEY = "coop:active_ids"
+
+PLAYER_COLORS = [
+    (80, 200, 255),
+    (255, 180, 70),
+    (120, 255, 140),
+]
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _deadline_iso(seconds: int = COOP_TURN_SECONDS) -> str:
+    return (_utc_now() + timedelta(seconds=seconds)).isoformat()
+
+
+def _parse_deadline(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        return None
+
+
+def _player_ref(kind: str, ref_id: str) -> str:
+    return f"{kind}:{ref_id}"
+
+
+def _parse_player_ref(raw: str | None) -> tuple[str, str] | None:
+    if not raw or ":" not in raw:
+        return None
+    kind, ref_id = raw.split(":", 1)
+    if kind in {"lobby", "session"} and ref_id:
+        return kind, ref_id
+    return None
+
+
+@dataclass
+class CoopLobby:
+    lobby_id: str
+    host_id: int
+    member_ids: list[int]
+    location: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "lobby_id": self.lobby_id,
+            "host_id": self.host_id,
+            "member_ids": list(self.member_ids),
+            "location": self.location,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> CoopLobby:
+        return cls(
+            lobby_id=str(raw.get("lobby_id") or ""),
+            host_id=int(raw.get("host_id") or 0),
+            member_ids=[int(x) for x in (raw.get("member_ids") or [])],
+            location=str(raw.get("location") or "Кордон"),
+        )
+
+
+@dataclass
+class CoopMissionSession:
+    session_id: str
+    lobby_id: str
+    location: str
+    player_ids: list[int]
+    positions: dict[str, list[int]] = field(default_factory=dict)
+    hp: dict[str, int] = field(default_factory=dict)
+    medkits_used: dict[str, bool] = field(default_factory=dict)
+    start: tuple[int, int] = (0, 0)
+    objectives: list[tuple[int, int]] = field(default_factory=list)
+    collected: list[tuple[int, int]] = field(default_factory=list)
+    hazards: list[tuple[int, int]] = field(default_factory=list)
+    enemies: list[tuple[int, int]] = field(default_factory=list)
+    enemy_kinds: list[str] = field(default_factory=list)
+    turn_order: list[int] = field(default_factory=list)
+    active_index: int = 0
+    turn_deadline: str | None = None
+    finished: bool = False
+    success: bool = False
+    log: list[str] = field(default_factory=list)
+    message_ids: dict[str, int] = field(default_factory=dict)
+    grid: int = COOP_GRID_SIZE
+
+    def active_player(self) -> int:
+        return self.turn_order[self.active_index % len(self.turn_order)]
+
+    def pos(self, player_id: int) -> tuple[int, int]:
+        raw = self.positions.get(str(player_id), [0, 0])
+        return int(raw[0]), int(raw[1])
+
+    def set_pos(self, player_id: int, pos: tuple[int, int]) -> None:
+        self.positions[str(player_id)] = [pos[0], pos[1]]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "lobby_id": self.lobby_id,
+            "location": self.location,
+            "player_ids": self.player_ids,
+            "positions": self.positions,
+            "hp": self.hp,
+            "medkits_used": self.medkits_used,
+            "start": list(self.start),
+            "objectives": [list(p) for p in self.objectives],
+            "collected": [list(p) for p in self.collected],
+            "hazards": [list(p) for p in self.hazards],
+            "enemies": [list(p) for p in self.enemies],
+            "enemy_kinds": list(self.enemy_kinds),
+            "turn_order": self.turn_order,
+            "active_index": self.active_index,
+            "turn_deadline": self.turn_deadline,
+            "finished": self.finished,
+            "success": self.success,
+            "log": self.log[-14:],
+            "message_ids": {str(k): int(v) for k, v in self.message_ids.items()},
+            "grid": self.grid,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> CoopMissionSession:
+        return cls(
+            session_id=str(raw.get("session_id") or ""),
+            lobby_id=str(raw.get("lobby_id") or ""),
+            location=str(raw.get("location") or "Кордон"),
+            player_ids=[int(x) for x in (raw.get("player_ids") or [])],
+            positions={str(k): list(v) for k, v in (raw.get("positions") or {}).items()},
+            hp={str(k): int(v) for k, v in (raw.get("hp") or {}).items()},
+            medkits_used={str(k): bool(v) for k, v in (raw.get("medkits_used") or {}).items()},
+            start=(int(raw["start"][0]), int(raw["start"][1])) if raw.get("start") else (0, 0),
+            objectives=[(int(p[0]), int(p[1])) for p in (raw.get("objectives") or [])],
+            collected=[(int(p[0]), int(p[1])) for p in (raw.get("collected") or [])],
+            hazards=[(int(p[0]), int(p[1])) for p in (raw.get("hazards") or [])],
+            enemies=[(int(p[0]), int(p[1])) for p in (raw.get("enemies") or [])],
+            enemy_kinds=[str(x) for x in (raw.get("enemy_kinds") or [])],
+            turn_order=[int(x) for x in (raw.get("turn_order") or [])],
+            active_index=int(raw.get("active_index") or 0),
+            turn_deadline=raw.get("turn_deadline"),
+            finished=bool(raw.get("finished")),
+            success=bool(raw.get("success")),
+            log=[str(x) for x in (raw.get("log") or [])],
+            message_ids={str(k): int(v) for k, v in (raw.get("message_ids") or {}).items()},
+            grid=int(raw.get("grid") or COOP_GRID_SIZE),
+        )
+
+
+def _lobby_key(lobby_id: str) -> str:
+    return f"{LOBBY_PREFIX}{lobby_id}"
+
+
+def _session_key(session_id: str) -> str:
+    return f"{SESSION_PREFIX}{session_id}"
+
+
+def _player_key(telegram_id: int) -> str:
+    return f"{PLAYER_PREFIX}{int(telegram_id)}"
+
+
+def get_player_coop_ref(storage: Storage, telegram_id: int) -> tuple[str, str] | None:
+    return _parse_player_ref(storage.get_meta(_player_key(telegram_id)))
+
+
+def get_coop_lobby(storage: Storage, lobby_id: str) -> CoopLobby | None:
+    raw = storage.get_meta(_lobby_key(lobby_id))
+    if not raw:
+        return None
+    try:
+        return CoopLobby.from_dict(json.loads(raw))
+    except Exception:
+        return None
+
+
+def get_coop_session_by_player(storage: Storage, telegram_id: int) -> CoopMissionSession | None:
+    ref = get_player_coop_ref(storage, telegram_id)
+    if ref is None or ref[0] != "session":
+        return None
+    raw = storage.get_meta(_session_key(ref[1]))
+    if not raw:
+        storage.delete_meta(_player_key(telegram_id))
+        return None
+    try:
+        session = CoopMissionSession.from_dict(json.loads(raw))
+    except Exception:
+        return None
+    if session.finished:
+        return None
+    return session
+
+
+def get_coop_lobby_by_player(storage: Storage, telegram_id: int) -> CoopLobby | None:
+    ref = get_player_coop_ref(storage, telegram_id)
+    if ref is None or ref[0] != "lobby":
+        return None
+    return get_coop_lobby(storage, ref[1])
+
+
+def _register_open_lobby(storage: Storage, lobby_id: str) -> None:
+    raw = storage.get_meta(OPEN_LOBBIES_KEY)
+    ids: list[str] = []
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                ids = [str(x) for x in parsed]
+        except json.JSONDecodeError:
+            ids = []
+    if lobby_id not in ids:
+        ids.append(lobby_id)
+    storage.set_meta(OPEN_LOBBIES_KEY, json.dumps(ids, ensure_ascii=False))
+
+
+def _unregister_open_lobby(storage: Storage, lobby_id: str) -> None:
+    raw = storage.get_meta(OPEN_LOBBIES_KEY)
+    if not raw:
+        return
+    try:
+        ids = [str(x) for x in json.loads(raw) if str(x) != lobby_id]
+    except json.JSONDecodeError:
+        ids = []
+    storage.set_meta(OPEN_LOBBIES_KEY, json.dumps(ids, ensure_ascii=False))
+
+
+def save_coop_lobby(storage: Storage, lobby: CoopLobby) -> None:
+    storage.set_meta(_lobby_key(lobby.lobby_id), json.dumps(lobby.to_dict(), ensure_ascii=False))
+    for pid in lobby.member_ids:
+        storage.set_meta(_player_key(pid), _player_ref("lobby", lobby.lobby_id))
+
+
+def clear_coop_lobby(storage: Storage, lobby: CoopLobby) -> None:
+    storage.delete_meta(_lobby_key(lobby.lobby_id))
+    _unregister_open_lobby(storage, lobby.lobby_id)
+    for pid in lobby.member_ids:
+        ref = get_player_coop_ref(storage, pid)
+        if ref and ref[0] == "lobby" and ref[1] == lobby.lobby_id:
+            storage.delete_meta(_player_key(pid))
+
+
+def save_coop_session(storage: Storage, session: CoopMissionSession) -> None:
+    storage.set_meta(_session_key(session.session_id), json.dumps(session.to_dict(), ensure_ascii=False))
+    for pid in session.player_ids:
+        storage.set_meta(_player_key(pid), _player_ref("session", session.session_id))
+
+
+def clear_coop_session(storage: Storage, session: CoopMissionSession) -> None:
+    storage.delete_meta(_session_key(session.session_id))
+    unregister_active_coop(storage, session.session_id)
+    for pid in session.player_ids:
+        ref = get_player_coop_ref(storage, pid)
+        if ref and ref[0] == "session" and ref[1] == session.session_id:
+            storage.delete_meta(_player_key(pid))
+
+
+def register_active_coop(storage: Storage, session_id: str) -> None:
+    raw = storage.get_meta(ACTIVE_SESSIONS_KEY)
+    ids: list[str] = []
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                ids = [str(x) for x in parsed]
+        except json.JSONDecodeError:
+            ids = []
+    if session_id not in ids:
+        ids.append(session_id)
+    storage.set_meta(ACTIVE_SESSIONS_KEY, json.dumps(ids, ensure_ascii=False))
+
+
+def unregister_active_coop(storage: Storage, session_id: str) -> None:
+    raw = storage.get_meta(ACTIVE_SESSIONS_KEY)
+    if not raw:
+        return
+    try:
+        ids = [str(x) for x in json.loads(raw) if str(x) != session_id]
+    except json.JSONDecodeError:
+        ids = []
+    storage.set_meta(ACTIVE_SESSIONS_KEY, json.dumps(ids, ensure_ascii=False))
+
+
+def list_open_coop_lobbies(storage: Storage, location: str) -> list[tuple[str, str, int]]:
+    raw = storage.get_meta(OPEN_LOBBIES_KEY)
+    if not raw:
+        return []
+    try:
+        ids = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(ids, list):
+        return []
+    result: list[tuple[str, str, int]] = []
+    for lobby_id in ids:
+        lobby = get_coop_lobby(storage, str(lobby_id))
+        if lobby is None:
+            continue
+        if lobby.location != location:
+            continue
+        host = storage.get_character(lobby.host_id, refresh_energy=False)
+        host_name = host.nickname if host else str(lobby.host_id)
+        result.append((lobby.lobby_id, host_name, len(lobby.member_ids)))
+    return result
+
+
+def coop_menu_text(storage: Storage, telegram_id: int) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return "Сначала создай персонажа."
+    session = get_coop_session_by_player(storage, telegram_id)
+    if session is not None:
+        active = storage.get_character(session.active_player(), refresh_energy=False)
+        active_name = active.nickname if active else str(session.active_player())
+        return (
+            f"👥 Кооп-вылазка на «{session.location}».\n"
+            f"Игроков: {len(session.player_ids)}/{COOP_MAX_PLAYERS}.\n"
+            f"Ход: {h(active_name)} ({COOP_TURN_SECONDS} сек).\n"
+            "Соберите цели и выживите — мутанты идут к ближайшему сталкеру."
+        )
+    lobby = get_coop_lobby_by_player(storage, telegram_id)
+    if lobby is not None:
+        names = []
+        for pid in lobby.member_ids:
+            ch = storage.get_character(pid, refresh_energy=False)
+            names.append(h(ch.nickname) if ch else str(pid))
+        host_mark = " (лидер)" if lobby.host_id == telegram_id else ""
+        return (
+            f"👥 Группа кооп-вылазки на «{lobby.location}»{host_mark}.\n"
+            f"Участники ({len(lobby.member_ids)}/{COOP_MAX_PLAYERS}): {', '.join(names)}.\n"
+            f"Энергия при старте: {COOP_ENERGY_COST} у каждого.\n"
+            "Лидер запускает вылазку, когда все готовы."
+        )
+    return (
+        f"👥 Кооп-вылазка (до {COOP_MAX_PLAYERS} игроков).\n"
+        f"Локация: «{player.location}».\n"
+        f"Пошаговое поле: ход {COOP_TURN_SECONDS} сек, аномалии и мутанты.\n"
+        f"Стоимость: {COOP_ENERGY_COST} энергии.\n"
+        "Создай группу или присоединись к открытой."
+    )
+
+
+def create_coop_lobby(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if get_coop_session_by_player(storage, telegram_id) or get_coop_lobby_by_player(storage, telegram_id):
+        return ActionResult(False, "Ты уже в кооп-группе или вылазке.")
+    if player.energy < COOP_ENERGY_COST:
+        return ActionResult(False, f"Нужно минимум {COOP_ENERGY_COST} энергии.")
+
+    lobby_id = uuid.uuid4().hex[:10]
+    lobby = CoopLobby(
+        lobby_id=lobby_id,
+        host_id=telegram_id,
+        member_ids=[telegram_id],
+        location=player.location,
+    )
+    save_coop_lobby(storage, lobby)
+    _register_open_lobby(storage, lobby_id)
+    return ActionResult(
+        True,
+        f"Группа создана на «{player.location}». Жди напарников (до {COOP_MAX_PLAYERS}).",
+        payload={"coop_lobby_id": lobby_id},
+    )
+
+
+def join_coop_lobby(storage: Storage, telegram_id: int, lobby_id: str) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if get_coop_session_by_player(storage, telegram_id) or get_coop_lobby_by_player(storage, telegram_id):
+        return ActionResult(False, "Сначала выйди из текущей группы.")
+    lobby = get_coop_lobby(storage, lobby_id)
+    if lobby is None:
+        return ActionResult(False, "Группа не найдена.")
+    if player.location != lobby.location:
+        return ActionResult(False, f"Нужно быть на «{lobby.location}».")
+    if telegram_id in lobby.member_ids:
+        return ActionResult(True, "Ты уже в этой группе.")
+    if len(lobby.member_ids) >= COOP_MAX_PLAYERS:
+        return ActionResult(False, "Группа заполнена.")
+    if player.energy < COOP_ENERGY_COST:
+        return ActionResult(False, f"Нужно минимум {COOP_ENERGY_COST} энергии.")
+    lobby.member_ids.append(telegram_id)
+    save_coop_lobby(storage, lobby)
+    return ActionResult(True, f"Ты в группе ({len(lobby.member_ids)}/{COOP_MAX_PLAYERS}).")
+
+
+def leave_coop_lobby(storage: Storage, telegram_id: int) -> ActionResult:
+    lobby = get_coop_lobby_by_player(storage, telegram_id)
+    if lobby is None:
+        return ActionResult(False, "Ты не в кооп-группе.")
+    if telegram_id in lobby.member_ids:
+        lobby.member_ids = [x for x in lobby.member_ids if x != telegram_id]
+    storage.delete_meta(_player_key(telegram_id))
+    if not lobby.member_ids:
+        clear_coop_lobby(storage, lobby)
+        return ActionResult(True, "Группа распущена.")
+    if lobby.host_id == telegram_id:
+        lobby.host_id = lobby.member_ids[0]
+    save_coop_lobby(storage, lobby)
+    return ActionResult(True, "Ты вышел из группы.")
+
+
+def _free_cell(grid: int, forbidden: set[tuple[int, int]]) -> tuple[int, int]:
+    opts = [(x, y) for x in range(grid) for y in range(grid) if (x, y) not in forbidden]
+    return random.choice(opts) if opts else (0, 0)
+
+
+def _build_coop_map(session: CoopMissionSession) -> None:
+    grid = session.grid
+    start = _free_cell(grid, set())
+    session.start = start
+    forbidden: set[tuple[int, int]] = {start}
+    for pid in session.player_ids:
+        if pid == session.player_ids[0]:
+            session.set_pos(pid, start)
+        else:
+            cell = _free_cell(grid, forbidden)
+            session.set_pos(pid, cell)
+            forbidden.add(cell)
+    obj_n = 2 + len(session.player_ids)
+    for _ in range(obj_n):
+        cell = _free_cell(grid, forbidden)
+        session.objectives.append(cell)
+        forbidden.add(cell)
+    danger = LOCATION_DANGER.get(session.location, 2)
+    for _ in range(2 + danger):
+        cell = _free_cell(grid, forbidden)
+        session.hazards.append(cell)
+        forbidden.add(cell)
+    for _ in range(2 + max(1, danger // 2)):
+        cell = _free_cell(grid, forbidden)
+        session.enemies.append(cell)
+        session.enemy_kinds.append(pick_mutant_kind())
+        forbidden.add(cell)
+
+
+def _combat_damage(location: str, character: Character) -> int:
+    danger = LOCATION_DANGER.get(location, 2)
+    raw = random.randint(6 + danger * 4, 12 + danger * 7)
+    soak = min(12, equipment_power(character))
+    pre = max(4, raw - soak)
+    return apply_incoming_damage(pre, character, min_damage=1)
+
+
+def _hazard_damage(character: Character) -> int:
+    return apply_incoming_damage(random.randint(14, 22), character, min_damage=1)
+
+
+def _occupied(session: CoopMissionSession, *, exclude: int | None = None) -> set[tuple[int, int]]:
+    blocked: set[tuple[int, int]] = set(session.hazards)
+    blocked.update(session.enemies)
+    for pid in session.player_ids:
+        if exclude is not None and pid == exclude:
+            continue
+        blocked.add(session.pos(pid))
+    return blocked
+
+
+def _advance_turn(session: CoopMissionSession) -> None:
+    session.active_index = (session.active_index + 1) % len(session.turn_order)
+    session.turn_deadline = _deadline_iso()
+
+
+def _move_enemies(session: CoopMissionSession) -> None:
+    occupied = _occupied(session)
+    player_cells = [session.pos(pid) for pid in session.player_ids]
+    new_positions: list[tuple[int, int]] = []
+    for pos in session.enemies:
+        occupied.discard(pos)
+        target = min(player_cells, key=lambda p: abs(p[0] - pos[0]) + abs(p[1] - pos[1]))
+        candidates = []
+        for dx, dy in MOVE_DELTAS.values():
+            nx, ny = pos[0] + dx, pos[1] + dy
+            if 0 <= nx < session.grid and 0 <= ny < session.grid:
+                nxt = (nx, ny)
+                if nxt not in occupied or nxt in player_cells:
+                    candidates.append(nxt)
+        if not candidates:
+            new_positions.append(pos)
+            occupied.add(pos)
+            continue
+        best = min(candidates, key=lambda c: abs(c[0] - target[0]) + abs(c[1] - target[1]))
+        new_positions.append(best)
+        occupied.add(best)
+    session.enemies = new_positions
+
+
+def _enemy_attacks(session: CoopMissionSession, storage: Storage) -> list[str]:
+    notes: list[str] = []
+    for epos in session.enemies:
+        for pid in session.player_ids:
+            if session.pos(pid) == epos:
+                player = storage.get_character(pid, refresh_energy=False)
+                if player is None:
+                    continue
+                dmg = _combat_damage(session.location, player)
+                session.hp[str(pid)] = max(0, session.hp.get(str(pid), 0) - dmg)
+                notes.append(f"Мутант ранит {h(player.nickname)}: −{dmg} HP.")
+    return notes
+
+
+def _objectives_complete(session: CoopMissionSession) -> bool:
+    return len(session.collected) >= len(session.objectives) and len(session.objectives) > 0
+
+
+def _sync_coop_hp_to_characters(storage: Storage, session: CoopMissionSession) -> None:
+    for pid in session.player_ids:
+        hp_val = session.hp.get(str(pid))
+        if hp_val is None:
+            continue
+        ch = storage.get_character(pid, refresh_energy=False)
+        if ch is None:
+            continue
+        max_hp = effective_max_health(ch)
+        delta = int(hp_val) - int(ch.health)
+        if delta != 0:
+            storage.change_health(pid, delta, max_health=max_hp)
+
+
+def _reward_players(storage: Storage, session: CoopMissionSession) -> str:
+    danger = LOCATION_DANGER.get(session.location, 2)
+    base_money = 120 + danger * 80
+    per_player = base_money + 40 * (len(session.player_ids) - 1)
+    lines = [f"✅ Кооп-вылазка на «{session.location}» успешна!"]
+    for pid in session.player_ids:
+        storage.change_money(pid, per_player)
+        _add_rating(storage, pid, RATING_REWARD.get("quest_success", 12))
+        ch = storage.get_character(pid, refresh_energy=False)
+        if ch:
+            lines.append(f"{h(ch.nickname)}: +{per_player} RU, рейтинг.")
+    return "\n".join(lines)
+
+
+def _finish_success(storage: Storage, session: CoopMissionSession) -> ActionResult:
+    _sync_coop_hp_to_characters(storage, session)
+    session.finished = True
+    session.success = True
+    text = _reward_players(storage, session)
+    session.log.append("Миссия выполнена!")
+    save_coop_session(storage, session)
+    clear_coop_session(storage, session)
+    return ActionResult(True, text, payload={"coop_done": True, "coop_success": True, "notify_all": session.player_ids})
+
+
+def _finish_fail(storage: Storage, session: CoopMissionSession, reason: str) -> ActionResult:
+    _sync_coop_hp_to_characters(storage, session)
+    session.finished = True
+    session.success = False
+    session.log.append(reason)
+    save_coop_session(storage, session)
+    player_ids = list(session.player_ids)
+    clear_coop_session(storage, session)
+    return ActionResult(False, reason, payload={"coop_done": True, "coop_success": False, "notify_all": player_ids})
+
+
+def _check_team_wipe(storage: Storage, session: CoopMissionSession) -> ActionResult | None:
+    alive = [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
+    if alive:
+        return None
+    return _finish_fail(storage, session, "Вся группа пала на вылазке.")
+
+
+def start_coop_mission(storage: Storage, host_id: int) -> ActionResult:
+    lobby = get_coop_lobby_by_player(storage, host_id)
+    if lobby is None:
+        return ActionResult(False, "Кооп-группа не найдена.")
+    if lobby.host_id != host_id:
+        return ActionResult(False, "Запускать может только лидер группы.")
+    if len(lobby.member_ids) < 1:
+        return ActionResult(False, "Нужен хотя бы один игрок.")
+
+    spent: list[int] = []
+    for pid in lobby.member_ids:
+        ch = storage.get_character(pid, refresh_energy=False)
+        if ch is None or _is_dead(ch):
+            return ActionResult(False, "Один из участников недоступен.")
+        if ch.energy < COOP_ENERGY_COST:
+            return ActionResult(False, f"У {h(ch.nickname)} не хватает энергии ({COOP_ENERGY_COST}).")
+    for pid in lobby.member_ids:
+        if storage.spend_energy(pid, COOP_ENERGY_COST):
+            spent.append(pid)
+        else:
+            for refund in spent:
+                storage.restore_energy(refund, COOP_ENERGY_COST)
+            return ActionResult(False, "Не удалось списать энергию.")
+
+    session_id = uuid.uuid4().hex[:12]
+    session = CoopMissionSession(
+        session_id=session_id,
+        lobby_id=lobby.lobby_id,
+        location=lobby.location,
+        player_ids=list(lobby.member_ids),
+        turn_order=list(lobby.member_ids),
+        active_index=0,
+        turn_deadline=_deadline_iso(),
+    )
+    _build_coop_map(session)
+    for pid in lobby.member_ids:
+        ch = storage.get_character(pid, refresh_energy=False)
+        if ch:
+            session.hp[str(pid)] = int(ch.health)
+            session.medkits_used[str(pid)] = False
+    first = storage.get_character(session.active_player(), refresh_energy=False)
+    session.log.append(
+        f"Кооп на «{session.location}»: {len(session.player_ids)} сталкеров. "
+        f"Первый ход — {h(first.nickname) if first else session.active_player()}."
+    )
+    clear_coop_lobby(storage, lobby)
+    save_coop_session(storage, session)
+    register_active_coop(storage, session_id)
+    return ActionResult(
+        True,
+        f"Кооп-вылазка началась! Ход {COOP_TURN_SECONDS} сек. Цели: {len(session.objectives)}.",
+        payload={"coop_started": True, "session_id": session_id, "notify_all": session.player_ids},
+    )
+
+
+def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
+    session = get_coop_session_by_player(storage, telegram_id)
+    if session is None:
+        return ActionResult(False, "Активной кооп-вылазки нет.")
+    if session.active_player() != telegram_id:
+        return ActionResult(False, "Сейчас ход другого игрока.")
+    delta = MOVE_DELTAS.get(direction)
+    if delta is None:
+        return ActionResult(False, "Некорректное направление.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Персонаж не найден.")
+
+    pos = session.pos(telegram_id)
+    nxt = (pos[0] + delta[0], pos[1] + delta[1])
+    if not (0 <= nxt[0] < session.grid and 0 <= nxt[1] < session.grid):
+        return ActionResult(False, "Край поля.")
+    for other in session.player_ids:
+        if other != telegram_id and session.pos(other) == nxt:
+            return ActionResult(False, "Клетка занята напарником.")
+    if nxt in session.enemies:
+        dmg = _combat_damage(session.location, player)
+        session.hp[str(telegram_id)] = max(0, session.hp.get(str(telegram_id), 0) - dmg)
+        idx = session.enemies.index(nxt)
+        session.enemies.pop(idx)
+        if idx < len(session.enemy_kinds):
+            session.enemy_kinds.pop(idx)
+        session.log.append(f"{h(player.nickname)} сразился с мутантом: −{dmg} HP.")
+        wipe = _check_team_wipe(storage, session)
+        if wipe:
+            return wipe
+    else:
+        session.set_pos(telegram_id, nxt)
+
+    if nxt in session.objectives and nxt not in session.collected:
+        session.collected.append(nxt)
+        session.log.append(f"{h(player.nickname)} отметил цель.")
+
+    if nxt in session.hazards:
+        dmg = _hazard_damage(player)
+        session.hp[str(telegram_id)] = max(0, session.hp.get(str(telegram_id), 0) - dmg)
+        session.hazards = [haz for haz in session.hazards if haz != nxt]
+        session.log.append(f"Аномалия: −{dmg} HP ({h(player.nickname)}).")
+        wipe = _check_team_wipe(storage, session)
+        if wipe:
+            return wipe
+
+    if _objectives_complete(session):
+        return _finish_success(storage, session)
+
+    _advance_turn(session)
+    _move_enemies(session)
+    session.log.extend(_enemy_attacks(session, storage))
+    wipe = _check_team_wipe(storage, session)
+    if wipe:
+        return wipe
+
+    save_coop_session(storage, session)
+    return ActionResult(True, "Ход сделан.", payload={"coop_active": True, "notify_all": session.player_ids})
+
+
+def coop_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
+    session = get_coop_session_by_player(storage, telegram_id)
+    if session is None:
+        return ActionResult(False, "Активной кооп-вылазки нет.")
+    if session.active_player() != telegram_id:
+        return ActionResult(False, "Сейчас ход другого игрока.")
+    if session.medkits_used.get(str(telegram_id)):
+        return ActionResult(False, "Аптечку в этой вылазке уже использовал.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Персонаж не найден.")
+    for key in ("medkit_science", "medkit_army", "medkit"):
+        if int(player.inventory.get(key, 0)) <= 0:
+            continue
+        result = use_medkit_item(storage, telegram_id, key)
+        if not result.ok:
+            continue
+        refreshed = storage.get_character(telegram_id, refresh_energy=False)
+        if refreshed:
+            session.hp[str(telegram_id)] = int(refreshed.health)
+        session.medkits_used[str(telegram_id)] = True
+        session.log.append(f"{h(player.nickname)} использовал аптечку.")
+        _advance_turn(session)
+        _move_enemies(session)
+        session.log.extend(_enemy_attacks(session, storage))
+        wipe = _check_team_wipe(storage, session)
+        if wipe:
+            return wipe
+        save_coop_session(storage, session)
+        return ActionResult(True, result.text, payload={"coop_active": True, "notify_all": session.player_ids})
+    return ActionResult(False, "Нет аптечки.")
+
+
+def coop_forfeit(storage: Storage, telegram_id: int) -> ActionResult:
+    session = get_coop_session_by_player(storage, telegram_id)
+    if session is None:
+        return ActionResult(False, "Активной кооп-вылазки нет.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    note = f"{h(player.nickname) if player else telegram_id} свалил с поля."
+    return _finish_fail(storage, session, note)
+
+
+def process_coop_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult]]:
+    outcomes: list[tuple[int, ActionResult]] = []
+    raw = storage.get_meta(ACTIVE_SESSIONS_KEY)
+    if not raw:
+        return outcomes
+    try:
+        session_ids = json.loads(raw)
+    except json.JSONDecodeError:
+        return outcomes
+    if not isinstance(session_ids, list):
+        return outcomes
+    still_active: list[str] = []
+    now = _utc_now()
+    for session_id in session_ids:
+        raw_s = storage.get_meta(_session_key(str(session_id)))
+        if not raw_s:
+            continue
+        try:
+            session = CoopMissionSession.from_dict(json.loads(raw_s))
+        except Exception:
+            continue
+        if session.finished:
+            continue
+        deadline = _parse_deadline(session.turn_deadline)
+        if deadline is None or now <= deadline:
+            still_active.append(str(session_id))
+            continue
+        active = session.active_player()
+        player = storage.get_character(active, refresh_energy=False)
+        session.log.append(f"Тайм-аут хода {h(player.nickname) if player else active}.")
+        _advance_turn(session)
+        _move_enemies(session)
+        session.log.extend(_enemy_attacks(session, storage))
+        wipe = _check_team_wipe(storage, session)
+        if wipe:
+            for pid in session.player_ids:
+                outcomes.append((pid, wipe))
+            continue
+        session.turn_deadline = _deadline_iso()
+        save_coop_session(storage, session)
+        still_active.append(str(session_id))
+        result = ActionResult(
+            True,
+            "Время вышло — ход пропущен.",
+            payload={"coop_active": True, "notify_all": session.player_ids},
+        )
+        for pid in session.player_ids:
+            outcomes.append((pid, result))
+    storage.set_meta(ACTIVE_SESSIONS_KEY, json.dumps(still_active, ensure_ascii=False))
+    return outcomes
+
+
+def coop_status_caption(session: CoopMissionSession, storage: Storage, viewer_id: int) -> str:
+    active = storage.get_character(session.active_player(), refresh_energy=False)
+    active_name = active.nickname if active else str(session.active_player())
+    left_obj = len(session.objectives) - len(session.collected)
+    lines = [
+        f"👥 Кооп · «{session.location}»",
+        f"Ход: {h(active_name)} ({COOP_TURN_SECONDS} сек)",
+        f"Цели: {len(session.collected)}/{len(session.objectives)} (осталось {left_obj})",
+        f"Мутанты: {len(session.enemies)} · Аномалии: {len(session.hazards)}",
+    ]
+    for i, pid in enumerate(session.player_ids):
+        ch = storage.get_character(pid, refresh_energy=False)
+        name = ch.nickname if ch else str(pid)
+        hp = session.hp.get(str(pid), 0)
+        mark = " ◀" if pid == session.active_player() else ""
+        if pid == viewer_id:
+            mark += " (ты)"
+        lines.append(f"{h(name)}{mark}: HP {hp}")
+    return "\n".join(lines)
+
+
+def _load_font(size: int) -> ImageFont.ImageFont:
+    for path in FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(path, size=size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def render_coop_frame(storage: Storage, session: CoopMissionSession, viewer_id: int) -> bytes:
+    cell = 88
+    grid = session.grid
+    grid_px = grid * cell
+    margin = 20
+    panel_w = 300
+    width = margin + grid_px + 16 + panel_w + margin
+    height = max(margin + grid_px + margin, 680)
+    canvas = Image.new("RGBA", (width, height), (18, 20, 22, 255))
+    draw = ImageDraw.Draw(canvas)
+    for gy in range(grid):
+        for gx in range(grid):
+            left = margin + gx * cell
+            top = margin + gy * cell
+            tone = 62 + ((gx * 17 + gy * 23) % 18)
+            draw.rectangle((left, top, left + cell - 1, top + cell - 1), fill=(tone, tone - 4, tone - 8))
+            draw.rectangle((left, top, left + cell - 1, top + cell - 1), outline=(28, 30, 34), width=1)
+
+    sx, sy = session.start
+    sl = margin + sx * cell
+    st = margin + sy * cell
+    draw.rectangle((sl + 3, st + 3, sl + cell - 4, st + cell - 4), outline=(80, 200, 90), width=3)
+
+    for hx, hy in session.hazards:
+        cx = margin + hx * cell + cell // 2
+        cy = margin + hy * cell + cell // 2
+        sprite = mission_icon_image(ANOMALY_ICON_KEY)
+        if sprite is not None:
+            diam = MISSION_ICON_GRID_DIAMETER
+            token = sprite.convert("RGBA").resize((diam, diam), Image.Resampling.LANCZOS)
+            mask = Image.new("L", (diam, diam), 0)
+            ImageDraw.Draw(mask).ellipse((1, 1, diam - 2, diam - 2), fill=255)
+            canvas.paste(token, (cx - diam // 2, cy - diam // 2), mask)
+        else:
+            draw.ellipse((cx - 20, cy - 20, cx + 20, cy + 20), fill=(200, 100, 40))
+
+    for ox, oy in session.objectives:
+        if (ox, oy) in session.collected:
+            continue
+        cx = margin + ox * cell + cell // 2
+        cy = margin + oy * cell + cell // 2
+        sprite = mission_icon_image(OBJECTIVE_ICON_KEY)
+        if sprite is not None:
+            _paste_circle(canvas, sprite, cx, cy, MISSION_ICON_GRID_DIAMETER, ring_color=(80, 200, 90), ring_width=3)
+
+    enemy_ring = (210, 55, 45)
+    for i, (ex, ey) in enumerate(session.enemies):
+        cx = margin + ex * cell + cell // 2
+        cy = margin + ey * cell + cell // 2
+        kind = session.enemy_kinds[i] if i < len(session.enemy_kinds) else MUTANT_SPRITE_KEYS[i % len(MUTANT_SPRITE_KEYS)]
+        sprite = mutant_sprite_image(kind)
+        if sprite is not None:
+            _paste_circle(canvas, sprite, cx, cy, MISSION_MUTANT_GRID_DIAMETER, ring_color=enemy_ring, ring_width=3)
+        else:
+            draw.ellipse((cx - 22, cy - 22, cx + 22, cy + 22), fill=(50, 90, 45), outline=enemy_ring, width=2)
+
+    for i, pid in enumerate(session.player_ids):
+        px, py = session.pos(pid)
+        cx = margin + px * cell + cell // 2
+        cy = margin + py * cell + cell // 2
+        ring = PLAYER_COLORS[i % len(PLAYER_COLORS)]
+        if pid == session.active_player():
+            draw.ellipse((cx - 32, cy - 32, cx + 32, cy + 32), outline=(255, 230, 80), width=3)
+        token = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        td = ImageDraw.Draw(token)
+        td.ellipse((4, 4, 60, 60), fill=(ring[0] // 2, ring[1] // 2, ring[2] // 2))
+        _paste_circle(canvas, token, cx, cy, 52, ring_color=ring, ring_width=3)
+
+    pl = margin + grid_px + 16
+    draw.rounded_rectangle(
+        (pl, margin, width - margin, height - margin),
+        radius=14,
+        fill=(44, 46, 50),
+        outline=(90, 94, 100),
+        width=2,
+    )
+    body = _load_font(16)
+    small = _load_font(13)
+    y = margin + 16
+    draw.text((pl + 14, y), "👥 Кооп-вылазка", fill=(240, 240, 240), font=body)
+    y += 28
+    for line in coop_status_caption(session, storage, viewer_id).split("\n")[1:]:
+        draw.text((pl + 14, y), line[:44], fill=(200, 200, 200), font=small)
+        y += 18
+    y += 6
+    for line in session.log[-6:]:
+        draw.text((pl + 14, y), line[:44], fill=(160, 160, 160), font=small)
+        y += 16
+
+    buf = BytesIO()
+    canvas.save(buf, format="PNG")
+    return buf.getvalue()

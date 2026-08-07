@@ -59,7 +59,8 @@ def sortie_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="⚔️ Война"), KeyboardButton(text="🗺 Переход")],
-            [KeyboardButton(text="🪖 Рейды"), KeyboardButton(text="⬅️ В меню")],
+            [KeyboardButton(text="🪖 Рейды"), KeyboardButton(text="👥 Кооп-вылазка")],
+            [KeyboardButton(text="⬅️ В меню")],
         ],
         resize_keyboard=True,
     )
@@ -1072,6 +1073,85 @@ def duel_challenge_keyboard(challenger_id: int) -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+def duel_grid_keyboard(*, is_active_turn: bool, medkit_available: bool) -> InlineKeyboardMarkup:
+    refresh_row = [
+        InlineKeyboardButton(text="🔄 Обновить", callback_data="dgrid:refresh"),
+        InlineKeyboardButton(text="🏳 Сдаться", callback_data="dgrid:forfeit"),
+    ]
+    if not is_active_turn:
+        return InlineKeyboardMarkup(inline_keyboard=[refresh_row])
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="🚶 ⬆️", callback_data="dgrid:move:up")],
+        [
+            InlineKeyboardButton(text="🚶 ⬅️", callback_data="dgrid:move:left"),
+            InlineKeyboardButton(text="🚶 ⬇️", callback_data="dgrid:move:down"),
+            InlineKeyboardButton(text="🚶 ➡️", callback_data="dgrid:move:right"),
+        ],
+        [InlineKeyboardButton(text="🔫 ⬆️", callback_data="dgrid:shoot:up")],
+        [
+            InlineKeyboardButton(text="🔫 ⬅️", callback_data="dgrid:shoot:left"),
+            InlineKeyboardButton(text="🔫 ⬇️", callback_data="dgrid:shoot:down"),
+            InlineKeyboardButton(text="🔫 ➡️", callback_data="dgrid:shoot:right"),
+        ],
+    ]
+    if medkit_available:
+        rows.append([InlineKeyboardButton(text="💊 Аптечка (1×)", callback_data="dgrid:medkit")])
+    rows.append(refresh_row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def coop_menu_keyboard(*, in_lobby: bool, is_host: bool, lobby_id: str | None = None) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if in_lobby and lobby_id:
+        if is_host:
+            rows.append([InlineKeyboardButton(text="▶️ Начать вылазку", callback_data=f"coop:start:{lobby_id}")])
+        rows.append([InlineKeyboardButton(text="🚪 Выйти из группы", callback_data="coop:leave")])
+    else:
+        rows.append([InlineKeyboardButton(text="➕ Создать группу", callback_data="coop:create")])
+        rows.append([InlineKeyboardButton(text="🔍 Найти группу", callback_data="coop:list")])
+    rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="coop:refresh")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def coop_lobby_list_keyboard(lobbies: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:
+    """(lobby_id, host_nickname, member_count)"""
+    rows: list[list[InlineKeyboardButton]] = []
+    for lobby_id, host_name, count in lobbies[:8]:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"👥 {host_name} ({count}/3)",
+                    callback_data=f"coop:join:{lobby_id}",
+                )
+            ]
+        )
+    if not rows:
+        rows.append([InlineKeyboardButton(text="Групп нет", callback_data="coop:refresh")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="coop:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def coop_mission_keyboard(*, is_active_turn: bool, medkit_available: bool) -> InlineKeyboardMarkup:
+    refresh_row = [
+        InlineKeyboardButton(text="🔄", callback_data="coop:refresh"),
+        InlineKeyboardButton(text="🏃 Свалить", callback_data="coop:forfeit"),
+    ]
+    if not is_active_turn:
+        return InlineKeyboardMarkup(inline_keyboard=[refresh_row])
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="⬆️", callback_data="coop:move:up")],
+        [
+            InlineKeyboardButton(text="⬅️", callback_data="coop:move:left"),
+            InlineKeyboardButton(text="⬇️", callback_data="coop:move:down"),
+            InlineKeyboardButton(text="➡️", callback_data="coop:move:right"),
+        ],
+    ]
+    if medkit_available:
+        rows.append([InlineKeyboardButton(text="💊 Аптечка", callback_data="coop:medkit")])
+    rows.append(refresh_row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def players_factions_keyboard(items: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:

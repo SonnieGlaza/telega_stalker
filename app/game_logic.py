@@ -2896,11 +2896,12 @@ def calculate_duel_challenger_chance(challenger_power: int, target_power: int) -
 
 def _duel_conditions_text() -> str:
     return (
+        f"Тактическая дуэль 8×8: ход, выстрел (дальность от оружия), 1 аптечка, укрытия 50% промах.\n"
         f"Стоимость при согласии: {DUEL_ENERGY_COST} энергии у каждого.\n"
-        f"Проигравший: HP снижается до {DUEL_LOSER_HP_REMAINING} (можно лечиться аптечками), "
-        f"−{DUEL_LOSER_MONEY_PERCENT}% денег (макс. {DUEL_LOSER_MONEY_CAP} RU, победителю), −{RATING_REWARD['duel_lose']} рейтинга.\n"
+        f"Проигравший: HP до {DUEL_LOSER_HP_REMAINING}, "
+        f"−{DUEL_LOSER_MONEY_PERCENT}% денег (макс. {DUEL_LOSER_MONEY_CAP} RU), −{RATING_REWARD['duel_lose']} рейтинга.\n"
         f"Победитель: ранение −{DUEL_WINNER_WOUND_MIN}…−{DUEL_WINNER_WOUND_MAX} HP, "
-        f"+{DUEL_LOSER_MONEY_PERCENT}% денег проигравшего (макс. {DUEL_LOSER_MONEY_CAP} RU), +{RATING_REWARD['duel_win']} рейтинга."
+        f"деньги проигравшего, +{RATING_REWARD['duel_win']} рейтинга."
     )
 
 
@@ -3030,57 +3031,26 @@ def accept_duel(
 
     _clear_duel_meta(storage, challenger_id, target_id)
 
+    from app.duel_grid import start_duel_grid
+
+    result, session = start_duel_grid(storage, challenger_id, target_id)
+    if not result.ok or session is None:
+        storage.restore_energy(challenger_id, DUEL_ENERGY_COST)
+        storage.restore_energy(target_id, DUEL_ENERGY_COST)
+        return ActionResult(False, result.text or "Не удалось начать дуэль."), None
+
     c_power = equipment_power(challenger)
     t_power = equipment_power(target)
-    chance = calculate_duel_challenger_chance(c_power, t_power)
-    roll = random.randint(1, 100)
-    challenger_wins = roll <= chance
-
-    winner = challenger if challenger_wins else target
-    loser = target if challenger_wins else challenger
-    winner_id = winner.telegram_id
-    loser_id = loser.telegram_id
-
-    winner_max_hp = effective_max_health(winner)
-    loser_max_hp = effective_max_health(loser)
-    wound = random.randint(DUEL_WINNER_WOUND_MIN, DUEL_WINNER_WOUND_MAX)
-    storage.change_health(winner_id, -wound, max_health=winner_max_hp)
-    loser_hp_target = min(DUEL_LOSER_HP_REMAINING, loser_max_hp)
-    loser_hp_delta = loser_hp_target - int(loser.health)
-    if loser_hp_delta != 0:
-        storage.change_health(loser_id, loser_hp_delta, max_health=loser_max_hp)
-
-    money_taken = max(0, int(loser.money * DUEL_LOSER_MONEY_PERCENT // 100))
-    money_taken = min(money_taken, DUEL_LOSER_MONEY_CAP)
-    if money_taken > 0:
-        if storage.change_money(loser_id, -money_taken):
-            storage.change_money(winner_id, money_taken)
-        else:
-            money_taken = 0
-
-    _add_rating(storage, winner_id, RATING_REWARD["duel_win"])
-    _add_rating(storage, loser_id, -RATING_REWARD["duel_lose"])
-
-    winner_after = storage.get_character(winner_id, refresh_energy=False)
-    loser_after = storage.get_character(loser_id, refresh_energy=False)
-    winner_hp = winner_after.health if winner_after else 0
-    loser_hp = loser_after.health if loser_after else 0
-
     common = (
-        f"⚔️ Дуэль: {h(challenger.nickname)} ({c_power}) vs {h(target.nickname)} ({t_power})\n"
-        f"Шанс победы {h(challenger.nickname)}: {chance}% (бросок {roll}).\n"
-        f"Победитель: {h(winner.nickname)} (HP {winner_hp}, ранение −{wound}"
-        f"{f', +{money_taken} RU' if money_taken else ''}).\n"
-        f"Проигравший: {h(loser.nickname)} (HP {loser_hp}"
-        f"{f', −{money_taken} RU' if money_taken else ''})."
+        f"⚔️ Тактическая дуэль на поле {session.grid}×{session.grid}!\n"
+        f"{h(challenger.nickname)} ({c_power}) vs {h(target.nickname)} ({t_power}).\n"
+        f"Ход {10} сек · стрельба по дальности оружия · укрытия 50% промах.\n"
+        f"Первый ход: {h(challenger.nickname)}."
     )
-    if target_id == winner_id:
-        target_text = f"Ты победил(а) в дуэли!\n{common}"
-        challenger_text = f"Ты проиграл(а) дуэль.\n{common}"
-    else:
-        target_text = f"Ты проиграл(а) дуэль.\n{common}"
-        challenger_text = f"Ты победил(а) в дуэли!\n{common}"
-    return ActionResult(True, target_text), challenger_text
+    target_text = f"Ты принял вызов.\n{common}"
+    challenger_text = f"Дуэль началась!\n{common}"
+    payload = {"duel_started": True, "duel_id": session.duel_id, "challenger_id": challenger_id, "target_id": target_id}
+    return ActionResult(True, target_text, payload=payload), challenger_text
 
 
 # Расходники/топливо, которые можно брать пачкой у торговца.

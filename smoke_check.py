@@ -604,6 +604,15 @@ def run_smoke_check() -> None:
         duel_result, challenger_msg = accept_duel(storage, 222, 111)
         assert duel_result.ok, duel_result.text
         assert challenger_msg
+        assert duel_result.payload and duel_result.payload.get("duel_started")
+        from app.duel_grid import get_duel_session_by_player, duel_shoot
+
+        session = get_duel_session_by_player(storage, 111)
+        assert session is not None
+        assert session.challenger_id == 111
+        assert session.target_id == 222
+        shoot = duel_shoot(storage, 111, "right")
+        assert shoot.ok or shoot.payload, shoot.text
 
         # Alliance notify payload.
         alliance = propose_alliance(storage, 111, "Бандиты")

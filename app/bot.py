@@ -41,6 +41,33 @@ from app.quest_mission import (
     render_mission_for_player,
     use_mission_medkit,
 )
+from app.duel_grid import (
+    duel_forfeit,
+    duel_move,
+    duel_shoot,
+    duel_use_medkit,
+    get_duel_session_by_player,
+    process_duel_turn_timeouts,
+    render_duel_frame,
+    save_duel_session,
+)
+from app.coop_mission import (
+    coop_forfeit,
+    coop_menu_text,
+    coop_move,
+    coop_status_caption,
+    coop_use_medkit,
+    create_coop_lobby,
+    get_coop_lobby_by_player,
+    get_coop_session_by_player,
+    join_coop_lobby,
+    leave_coop_lobby,
+    list_open_coop_lobbies,
+    process_coop_turn_timeouts,
+    render_coop_frame,
+    save_coop_session,
+    start_coop_mission,
+)
 from app.config import load_settings
 from app.html_utils import html_safe as h
 from app.game_logic import (
@@ -227,6 +254,10 @@ from app.keyboards import (
     alliance_target_keyboard,
     alliance_pending_keyboard,
     duel_challenge_keyboard,
+    duel_grid_keyboard,
+    coop_menu_keyboard,
+    coop_lobby_list_keyboard,
+    coop_mission_keyboard,
     war_lobby_keyboard,
     war_transfer_keyboard,
     market_lots_keyboard,
@@ -2434,6 +2465,178 @@ async def _send_or_edit_quest_mission_frame(
     await safe_callback_answer(callback)
 
 
+def _player_has_medkit(player: Character | None) -> bool:
+    if player is None:
+        return False
+    return any(int(player.inventory.get(k, 0)) > 0 for k in ("medkit", "medkit_army", "medkit_science"))
+
+
+def _duel_status_caption(storage: Storage, session: Any, viewer_id: int) -> str:
+    active = storage.get_character(session.active_player(), refresh_energy=False)
+    active_name = h(active.nickname) if active else str(session.active_player())
+    lines = [f"⚔️ Тактическая дуэль · ход {active_name} (10 сек)"]
+    for pid in (session.challenger_id, session.target_id):
+        ch = storage.get_character(pid, refresh_energy=False)
+        name = h(ch.nickname) if ch else str(pid)
+        hp = session.hp.get(str(pid), 0)
+        mark = " ◀" if pid == session.active_player() else ""
+        if pid == viewer_id:
+            mark += " (ты)"
+        weapon = str(ch.equipment.get("weapon", "Нож")) if ch else "Нож"
+        from app.duel_grid import weapon_shoot_range
+
+        rng = weapon_shoot_range(weapon)
+        lines.append(f"{name}{mark}: HP {hp} · дальность {rng}")
+    if session.log:
+        lines.append(session.log[-1][:80])
+    return "\n".join(lines)
+
+
+async def _upsert_tactical_photo(
+    bot: Bot,
+    *,
+    chat_id: int,
+    message_id: int | None,
+    image_bytes: bytes,
+    caption: str,
+    markup: InlineKeyboardMarkup,
+) -> int:
+    media = BufferedInputFile(image_bytes, filename="tactical.png")
+    if message_id is not None:
+        try:
+            await bot.edit_message_media(
+                chat_id=chat_id,
+                message_id=message_id,
+                media=InputMediaPhoto(media=media, caption=caption),
+                reply_markup=markup,
+            )
+            return message_id
+        except TelegramBadRequest:
+            pass
+    sent = await bot.send_photo(chat_id, photo=media, caption=caption, reply_markup=markup)
+    return sent.message_id
+
+
+async def _broadcast_duel_session(
+    bot: Bot,
+    storage: Storage,
+    session: Any,
+    *,
+    note: str | None = None,
+) -> None:
+    for pid in (session.challenger_id, session.target_id):
+        ch = storage.get_character(pid, refresh_energy=False)
+        is_active = session.active_player() == pid
+        medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(ch)
+        markup = duel_grid_keyboard(is_active_turn=is_active, medkit_available=medkit)
+        caption = _duel_status_caption(storage, session, pid)
+        if note and is_active:
+            caption = f"{caption}\n\n{note}"
+        frame = render_duel_frame(storage, session, pid)
+        msg_id = session.message_ids.get(str(pid))
+        new_id = await _upsert_tactical_photo(
+            bot,
+            chat_id=pid,
+            message_id=msg_id,
+            image_bytes=frame,
+            caption=caption,
+            markup=markup,
+        )
+        session.message_ids[str(pid)] = new_id
+    save_duel_session(storage, session)
+
+
+async def _notify_duel_finished(bot: Bot, result: Any) -> None:
+    payload = result.payload or {}
+    if not payload.get("duel_done"):
+        return
+    winner_id = int(payload.get("winner_id") or 0)
+    loser_id = int(payload.get("loser_id") or 0)
+    for pid, key in ((winner_id, "winner_text"), (loser_id, "loser_text")):
+        text = str(payload.get(key) or result.text)
+        try:
+            await bot.send_message(pid, action_result_text(pid, text))
+        except Exception:
+            logger.exception("Failed duel result notify to %s", pid)
+
+
+async def _handle_duel_action(bot: Bot, callback: CallbackQuery, result: Any) -> None:
+    storage = get_storage()
+    payload = result.payload or {}
+    if payload.get("duel_done"):
+        await _notify_duel_finished(bot, result)
+        await safe_callback_answer(callback, "Дуэль завершена")
+        return
+    if not result.ok:
+        await reply_action_result(callback, result.text)
+        return
+    session = get_duel_session_by_player(storage, callback.from_user.id)
+    if session is None:
+        await reply_action_result(callback, result.text)
+        return
+    await _broadcast_duel_session(bot, storage, session, note=result.text)
+    await safe_callback_answer(callback, result.text[:CALLBACK_ALERT_MAX_LEN] if len(result.text) <= CALLBACK_ALERT_MAX_LEN else "Готово")
+
+
+async def _broadcast_coop_session(
+    bot: Bot,
+    storage: Storage,
+    session: Any,
+    *,
+    note: str | None = None,
+) -> None:
+    for pid in session.player_ids:
+        ch = storage.get_character(pid, refresh_energy=False)
+        is_active = session.active_player() == pid
+        medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(ch)
+        markup = coop_mission_keyboard(is_active_turn=is_active, medkit_available=medkit)
+        caption = coop_status_caption(session, storage, pid)
+        if note and is_active:
+            caption = f"{caption}\n\n{note}"
+        frame = render_coop_frame(storage, session, pid)
+        msg_id = session.message_ids.get(str(pid))
+        new_id = await _upsert_tactical_photo(
+            bot,
+            chat_id=pid,
+            message_id=msg_id,
+            image_bytes=frame,
+            caption=caption,
+            markup=markup,
+        )
+        session.message_ids[str(pid)] = new_id
+    save_coop_session(storage, session)
+
+
+async def _notify_coop_finished(bot: Bot, result: Any) -> None:
+    payload = result.payload or {}
+    if not payload.get("coop_done"):
+        return
+    notify_ids = [int(x) for x in (payload.get("notify_all") or [])]
+    for pid in notify_ids:
+        try:
+            await bot.send_message(pid, action_result_text(pid, result.text))
+        except Exception:
+            logger.exception("Failed coop result notify to %s", pid)
+
+
+async def _handle_coop_action(bot: Bot, callback: CallbackQuery, result: Any) -> None:
+    storage = get_storage()
+    payload = result.payload or {}
+    if payload.get("coop_done"):
+        await _notify_coop_finished(bot, result)
+        await safe_callback_answer(callback, "Вылазка завершена")
+        return
+    if not result.ok:
+        await reply_action_result(callback, result.text)
+        return
+    session = get_coop_session_by_player(storage, callback.from_user.id)
+    if session is None:
+        await reply_action_result(callback, result.text)
+        return
+    await _broadcast_coop_session(bot, storage, session, note=result.text)
+    await safe_callback_answer(callback, "Готово")
+
+
 @router.callback_query(F.data.startswith("qmission:"))
 async def quest_mission_callback(callback: CallbackQuery) -> None:
     action = (callback.data or "").removeprefix("qmission:").strip()
@@ -3095,22 +3298,67 @@ async def duel_accept_callback(callback: CallbackQuery, bot: Bot) -> None:
         await reply_action_result(callback, "Некорректный вызов.")
         return
     target_id = callback.from_user.id
-    result, challenger_text = accept_duel(get_storage(), target_id, challenger_id)
-    if result.ok:
-        await safe_callback_answer(callback, "Дуэль завершена")
-        if callback.message:
-            await callback.message.answer(action_result_text(target_id, result.text))
-            try:
-                await callback.message.edit_reply_markup(reply_markup=None)
-            except TelegramBadRequest:
-                pass
-        if challenger_text:
-            try:
-                await bot.send_message(challenger_id, action_result_text(challenger_id, challenger_text))
-            except Exception:
-                logger.exception("Failed to notify duel challenger %s", challenger_id)
-    else:
+    storage = get_storage()
+    result, challenger_text = accept_duel(storage, target_id, challenger_id)
+    if not result.ok:
         await reply_action_result(callback, result.text)
+        return
+    session = get_duel_session_by_player(storage, target_id)
+    if session is None:
+        await reply_action_result(callback, result.text)
+        return
+    await safe_callback_answer(callback, "Дуэль началась!")
+    if callback.message:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+    await _broadcast_duel_session(bot, storage, session, note=result.text)
+    if challenger_text:
+        challenger_session = get_duel_session_by_player(storage, challenger_id)
+        if challenger_session is not None:
+            await _broadcast_duel_session(bot, storage, challenger_session, note=challenger_text)
+
+
+@router.callback_query(F.data.startswith("dgrid:"))
+async def duel_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
+    assert callback.data and callback.from_user
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+    action = (callback.data or "").removeprefix("dgrid:").strip()
+
+    if action == "refresh":
+        session = get_duel_session_by_player(storage, telegram_id)
+        if session is None:
+            await callback.answer("Активной дуэли нет.", show_alert=True)
+            return
+        await _broadcast_duel_session(bot, storage, session)
+        await safe_callback_answer(callback)
+        return
+
+    if action == "forfeit":
+        result = duel_forfeit(storage, telegram_id)
+        await _handle_duel_action(bot, callback, result)
+        return
+
+    if action == "medkit":
+        result = duel_use_medkit(storage, telegram_id)
+        await _handle_duel_action(bot, callback, result)
+        return
+
+    if action.startswith("move:"):
+        direction = action.removeprefix("move:")
+        result = duel_move(storage, telegram_id, direction)
+        await _handle_duel_action(bot, callback, result)
+        return
+
+    if action.startswith("shoot:"):
+        direction = action.removeprefix("shoot:")
+        result = duel_shoot(storage, telegram_id, direction)
+        await _handle_duel_action(bot, callback, result)
+        return
+
+    await callback.answer("Неизвестное действие.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("duel:decline:"))
@@ -3148,9 +3396,158 @@ async def show_sortie(message: Message) -> None:
         return
     await message.answer(
         "🏕 Вылазка\n"
-        "Война, переходы по Зоне и рейды.",
+        "Война, переходы по Зоне, рейды и кооп.",
         reply_markup=sortie_keyboard(),
     )
+
+
+@router.message(F.text == "👥 Кооп-вылазка")
+async def show_coop_menu(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    storage = get_storage()
+    session = get_coop_session_by_player(storage, player.telegram_id)
+    if session is not None:
+        frame = render_coop_frame(storage, session, player.telegram_id)
+        media = BufferedInputFile(frame, filename="coop_mission.png")
+        is_active = session.active_player() == player.telegram_id
+        medkit = not session.medkits_used.get(str(player.telegram_id), False) and _player_has_medkit(player)
+        await message.answer_photo(
+            photo=media,
+            caption=coop_status_caption(session, storage, player.telegram_id),
+            reply_markup=coop_mission_keyboard(is_active_turn=is_active, medkit_available=medkit),
+        )
+        return
+    lobby = get_coop_lobby_by_player(storage, player.telegram_id)
+    text = coop_menu_text(storage, player.telegram_id)
+    await message.answer(
+        text,
+        reply_markup=coop_menu_keyboard(
+            in_lobby=lobby is not None,
+            is_host=lobby.host_id == player.telegram_id if lobby else False,
+            lobby_id=lobby.lobby_id if lobby else None,
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("coop:"))
+async def coop_callback(callback: CallbackQuery, bot: Bot) -> None:
+    assert callback.from_user
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+    action = (callback.data or "").removeprefix("coop:").strip()
+
+    if action == "menu" or action == "refresh":
+        text = coop_menu_text(storage, telegram_id)
+        lobby = get_coop_lobby_by_player(storage, telegram_id)
+        session = get_coop_session_by_player(storage, telegram_id)
+        if session is not None:
+            await _broadcast_coop_session(bot, storage, session)
+            await safe_callback_answer(callback)
+            return
+        await edit_menu_message(
+            callback,
+            text,
+            coop_menu_keyboard(
+                in_lobby=lobby is not None,
+                is_host=lobby.host_id == telegram_id if lobby else False,
+                lobby_id=lobby.lobby_id if lobby else None,
+            ),
+        )
+        return
+
+    if action == "create":
+        result = create_coop_lobby(storage, telegram_id)
+        if not result.ok:
+            await reply_action_result(callback, result.text)
+            return
+        lobby = get_coop_lobby_by_player(storage, telegram_id)
+        await edit_menu_message(
+            callback,
+            coop_menu_text(storage, telegram_id),
+            coop_menu_keyboard(in_lobby=True, is_host=True, lobby_id=lobby.lobby_id if lobby else None),
+        )
+        return
+
+    if action == "list":
+        player = storage.get_character(telegram_id, refresh_energy=False)
+        if player is None:
+            await reply_action_result(callback, "Сначала создай персонажа.")
+            return
+        lobbies = list_open_coop_lobbies(storage, player.location)
+        await edit_menu_message(
+            callback,
+            f"Открытые группы на «{player.location}»:",
+            coop_lobby_list_keyboard(lobbies),
+        )
+        return
+
+    if action == "leave":
+        result = leave_coop_lobby(storage, telegram_id)
+        await reply_action_result(callback, result.text)
+        if result.ok:
+            await edit_menu_message(
+                callback,
+                coop_menu_text(storage, telegram_id),
+                coop_menu_keyboard(in_lobby=False, is_host=False),
+            )
+        return
+
+    if action.startswith("join:"):
+        lobby_id = action.removeprefix("join:")
+        result = join_coop_lobby(storage, telegram_id, lobby_id)
+        if not result.ok:
+            await reply_action_result(callback, result.text)
+            return
+        lobby = get_coop_lobby_by_player(storage, telegram_id)
+        await edit_menu_message(
+            callback,
+            coop_menu_text(storage, telegram_id),
+            coop_menu_keyboard(
+                in_lobby=True,
+                is_host=lobby.host_id == telegram_id if lobby else False,
+                lobby_id=lobby.lobby_id if lobby else None,
+            ),
+        )
+        return
+
+    if action.startswith("start:"):
+        lobby_id = action.removeprefix("start:")
+        lobby = get_coop_lobby_by_player(storage, telegram_id)
+        if lobby is None or lobby.lobby_id != lobby_id:
+            await reply_action_result(callback, "Группа не найдена.")
+            return
+        result = start_coop_mission(storage, telegram_id)
+        if not result.ok:
+            await reply_action_result(callback, result.text)
+            return
+        session = get_coop_session_by_player(storage, telegram_id)
+        if session is None:
+            await reply_action_result(callback, result.text)
+            return
+        await _broadcast_coop_session(bot, storage, session, note=result.text)
+        await safe_callback_answer(callback, "Вылазка началась!")
+        return
+
+    if action == "forfeit":
+        result = coop_forfeit(storage, telegram_id)
+        await _handle_coop_action(bot, callback, result)
+        return
+
+    if action == "medkit":
+        result = coop_use_medkit(storage, telegram_id)
+        await _handle_coop_action(bot, callback, result)
+        return
+
+    if action.startswith("move:"):
+        direction = action.removeprefix("move:")
+        result = coop_move(storage, telegram_id, direction)
+        await _handle_coop_action(bot, callback, result)
+        return
+
+    await callback.answer("Неизвестное действие.", show_alert=True)
 
 
 @router.message(F.text == "🗺 Переход")
@@ -4249,9 +4646,42 @@ async def run_bot() -> None:
             except Exception:
                 logger.exception("Travel live ETA tick failed")
 
+    async def periodic_tactical_turns() -> None:
+        """Таймер ходов тактической дуэли и кооп-вылазки (~10 сек)."""
+        while True:
+            await asyncio.sleep(1)
+            storage = get_storage()
+            try:
+                duel_updates: set[str] = set()
+                for pid, result in process_duel_turn_timeouts(storage):
+                    payload = result.payload or {}
+                    if payload.get("duel_done"):
+                        await _notify_duel_finished(bot, result)
+                        continue
+                    session = get_duel_session_by_player(storage, pid)
+                    if session and session.duel_id not in duel_updates:
+                        duel_updates.add(session.duel_id)
+                        await _broadcast_duel_session(bot, storage, session, note=result.text)
+            except Exception:
+                logger.exception("Duel timeout tick failed")
+            try:
+                coop_updates: set[str] = set()
+                for pid, result in process_coop_turn_timeouts(storage):
+                    payload = result.payload or {}
+                    if payload.get("coop_done"):
+                        await _notify_coop_finished(bot, result)
+                        continue
+                    session = get_coop_session_by_player(storage, pid)
+                    if session and session.session_id not in coop_updates:
+                        coop_updates.add(session.session_id)
+                        await _broadcast_coop_session(bot, storage, session, note=result.text)
+            except Exception:
+                logger.exception("Coop timeout tick failed")
+
     sync_task = asyncio.create_task(periodic_snapshot_sync())
     zone_task = asyncio.create_task(periodic_zone_systems())
     travel_eta_task = asyncio.create_task(periodic_travel_live_eta())
+    tactical_task = asyncio.create_task(periodic_tactical_turns())
     dp = Dispatcher()
     dp.include_router(router)
     try:
@@ -4260,7 +4690,8 @@ async def run_bot() -> None:
         sync_task.cancel()
         zone_task.cancel()
         travel_eta_task.cancel()
-        for task in (sync_task, zone_task, travel_eta_task):
+        tactical_task.cancel()
+        for task in (sync_task, zone_task, travel_eta_task, tactical_task):
             try:
                 await task
             except asyncio.CancelledError:
