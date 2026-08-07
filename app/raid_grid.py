@@ -250,6 +250,17 @@ def get_raid_grid_session_by_player(storage: Storage, telegram_id: int) -> RaidG
     return session
 
 
+def clear_stale_raid_grid_session(storage: Storage, telegram_id: int) -> None:
+    """Снять зависшую сессию, если рейд в БД уже не in_progress."""
+    session = get_raid_grid_session_by_player(storage, telegram_id)
+    if session is None:
+        return
+    raid = storage.get_raid(session.raid_id)
+    if raid is not None and str(raid.get("status") or "") == "in_progress":
+        return
+    clear_raid_grid_session(storage, session)
+
+
 def save_raid_grid_session(storage: Storage, session: RaidGridSession) -> None:
     storage.set_meta(_session_key(session.session_id), json.dumps(session.to_dict(), ensure_ascii=False))
     for pid in session.player_ids:
@@ -726,7 +737,9 @@ def start_raid_grid(
 
     members: list[Character] = []
     for pid in player_ids:
-        if get_raid_grid_session_by_player(storage, pid):
+        clear_stale_raid_grid_session(storage, pid)
+        existing = get_raid_grid_session_by_player(storage, pid)
+        if existing is not None:
             ch = storage.get_character(pid, refresh_energy=False)
             name = h(ch.nickname) if ch else str(pid)
             return ActionResult(False, f"{name} уже в тактическом рейде."), None

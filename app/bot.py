@@ -63,6 +63,7 @@ from app.clan_war_grid import (
     save_cwar_session,
 )
 from app.raid_grid import (
+    clear_stale_raid_grid_session,
     get_raid_grid_session_by_player,
     process_rgrid_turn_timeouts,
     render_rgrid_frame,
@@ -573,12 +574,11 @@ async def deliver_group_result(
     prefix: str = "📣",
     short_ack: str = "Готово",
 ) -> None:
-    notified: set[int] = set()
+    initiator_id = callback.from_user.id
     member_ids = getattr(result, "notify_member_ids", ()) or ()
     for member_id in member_ids:
-        if member_id in notified:
+        if member_id == initiator_id:
             continue
-        notified.add(member_id)
         try:
             await bot.send_message(
                 member_id,
@@ -586,10 +586,7 @@ async def deliver_group_result(
             )
         except Exception:
             logger.exception("Failed to deliver group result to %s", member_id)
-    if callback.from_user.id not in notified:
-        await reply_action_result(callback, result.text, bot=bot, short_ack=short_ack)
-    else:
-        await safe_callback_answer(callback, short_ack)
+    await reply_action_result(callback, result.text, bot=bot, short_ack=short_ack)
     await apply_action_notifies(bot, result)
 
 
@@ -4872,7 +4869,8 @@ async def show_raids(message: Message) -> None:
 async def create_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
     location = (callback.data or "").split(":", maxsplit=2)[2]
     result = create_or_join_faction_raid(get_storage(), callback.from_user.id, location)
-    await finish_callback_action(callback, result, bot)
+    await reply_action_result(callback, result.text, bot=bot)
+    await apply_action_notifies(bot, result)
 
 
 @router.callback_query(F.data.startswith("raid:depot:"))
@@ -4883,7 +4881,8 @@ async def create_depot_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
         return
     depot_kind, target_faction = parts[2], parts[3]
     result = create_or_join_depot_raid(get_storage(), callback.from_user.id, target_faction, depot=depot_kind)
-    await finish_callback_action(callback, result, bot)
+    await reply_action_result(callback, result.text, bot=bot)
+    await apply_action_notifies(bot, result)
 
 
 @router.callback_query(F.data == "raid:join")
@@ -4906,7 +4905,8 @@ async def join_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
         )
     else:
         result = create_or_join_faction_raid(get_storage(), callback.from_user.id, str(open_raid["location"]))
-    await finish_callback_action(callback, result, bot)
+    await reply_action_result(callback, result.text, bot=bot)
+    await apply_action_notifies(bot, result)
 
 
 @router.callback_query(F.data == "raid:ally:join")
@@ -4936,34 +4936,66 @@ async def join_raid_as_ally_callback(callback: CallbackQuery, bot: Bot) -> None:
         )
     else:
         result = create_or_join_faction_raid(storage, callback.from_user.id, str(open_raid["location"]))
-    await finish_callback_action(callback, result, bot)
+    await reply_action_result(callback, result.text, bot=bot)
+    await apply_action_notifies(bot, result)
 
 
 @router.callback_query(F.data == "raid:launch")
 async def launch_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
-    result = launch_open_raid(get_storage(), callback.from_user.id)
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+    clear_stale_raid_grid_session(storage, telegram_id)
+
+    session = get_raid_grid_session_by_player(storage, telegram_id)
+    if session is not None:
+        await safe_callback_answer(callback, "Карта рейда")
+        try:
+            await _broadcast_rgrid_session(bot, storage, session)
+        except Exception:
+            logger.exception("Failed to re-open tactical raid map for user %s", telegram_id)
+            await reply_action_result(callback, "Не удалось показать карту рейда.", bot=bot)
+        return
+
+    result = launch_open_raid(storage, telegram_id)
     if result.ok and result.tactical_raid:
-        storage = get_storage()
-        session = get_raid_grid_session_by_player(storage, callback.from_user.id)
+        session = get_raid_grid_session_by_player(storage, telegram_id)
         if session is None:
             for pid in result.notify_member_ids:
                 session = get_raid_grid_session_by_player(storage, pid)
                 if session is not None:
                     break
         if session is not None:
+            await safe_callback_answer(callback, "Тактический рейд!")
             try:
                 await _broadcast_rgrid_session(bot, storage, session, note=result.text)
             except Exception:
                 logger.exception("Failed to broadcast tactical raid map for raid #%s", session.raid_id)
-                await deliver_group_result(callback, bot, result, prefix="📣 Итог рейда:")
+                await reply_action_result(
+                    callback,
+                    f"{result.text}\n\n⚠️ Не удалось отправить карту. Попробуй нажать «Запустить» ещё раз.",
+                    bot=bot,
+                )
                 return
-            await safe_callback_answer(callback, "Тактический рейд!")
+            for pid in result.notify_member_ids:
+                if pid == telegram_id:
+                    continue
+                try:
+                    await bot.send_message(pid, action_result_text(pid, result.text))
+                except Exception:
+                    logger.exception("Failed to notify rgrid start to %s", pid)
             return
         logger.error(
             "Tactical raid started but rgrid session missing (leader=%s, members=%s)",
-            callback.from_user.id,
+            telegram_id,
             result.notify_member_ids,
         )
+        await reply_action_result(
+            callback,
+            f"{result.text}\n\n⚠️ Карта не найдена. Попробуй нажать «Запустить» ещё раз.",
+            bot=bot,
+        )
+        return
+
     await deliver_group_result(callback, bot, result, prefix="📣 Итог рейда:")
 
 

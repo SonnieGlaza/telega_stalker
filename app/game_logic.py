@@ -5358,6 +5358,10 @@ def resolve_open_raid_kind(open_raid: dict[str, Any]) -> str:
     return "lair"
 
 
+def _faction_raid_in_progress(storage: Storage, faction: str) -> dict[str, Any] | None:
+    return storage.get_in_progress_raid_for_faction(faction)
+
+
 def _raid_join_notify(
     storage: Storage,
     raid_id: int,
@@ -5413,6 +5417,13 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
                 open_raid = ally_open
                 break
     if open_raid is None:
+        active = _faction_raid_in_progress(storage, player.faction)
+        if active is not None:
+            return ActionResult(
+                False,
+                f"Группировка уже в тактическом рейде #{active['id']}. "
+                "Нажми «🚀 Запустить рейд», чтобы открыть карту.",
+            )
         raid_id = storage.create_raid(player.faction, location_name, telegram_id)
         return ActionResult(
             True,
@@ -5510,6 +5521,13 @@ def create_or_join_depot_raid(
                 break
 
     if open_raid is None:
+        active = _faction_raid_in_progress(storage, player.faction)
+        if active is not None:
+            return ActionResult(
+                False,
+                f"Группировка уже в тактическом рейде #{active['id']}. "
+                "Нажми «🚀 Запустить рейд», чтобы открыть карту.",
+            )
         location_label = f"{'Склад' if depot == 'warehouse' else 'Гараж'} «{target_faction}»"
         raid_id = storage.create_raid(
             player.faction,

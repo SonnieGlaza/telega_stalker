@@ -578,6 +578,31 @@ def run_smoke_check() -> None:
         clear_raid_grid_session(storage, depot_session)
         storage.finish_raid(int(depot_session.raid_id), status="cancelled", result_text="smoke depot cleanup")
 
+        # Stale rgrid session must not block a new raid launch.
+        from app.raid_grid import clear_stale_raid_grid_session, start_raid_grid
+
+        depot_create2 = create_or_join_depot_raid(storage, 111, "Бандиты", depot="garage")
+        assert depot_create2.ok, depot_create2.text
+        create_or_join_depot_raid(storage, 222, "Бандиты", depot="garage")
+        open_garage = storage.get_open_raid_for_faction("Долг")
+        assert open_garage is not None
+        raid_id = int(open_garage["id"])
+        stale_result, stale_session = start_raid_grid(
+            storage,
+            raid_id=raid_id,
+            raid_kind="garage",
+            location_label="Гараж «Бандиты»",
+            attacker_faction="Долг",
+            player_ids=[111, 222],
+            target_faction="Бандиты",
+        )
+        assert stale_result.ok and stale_session is not None
+        storage.start_raid_assault(raid_id)
+        storage.finish_raid(raid_id, status="success", result_text="stale setup")
+        clear_raid_grid_session(storage, stale_session)
+        clear_stale_raid_grid_session(storage, 111)
+        assert get_raid_grid_session_by_player(storage, 111) is None
+
         # War lobby.
         war_create = create_or_join_war_lobby(storage, 111, "Свалка")
         assert war_create.ok, war_create.text

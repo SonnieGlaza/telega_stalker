@@ -2980,6 +2980,23 @@ class Storage:
             return None
         return dict(row)
 
+    def get_in_progress_raid_for_faction(self, faction: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, faction, location, leader_id, status, created_at, started_at, finished_at, result_text,
+                       raid_kind, target_faction
+                FROM raids
+                WHERE faction = ? AND status = 'in_progress'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (faction,),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
     def create_raid(
         self,
         faction: str,
