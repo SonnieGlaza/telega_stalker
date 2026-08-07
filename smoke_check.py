@@ -550,19 +550,6 @@ def run_smoke_check() -> None:
 
         war_create2 = create_or_join_war_lobby(storage, 111, "Янтарь")
         assert war_create2.ok, war_create2.text
-        from app.clan_war_grid import render_war_lobby_preview_frame
-
-        lobby = storage.get_open_war_lobby_for_faction("Долг")
-        assert lobby is not None
-        preview_members = storage.get_war_lobby_member_ids(int(lobby["id"]))
-        preview = render_war_lobby_preview_frame(
-            storage,
-            location_name="Янтарь",
-            member_ids=preview_members,
-            viewer_id=111,
-            leader_id=111,
-        )
-        assert len(preview) > 1000
         storage.restore_energy(111, 100)
         storage.restore_energy(222, 100)
         create_or_join_war_lobby(storage, 222, "Янтарь")

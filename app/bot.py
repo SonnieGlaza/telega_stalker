@@ -59,7 +59,6 @@ from app.clan_war_grid import (
     get_cwar_session_by_player,
     process_cwar_turn_timeouts,
     render_cwar_frame,
-    render_war_lobby_preview_frame,
     save_cwar_session,
 )
 from app.raid_grid import (
@@ -223,7 +222,6 @@ from app.game_logic import (
     dissolve_war_lobby,
     can_dissolve_war_lobby,
     build_war_lobby_overview,
-    find_open_war_lobby_for_character,
     transfer_location_to_ally,
     create_market_lot,
     buy_first_market_lot,
@@ -4543,59 +4541,7 @@ async def _show_war_lobby_menu(callback: CallbackQuery, bot: Bot) -> None:
         await _broadcast_cwar_session(bot, db, session)
         await safe_callback_answer(callback)
         return
-    lobby = find_open_war_lobby_for_character(db, player)
-    if lobby is None:
-        await edit_menu_message(callback, overview, markup)
-        return
-    member_ids = db.get_war_lobby_member_ids(int(lobby["id"]))
-    frame = render_war_lobby_preview_frame(
-        db,
-        location_name=str(lobby["location"]),
-        member_ids=member_ids,
-        viewer_id=player.telegram_id,
-        leader_id=int(lobby["leader_id"]),
-    )
-    await _edit_menu_photo(callback, frame, overview, markup)
-
-
-async def _edit_menu_photo(
-    callback: CallbackQuery,
-    image_bytes: bytes,
-    caption: str,
-    reply_markup: Any,
-    *,
-    answer_callback: bool = True,
-) -> None:
-    message = callback.message
-    media = BufferedInputFile(image_bytes, filename="war_lobby.png")
-    if message is None:
-        if answer_callback:
-            await safe_callback_answer(callback)
-        return
-    try:
-        if message.photo:
-            await message.edit_media(
-                media=InputMediaPhoto(media=media, caption=caption),
-                reply_markup=reply_markup,
-            )
-        else:
-            await message.answer_photo(photo=media, caption=caption, reply_markup=reply_markup)
-            try:
-                await message.delete()
-            except TelegramBadRequest:
-                pass
-    except TelegramBadRequest as exc:
-        if "message is not modified" in str(exc).lower():
-            if answer_callback:
-                await safe_callback_answer(callback)
-            return
-        await message.answer_photo(photo=media, caption=caption, reply_markup=reply_markup)
-        try:
-            await message.delete()
-        except TelegramBadRequest:
-            pass
-    if answer_callback:
-        await safe_callback_answer(callback)
+    await edit_menu_message(callback, overview, markup)
 
 
 async def _refresh_war_lobby_menu(callback: CallbackQuery, bot: Bot) -> None:
