@@ -65,6 +65,22 @@ PLAYER_COLORS = [
 # Яркий контрастный квадрат вокруг клетки зрителя ("ты тут").
 VIEWER_SQUARE_COLOR = (80, 230, 255)
 
+# Болтовня по рации — сталкерский сленг, изредка попадает в лог хода.
+RADIO_LINES: list[str] = [
+    "«Альфа, приём. Как слышно?»",
+    "«{name}, приём, ты как там?»",
+    "«Слева тварь, глаз не спускай!»",
+    "«Держим строй, не растягиваемся!»",
+    "«Аптечку бы… у кого есть?»",
+    "«{name}, прикрой, захожу справа.»",
+    "«Тихо… кажется, что-то шевельнулось.»",
+    "«На связи. Двигаюсь к цели.»",
+    "«Заряд бодрости бы не помешал.»",
+    "«Внимание, аномалия впереди!»",
+    "«{name}, не отставай, работаем вместе.»",
+    "«Приём, база, тут жарко.»",
+]
+
 
 def _parse_kind_list(
     positions_raw: list,
@@ -163,6 +179,9 @@ class CoopMissionSession:
     npcs: list[tuple[int, int]] = field(default_factory=list)
     npc_kinds: list[str] = field(default_factory=list)
     death_causes: dict[str, str] = field(default_factory=dict)
+    death_killers: dict[str, str] = field(default_factory=dict)
+    carrying: dict[str, str] = field(default_factory=dict)
+    evacuated: list[int] = field(default_factory=list)
     turn_order: list[int] = field(default_factory=list)
     active_index: int = 0
     turn_seq: int = 0
@@ -201,6 +220,9 @@ class CoopMissionSession:
             "npcs": [list(p) for p in self.npcs],
             "npc_kinds": list(self.npc_kinds),
             "death_causes": dict(self.death_causes),
+            "death_killers": dict(self.death_killers),
+            "carrying": dict(self.carrying),
+            "evacuated": list(self.evacuated),
             "turn_order": self.turn_order,
             "active_index": self.active_index,
             "turn_seq": self.turn_seq,
@@ -233,6 +255,9 @@ class CoopMissionSession:
             npcs=[(int(p[0]), int(p[1])) for p in (raw.get("npcs") or [])],
             npc_kinds=_parse_kind_list(raw.get("npcs") or [], raw.get("npc_kinds"), NPC_SPRITE_KEYS, valid=NPC_SPRITES),
             death_causes={str(k): str(v) for k, v in (raw.get("death_causes") or {}).items()},
+            death_killers={str(k): str(v) for k, v in (raw.get("death_killers") or {}).items()},
+            carrying={str(k): str(v) for k, v in (raw.get("carrying") or {}).items()},
+            evacuated=[int(x) for x in (raw.get("evacuated") or [])],
             turn_order=[int(x) for x in (raw.get("turn_order") or [])],
             active_index=int(raw.get("active_index") or 0),
             turn_seq=int(raw.get("turn_seq") or 0),
@@ -421,7 +446,9 @@ def coop_menu_text(storage: Storage, telegram_id: int) -> str:
             f"Игроков: {len(session.player_ids)}/{COOP_MAX_PLAYERS}.\n"
             f"Ход: {h(active_name)} ({COOP_TURN_SECONDS} сек).\n"
             "Соберите цели и выживите — мутанты и НПС-мародёры идут к ближайшему живому сталкеру.\n"
-            "На поле — ваши аватары со скинами, ваша клетка обведена ярким квадратом."
+            "На поле — ваши аватары со скинами, ваша клетка обведена ярким квадратом.\n"
+            "📻 В эфире изредка звучит болтовня по рации — держите связь.\n"
+            "🦺 Раненого напарника (0 HP) можно эвакуировать: подойди вплотную и тащи его на точку старта."
         )
     lobby = get_coop_lobby_by_player(storage, telegram_id)
     if lobby is not None:
@@ -634,7 +661,7 @@ def _advance_turn(session: CoopMissionSession) -> None:
     for _ in range(n):
         session.active_index = (session.active_index + 1) % n
         pid = session.turn_order[session.active_index]
-        if session.hp.get(str(pid), 0) > 0:
+        if session.hp.get(str(pid), 0) > 0 and pid not in session.evacuated:
             break
     session.turn_seq += 1
     session.turn_deadline = _deadline_iso()
@@ -681,11 +708,18 @@ def _hostile_attacks(
     session: CoopMissionSession,
     storage: Storage,
     positions: list[tuple[int, int]],
+    kinds: list[str],
     label: str,
     cause: str,
+    *,
+    npc: bool,
 ) -> list[str]:
+    from app.death_flavor import killer_label_for_kind
+
     notes: list[str] = []
-    for epos in positions:
+    for i, epos in enumerate(positions):
+        kind = kinds[i] if i < len(kinds) else ""
+        killer_name = killer_label_for_kind(kind, npc=npc) if kind else label
         for pid in session.player_ids:
             if session.hp.get(str(pid), 0) <= 0:
                 continue
@@ -698,16 +732,27 @@ def _hostile_attacks(
                 session.hp[str(pid)] = new_hp
                 if new_hp <= 0:
                     session.death_causes[str(pid)] = cause
+                    session.death_killers[str(pid)] = killer_name
                 notes.append(f"{label} ранит {h(player.nickname)}: −{dmg} HP.")
     return notes
 
 
 def _enemy_attacks(session: CoopMissionSession, storage: Storage) -> list[str]:
-    return _hostile_attacks(session, storage, session.enemies, "Мутант", "mutant")
+    return _hostile_attacks(session, storage, session.enemies, session.enemy_kinds, "Мутант", "mutant", npc=False)
 
 
 def _npc_attacks(session: CoopMissionSession, storage: Storage) -> list[str]:
-    return _hostile_attacks(session, storage, session.npcs, "Мародёр", "npc")
+    return _hostile_attacks(session, storage, session.npcs, session.npc_kinds, "Мародёр", "npc", npc=True)
+
+
+def _maybe_radio_chatter(session: CoopMissionSession, storage: Storage) -> None:
+    """0–1 короткая фраза по рации в лог хода — просто атмосфера."""
+    if random.random() >= 0.45:
+        return
+    active = storage.get_character(session.active_player(), refresh_energy=False)
+    name = h(active.nickname) if active else "боец"
+    line = random.choice(RADIO_LINES).format(name=name)
+    session.log.append(f"📻 {line}")
 
 
 def _objectives_complete(session: CoopMissionSession) -> bool:
@@ -750,7 +795,8 @@ def _reward_players(storage: Storage, session: CoopMissionSession) -> str:
             continue
         storage.change_money(pid, per_player)
         _add_rating(storage, pid, RATING_REWARD.get("quest_success", 12))
-        lines.append(f"{name}: +{per_player} RU, рейтинг.")
+        evac_mark = " (эвакуирован напарником)" if pid in session.evacuated else ""
+        lines.append(f"{name}{evac_mark}: +{per_player} RU, рейтинг.")
     return "\n".join(lines)
 
 
@@ -759,16 +805,21 @@ def _finish_success(storage: Storage, session: CoopMissionSession) -> ActionResu
     message_ids = {str(k): int(v) for k, v in session.message_ids.items()}
     session.finished = True
     session.success = True
-    from app.game_logic import remember_death_cause
+    from app.game_logic import remember_death_cause, remember_death_killer
 
     dead_ids: list[int] = []
     death_causes_payload: dict[str, str] = {}
+    death_killers_payload: dict[str, str] = {}
     for pid in session.player_ids:
         if session.hp.get(str(pid), 0) <= 0:
             cause = _map_death_cause(session.death_causes.get(str(pid)))
             remember_death_cause(storage, pid, cause)
             dead_ids.append(pid)
             death_causes_payload[str(pid)] = cause
+            killer_name = session.death_killers.get(str(pid))
+            if killer_name:
+                remember_death_killer(storage, pid, killer_name)
+                death_killers_payload[str(pid)] = killer_name
     text = _reward_players(storage, session)
     session.log.append("Миссия выполнена!")
     save_coop_session(storage, session)
@@ -785,6 +836,7 @@ def _finish_success(storage: Storage, session: CoopMissionSession) -> ActionResu
             "session_id": session.session_id,
             "dead_players": dead_ids,
             "death_causes": death_causes_payload,
+            "death_killers": death_killers_payload,
             "death_location": session.location,
         },
     )
@@ -806,14 +858,19 @@ def _finish_fail(
     session.log.append(reason)
     save_coop_session(storage, session)
     player_ids = list(session.player_ids)
-    from app.game_logic import remember_death_cause
+    from app.game_logic import remember_death_cause, remember_death_killer
 
     death_causes_payload: dict[str, str] = {}
+    death_killers_payload: dict[str, str] = {}
     for pid in player_ids:
         if session.hp.get(str(pid), 0) <= 0:
             cause = _map_death_cause(session.death_causes.get(str(pid)))
             remember_death_cause(storage, pid, cause)
             death_causes_payload[str(pid)] = cause
+            killer_name = session.death_killers.get(str(pid))
+            if killer_name:
+                remember_death_killer(storage, pid, killer_name)
+                death_killers_payload[str(pid)] = killer_name
     clear_coop_session(storage, session)
     return ActionResult(
         False,
@@ -827,16 +884,40 @@ def _finish_fail(
             "death_location": session.location,
             "death_cause": "coop",
             "death_causes": death_causes_payload,
+            "death_killers": death_killers_payload,
         },
     )
 
 
 def _check_team_wipe(storage: Storage, session: CoopMissionSession) -> ActionResult | None:
-    alive = [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
-    if alive:
+    # Эвакуированные — уже в безопасности, вайп группы их не касается.
+    remaining = [pid for pid in session.player_ids if pid not in session.evacuated]
+    if not remaining:
+        return None
+    all_downed = all(session.hp.get(str(pid), 0) <= 0 for pid in remaining)
+    if not all_downed:
         return None
     # Вайп всей группы — энергия, потраченная на вылазку, не возвращается.
     return _finish_fail(storage, session, "Вся группа откинулась на вылазке — медики ждут на базе.")
+
+
+def can_evacuate(session: CoopMissionSession, telegram_id: int) -> bool:
+    """Показывать ли кнопку «Эвак»: игрок уже тащит раненого или стоит рядом с ним."""
+    if session.hp.get(str(telegram_id), 0) <= 0 or telegram_id in session.evacuated:
+        return False
+    if str(telegram_id) in session.carrying:
+        return True
+    pos = session.pos(telegram_id)
+    carried_ids = {int(v) for v in session.carrying.values()}
+    for pid in session.player_ids:
+        if pid == telegram_id or pid in session.evacuated or pid in carried_ids:
+            continue
+        if session.hp.get(str(pid), 0) > 0:
+            continue
+        opos = session.pos(pid)
+        if abs(opos[0] - pos[0]) + abs(opos[1] - pos[1]) == 1:
+            return True
+    return False
 
 
 def start_coop_mission(storage: Storage, host_id: int) -> ActionResult:
@@ -909,6 +990,8 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         return ActionResult(False, "Активной кооп-вылазки нет.")
     if session.hp.get(str(telegram_id), 0) <= 0:
         return ActionResult(False, "Ты выбыл.")
+    if telegram_id in session.evacuated:
+        return ActionResult(False, "Ты уже эвакуирован в безопасное место.")
     if session.active_player() != telegram_id:
         return ActionResult(False, "Сейчас ход другого игрока.")
     turn_seq = session.turn_seq
@@ -926,14 +1009,18 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
     for other in session.player_ids:
         if other != telegram_id and session.pos(other) == nxt:
             return ActionResult(False, "Клетка занята напарником.")
+    from app.death_flavor import killer_label_for_kind
+
     moved = False
     if nxt in session.enemies:
         dmg = _combat_damage(session.location, player)
         new_hp = max(0, session.hp.get(str(telegram_id), 0) - dmg)
         session.hp[str(telegram_id)] = new_hp
-        if new_hp <= 0:
-            session.death_causes[str(telegram_id)] = "mutant"
         idx = session.enemies.index(nxt)
+        if new_hp <= 0:
+            kind = session.enemy_kinds[idx] if idx < len(session.enemy_kinds) else ""
+            session.death_causes[str(telegram_id)] = "mutant"
+            session.death_killers[str(telegram_id)] = killer_label_for_kind(kind, npc=False) if kind else "Мутант"
         session.enemies.pop(idx)
         if idx < len(session.enemy_kinds):
             session.enemy_kinds.pop(idx)
@@ -945,9 +1032,11 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         dmg = _combat_damage(session.location, player)
         new_hp = max(0, session.hp.get(str(telegram_id), 0) - dmg)
         session.hp[str(telegram_id)] = new_hp
-        if new_hp <= 0:
-            session.death_causes[str(telegram_id)] = "npc"
         idx = session.npcs.index(nxt)
+        if new_hp <= 0:
+            kind = session.npc_kinds[idx] if idx < len(session.npc_kinds) else ""
+            session.death_causes[str(telegram_id)] = "npc"
+            session.death_killers[str(telegram_id)] = killer_label_for_kind(kind, npc=True) if kind else "Мародёр"
         session.npcs.pop(idx)
         if idx < len(session.npc_kinds):
             session.npc_kinds.pop(idx)
@@ -958,6 +1047,9 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
     else:
         session.set_pos(telegram_id, nxt)
         moved = True
+        carried_id_raw = session.carrying.get(str(telegram_id))
+        if carried_id_raw is not None:
+            session.set_pos(int(carried_id_raw), nxt)
 
     if moved:
         if nxt in session.objectives and nxt not in session.collected:
@@ -970,11 +1062,25 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
             session.hp[str(telegram_id)] = new_hp
             if new_hp <= 0:
                 session.death_causes[str(telegram_id)] = "anomaly"
+                session.death_killers[str(telegram_id)] = "Аномалия"
             session.hazards = [haz for haz in session.hazards if haz != nxt]
             session.log.append(f"Аномалия: −{dmg} HP ({h(player.nickname)}).")
             wipe = _check_team_wipe(storage, session)
             if wipe:
                 return wipe
+
+        carried_id_raw = session.carrying.get(str(telegram_id))
+        if carried_id_raw is not None and nxt == session.start:
+            downed_id = int(carried_id_raw)
+            session.carrying.pop(str(telegram_id), None)
+            session.hp[str(downed_id)] = 1
+            if downed_id not in session.evacuated:
+                session.evacuated.append(downed_id)
+            session.death_causes.pop(str(downed_id), None)
+            session.death_killers.pop(str(downed_id), None)
+            downed_char = storage.get_character(downed_id, refresh_energy=False)
+            downed_name = h(downed_char.nickname) if downed_char else str(downed_id)
+            session.log.append(f"🦺 {h(player.nickname)} эвакуировал {downed_name} на точку сбора!")
 
     if _objectives_complete(session):
         return _finish_success(storage, session)
@@ -984,6 +1090,7 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
     _move_npcs(session)
     session.log.extend(_enemy_attacks(session, storage))
     session.log.extend(_npc_attacks(session, storage))
+    _maybe_radio_chatter(session, storage)
     wipe = _check_team_wipe(storage, session)
     if wipe:
         return wipe
@@ -999,6 +1106,8 @@ def coop_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Активной кооп-вылазки нет.")
     if session.hp.get(str(telegram_id), 0) <= 0:
         return ActionResult(False, "Ты выбыл.")
+    if telegram_id in session.evacuated:
+        return ActionResult(False, "Ты уже эвакуирован в безопасное место.")
     if session.active_player() != telegram_id:
         return ActionResult(False, "Сейчас ход другого игрока.")
     turn_seq = session.turn_seq
@@ -1019,12 +1128,69 @@ def coop_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     _move_npcs(session)
     session.log.extend(_enemy_attacks(session, storage))
     session.log.extend(_npc_attacks(session, storage))
+    _maybe_radio_chatter(session, storage)
     wipe = _check_team_wipe(storage, session)
     if wipe:
         return wipe
     if not _save_if_turn_ok(storage, session, turn_seq):
         return ActionResult(False, "Ход уже выполнен.")
     return ActionResult(True, result.text, payload={"coop_active": True, "notify_all": session.player_ids})
+
+
+def coop_evacuate(storage: Storage, telegram_id: int) -> ActionResult:
+    """Взять на себя эвакуацию раненого напарника с соседней клетки."""
+    session = get_coop_session_by_player(storage, telegram_id)
+    if session is None:
+        return ActionResult(False, "Активной кооп-вылазки нет.")
+    if session.hp.get(str(telegram_id), 0) <= 0:
+        return ActionResult(False, "Ты выбыл.")
+    if telegram_id in session.evacuated:
+        return ActionResult(False, "Ты уже эвакуирован в безопасное место.")
+    if session.active_player() != telegram_id:
+        return ActionResult(False, "Сейчас ход другого игрока.")
+    if str(telegram_id) in session.carrying:
+        return ActionResult(False, "Ты уже тащишь раненого — веди его на точку старта.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Персонаж не найден.")
+
+    pos = session.pos(telegram_id)
+    carried_ids = {int(v) for v in session.carrying.values()}
+    downed_id: int | None = None
+    for pid in session.player_ids:
+        if pid == telegram_id or pid in session.evacuated or pid in carried_ids:
+            continue
+        if session.hp.get(str(pid), 0) > 0:
+            continue
+        opos = session.pos(pid)
+        if abs(opos[0] - pos[0]) + abs(opos[1] - pos[1]) == 1:
+            downed_id = pid
+            break
+    if downed_id is None:
+        return ActionResult(False, "Рядом нет раненых для эвакуации.")
+
+    turn_seq = session.turn_seq
+    session.carrying[str(telegram_id)] = str(downed_id)
+    session.set_pos(downed_id, pos)
+    downed_char = storage.get_character(downed_id, refresh_energy=False)
+    downed_name = h(downed_char.nickname) if downed_char else str(downed_id)
+    session.log.append(f"🦺 {h(player.nickname)} взвалил {downed_name} на плечи и тащит на точку старта.")
+    _advance_turn(session)
+    _move_enemies(session)
+    _move_npcs(session)
+    session.log.extend(_enemy_attacks(session, storage))
+    session.log.extend(_npc_attacks(session, storage))
+    _maybe_radio_chatter(session, storage)
+    wipe = _check_team_wipe(storage, session)
+    if wipe:
+        return wipe
+    if not _save_if_turn_ok(storage, session, turn_seq):
+        return ActionResult(False, "Ход уже выполнен.")
+    return ActionResult(
+        True,
+        f"Ты тащишь {downed_name} — доберись до точки старта.",
+        payload={"coop_active": True, "notify_all": session.player_ids},
+    )
 
 
 def coop_forfeit(storage: Storage, telegram_id: int) -> ActionResult:
@@ -1074,6 +1240,7 @@ def process_coop_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
         _move_npcs(session)
         session.log.extend(_enemy_attacks(session, storage))
         session.log.extend(_npc_attacks(session, storage))
+        _maybe_radio_chatter(session, storage)
         wipe = _check_team_wipe(storage, session)
         if wipe:
             if str(session_id) not in finished:
@@ -1112,10 +1279,14 @@ def coop_status_caption(session: CoopMissionSession, storage: Storage, viewer_id
         ch = storage.get_character(pid, refresh_energy=False)
         name = ch.nickname if ch else str(pid)
         hp = session.hp.get(str(pid), 0)
-        if hp <= 0:
-            mark = " ☠ выбыл"
+        if pid in session.evacuated:
+            mark = " 🦺 эвакуирован"
+        elif hp <= 0:
+            mark = " ☠ ранен, ждёт эвакуации"
         else:
             mark = " ◀" if pid == session.active_player() else ""
+            if str(pid) in session.carrying:
+                mark += " 🦺 несёт напарника"
         if pid == viewer_id:
             mark += " (ты)"
         lines.append(f"{h(name)}{mark}: HP {hp}")

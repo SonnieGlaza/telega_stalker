@@ -52,6 +52,8 @@ from app.duel_grid import (
     save_duel_session,
 )
 from app.coop_mission import (
+    can_evacuate,
+    coop_evacuate,
     coop_forfeit,
     coop_menu_text,
     coop_move,
@@ -186,6 +188,8 @@ from app.game_logic import (
     character_rank_title,
     build_dead_character_text,
     build_battle_death_text,
+    append_death_log,
+    build_death_log_text,
     respawn_character,
     format_personal_stash,
     deposit_to_personal_stash,
@@ -1395,6 +1399,27 @@ def ensure_character(message: Message) -> Character | None:
     return player
 
 
+async def reject_if_dead(message_or_callback: Message | CallbackQuery, player: Character) -> bool:
+    """Если персонаж мёртв — показать историю смерти + клавиатуру спасения и вернуть True.
+
+    Используй сразу после ensure_character/ensure_ready:
+        player = ensure_character(message)
+        if player is None: ...
+        if await reject_if_dead(message, player): return
+    """
+    if player.health > 0:
+        return False
+    text = build_dead_character_text(player, storage=get_storage())
+    keyboard = dead_character_keyboard()
+    if isinstance(message_or_callback, CallbackQuery):
+        await safe_callback_answer(message_or_callback)
+        if message_or_callback.message is not None:
+            await message_or_callback.message.answer(text, reply_markup=keyboard)
+    else:
+        await message_or_callback.answer(text, reply_markup=keyboard)
+    return True
+
+
 def action_result_text(telegram_id: int, text: str) -> str:
     storage = get_storage()
     arrival = storage.pop_arrival_notice(telegram_id)
@@ -2364,6 +2389,8 @@ async def show_quests(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
+    if await reject_if_dead(message, player):
+        return
     if not player_ready(player):
         await message.answer("Сначала выбери группировку.")
         return
@@ -2463,6 +2490,7 @@ async def _push_offline_survival_deaths(bot: Bot, storage: Storage) -> None:
         if after is not None and after.health <= 0:
             try:
                 text = build_dead_character_text(after, storage=storage)
+                append_death_log(storage, telegram_id, text)
                 await bot.send_message(telegram_id, text, reply_markup=dead_character_keyboard())
             except Exception:
                 logger.debug("Failed offline survival death push to %s", telegram_id)
@@ -2488,6 +2516,7 @@ async def _send_battle_death_notice(
         cause=cause or "combat",
         storage=storage,
     )
+    append_death_log(storage, user_id, text)
     try:
         await bot.send_message(user_id, text, reply_markup=dead_character_keyboard())
     except Exception:
@@ -2676,7 +2705,8 @@ async def _broadcast_coop_session(
         ch = storage.get_character(pid, refresh_energy=False)
         is_active = session.active_player() == pid
         medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(ch)
-        markup = coop_mission_keyboard(is_active_turn=is_active, medkit_available=medkit)
+        evac = can_evacuate(session, pid)
+        markup = coop_mission_keyboard(is_active_turn=is_active, medkit_available=medkit, evac_available=evac)
         caption = coop_status_caption(session, storage, pid)
         if note:
             caption = f"{caption}\n\n{note}" if pid == session.active_player() else f"{caption}\n\n↪ {note}"
@@ -2711,14 +2741,16 @@ async def _notify_coop_finished(bot: Bot, result: Any) -> None:
         try:
             if player is not None and player.health <= 0:
                 cause = death_causes.get(str(pid), default_cause)
+                death_text = build_battle_death_text(
+                    player,
+                    where=str(death_where or player.location),
+                    cause=cause,
+                    storage=storage,
+                )
+                append_death_log(storage, pid, death_text)
                 await bot.send_message(
                     pid,
-                    build_battle_death_text(
-                        player,
-                        where=str(death_where or player.location),
-                        cause=cause,
-                        storage=storage,
-                    ),
+                    death_text,
                     reply_markup=dead_character_keyboard(),
                 )
                 # На успешном коопе живые видят награду; погибшему — только смерть.
@@ -2870,6 +2902,8 @@ async def show_achievements(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
+    if await reject_if_dead(message, player):
+        return
     text = build_achievements_overview(get_storage(), player.telegram_id)
     await message.answer(text, reply_markup=_pda_keyboard_for(player))
 
@@ -2880,8 +2914,33 @@ async def show_character_stats(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
+    if await reject_if_dead(message, player):
+        return
     text = build_character_stats_overview(get_storage(), player.telegram_id)
     await message.answer(text, reply_markup=_pda_keyboard_for(player))
+
+
+@router.message(F.text == "☠️ Смерти")
+async def show_death_log(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    text = build_death_log_text(get_storage(), player.telegram_id)
+    await message.answer(text, reply_markup=_pda_keyboard_for(player))
+
+
+@router.callback_query(F.data == "death:log")
+async def show_death_log_callback(callback: CallbackQuery) -> None:
+    """Доступен и мёртвым — кнопка есть прямо в dead_character_keyboard."""
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    text = build_death_log_text(get_storage(), player.telegram_id)
+    await safe_callback_answer(callback)
+    if callback.message is not None:
+        await callback.message.answer(text)
 
 
 @router.message(F.text == "📟 КПК")
@@ -2889,6 +2948,8 @@ async def show_pda(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
         return
     await message.answer(
         "📟 КПК сталкера\n"
@@ -2902,6 +2963,8 @@ async def show_referral_system(message: Message, bot: Bot) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
         return
     referral_link = None
     try:
@@ -2922,6 +2985,8 @@ async def show_pda_chats(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
+    if await reject_if_dead(message, player):
+        return
     await message.answer(_build_pda_chats_text(player), reply_markup=_pda_keyboard_for(player))
 
 
@@ -2940,6 +3005,8 @@ async def show_rating(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
+    if await reject_if_dead(message, player):
+        return
     text, page, total_pages = build_rating_overview(get_storage(), player.telegram_id, page=0)
     await message.answer(
         text,
@@ -2952,6 +3019,8 @@ async def show_zone_map(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
         return
     locations = get_storage().get_locations()
     image_bytes = build_zone_map_image(locations, current_location=player.location, player_faction=player.faction)
@@ -2968,6 +3037,8 @@ async def show_players(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
         return
     text, items = build_players_root_text(get_storage())
     await message.answer(text, reply_markup=players_factions_keyboard(items))
@@ -3519,6 +3590,8 @@ async def show_sortie(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
+    if await reject_if_dead(message, player):
+        return
     await message.answer(
         "🏕 Вылазка\n"
         "Война, переходы по Зоне, рейды и кооп.",
@@ -3532,13 +3605,16 @@ async def show_coop_menu(message: Message, bot: Bot) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
+    if await reject_if_dead(message, player):
+        return
     storage = get_storage()
     session = get_coop_session_by_player(storage, player.telegram_id)
     if session is not None:
         frame = render_coop_frame(storage, session, player.telegram_id)
         is_active = session.active_player() == player.telegram_id
         medkit = not session.medkits_used.get(str(player.telegram_id), False) and _player_has_medkit(player)
-        markup = coop_mission_keyboard(is_active_turn=is_active, medkit_available=medkit)
+        evac = can_evacuate(session, player.telegram_id)
+        markup = coop_mission_keyboard(is_active_turn=is_active, medkit_available=medkit, evac_available=evac)
         caption = coop_status_caption(session, storage, player.telegram_id)
         msg_id = session.message_ids.get(str(player.telegram_id))
         new_id = await _upsert_tactical_photo(
@@ -3681,6 +3757,11 @@ async def coop_callback(callback: CallbackQuery, bot: Bot) -> None:
         await _handle_coop_action(bot, callback, result)
         return
 
+    if action == "evac":
+        result = coop_evacuate(storage, telegram_id)
+        await _handle_coop_action(bot, callback, result)
+        return
+
     await callback.answer("Неизвестное действие.", show_alert=True)
 
 
@@ -3689,6 +3770,8 @@ async def show_travel(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
         return
     db = get_storage()
     locations = db.get_locations()

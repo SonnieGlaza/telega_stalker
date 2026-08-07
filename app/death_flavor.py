@@ -217,6 +217,27 @@ LOOT_LINES: list[str] = [
     "Личный схрон не трогают. А вот то, что на поясе было — считай, прощай.",
 ]
 
+# Человекочитаемые «имена» убийц по типу мутанта/НПС — для строки «Добил: …».
+MUTANT_NAME_OPENERS: dict[str, str] = {
+    "blind_dog": "Слепой пёс",
+    "tushkano": "Тушкан",
+    "pseudodog": "Псевдопёс",
+    "bloodsucker": "Кровосос",
+    "flesh": "Плоть",
+}
+
+NPC_NAME_OPENERS: dict[str, str] = {
+    "maloy": "Малой",
+}
+NPC_GENERIC_NAME = "Мародёр"
+
+
+def killer_label_for_kind(kind: str, *, npc: bool = False) -> str:
+    """Человекочитаемое имя убийцы по ключу вида (kind) мутанта/НПС."""
+    if npc:
+        return NPC_NAME_OPENERS.get(kind, NPC_GENERIC_NAME)
+    return MUTANT_NAME_OPENERS.get(kind, kind or "мутант")
+
 
 def infer_death_cause(character: Character, *, cause: str | None = None) -> DeathCause:
     if cause in CAUSE_OPENERS:
@@ -266,6 +287,7 @@ def generate_death_story(
     respawn_cost: int = 500,
     max_hp: int | None = None,
     seed: int | None = None,
+    killer_name: str | None = None,
 ) -> str:
     """Случайный сталкерский текст смерти с привязкой к месту и причине."""
     rng = random.Random(seed) if seed is not None else random.Random()
@@ -296,6 +318,10 @@ def generate_death_story(
     lines = [
         f"☠️ {name}, на «{spot}» ({cause_tag})…",
         opener,
+    ]
+    if killer_name:
+        lines.append(f"Добил: {h(killer_name)}.")
+    lines += [
         f"Последнее, что помнишь: {atmosphere}. Ты {fall}.",
         "",
         wake,

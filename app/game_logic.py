@@ -1185,12 +1185,36 @@ def peek_death_cause(storage: Storage, telegram_id: int) -> str | None:
     return storage.get_meta(_death_cause_key(telegram_id))
 
 
+DEATH_KILLER_META_PREFIX = "death:last_killer:"
+
+
+def _death_killer_key(telegram_id: int) -> str:
+    return f"{DEATH_KILLER_META_PREFIX}{int(telegram_id)}"
+
+
+def remember_death_killer(storage: Storage, telegram_id: int, name: str) -> None:
+    storage.set_meta(_death_killer_key(telegram_id), name)
+
+
+def pop_death_killer(storage: Storage, telegram_id: int) -> str | None:
+    key = _death_killer_key(telegram_id)
+    raw = storage.get_meta(key)
+    if raw:
+        storage.delete_meta(key)
+    return raw
+
+
+def peek_death_killer(storage: Storage, telegram_id: int) -> str | None:
+    return storage.get_meta(_death_killer_key(telegram_id))
+
+
 def build_dead_character_text(
     character: Character,
     *,
     where: str | None = None,
     cause: str | None = None,
     storage: Storage | None = None,
+    killer_name: str | None = None,
 ) -> str:
     """Текст смерти: каждый раз новый, с локацией и причиной (бой/голод/рад…)."""
     from app.death_flavor import generate_death_story
@@ -1198,6 +1222,9 @@ def build_dead_character_text(
     resolved = cause
     if resolved is None and storage is not None:
         resolved = peek_death_cause(storage, character.telegram_id)
+    resolved_killer = killer_name
+    if resolved_killer is None and storage is not None:
+        resolved_killer = peek_death_killer(storage, character.telegram_id)
     return generate_death_story(
         character,
         where=where,
@@ -1205,6 +1232,7 @@ def build_dead_character_text(
         home=faction_home_base(character.faction),
         respawn_cost=RESPAWN_COST_RU,
         max_hp=effective_max_health(character),
+        killer_name=resolved_killer,
     )
 
 
@@ -1214,9 +1242,76 @@ def build_battle_death_text(
     where: str | None = None,
     cause: str | None = "combat",
     storage: Storage | None = None,
+    killer_name: str | None = None,
 ) -> str:
     """Смерть на поле / вылазке — тот же генератор, явная причина."""
-    return build_dead_character_text(character, where=where, cause=cause, storage=storage)
+    return build_dead_character_text(
+        character, where=where, cause=cause, storage=storage, killer_name=killer_name
+    )
+
+
+DEATH_LOG_MAX_ENTRIES = 5
+DEATH_LOG_TEXT_LIMIT = 400
+
+
+def _death_log_key(telegram_id: int) -> str:
+    return f"death_log:{int(telegram_id)}"
+
+
+def append_death_log(storage: Storage, telegram_id: int, story_text: str) -> None:
+    """Хранит последние 5 записей о смерти игрока (JSON-список в meta)."""
+    text = (story_text or "").strip()
+    if not text:
+        return
+    if len(text) > DEATH_LOG_TEXT_LIMIT:
+        text = text[:DEATH_LOG_TEXT_LIMIT].rstrip() + "…"
+    key = _death_log_key(telegram_id)
+    raw = storage.get_meta(key)
+    entries: list[dict[str, str]] = []
+    if raw:
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, list):
+                entries = [e for e in loaded if isinstance(e, dict)]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            entries = []
+    entries.append({"at": datetime.now(timezone.utc).isoformat(), "text": text})
+    entries = entries[-DEATH_LOG_MAX_ENTRIES:]
+    storage.set_meta(key, json.dumps(entries, ensure_ascii=False))
+
+
+def _format_death_log_when(raw_at: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(raw_at)
+    except (ValueError, TypeError):
+        return "неизвестно когда"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).strftime("%d.%m %H:%M")
+
+
+def build_death_log_text(storage: Storage, telegram_id: int) -> str:
+    """Журнал смертей: последние до 5 записей, самые новые сверху."""
+    raw = storage.get_meta(_death_log_key(telegram_id))
+    entries: list[dict[str, str]] = []
+    if raw:
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, list):
+                entries = [e for e in loaded if isinstance(e, dict)]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            entries = []
+    if not entries:
+        return "☠️ Журнал смертей пуст.\nПока ты держишься — или ещё не успел записать историю."
+    lines = ["☠️ Журнал смертей (последние записи, UTC):", ""]
+    for idx, entry in enumerate(reversed(entries), start=1):
+        when = _format_death_log_when(str(entry.get("at") or ""))
+        text = str(entry.get("text") or "").strip()
+        lines.append(f"{idx}. {when}")
+        if text:
+            lines.append(text)
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def _apply_death_inventory_loot(storage: Storage, telegram_id: int) -> str:

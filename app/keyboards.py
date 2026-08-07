@@ -46,7 +46,7 @@ def pda_keyboard(*, is_leader: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🧾 Профиль"), KeyboardButton(text="💬 Чаты")],
         [KeyboardButton(text="🏆 Рейтинг"), KeyboardButton(text="🗺 Карта")],
         [KeyboardButton(text="🎖 Достижения"), KeyboardButton(text="📊 Статистика")],
-        [KeyboardButton(text="👥 Игроки")],
+        [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="☠️ Смерти")],
     ]
     if is_leader:
         rows[-1].append(KeyboardButton(text="📣 Сбор"))
@@ -428,6 +428,7 @@ def dead_character_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="♻️ Спасение на базе (500 RU)", callback_data="respawn:base")],
+            [InlineKeyboardButton(text="☠️ Журнал смертей", callback_data="death:log")],
         ]
     )
 
@@ -1137,7 +1138,9 @@ def coop_lobby_list_keyboard(lobbies: list[tuple[str, str, int]]) -> InlineKeybo
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def coop_mission_keyboard(*, is_active_turn: bool, medkit_available: bool) -> InlineKeyboardMarkup:
+def coop_mission_keyboard(
+    *, is_active_turn: bool, medkit_available: bool, evac_available: bool = False
+) -> InlineKeyboardMarkup:
     refresh_row = [
         InlineKeyboardButton(text="🔄", callback_data="coop:refresh"),
         InlineKeyboardButton(text="🏃 Свалить", callback_data="coop:forfeit"),
@@ -1154,6 +1157,8 @@ def coop_mission_keyboard(*, is_active_turn: bool, medkit_available: bool) -> In
     ]
     if medkit_available:
         rows.append([InlineKeyboardButton(text="💊 Аптечка", callback_data="coop:medkit")])
+    if evac_available:
+        rows.append([InlineKeyboardButton(text="🦺 Эвак", callback_data="coop:evac")])
     rows.append(refresh_row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
