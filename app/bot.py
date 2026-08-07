@@ -25,7 +25,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from app.fsm_nav import REPLY_NAV_BUTTONS, abort_fsm_if_nav
+from app.fsm_nav import abort_fsm_if_nav
 from app.artifact_hunt import (
     abandon_artifact_hunt,
     get_hunt_session,
@@ -233,7 +233,6 @@ from app.game_logic import (
     build_war_lobby_overview,
     transfer_location_to_ally,
     create_market_lot,
-    buy_first_market_lot,
     buy_market_lot,
     build_market_lots_overview,
     list_sellable_market_equipment,
@@ -1837,21 +1836,6 @@ async def respawn_base_callback(callback: CallbackQuery) -> None:
             await send_profile_snapshot(callback.message, player)
 
 
-@router.callback_query(F.data == "player:respawn")
-async def show_respawn_menu_callback(callback: CallbackQuery) -> None:
-    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
-    if player is None:
-        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
-        return
-    if player.health > 0:
-        await callback.answer("Респавн доступен только при HP=0.", show_alert=True)
-        return
-    await edit_menu_message(
-        callback,
-        build_dead_character_text(player, storage=get_storage()),
-        dead_character_keyboard(),
-    )
-
 
 @router.message(F.text == "🧾 Профиль")
 async def show_profile(message: Message) -> None:
@@ -3261,29 +3245,6 @@ async def contract_cancel_callback(callback: CallbackQuery) -> None:
         text, keyboard = _quests_menu_payload(storage, player)
         await edit_menu_message(callback, text, keyboard, answer_callback=False)
 
-
-@router.message(F.text == "🎖 Достижения")
-async def show_achievements(message: Message) -> None:
-    player = ensure_character(message)
-    if player is None:
-        await message.answer("Сначала создай персонажа через /start.")
-        return
-    if await reject_if_dead(message, player):
-        return
-    text = build_achievements_overview(get_storage(), player.telegram_id)
-    await message.answer(text, reply_markup=_pda_keyboard_for(player))
-
-
-@router.message(F.text == "📊 Статистика")
-async def show_character_stats(message: Message) -> None:
-    player = ensure_character(message)
-    if player is None:
-        await message.answer("Сначала создай персонажа через /start.")
-        return
-    if await reject_if_dead(message, player):
-        return
-    text = build_character_stats_overview(get_storage(), player.telegram_id)
-    await message.answer(text, reply_markup=_pda_keyboard_for(player))
 
 
 @router.message(F.text == "☠️ Смерти")
@@ -4780,6 +4741,14 @@ async def alliance_propose_menu_callback(callback: CallbackQuery) -> None:
     if player is None or not player.faction:
         await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
         return
+    others = [
+        str(faction.get("name", ""))
+        for faction in db.get_factions()
+        if str(faction.get("name", "")) and str(faction["name"]) != player.faction
+    ]
+    if not others:
+        await edit_menu_message(callback, "Нет доступных группировок для предложения договора о союзе.", alliance_keyboard())
+        return
     await edit_menu_message(
         callback,
         "Выбери группировку для предложения договора о союзе:",
@@ -4794,6 +4763,14 @@ async def alliance_war_menu_callback(callback: CallbackQuery) -> None:
     if player is None or not player.faction:
         await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
         return
+    others = [
+        str(faction.get("name", ""))
+        for faction in db.get_factions()
+        if str(faction.get("name", "")) and str(faction["name"]) != player.faction
+    ]
+    if not others:
+        await edit_menu_message(callback, "Нет доступных группировок для объявления войны.", alliance_keyboard())
+        return
     await edit_menu_message(
         callback,
         "Выбери группировку для объявления войны:",
@@ -4807,6 +4784,14 @@ async def alliance_break_menu_callback(callback: CallbackQuery) -> None:
     player = db.get_character(callback.from_user.id, refresh_energy=False)
     if player is None or not player.faction:
         await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
+        return
+    others = [
+        str(faction.get("name", ""))
+        for faction in db.get_factions()
+        if str(faction.get("name", "")) and str(faction["name"]) != player.faction
+    ]
+    if not others:
+        await edit_menu_message(callback, "Нет доступных группировок для разрыва союза.", alliance_keyboard())
         return
     await edit_menu_message(
         callback,
@@ -4824,6 +4809,9 @@ async def alliance_confirm_menu_callback(callback: CallbackQuery) -> None:
         return
     incoming = db.list_incoming_alliance_requests(player.faction)
     pending_from = [str(row["requester_faction"]) for row in incoming]
+    if not pending_from:
+        await edit_menu_message(callback, "Входящих предложений на союз нет.", alliance_keyboard())
+        return
     await edit_menu_message(
         callback,
         "Входящие предложения на союз:",
@@ -4835,10 +4823,6 @@ async def alliance_confirm_menu_callback(callback: CallbackQuery) -> None:
 async def alliance_menu_back_callback(callback: CallbackQuery) -> None:
     await edit_menu_message(callback, "Раздел дипломатии:", alliance_keyboard())
 
-
-@router.callback_query(F.data == "alliance:none")
-async def alliance_none_callback(callback: CallbackQuery) -> None:
-    await callback.answer("Список пуст.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("alliance:confirm:"))
@@ -5669,11 +5653,6 @@ async def process_market_lot_price(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer(action_result_text(message.from_user.id, result.text))
 
-
-@router.callback_query(F.data == "eco:market:buy:first")
-async def market_buy_first_callback(callback: CallbackQuery, bot: Bot) -> None:
-    result = buy_first_market_lot(get_storage(), callback.from_user.id)
-    await finish_callback_action(callback, result, bot)
 
 
 @router.callback_query(F.data == "eco:market:list")
