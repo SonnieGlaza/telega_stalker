@@ -560,6 +560,9 @@ def run_smoke_check() -> None:
         depot_join = create_or_join_depot_raid(storage, 222, "Бандиты", depot="warehouse")
         assert depot_join.ok, depot_join.text
         assert depot_join.payload and depot_join.payload.get("notify")
+        join_notify = depot_join.payload["notify"]
+        assert any(int(item[0]) == 222 for item in join_notify)
+        assert any(int(item[0]) == 111 for item in join_notify)
         open_depot = storage.get_open_raid_for_faction("Долг")
         assert open_depot is not None
         with storage._connect() as conn:

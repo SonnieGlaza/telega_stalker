@@ -5371,11 +5371,18 @@ def _raid_join_notify(
     joiner = storage.get_character(joiner_id, refresh_energy=False)
     joiner_name = h(joiner.nickname) if joiner else str(joiner_id)
     member_ids = storage.get_raid_member_ids(raid_id)
-    note = (
-        f"👥 {joiner_name} присоединился к рейду #{raid_id} ({raid_label}).\n"
-        f"Состав: {len(member_ids)}/{RAID_MAX_MEMBERS}."
+    members_line = f"Состав: {len(member_ids)}/{RAID_MAX_MEMBERS}."
+    notify: list[list[Any]] = [
+        [
+            joiner_id,
+            f"✅ Ты присоединился к рейду #{raid_id} ({raid_label}).\n{members_line}",
+        ]
+    ]
+    others_note = (
+        f"👥 {joiner_name} присоединился к рейду #{raid_id} ({raid_label}).\n{members_line}"
     )
-    return [[pid, note] for pid in member_ids if pid != joiner_id]
+    notify.extend([[pid, others_note] for pid in member_ids if pid != joiner_id])
+    return notify
 
 
 def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
