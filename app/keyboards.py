@@ -1092,36 +1092,39 @@ def ratings_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Моя статистика", callback_data="ratings:stats")],
             [InlineKeyboardButton(text="🎖 Мои достижения", callback_data="ratings:achievements")],
-            [InlineKeyboardButton(text="🏆 Топ сталкеров", callback_data="rating:page:0")],
+            [InlineKeyboardButton(text="🏆 Рейтинг за всё время", callback_data="rating:alltime:page:0")],
+            [InlineKeyboardButton(text="📅 Рейтинг за сезон", callback_data="rating:season:page:0")],
         ]
     )
 
 
-def rating_page_keyboard(*, page: int, total_pages: int) -> InlineKeyboardMarkup:
+def rating_page_keyboard(*, mode: str, page: int, total_pages: int) -> InlineKeyboardMarkup:
+    safe_mode = mode if mode in {"alltime", "season"} else "alltime"
     rows: list[list[InlineKeyboardButton]] = []
     nav: list[InlineKeyboardButton] = []
     if page > 0:
         nav.append(
             InlineKeyboardButton(
                 text="⬅️",
-                callback_data=f"rating:page:{page - 1}",
+                callback_data=f"rating:{safe_mode}:page:{page - 1}",
             )
         )
     nav.append(
         InlineKeyboardButton(
             text=f"{page + 1}/{total_pages}",
-            callback_data=f"rating:page:{page}",
+            callback_data=f"rating:{safe_mode}:page:{page}",
         )
     )
     if page + 1 < total_pages:
         nav.append(
             InlineKeyboardButton(
                 text="➡️",
-                callback_data=f"rating:page:{page + 1}",
+                callback_data=f"rating:{safe_mode}:page:{page + 1}",
             )
         )
     if nav:
         rows.append(nav)
+    rows.append([InlineKeyboardButton(text="⬅️ К разделам рейтинга", callback_data="ratings:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

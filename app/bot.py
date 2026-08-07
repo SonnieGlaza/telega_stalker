@@ -137,6 +137,8 @@ from app.game_logic import (
     build_events_overview,
     build_raids_overview,
     build_rating_overview,
+    build_season_rating_overview,
+    build_rating_menu_text,
     BULK_BUY_ITEM_KEYS,
     SHOP_ITEMS,
     buy_item,
@@ -336,6 +338,7 @@ from app.keyboards import (
     war_sections_keyboard,
     players_factions_keyboard,
     players_faction_page_keyboard,
+    ratings_keyboard,
     rating_page_keyboard,
     notify_prefs_keyboard,
     tutorial_keyboard,
@@ -902,7 +905,8 @@ def _build_info_text(player: Character) -> str:
         "• 🛏 Спальник — ×2 реген энергии.\n"
         "• 💎 Артефакты — поиск детектором по таблицам локаций.\n"
         "• 🎖 Скины по рейтингу: 0 / 500 / 2000 / 5000.\n"
-        "• 📅 Сезон рейтинга: раз в 14 дней топ-3 объявляется, очки сезона обнуляются.\n\n"
+        "• 📅 Сезон рейтинга: раз в 14 дней топ-3 получает эксклюзивную снарягу "
+        "(🥇 пушка+броня, 🥈 пушка, 🥉 броня; у торговца не продаётся).\n\n"
         "Чаты и рефералка: 📟 КПК."
     )
 
@@ -3424,10 +3428,9 @@ async def show_rating(message: Message) -> None:
         return
     if await reject_if_dead(message, player):
         return
-    text, page, total_pages = build_rating_overview(get_storage(), player.telegram_id, page=0)
     await message.answer(
-        text,
-        reply_markup=rating_page_keyboard(page=page, total_pages=total_pages),
+        build_rating_menu_text(),
+        reply_markup=ratings_keyboard(),
     )
 
 
@@ -3600,7 +3603,18 @@ async def show_achievements_callback(callback: CallbackQuery) -> None:
     await edit_menu_message(callback, text, None)
 
 
+@router.callback_query(F.data == "ratings:menu")
 @router.callback_query(F.data == "ratings:leaderboard")
+async def show_ratings_menu_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    await edit_menu_message(callback, build_rating_menu_text(), ratings_keyboard())
+
+
+@router.callback_query(F.data.startswith("rating:alltime:page:"))
+@router.callback_query(F.data.startswith("rating:season:page:"))
 @router.callback_query(F.data.startswith("rating:page:"))
 async def show_rating_callback(callback: CallbackQuery) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
@@ -3608,21 +3622,41 @@ async def show_rating_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     page = 0
+    mode = "alltime"
     raw = callback.data or ""
-    if raw.startswith("rating:page:"):
+    if raw.startswith("rating:season:page:"):
+        mode = "season"
         try:
             page = int(raw.rsplit(":", maxsplit=1)[-1])
         except ValueError:
             page = 0
-    text, safe_page, total_pages = build_rating_overview(
-        get_storage(),
-        player.telegram_id,
-        page=page,
-    )
+    elif raw.startswith("rating:alltime:page:"):
+        try:
+            page = int(raw.rsplit(":", maxsplit=1)[-1])
+        except ValueError:
+            page = 0
+    elif raw.startswith("rating:page:"):
+        try:
+            page = int(raw.rsplit(":", maxsplit=1)[-1])
+        except ValueError:
+            page = 0
+    storage = get_storage()
+    if mode == "season":
+        text, safe_page, total_pages = build_season_rating_overview(
+            storage,
+            player.telegram_id,
+            page=page,
+        )
+    else:
+        text, safe_page, total_pages = build_rating_overview(
+            storage,
+            player.telegram_id,
+            page=page,
+        )
     await edit_menu_message(
         callback,
         text,
-        rating_page_keyboard(page=safe_page, total_pages=total_pages),
+        rating_page_keyboard(mode=mode, page=safe_page, total_pages=total_pages),
     )
 
 

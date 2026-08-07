@@ -203,14 +203,37 @@ WEAPON_CATALOG: dict[str, dict[str, int | str]] = {
     "weapon_gauss": {"name": "Гаусс-пушка", "buy_price": 90000, "sell_price": 45000},
 }
 
+# Сезонные награды топ-3 — не продаются у торговца, выдаются в конце сезона.
+SEASON_REWARD_WEAPONS: dict[str, dict[str, int | str]] = {
+    "weapon_season_champion": {"name": "РВК «Чемпион Зоны»", "sell_price": 12000},
+    "weapon_season_silver": {"name": "ВСС «Серебряный сталкер»", "sell_price": 8000},
+}
+SEASON_REWARD_ARMOR: dict[str, dict[str, int | str]] = {
+    "armor_season_champion": {"name": "Костюм «Чемпион Зоны»", "sell_price": 10000},
+    "armor_season_bronze": {"name": "Бронекостюм «Бронза сезона»", "sell_price": 6000},
+}
+SEASON_RANK_REWARDS: dict[int, tuple[tuple[str, str], ...]] = {
+    1: (
+        ("weapon_season_champion", "РВК «Чемпион Зоны»"),
+        ("armor_season_champion", "Костюм «Чемпион Зоны»"),
+    ),
+    2: (("weapon_season_silver", "ВСС «Серебряный сталкер»"),),
+    3: (("armor_season_bronze", "Бронекостюм «Бронза сезона»"),),
+}
+SEASON_REWARD_ITEM_KEYS: frozenset[str] = frozenset(SEASON_REWARD_WEAPONS) | frozenset(SEASON_REWARD_ARMOR)
+
 # Legacy callback alias used in keyboards.
 WEAPON_CATALOG["weapon_fora12"] = WEAPON_CATALOG["weapon_fort12"]
 ARMOR_CATALOG["armor_sunrise"] = ARMOR_CATALOG["armor_zarya"]
 ARMOR_CATALOG["armor_berill5m"] = ARMOR_CATALOG["armor_bulat"]
 ARMOR_CATALOG["armor_exoskeleton"] = ARMOR_CATALOG["armor_exo"]
+WEAPON_CATALOG.update(SEASON_REWARD_WEAPONS)
+ARMOR_CATALOG.update(SEASON_REWARD_ARMOR)
 
 SHOP_ITEMS.update(ARMOR_CATALOG)
 SHOP_ITEMS.update(WEAPON_CATALOG)
+for _season_key in SEASON_REWARD_ITEM_KEYS:
+    SHOP_ITEMS.pop(_season_key, None)
 
 # Координаты должны совпадать с app/zone_map.py, чтобы время перехода
 # соответствовало визуальной дистанции на карте.
@@ -245,6 +268,8 @@ WEAPON_RATING_BY_NAME: dict[str, int] = {
     "СВДм-2": 8,
     "РП-74": 8,
     "Гаусс-пушка": 10,
+    "РВК «Чемпион Зоны»": 9,
+    "ВСС «Серебряный сталкер»": 8,
 }
 
 ARMOR_RATING_BY_NAME: dict[str, int] = {
@@ -258,6 +283,8 @@ ARMOR_RATING_BY_NAME: dict[str, int] = {
     "Научный костюм": 5,
     "Экзоскелет": 7,
     "Носорог": 8,
+    "Костюм «Чемпион Зоны»": 8,
+    "Бронекостюм «Бронза сезона»": 7,
 }
 # Совместимость с историческими названиями экипировки из старых сохранений.
 ARMOR_RATING_BY_NAME.setdefault("Бронежилет сталкера", ARMOR_RATING_BY_NAME["Сталкерский бронежилет"])
@@ -1608,6 +1635,38 @@ def _season_days_left(season: dict[str, Any], now: datetime) -> int:
     return max(0, int((ends_at - now).total_seconds() // 86400))
 
 
+def _season_reward_blurb() -> str:
+    return (
+        "Награды сезона (не продаются у торговца):\n"
+        "🥇 РВК «Чемпион Зоны» + Костюм «Чемпион Зоны»\n"
+        "🥈 ВСС «Серебряный сталкер»\n"
+        "🥉 Бронекостюм «Бронза сезона»"
+    )
+
+
+def _grant_season_rating_rewards(storage: Storage, top: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    medals = ["🥇", "🥈", "🥉"]
+    for idx, row in enumerate(top[:3], start=1):
+        rewards = SEASON_RANK_REWARDS.get(idx)
+        if not rewards:
+            continue
+        try:
+            telegram_id = int(row.get("telegram_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if telegram_id <= 0:
+            continue
+        labels: list[str] = []
+        for item_key, label in rewards:
+            storage.add_item(telegram_id, item_key, 1)
+            labels.append(label)
+        medal = medals[idx - 1] if idx <= len(medals) else "•"
+        nickname = str(row.get("nickname") or f"Игрок {telegram_id}")
+        lines.append(f"{medal} {nickname} получает: {', '.join(labels)}")
+    return lines
+
+
 def process_rating_season(storage: Storage) -> str | None:
     """Проверяет окончание сезона: архивирует топ-3, сбрасывает очки, начинает новый сезон."""
     now = datetime.now(timezone.utc)
@@ -1625,6 +1684,10 @@ def process_rating_season(storage: Storage) -> str | None:
             points = int(row.get("season_rating") or 0)
             medal = medals[idx] if idx < len(medals) else "•"
             lines.append(f"{medal} {nickname} — {points} очк. сезона")
+        reward_lines = _grant_season_rating_rewards(storage, top)
+        if reward_lines:
+            lines.append("")
+            lines.extend(reward_lines)
     else:
         lines.append("В этом сезоне никто не набрал очков.")
 
@@ -2055,16 +2118,28 @@ RATING_MAX_PAGES = 10
 RATING_TOP_LIMIT = RATING_PAGE_SIZE * RATING_MAX_PAGES  # топ-100
 
 
+def _player_season_rating_rank(storage: Storage, telegram_id: int, *, limit: int = 100) -> int | None:
+    board = storage.get_season_rating_leaderboard(limit=limit)
+    tid = int(telegram_id)
+    for idx, row in enumerate(board, start=1):
+        try:
+            if int(row.get("telegram_id") or 0) == tid:
+                return idx
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def build_rating_overview(
     storage: Storage,
     requester_id: int,
     *,
     page: int = 0,
 ) -> tuple[str, int, int]:
-    """Возвращает (text, page, total_pages) для топ-100 по 10 на страницу."""
+    """Возвращает (text, page, total_pages) для топ-100 за всё время."""
     top = storage.get_rating_leaderboard(limit=RATING_TOP_LIMIT)
     if not top:
-        return ("🏆 Рейтинг пока пуст. Стань первым сталкером!", 0, 1)
+        return ("🏆 Рейтинг за всё время пока пуст. Стань первым сталкером!", 0, 1)
 
     total = len(top)
     total_pages = max(1, min(RATING_MAX_PAGES, (total + RATING_PAGE_SIZE - 1) // RATING_PAGE_SIZE))
@@ -2073,7 +2148,7 @@ def build_rating_overview(
     chunk = top[start : start + RATING_PAGE_SIZE]
 
     lines = [
-        "🏆 Рейтинг сталкеров (топ-100)",
+        "🏆 Рейтинг за всё время (топ-100)",
         f"Страница {safe_page + 1}/{total_pages} • по {RATING_PAGE_SIZE} игроков",
         "",
     ]
@@ -2101,22 +2176,82 @@ def build_rating_overview(
         lines.append(f"\nТвоя позиция: #{requester_rank}")
     elif top:
         lines.append("\nТебя нет в топ-100.")
+    return ("\n".join(lines), safe_page, total_pages)
 
+
+def build_season_rating_overview(
+    storage: Storage,
+    requester_id: int,
+    *,
+    page: int = 0,
+) -> tuple[str, int, int]:
+    """Возвращает (text, page, total_pages) для топ-100 сезонного рейтинга."""
     now = datetime.now(timezone.utc)
     season = get_rating_season(storage, now)
     days_left = _season_days_left(season, now)
-    season_top = storage.get_season_rating_leaderboard(limit=5)
-    lines.append(f"\n📅 Сезон #{season.get('id')} — осталось дней: {days_left}")
-    if season_top:
-        medals = ["🥇", "🥈", "🥉"]
-        for idx, row in enumerate(season_top):
-            nickname = h(str(row.get("nickname") or f"Игрок {row.get('telegram_id')}"))
-            points = int(row.get("season_rating") or 0)
-            medal = medals[idx] if idx < len(medals) else f"{idx + 1}."
-            lines.append(f"{medal} {nickname} — {points} очк. сезона")
+    top = storage.get_season_rating_leaderboard(limit=RATING_TOP_LIMIT)
+    if not top:
+        return (
+            f"📅 Сезонный рейтинг #{season.get('id')} (топ-100)\n"
+            f"Осталось дней: {days_left}\n\n"
+            f"{_season_reward_blurb()}\n\n"
+            "Пока никто не набрал очков в этом сезоне.",
+            0,
+            1,
+        )
+
+    total = len(top)
+    total_pages = max(1, min(RATING_MAX_PAGES, (total + RATING_PAGE_SIZE - 1) // RATING_PAGE_SIZE))
+    safe_page = max(0, min(int(page), total_pages - 1))
+    start = safe_page * RATING_PAGE_SIZE
+    chunk = top[start : start + RATING_PAGE_SIZE]
+
+    lines = [
+        f"📅 Сезонный рейтинг #{season.get('id')} (топ-100)",
+        f"Осталось дней: {days_left}",
+        "",
+        _season_reward_blurb(),
+        "",
+        f"Страница {safe_page + 1}/{total_pages} • по {RATING_PAGE_SIZE} игроков",
+        "",
+    ]
+    requester_rank = None
+    for offset, row in enumerate(chunk):
+        idx = start + offset + 1
+        faction = row.get("faction") or "нейтрал"
+        nickname = h(str(row.get("nickname") or f"Игрок {row.get('telegram_id')}"))
+        rating = int(row.get("season_rating") or 0)
+        marker = "👑 " if idx == 1 else ""
+        reward_hint = ""
+        if idx in SEASON_RANK_REWARDS:
+            reward_hint = " 🎁"
+        lines.append(f"{idx}. {marker}{nickname} [{faction}] — {rating} очк. сезона{reward_hint}")
+        if int(row.get("telegram_id") or 0) == requester_id:
+            requester_rank = idx
+
+    if requester_rank is None:
+        requester_rank = _player_season_rating_rank(storage, requester_id, limit=RATING_TOP_LIMIT)
+
+    if requester_rank is not None:
+        lines.append(f"\nТвоя позиция: #{requester_rank}")
     else:
-        lines.append("В этом сезоне ещё никто не набрал очков.")
+        stats = storage.get_player_stats(requester_id)
+        season_points = int(stats.get("season_rating") or 0)
+        if season_points > 0:
+            lines.append(f"\nТвои очки сезона: {season_points} (вне топ-100).")
+        else:
+            lines.append("\nТы ещё не набрал очков в этом сезоне.")
+
     return ("\n".join(lines), safe_page, total_pages)
+
+
+def build_rating_menu_text() -> str:
+    return (
+        "🏆 Рейтинг сталкеров\n\n"
+        "• Рейтинг за всё время — общий топ-100.\n"
+        "• Рейтинг за сезон — топ текущего 14-дневного сезона; "
+        "топ-3 получают эксклюзивную снарягу (не продаётся у торговца)."
+    )
 
 
 def calculate_equipment_bonus(character: Character) -> int:
@@ -3591,6 +3726,8 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
     item_key = normalize_shop_item_key(item_key)
     item = SHOP_ITEMS.get(item_key)
     if item is None:
+        if item_key in SEASON_REWARD_ITEM_KEYS:
+            return ActionResult(False, "Эксклюзив сезонного рейтинга — у торговца не продаётся.")
         return ActionResult(False, "Такого товара нет у торговца.")
     qty = max(1, int(amount))
     unit_price = int(item["buy_price"])

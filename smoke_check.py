@@ -864,6 +864,51 @@ def run_smoke_check() -> None:
         assert get_faction_garage(storage, "Долг")["niva_durs"] == [55]
         assert not storage.get_character(111, refresh_energy=False).niva_owned
 
+        # Season rating leaderboard + exclusive rewards.
+        from app.game_logic import (
+            RATING_SEASON_META_KEY,
+            SEASON_REWARD_ITEM_KEYS,
+            build_season_rating_overview,
+            get_rating_season,
+            process_rating_season,
+        )
+
+        assert "weapon_season_champion" in SEASON_REWARD_ITEM_KEYS
+        assert "armor_season_bronze" in SEASON_REWARD_ITEM_KEYS
+        assert "weapon_season_champion" not in SHOP_ITEMS
+        denied_season_buy = buy_item(storage, 111, "weapon_season_champion")
+        assert not denied_season_buy.ok
+        assert "торговца" in denied_season_buy.text.lower() or "эксклюзив" in denied_season_buy.text.lower()
+
+        for tid, pts in ((111, 500), (222, 300), (333, 100)):
+            with storage._connect() as conn:
+                storage._ensure_player_stats_row(conn, tid)
+                conn.execute(
+                    "UPDATE player_stats SET season_rating = ? WHERE telegram_id = ?",
+                    (pts, tid),
+                )
+        season_text, _pg, _pages = build_season_rating_overview(storage, 111, page=0)
+        assert "Сезонный рейтинг" in season_text
+        assert "Чемпион Зоны" in season_text
+        assert "#1" in season_text or "1." in season_text
+
+        season = get_rating_season(storage)
+        past_season = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        storage.set_meta(
+            RATING_SEASON_META_KEY,
+            json.dumps({**season, "ends_at": past_season}, ensure_ascii=False),
+        )
+        end_message = process_rating_season(storage)
+        assert end_message
+        assert "Чемпион Зоны" in end_message
+        inv111 = storage.get_character(111, refresh_energy=False).inventory
+        assert inv111.get("weapon_season_champion", 0) >= 1
+        assert inv111.get("armor_season_champion", 0) >= 1
+        inv222 = storage.get_character(222, refresh_energy=False).inventory
+        assert inv222.get("weapon_season_silver", 0) >= 1
+        inv333 = storage.get_character(333, refresh_energy=False).inventory
+        assert inv333.get("armor_season_bronze", 0) >= 1
+
         _, _, missing_callbacks = _callback_handler_coverage()
         assert not missing_callbacks, f"Missing callback handlers: {', '.join(missing_callbacks)}"
 
