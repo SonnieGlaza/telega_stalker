@@ -242,6 +242,15 @@ def run_smoke_check() -> None:
             storage.change_diesel(111, -no_fuel_player.diesel)
         if no_fuel_player.gasoline > 0:
             storage.change_gasoline(111, -no_fuel_player.gasoline)
+        bound_foot = travel_to(storage, 111, "Болото")
+        assert not bound_foot.ok
+        assert "грузовик" in bound_foot.text.lower() or "пешком" in bound_foot.text.lower()
+        from app.game_logic import garage_deposit_truck, garage_withdraw_truck
+
+        repaired_before = repair_truck(storage, 111)
+        assert repaired_before.ok, repaired_before.text
+        deposited = garage_deposit_truck(storage, 111)
+        assert deposited.ok, deposited.text
         foot_travel = travel_to(storage, 111, "Болото")
         assert foot_travel.ok, foot_travel.text
         assert "пешком" in foot_travel.text.lower()
@@ -253,8 +262,10 @@ def run_smoke_check() -> None:
                 (past2, 111),
             )
         storage.resolve_travel_if_due(111)
-        repaired = repair_truck(storage, 111)
-        assert repaired.ok, repaired.text
+        storage.change_diesel(111, 10)
+        storage.change_money(111, 5000)
+        withdrawn = garage_withdraw_truck(storage, 111)
+        assert withdrawn.ok, withdrawn.text
         after_repair = storage.get_character(111, refresh_energy=False)
         assert after_repair is not None
         assert after_repair.truck_durability == 100
@@ -444,7 +455,7 @@ def run_smoke_check() -> None:
         storage.set_active_contract(111, None)
 
         # Bicycle quest mult only after bike arrival (and then consumed).
-        from app.game_logic import BICYCLE_QUEST_REWARD_MULT, build_players_faction_page_text
+        from app.game_logic import TRANSPORT_QUEST_REWARD_MULT, build_players_faction_page_text
         from app.keyboards import players_faction_page_keyboard
 
         bandit_home = faction_home_base("Бандиты")
@@ -467,7 +478,7 @@ def run_smoke_check() -> None:
         save_mission_session(storage, 333, bike_session)
         bike_done = _finish_success(storage, 333, bike_session)
         assert bike_done.ok, bike_done.text
-        assert f"×{BICYCLE_QUEST_REWARD_MULT:g}" in bike_done.text or "велосипед" in bike_done.text.lower()
+        assert f"×{TRANSPORT_QUEST_REWARD_MULT['bicycle']:g}" in bike_done.text or "велосипед" in bike_done.text.lower()
         assert storage.get_last_arrival_transport(333) is None
         storage.set_last_arrival_transport(333, "bicycle")
         assert storage.consume_last_arrival_transport(333) == "bicycle"
@@ -607,6 +618,8 @@ def run_smoke_check() -> None:
         storage.set_active_contract(111, None)
         storage.restore_energy(111, 100)
         storage.set_location(111, "Росток")
+        if storage.get_character(111, refresh_energy=False).truck_owned:
+            garage_deposit_truck(storage, 111)
         smuggle_start = start_smuggling_run(storage, 111, "Болото", transport_mode="foot")
         assert smuggle_start.ok, smuggle_start.text
         assert get_active_smuggling(storage, 111)

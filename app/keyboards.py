@@ -72,11 +72,14 @@ def quests_keyboard(
     contract_buttons: list[tuple[str, str]] | None = None,
     show_work: bool = False,
     show_turnin: bool = False,
+    show_go_home: bool = False,
     show_cancel: bool = False,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if show_work:
         rows.append([InlineKeyboardButton(text="⚙️ Выполнить работу", callback_data="contract:work")])
+    if show_go_home:
+        rows.append([InlineKeyboardButton(text="🏠 На базу", callback_data="contract:go_home")])
     if show_turnin:
         rows.append([InlineKeyboardButton(text="📦 Сдать отчёт на базе", callback_data="contract:turnin")])
     for label, callback_data in contract_buttons or []:
@@ -869,6 +872,8 @@ def faction_group_keyboard(
     is_leader: bool = False,
     can_withdraw_warehouse: bool = False,
     can_withdraw_treasury: bool = False,
+    can_request_garage_rental: bool = False,
+    pending_garage_requests: int = 0,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="🏛 Клановые задачи", callback_data="clanquest:open")],
@@ -885,9 +890,25 @@ def faction_group_keyboard(
         [InlineKeyboardButton(text="🏚 Сдать Ниву в гараж", callback_data="faction:garage:deposit:niva")],
         [InlineKeyboardButton(text="🏚 Сдать грузовик в гараж", callback_data="faction:garage:deposit:truck")],
     ]
-    if can_withdraw_warehouse:
+    if can_request_garage_rental:
         rows.extend(
             [
+                [InlineKeyboardButton(text="🏚 Запросить аренду Нивы", callback_data="faction:garage:request:niva")],
+                [
+                    InlineKeyboardButton(
+                        text="🏚 Запросить аренду грузовика",
+                        callback_data="faction:garage:request:truck",
+                    )
+                ],
+            ]
+        )
+    if can_withdraw_warehouse:
+        request_label = "📋 Запросы на аренду"
+        if pending_garage_requests > 0:
+            request_label = f"📋 Запросы на аренду ({pending_garage_requests})"
+        rows.extend(
+            [
+                [InlineKeyboardButton(text=request_label, callback_data="faction:garage:requests")],
                 [InlineKeyboardButton(text="📤 Забрать патрон (1 шт.)", callback_data="eco:warehouse:withdraw:ammo_pack")],
                 [InlineKeyboardButton(text="📤 Забрать аптечку (1 шт.)", callback_data="eco:warehouse:withdraw:medkit")],
                 [InlineKeyboardButton(text="📤 Забрать энергетик (1 шт.)", callback_data="eco:warehouse:withdraw:energy_drink")],
@@ -924,6 +945,29 @@ def faction_group_keyboard(
             ]
         )
         rows.append([InlineKeyboardButton(text="🎖 Назначить звание", callback_data="rank:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def garage_rental_requests_keyboard(requests: list[dict[str, object]]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for entry in requests:
+        request_id = str(entry.get("id") or "")
+        nickname = str(entry.get("player_nickname") or "?")
+        vehicle = str(entry.get("vehicle_key") or "")
+        vehicle_label = {"niva": "Нива", "truck": "Грузовик"}.get(vehicle, vehicle)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"✅ {nickname}: {vehicle_label}",
+                    callback_data=f"faction:garage:approve:{request_id}",
+                ),
+                InlineKeyboardButton(
+                    text="❌",
+                    callback_data=f"faction:garage:deny:{request_id}",
+                ),
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="faction:garage:requests:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

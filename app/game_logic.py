@@ -802,12 +802,23 @@ FACTION_HOME_BASE: dict[str, str] = {
     "Бандиты": "Свалка",
 }
 
-# Скорость перехода: пешком ×1, велосипед ×1.5, Нива ×2, грузовик ×5.
+# Скорость перехода и множитель награды за контракт (если доехал на этом транспорте).
 TRAVEL_SPEED_FOOT = 1
-TRAVEL_SPEED_BICYCLE = 1.5
-TRAVEL_SPEED_NIVA = 2
-TRAVEL_SPEED_TRUCK = 5
-BICYCLE_QUEST_REWARD_MULT = 1.5
+TRAVEL_SPEED_BICYCLE = 1.25
+TRAVEL_SPEED_NIVA = 1.5
+TRAVEL_SPEED_TRUCK = 2
+TRANSPORT_QUEST_REWARD_MULT: dict[str, float] = {
+    "foot": 1.0,
+    "bicycle": 1.25,
+    "niva": 1.5,
+    "truck": 2.0,
+}
+TRANSPORT_QUEST_REWARD_LABELS: dict[str, str] = {
+    "foot": "пешком",
+    "bicycle": "велосипед",
+    "niva": "Нива",
+    "truck": "грузовик",
+}
 TRAVEL_ENERGY_FOOT = 16
 TRAVEL_ENERGY_BICYCLE = 11
 TRAVEL_ENERGY_NIVA = 12
@@ -896,6 +907,8 @@ DEPOT_RAID_MAX_LOOT_PERCENT = 50
 DEPOT_RAID_VEHICLE_STEAL_CHANCE = 5  # % шанс угнать 1 машину сверху канистр (только гараж)
 GARAGE_VEHICLE_RENTAL_MINUTES = 30  # аренда при выдаче техники из гаража группировки
 GARAGE_VEHICLE_RENTALS_META = "garage:vehicle_rentals"
+GARAGE_RENTAL_REQUESTS_META = "garage:rental_requests"
+GARAGE_RENTAL_REQUEST_MAX_RANK = 4  # запрос на аренду — ранги 1–4 (5+ подтверждают выдачу)
 DEPOT_RAID_FAIL_MONEY_PENALTY = 90
 DEPOT_RAID_DEFENSE_POWER_RATIO = 0.55  # доля силы домашней базы цели, обороняющая склад/гараж
 
@@ -2443,14 +2456,16 @@ def can_travel_by_bicycle(character: Character) -> bool:
 def describe_travel_fuel_status(character: Character) -> str:
     lines = [f"Запас: дизель {character.diesel}, бензин {character.gasoline}."]
     if can_travel_by_truck(character):
-        lines.append("Грузовик готов (×5, −1 дизель за переход).")
+        lines.append(
+            f"Грузовик готов (×{TRAVEL_SPEED_TRUCK:g}, −1 дизель за переход)."
+        )
     elif character.truck_owned:
         if character.truck_durability <= 0:
             lines.append("Грузовик сломан — без ускорения.")
         else:
             lines.append("Грузовик без дизеля — ускорение недоступно.")
     if can_travel_by_niva(character):
-        lines.append("Нива готова (×2, −1 бензин за переход).")
+        lines.append(f"Нива готова (×{TRAVEL_SPEED_NIVA:g}, −1 бензин за переход).")
     elif character.niva_owned:
         if character.niva_durability <= 0:
             lines.append("Нива сломана — без ускорения.")
@@ -2459,7 +2474,7 @@ def describe_travel_fuel_status(character: Character) -> str:
     if can_travel_by_bicycle(character):
         lines.append(
             f"Велосипед готов (×{TRAVEL_SPEED_BICYCLE:g}, без топлива; "
-            f"награда ×{BICYCLE_QUEST_REWARD_MULT:g} только если доехал на нём)."
+            f"награда ×{TRANSPORT_QUEST_REWARD_MULT['bicycle']:g} если доехал на нём)."
         )
     if (
         not can_travel_by_truck(character)
@@ -2645,10 +2660,11 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
         "Контракты: бери на домашней базе, едь на точку, выполняй работу.",
         f"Домашняя база ({character.faction or '?'}): «{home}»",
         "",
-        "Транспорт ускоряет переход:",
+        "Транспорт ускоряет переход и награду за контракт (если доехал на нём):",
         "• пешком — ×1",
-        f"• велосипед — ×{TRAVEL_SPEED_BICYCLE:g} (без топлива; награда ×{BICYCLE_QUEST_REWARD_MULT:g}, если доехал на нём)",
-        "• Нива — ×2 (нужен бензин), грузовик — ×5 (нужен дизель)",
+        f"• велосипед — ×{TRAVEL_SPEED_BICYCLE:g} (без топлива; награда ×{TRANSPORT_QUEST_REWARD_MULT['bicycle']:g})",
+        f"• Нива — ×{TRAVEL_SPEED_NIVA:g} (бензин; награда ×{TRANSPORT_QUEST_REWARD_MULT['niva']:g})",
+        f"• грузовик — ×{TRAVEL_SPEED_TRUCK:g} (дизель; награда ×{TRANSPORT_QUEST_REWARD_MULT['truck']:g})",
         f"1 игровая минута пути ≈ {TRAVEL_REAL_SECONDS_PER_GAME_MINUTE} сек реального времени.",
         "",
         "Текущие запасы:",
@@ -2906,11 +2922,19 @@ def apply_contract_mission_success(
     )
     base_reward = random.randint(quest.reward_min, quest.reward_max)
     ru_mult = _location_contract_ru_mult(storage, work_location, updated.faction)
-    bicycle_note = ""
-    arrived_transport = storage.get_last_arrival_transport(telegram_id)
+    transport_note = ""
+    arrived_transport = storage.get_last_arrival_transport(telegram_id) or "foot"
+    transport_mult = 1.0
     if arrived_transport == "bicycle" and updated.bicycle_owned:
-        ru_mult *= BICYCLE_QUEST_REWARD_MULT
-        bicycle_note = f" ×{BICYCLE_QUEST_REWARD_MULT:g} велосипед"
+        transport_mult = TRANSPORT_QUEST_REWARD_MULT["bicycle"]
+    elif arrived_transport == "niva" and updated.niva_owned:
+        transport_mult = TRANSPORT_QUEST_REWARD_MULT["niva"]
+    elif arrived_transport == "truck" and updated.truck_owned:
+        transport_mult = TRANSPORT_QUEST_REWARD_MULT["truck"]
+    if transport_mult > 1.0:
+        ru_mult *= transport_mult
+        label = TRANSPORT_QUEST_REWARD_LABELS.get(arrived_transport, arrived_transport)
+        transport_note = f" ×{transport_mult:g} {label}"
         storage.consume_last_arrival_transport(telegram_id)
     reward = max(1, int(round(base_reward * ru_mult)))
     storage.change_money(telegram_id, reward)
@@ -2936,7 +2960,7 @@ def apply_contract_mission_success(
         loc_only = _location_contract_ru_mult(storage, work_location, updated.faction)
         if loc_only > 1.0:
             loc_part = f"локация ×{loc_only:.2f}"
-        parts = [p for p in (loc_part, bicycle_note.strip()) if p]
+        parts = [p for p in (loc_part, transport_note.strip()) if p]
         mult_note = f" ({', '.join(parts)})" if parts else ""
     return ActionResult(
         True,
@@ -3771,7 +3795,7 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
         return ActionResult(
             True,
             f"Велосипед куплен: переходы ×{TRAVEL_SPEED_BICYCLE:g}, "
-            f"награда ×{BICYCLE_QUEST_REWARD_MULT:g} если доехал на велосипеде.",
+            f"награда ×{TRANSPORT_QUEST_REWARD_MULT['bicycle']:g} если доехал на велосипеде.",
         )
     if item_key == "sleeping_bag":
         storage.set_sleeping_bag_owned(telegram_id)
@@ -4690,9 +4714,27 @@ def _compute_niva_wear(distance_px: float | None, travel_minutes: int) -> int:
     return random.randint(min_wear, max_wear)
 
 
-def list_available_travel_modes(character: Character) -> list[tuple[str, str, float, int]]:
-    """Доступные режимы: (mode, label, speed_mult, energy_cost). Всегда можно пешком; велик не прячется за Нивой."""
-    options: list[tuple[str, str, float, int]] = [
+def list_available_travel_modes(character: Character, *, bound_transport: str | None = None) -> list[tuple[str, str, float, int]]:
+    """Доступные режимы: (mode, label, speed_mult, energy_cost)."""
+    bound = bound_transport
+    if bound in ("niva", "truck"):
+        options: list[tuple[str, str, float, int]] = []
+        if bound == "niva" and can_travel_by_niva(character):
+            options.append(
+                ("niva", f"Нива ×{TRAVEL_SPEED_NIVA:g}", float(TRAVEL_SPEED_NIVA), TRAVEL_ENERGY_NIVA)
+            )
+        elif bound == "truck" and can_travel_by_truck(character):
+            options.append(
+                (
+                    "truck",
+                    f"Грузовик ×{TRAVEL_SPEED_TRUCK:g}",
+                    float(TRAVEL_SPEED_TRUCK),
+                    TRAVEL_ENERGY_TRUCK,
+                )
+            )
+        return options or [("foot", "Пешком ×1 (техника недоступна)", float(TRAVEL_SPEED_FOOT), TRAVEL_ENERGY_FOOT)]
+
+    options = [
         ("foot", "Пешком ×1", float(TRAVEL_SPEED_FOOT), TRAVEL_ENERGY_FOOT),
     ]
     if can_travel_by_bicycle(character):
@@ -4723,9 +4765,11 @@ def list_available_travel_modes(character: Character) -> list[tuple[str, str, fl
 def _resolve_travel_transport(
     character: Character,
     preferred_mode: str | None = None,
+    *,
+    bound_transport: str | None = None,
 ) -> tuple[str, float, int, str | None]:
     """Выбрать режим: preferred если доступен, иначе самый быстрый из доступных."""
-    options = list_available_travel_modes(character)
+    options = list_available_travel_modes(character, bound_transport=bound_transport)
     by_mode = {mode: (mode, speed, energy) for mode, _label, speed, energy in options}
     notes: list[str] = []
     if character.truck_owned and character.truck_durability > 0 and character.diesel <= 0:
@@ -4736,13 +4780,24 @@ def _resolve_travel_transport(
         notes.append("Нет бензина — Нива недоступна.")
     elif character.niva_owned and character.niva_durability <= 0:
         notes.append("Нива сломана.")
+    if bound_transport in ("niva", "truck"):
+        notes.append(
+            f"Ты за рулём {_vehicle_label_for_key(bound_transport)} — только на ней/нём."
+        )
     foot_note = " ".join(notes) if notes else None
 
     if preferred_mode:
         picked = by_mode.get(preferred_mode)
         if picked is None:
-            return "foot", float(TRAVEL_SPEED_FOOT), TRAVEL_ENERGY_FOOT, (
-                f"Режим «{preferred_mode}» недоступен."
+            fallback = "foot"
+            if bound_transport in by_mode:
+                fallback = bound_transport
+            fb_mode, fb_speed, fb_energy = by_mode.get(
+                fallback,
+                (fallback, float(TRAVEL_SPEED_FOOT), TRAVEL_ENERGY_FOOT),
+            )
+            return fb_mode, fb_speed, fb_energy, (
+                f"Режим «{preferred_mode}» недоступен." + (f" {foot_note}" if foot_note else "")
             )
         mode, speed, energy = picked
         return mode, speed, energy, foot_note
@@ -4845,8 +4900,27 @@ def travel_to(
     if destination not in locations:
         return ActionResult(False, "Такой локации нет.")
 
+    bound_transport = storage.get_bound_transport(telegram_id)
+    if bound_transport in ("niva", "truck"):
+        vehicle_label = _vehicle_label_for_key(bound_transport)
+        if transport_mode in ("foot", "bicycle") or (
+            transport_mode is not None and transport_mode != bound_transport
+        ):
+            return ActionResult(
+                False,
+                f"Ты за рулём {vehicle_label} — пешком или на другом транспорте не уйти. "
+                "Сдай технику в гараж, когда закончишь.",
+            )
+        if transport_mode is None:
+            transport_mode = bound_transport
+
     if transport_mode is not None:
-        available = {mode for mode, *_rest in list_available_travel_modes(character)}
+        available = {
+            mode
+            for mode, *_rest in list_available_travel_modes(
+                character, bound_transport=bound_transport
+            )
+        }
         if transport_mode not in available:
             labels = {
                 "truck": "Недостаточно дизеля или грузовик недоступен.",
@@ -4859,6 +4933,7 @@ def travel_to(
     picked_mode, speed_mult, energy_cost, foot_note = _resolve_travel_transport(
         character,
         preferred_mode=transport_mode,
+        bound_transport=bound_transport,
     )
     transport_mode = picked_mode
     if transport_mode == "truck" and not can_travel_by_truck(character):
@@ -4911,11 +4986,13 @@ def travel_to(
             vehicle_wear_text = f"\nИзнос Нивы: -{niva_wear}% (прочность: {niva_durability}%)."
 
     storage.start_travel(telegram_id, destination, arrives_at, transport_mode)
+    if transport_mode in ("niva", "truck"):
+        storage.set_bound_transport(telegram_id, transport_mode)
     transport_labels = {
         "foot": "пешком",
         "bicycle": f"на велосипеде (×{TRAVEL_SPEED_BICYCLE:g})",
-        "niva": "на Ниве (×2)",
-        "truck": "на грузовике (×5)",
+        "niva": f"на Ниве (×{TRAVEL_SPEED_NIVA:g})",
+        "truck": f"на грузовике (×{TRAVEL_SPEED_TRUCK:g})",
     }
     note_text = f"\n{foot_note}" if foot_note else ""
     return ActionResult(
@@ -6985,6 +7062,272 @@ def _vehicle_durs_key(vehicle_key: str) -> str:
     return "niva_durs" if vehicle_key == "niva" else "truck_durs"
 
 
+def can_request_garage_vehicle_rental(storage: Storage, character: Character) -> bool:
+    """Ранги 1–4 (не лидер и не 5+) могут запросить аренду из гаража."""
+    if character.faction is None:
+        return False
+    if can_withdraw_faction_warehouse(storage, character):
+        return False
+    level = character_rank_level(character)
+    return 1 <= level <= GARAGE_RENTAL_REQUEST_MAX_RANK
+
+
+def _load_garage_rental_requests(storage: Storage) -> list[dict[str, Any]]:
+    raw = storage.get_meta(GARAGE_RENTAL_REQUESTS_META)
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [dict(item) for item in parsed if isinstance(item, dict)]
+
+
+def _save_garage_rental_requests(storage: Storage, entries: list[dict[str, Any]]) -> None:
+    storage.set_meta(GARAGE_RENTAL_REQUESTS_META, json.dumps(entries, ensure_ascii=False))
+
+
+def _garage_rental_request_id(player_id: int, vehicle_key: str) -> str:
+    return f"{int(player_id)}:{vehicle_key}"
+
+
+def list_garage_rental_requests_for_faction(storage: Storage, faction: str) -> list[dict[str, Any]]:
+    return [entry for entry in _load_garage_rental_requests(storage) if str(entry.get("faction") or "") == faction]
+
+
+def _find_garage_rental_request(storage: Storage, request_id: str) -> dict[str, Any] | None:
+    for entry in _load_garage_rental_requests(storage):
+        if str(entry.get("id") or "") == request_id:
+            return entry
+    return None
+
+
+def _has_active_garage_rental(storage: Storage, player_id: int, vehicle_key: str) -> bool:
+    for entry in _load_garage_vehicle_rentals(storage):
+        if (
+            int(entry.get("player_id") or 0) == int(player_id)
+            and str(entry.get("vehicle_key") or "") == vehicle_key
+        ):
+            return True
+    return False
+
+
+def _fuel_type_for_vehicle(vehicle_key: str) -> str:
+    return "gasoline" if vehicle_key == "niva" else "diesel"
+
+
+def _apply_garage_fuel_on_vehicle_issue(
+    storage: Storage,
+    telegram_id: int,
+    player: Character,
+    garage: dict[str, Any],
+    vehicle_key: str,
+) -> tuple[bool, str]:
+    fuel_type = _fuel_type_for_vehicle(vehicle_key)
+    amount = FUEL_CAN_GASOLINE_AMOUNT if fuel_type == "gasoline" else FUEL_CAN_DIESEL_AMOUNT
+    label = _GARAGE_FUEL_LABELS[fuel_type]
+    changer = storage.change_gasoline if fuel_type == "gasoline" else storage.change_diesel
+    shop_key = "gasoline_can" if fuel_type == "gasoline" else "diesel_can"
+
+    if int(garage.get(fuel_type, 0) or 0) > 0:
+        garage[fuel_type] = int(garage.get(fuel_type, 0) or 0) - 1
+        if not changer(telegram_id, amount):
+            garage[fuel_type] = int(garage.get(fuel_type, 0) or 0) + 1
+            return False, f"Не удалось выдать {label} из гаража."
+        return True, f"Топливо из гаража: канистра {label} (+{amount})."
+
+    personal = int(player.gasoline if fuel_type == "gasoline" else player.diesel)
+    if personal >= 1:
+        return True, f"Топливо из личного запаса ({label}: {personal})."
+
+    buy_price = int(SHOP_ITEMS[shop_key]["buy_price"])
+    if not storage.change_money(telegram_id, -buy_price):
+        return False, (
+            f"В гараже нет {label}, а на канистру не хватает денег ({buy_price} RU)."
+        )
+    if not changer(telegram_id, amount):
+        storage.change_money(telegram_id, buy_price)
+        return False, f"Не удалось оплатить канистру {label}."
+    return True, f"Топливо оплачено самому: {buy_price} RU (+{amount} {label})."
+
+
+def _issue_garage_vehicle(
+    storage: Storage,
+    telegram_id: int,
+    vehicle_key: str,
+    *,
+    approver_note: str = "",
+) -> ActionResult:
+    if vehicle_key not in ("niva", "truck"):
+        return ActionResult(False, "Неизвестный тип техники.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Гараж доступен только бойцам группировки.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    owned = player.niva_owned if vehicle_key == "niva" else player.truck_owned
+    if owned:
+        return ActionResult(False, f"У игрока уже есть {_vehicle_label_for_key(vehicle_key)}.")
+    garage = get_faction_garage(storage, player.faction)
+    if int(garage.get(vehicle_key, 0) or 0) <= 0:
+        return ActionResult(False, f"В гараже нет свободных {_vehicle_label_for_key(vehicle_key)}.")
+
+    fuel_ok, fuel_note = _apply_garage_fuel_on_vehicle_issue(
+        storage, telegram_id, player, garage, vehicle_key
+    )
+    if not fuel_ok:
+        return ActionResult(False, fuel_note)
+
+    garage[vehicle_key] = int(garage.get(vehicle_key, 0) or 0) - 1
+    durs_key = _vehicle_durs_key(vehicle_key)
+    durs = list(garage.get(durs_key) or [])
+    dur = durs.pop(0) if durs else 100
+    garage[durs_key] = durs
+    _set_faction_garage(storage, player.faction, garage)
+
+    _schedule_garage_vehicle_rental(
+        storage,
+        vehicle_key=vehicle_key,
+        dur=dur,
+        faction=player.faction,
+        player_id=telegram_id,
+    )
+    if vehicle_key == "niva":
+        storage.set_niva_owned(telegram_id)
+        storage.set_niva_durability(telegram_id, dur)
+    else:
+        storage.set_truck_owned(telegram_id)
+        storage.set_truck_durability(telegram_id, dur)
+    storage.set_bound_transport(telegram_id, vehicle_key)
+
+    extra = f"\n{approver_note}" if approver_note else ""
+    return ActionResult(
+        True,
+        f"{_vehicle_label_for_key(vehicle_key)} из гаража закреплена за тобой "
+        f"(прочность {dur}%) на {GARAGE_VEHICLE_RENTAL_MINUTES} мин.\n"
+        f"{fuel_note}\n"
+        f"В гараже осталось: {garage[vehicle_key]} шт.{extra}",
+    )
+
+
+def request_garage_vehicle_rental(storage: Storage, telegram_id: int, vehicle_key: str) -> ActionResult:
+    if vehicle_key not in ("niva", "truck"):
+        return ActionResult(False, "Неизвестный тип техники.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Гараж доступен только бойцам группировки.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if not can_request_garage_vehicle_rental(storage, player):
+        return ActionResult(
+            False,
+            "Запрос на аренду доступен бойцам 1–4 ранга. С 5 ранга — прямая выдача или подтверждение чужих запросов.",
+        )
+    if vehicle_key == "niva" and player.niva_owned:
+        return ActionResult(False, "У тебя уже есть Нива.")
+    if vehicle_key == "truck" and player.truck_owned:
+        return ActionResult(False, "У тебя уже есть грузовик.")
+    garage = get_faction_garage(storage, player.faction)
+    if int(garage.get(vehicle_key, 0) or 0) <= 0:
+        return ActionResult(False, f"В гараже нет {_vehicle_label_for_key(vehicle_key)} для аренды.")
+
+    request_id = _garage_rental_request_id(telegram_id, vehicle_key)
+    entries = _load_garage_rental_requests(storage)
+    if any(str(entry.get("id") or "") == request_id for entry in entries):
+        return ActionResult(False, "Такой запрос уже отправлен — жди подтверждения от 5+ ранга.")
+
+    entries.append(
+        {
+            "id": request_id,
+            "faction": player.faction,
+            "player_id": int(telegram_id),
+            "player_nickname": player.nickname,
+            "vehicle_key": vehicle_key,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    _save_garage_rental_requests(storage, entries)
+    return ActionResult(
+        True,
+        f"Запрос на аренду {_vehicle_label_for_key(vehicle_key)} отправлен в «{player.faction}». "
+        "Ожидай подтверждения от бойца 5+ ранга.",
+    )
+
+
+def approve_garage_rental_request(storage: Storage, approver_id: int, request_id: str) -> ActionResult:
+    approver = storage.get_character(approver_id, refresh_energy=False)
+    if approver is None or approver.faction is None:
+        return ActionResult(False, "Сначала создай персонажа и выбери группировку.")
+    if not can_withdraw_faction_warehouse(storage, approver):
+        return ActionResult(False, "Подтверждать выдачу могут бойцы 5+ ранга (или лидер).")
+    entry = _find_garage_rental_request(storage, request_id)
+    if entry is None:
+        return ActionResult(False, "Запрос не найден или уже обработан.")
+    if str(entry.get("faction") or "") != approver.faction:
+        return ActionResult(False, "Это запрос другой группировки.")
+
+    player_id = int(entry.get("player_id") or 0)
+    vehicle_key = str(entry.get("vehicle_key") or "")
+    nickname = str(entry.get("player_nickname") or "?")
+    result = _issue_garage_vehicle(
+        storage,
+        player_id,
+        vehicle_key,
+        approver_note=f"Подтвердил: {approver.nickname}.",
+    )
+    if result.ok:
+        entries = [
+            item for item in _load_garage_rental_requests(storage) if str(item.get("id") or "") != request_id
+        ]
+        _save_garage_rental_requests(storage, entries)
+        return ActionResult(
+            True,
+            f"Выдано игроку {nickname}: {_vehicle_label_for_key(vehicle_key)}.\n{result.text}",
+        )
+    return result
+
+
+def deny_garage_rental_request(storage: Storage, approver_id: int, request_id: str) -> ActionResult:
+    approver = storage.get_character(approver_id, refresh_energy=False)
+    if approver is None or approver.faction is None:
+        return ActionResult(False, "Сначала создай персонажа и выбери группировку.")
+    if not can_withdraw_faction_warehouse(storage, approver):
+        return ActionResult(False, "Отклонять запросы могут бойцы 5+ ранга (или лидер).")
+    entry = _find_garage_rental_request(storage, request_id)
+    if entry is None:
+        return ActionResult(False, "Запрос не найден или уже обработан.")
+    if str(entry.get("faction") or "") != approver.faction:
+        return ActionResult(False, "Это запрос другой группировки.")
+    nickname = str(entry.get("player_nickname") or "?")
+    vehicle_key = str(entry.get("vehicle_key") or "")
+    entries = [
+        item for item in _load_garage_rental_requests(storage) if str(item.get("id") or "") != request_id
+    ]
+    _save_garage_rental_requests(storage, entries)
+    return ActionResult(
+        True,
+        f"Запрос {nickname} на {_vehicle_label_for_key(vehicle_key)} отклонён.",
+    )
+
+
+def build_garage_rental_requests_overview(storage: Storage, telegram_id: int) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return "Гараж доступен только бойцам группировки."
+    requests = list_garage_rental_requests_for_faction(storage, player.faction)
+    if not requests:
+        return f"📋 Запросы на аренду «{player.faction}»: пусто."
+    lines = [f"📋 Запросы на аренду «{player.faction}» ({len(requests)}):"]
+    for entry in requests:
+        nickname = str(entry.get("player_nickname") or "?")
+        vehicle = _vehicle_label_for_key(str(entry.get("vehicle_key") or ""))
+        lines.append(f"• {nickname} — {vehicle}")
+    lines.append("\nПодтверди или отклони запрос кнопками ниже.")
+    return "\n".join(lines)
+
+
 def _add_vehicle_to_garage_data(garage: dict[str, Any], *, vehicle_key: str, durs_key: str, dur: int) -> None:
     garage[vehicle_key] = int(garage.get(vehicle_key, 0) or 0) + 1
     durs = list(garage.get(durs_key) or [])
@@ -7059,6 +7402,7 @@ def process_due_garage_vehicle_rentals(storage: Storage) -> list[tuple[str, str]
             elif vehicle_key == "truck" and player.truck_owned:
                 dur = max(0, min(100, int(player.truck_durability)))
                 storage.clear_truck_owned(player_id)
+            storage.clear_bound_transport(player_id)
 
         if faction:
             garage = get_faction_garage(storage, faction)
@@ -7089,8 +7433,10 @@ def build_faction_garage_overview(storage: Storage, faction: str) -> str:
         f"• Канистр бензина (+{FUEL_CAN_GASOLINE_AMOUNT} каждая): {garage['gasoline']}\n"
         f"• Канистр дизеля (+{FUEL_CAN_DIESEL_AMOUNT} каждая): {garage['diesel']}\n\n"
         "Сдать канистру можно из своего запаса топлива; забрать — с 5 ранга (или лидеру).\n"
-        f"Нива/грузовик из гаража — аренда на {GARAGE_VEHICLE_RENTAL_MINUTES} мин, затем возвращаются в гараж.\n"
-        "Прочность техники при сдаче сохраняется."
+        f"Ранги 1–4 — запрос на аренду; 5+ — выдача или подтверждение запроса.\n"
+        f"При выдаче топливо берётся из гаража; если канистр пуст — платишь сам.\n"
+        f"Нива/грузовик — аренда {GARAGE_VEHICLE_RENTAL_MINUTES} мин; перед сдачей грузовика — полный ремонт.\n"
+        "На арендованной технике нельзя слезть и идти пешком."
     )
 
 
@@ -7158,6 +7504,7 @@ def garage_deposit_niva(storage: Storage, telegram_id: int) -> ActionResult:
     dur = max(0, min(100, int(player.niva_durability)))
     _cancel_garage_vehicle_rental(storage, player_id=telegram_id, vehicle_key="niva")
     storage.clear_niva_owned(telegram_id)
+    storage.clear_bound_transport(telegram_id)
     garage = get_faction_garage(storage, player.faction)
     garage["niva"] = int(garage.get("niva", 0) or 0) + 1
     durs = list(garage.get("niva_durs") or [])
@@ -7176,32 +7523,9 @@ def garage_withdraw_niva(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Гараж доступен только бойцам группировки.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
-    if player.niva_owned:
-        return ActionResult(False, "У тебя уже есть своя Нива.")
     if not can_withdraw_faction_warehouse(storage, player):
         return ActionResult(False, "Забирать из гаража можно с 5 ранга (или лидеру группировки).")
-    garage = get_faction_garage(storage, player.faction)
-    if garage.get("niva", 0) <= 0:
-        return ActionResult(False, "В гараже нет свободных Нив.")
-    garage["niva"] = int(garage.get("niva", 0) or 0) - 1
-    durs = list(garage.get("niva_durs") or [])
-    dur = durs.pop(0) if durs else 100
-    garage["niva_durs"] = durs
-    _set_faction_garage(storage, player.faction, garage)
-    _schedule_garage_vehicle_rental(
-        storage,
-        vehicle_key="niva",
-        dur=dur,
-        faction=player.faction,
-        player_id=telegram_id,
-    )
-    storage.set_niva_owned(telegram_id)
-    storage.set_niva_durability(telegram_id, dur)
-    return ActionResult(
-        True,
-        f"Нива из гаража закреплена за тобой (прочность {dur}%) на {GARAGE_VEHICLE_RENTAL_MINUTES} мин.\n"
-        f"В гараже осталось: {garage['niva']} шт.",
-    )
+    return _issue_garage_vehicle(storage, telegram_id, "niva")
 
 
 def garage_deposit_truck(storage: Storage, telegram_id: int) -> ActionResult:
@@ -7212,9 +7536,16 @@ def garage_deposit_truck(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, _dead_block_text())
     if not player.truck_owned:
         return ActionResult(False, "У тебя нет грузовика, чтобы сдать его в гараж.")
+    if _has_active_garage_rental(storage, telegram_id, "truck"):
+        if int(player.truck_durability) < 100:
+            return ActionResult(
+                False,
+                "Перед сдачей арендованного грузовика нужен полный ремонт (100% прочности).",
+            )
     dur = max(0, min(100, int(player.truck_durability)))
     _cancel_garage_vehicle_rental(storage, player_id=telegram_id, vehicle_key="truck")
     storage.clear_truck_owned(telegram_id)
+    storage.clear_bound_transport(telegram_id)
     garage = get_faction_garage(storage, player.faction)
     garage["truck"] = int(garage.get("truck", 0) or 0) + 1
     durs = list(garage.get("truck_durs") or [])
@@ -7233,32 +7564,9 @@ def garage_withdraw_truck(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Гараж доступен только бойцам группировки.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
-    if player.truck_owned:
-        return ActionResult(False, "У тебя уже есть свой грузовик.")
     if not can_withdraw_faction_warehouse(storage, player):
         return ActionResult(False, "Забирать из гаража можно с 5 ранга (или лидеру группировки).")
-    garage = get_faction_garage(storage, player.faction)
-    if garage.get("truck", 0) <= 0:
-        return ActionResult(False, "В гараже нет свободных грузовиков.")
-    garage["truck"] = int(garage.get("truck", 0) or 0) - 1
-    durs = list(garage.get("truck_durs") or [])
-    dur = durs.pop(0) if durs else 100
-    garage["truck_durs"] = durs
-    _set_faction_garage(storage, player.faction, garage)
-    _schedule_garage_vehicle_rental(
-        storage,
-        vehicle_key="truck",
-        dur=dur,
-        faction=player.faction,
-        player_id=telegram_id,
-    )
-    storage.set_truck_owned(telegram_id)
-    storage.set_truck_durability(telegram_id, dur)
-    return ActionResult(
-        True,
-        f"Грузовик из гаража закреплён за тобой (прочность {dur}%) на {GARAGE_VEHICLE_RENTAL_MINUTES} мин.\n"
-        f"В гараже осталось: {garage['truck']} шт.",
-    )
+    return _issue_garage_vehicle(storage, telegram_id, "truck")
 
 
 def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:

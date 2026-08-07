@@ -128,6 +128,8 @@ from app.game_logic import (
     DUEL_LOSER_HP_REMAINING,
     TRANSFER_FEE_PERCENT,
     TRAVEL_SPEED_BICYCLE,
+    TRAVEL_SPEED_NIVA,
+    TRAVEL_SPEED_TRUCK,
     RESOURCE_POINT_INCOME_PER_HOUR,
     BASE_POINT_INCOME_PER_HOUR,
     build_achievements_overview,
@@ -187,6 +189,12 @@ from app.game_logic import (
     garage_withdraw_niva,
     garage_deposit_truck,
     garage_withdraw_truck,
+    request_garage_vehicle_rental,
+    approve_garage_rental_request,
+    deny_garage_rental_request,
+    build_garage_rental_requests_overview,
+    list_garage_rental_requests_for_faction,
+    can_request_garage_vehicle_rental,
     format_inventory,
     repair_gear,
     upgrade_armor,
@@ -280,6 +288,7 @@ from app.keyboards import (
     economy_keyboard,
     smuggling_keyboard,
     faction_group_keyboard,
+    garage_rental_requests_keyboard,
     faction_ranks_members_keyboard,
     faction_rank_pick_keyboard,
     inventory_equipment_keyboard,
@@ -870,8 +879,8 @@ def _build_info_text(player: Character) -> str:
         "☠️ журнал смертей (последние 5).\n"
         "• 🏕 Вылазка — война, переходы, рейды и 👥 кооп-вылазка (можно эвакуировать раненого напарника).\n"
         "• 👥 Группировка — склад/казна/гараж: сдать может любой; забрать склад/гараж с 5 ранга, "
-        "казна — только лидер. В гараже хранятся канистры топлива и сданные Нивы/грузовики; "
-        "техника из гаража выдаётся на 30 мин (аренда).\n"
+        "ранги 1–4 — запрос на аренду авто. В гараже канистры и сданные Нивы/грузовики; "
+        "техника из гаража — аренда 30 мин, перед сдачей грузовика — полный ремонт.\n"
         "• 🏦 Экономика — биржа (свои лоты, фильтры по категориям: артефакты/расходники/топливо), "
         "рынок снаряжения, перевозка контрабанды.\n"
         "• 📋 Задания — контракты с переездом (есть 🗓 контракты дня и 📅 контракт недели "
@@ -888,8 +897,9 @@ def _build_info_text(player: Character) -> str:
         "Механики:\n"
         "• 🗺 Переходы: 1 игр. мин ≈ 10 сек реально;\n"
         f"  пешком ×1, велосипед ×{TRAVEL_SPEED_BICYCLE:g}, "
-        "Нива ×2 + бензин, грузовик ×5 + дизель. Нива и грузовик изнашиваются в пути — "
-        "чинятся у торговца.\n"
+        f"Нива ×{TRAVEL_SPEED_NIVA:g} + бензин, грузовик ×{TRAVEL_SPEED_TRUCK:g} + дизель. "
+        "Награда за контракт с теми же множителями, если доехал на этом транспорте. "
+        "На арендованной технике нельзя слезть и идти пешком.\n"
         "• 📋 Контракты: вылазка на сетке — сам обходишь угрозы (аномалии/мутанты/НПС) "
         "и решаешь, победить или обойти; чем выше сложность, тем больше угроз.\n"
         "• 🗓 Контракты дня/недели: ротация в «Заданиях», бонус RU и рейтинга сверху, "
@@ -2446,6 +2456,7 @@ def _quests_menu_payload(storage, player):
     contract_buttons: list[tuple[str, str]] = []
     show_work = False
     show_turnin = False
+    show_go_home = False
     show_cancel = bool(active)
 
     if active:
@@ -2455,6 +2466,7 @@ def _quests_menu_payload(storage, player):
             show_work = player.location == template.work_location and not traveling
         if stage == "return":
             show_turnin = player.location == home and not traveling
+            show_go_home = player.location != home and not traveling
     elif at_home:
         from app.game_logic import (
             list_quest_contracts_for_character,
@@ -2482,6 +2494,7 @@ def _quests_menu_payload(storage, player):
         contract_buttons=contract_buttons,
         show_work=show_work,
         show_turnin=show_turnin,
+        show_go_home=show_go_home,
         show_cancel=show_cancel,
     )
     intro = (
@@ -3172,6 +3185,46 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
         caption=str(payload.get("caption") or ""),
         note=str(payload.get("move_note") or result.text),
     )
+
+@router.callback_query(F.data == "contract:go_home")
+async def contract_go_home_callback(callback: CallbackQuery, bot: Bot) -> None:
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    home = faction_home_base(player.faction)
+    if player.location == home:
+        await callback.answer("Ты уже на базе.", show_alert=True)
+        return
+    active = storage.get_active_contract(telegram_id)
+    if not active or str(active.get("stage", "")) != "return":
+        await callback.answer("Сейчас нечего везти на базу.", show_alert=True)
+        return
+    bound = storage.get_bound_transport(telegram_id)
+    preferred_mode: str | None = None
+    if bound in ("niva", "truck"):
+        preferred_mode = bound
+    result = travel_to(storage, telegram_id, home, transport_mode=preferred_mode)
+    if not result.ok:
+        await reply_action_result(callback, result.text)
+        return
+    await safe_callback_answer(callback, "На базу!")
+    if callback.message is not None:
+        await callback.message.answer(action_result_text(telegram_id, result.text))
+    else:
+        await bot.send_message(telegram_id, action_result_text(telegram_id, result.text))
+    clear_travel_eta_message_id(storage, telegram_id)
+    await publish_travel_live_eta(bot, telegram_id)
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is not None:
+        text, keyboard = _quests_menu_payload(storage, player)
+        try:
+            await edit_menu_message(callback, text, keyboard, answer_callback=False)
+        except TelegramBadRequest:
+            pass
+
 
 @router.callback_query(F.data == "contract:turnin")
 async def contract_turnin_callback(callback: CallbackQuery) -> None:
@@ -4403,7 +4456,8 @@ async def travel_back_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("travel:to:"))
 async def travel_pick_destination(callback: CallbackQuery) -> None:
     destination = (callback.data or "").removeprefix("travel:to:").strip()
-    player = get_storage().get_character(callback.from_user.id)
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id)
     if player is None:
         await callback.answer("Сначала создай персонажа.", show_alert=True)
         return
@@ -4412,7 +4466,9 @@ async def travel_pick_destination(callback: CallbackQuery) -> None:
         return
     modes = [
         (mode, f"{label} (−{energy} эн.)")
-        for mode, label, _speed, energy in list_available_travel_modes(player)
+        for mode, label, _speed, energy in list_available_travel_modes(
+            player, bound_transport=storage.get_bound_transport(callback.from_user.id)
+        )
     ]
     await edit_menu_message(
         callback,
@@ -4903,10 +4959,16 @@ def _faction_group_keyboard_for(telegram_id: int):
     )
     can_wh = bool(player and can_withdraw_faction_warehouse(storage, player))
     can_tr = bool(player and can_withdraw_faction_treasury(storage, player))
+    can_request = bool(player and can_request_garage_vehicle_rental(storage, player))
+    pending = 0
+    if player and player.faction and can_wh:
+        pending = len(list_garage_rental_requests_for_faction(storage, player.faction))
     return faction_group_keyboard(
         is_leader=is_leader,
         can_withdraw_warehouse=can_wh,
         can_withdraw_treasury=can_tr,
+        can_request_garage_rental=can_request,
+        pending_garage_requests=pending,
     )
 
 
@@ -4994,6 +5056,84 @@ async def faction_garage_withdraw_callback(callback: CallbackQuery) -> None:
     else:
         result = ActionResult(False, "Неизвестный тип выдачи из гаража.")
     await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data.startswith("faction:garage:request:"))
+async def faction_garage_request_callback(callback: CallbackQuery) -> None:
+    kind = (callback.data or "").split(":", maxsplit=3)[3]
+    storage = get_storage()
+    if kind not in ("niva", "truck"):
+        await callback.answer("Неизвестный запрос.", show_alert=True)
+        return
+    result = request_garage_vehicle_rental(storage, callback.from_user.id, kind)
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "faction:garage:requests:back")
+async def faction_garage_requests_back_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    text = build_faction_group_overview(storage, callback.from_user.id)
+    await edit_menu_message(callback, text, _faction_group_keyboard_for(callback.from_user.id))
+
+
+@router.callback_query(F.data == "faction:garage:requests")
+async def faction_garage_requests_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Сначала выбери группировку.", show_alert=True)
+        return
+    if not can_withdraw_faction_warehouse(storage, player):
+        await callback.answer("Запросы видят бойцы 5+ ранга.", show_alert=True)
+        return
+    requests = list_garage_rental_requests_for_faction(storage, player.faction)
+    text = build_garage_rental_requests_overview(storage, callback.from_user.id)
+    keyboard = garage_rental_requests_keyboard(requests) if requests else _faction_group_keyboard_for(
+        callback.from_user.id
+    )
+    await edit_menu_message(callback, text, keyboard)
+
+
+@router.callback_query(F.data.startswith("faction:garage:approve:"))
+async def faction_garage_approve_callback(callback: CallbackQuery) -> None:
+    request_id = (callback.data or "").split(":", maxsplit=3)[3]
+    storage = get_storage()
+    result = approve_garage_rental_request(storage, callback.from_user.id, request_id)
+    await reply_action_result(callback, result.text)
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is not None and player.faction:
+        requests = list_garage_rental_requests_for_faction(storage, player.faction)
+        text = build_garage_rental_requests_overview(storage, callback.from_user.id)
+        keyboard = garage_rental_requests_keyboard(requests) if requests else _faction_group_keyboard_for(
+            callback.from_user.id
+        )
+        try:
+            await edit_menu_message(callback, text, keyboard, answer_callback=False)
+        except TelegramBadRequest:
+            pass
+
+
+@router.callback_query(F.data.startswith("faction:garage:deny:"))
+async def faction_garage_deny_callback(callback: CallbackQuery) -> None:
+    request_id = (callback.data or "").split(":", maxsplit=3)[3]
+    storage = get_storage()
+    result = deny_garage_rental_request(storage, callback.from_user.id, request_id)
+    await reply_action_result(callback, result.text)
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is not None and player.faction:
+        requests = list_garage_rental_requests_for_faction(storage, player.faction)
+        text = build_garage_rental_requests_overview(storage, callback.from_user.id)
+        keyboard = garage_rental_requests_keyboard(requests) if requests else _faction_group_keyboard_for(
+            callback.from_user.id
+        )
+        try:
+            await edit_menu_message(callback, text, keyboard, answer_callback=False)
+        except TelegramBadRequest:
+            pass
 
 
 @router.callback_query(F.data.startswith("eco:treasury:deposit:"))

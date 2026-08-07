@@ -1426,6 +1426,19 @@ class Storage:
             self.delete_meta(key)
         return value
 
+    def set_bound_transport(self, telegram_id: int, transport: str | None) -> None:
+        key = f"bound_transport:{int(telegram_id)}"
+        if transport:
+            self.set_meta(key, str(transport))
+        else:
+            self.delete_meta(key)
+
+    def get_bound_transport(self, telegram_id: int) -> str | None:
+        return self.get_meta(f"bound_transport:{int(telegram_id)}")
+
+    def clear_bound_transport(self, telegram_id: int) -> None:
+        self.delete_meta(f"bound_transport:{int(telegram_id)}")
+
     @staticmethod
     def _arrival_notice_key(telegram_id: int) -> str:
         return f"arrival_notice:{int(telegram_id)}"
