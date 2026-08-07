@@ -171,7 +171,7 @@ from app.game_logic import (
     DAILY_CONTRACT_BONUS_PERCENT,
     WEEKLY_CONTRACT_BONUS_PERCENT,
     process_due_travels,
-    process_due_garage_stolen_returns,
+    process_due_garage_vehicle_rentals,
     collect_travel_eta_notices,
     process_zone_event_cycle,
     build_players_root_text,
@@ -867,7 +867,8 @@ def _build_info_text(player: Character) -> str:
         "☠️ журнал смертей (последние 5).\n"
         "• 🏕 Вылазка — война, переходы, рейды и 👥 кооп-вылазка (можно эвакуировать раненого напарника).\n"
         "• 👥 Группировка — склад/казна/гараж: сдать может любой; забрать склад/гараж с 5 ранга, "
-        "казна — только лидер. В гараже хранятся канистры топлива и сданные Нивы/грузовики.\n"
+        "казна — только лидер. В гараже хранятся канистры топлива и сданные Нивы/грузовики; "
+        "техника из гаража выдаётся на 30 мин (аренда).\n"
         "• 🏦 Экономика — биржа (свои лоты, фильтры по категориям: артефакты/расходники/топливо), "
         "рынок снаряжения, перевозка контрабанды.\n"
         "• 📋 Задания — контракты с переездом (есть 🗓 контракты дня и 📅 контракт недели "
@@ -5612,21 +5613,20 @@ async def run_bot() -> None:
                 logger.exception("Points income tick failed")
             try:
                 storage = get_storage()
-                return_messages = process_due_garage_stolen_returns(storage)
-                for message_text, owner_faction, holder_faction in return_messages:
+                return_messages = process_due_garage_vehicle_rentals(storage)
+                for message_text, faction in return_messages:
                     notify_ids: set[int] = set()
-                    for faction in (owner_faction, holder_faction):
-                        for user_id in storage.list_faction_member_ids(faction):
-                            notify_ids.add(int(user_id))
+                    for user_id in storage.list_faction_member_ids(faction):
+                        notify_ids.add(int(user_id))
                     for user_id in notify_ids:
                         if not is_notify_enabled(storage, user_id, "faction"):
                             continue
                         try:
                             await bot.send_message(user_id, message_text)
                         except Exception:
-                            logger.debug("Failed garage return notify to %s", user_id)
+                            logger.debug("Failed garage rental return notify to %s", user_id)
             except Exception:
-                logger.exception("Garage stolen return tick failed")
+                logger.exception("Garage vehicle rental tick failed")
             try:
                 storage = get_storage()
                 message_text, notify_ids, killed_ids = process_emission_cycle(storage)
