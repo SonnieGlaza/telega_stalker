@@ -942,14 +942,15 @@ def rgrid_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
         return result
     session.hp[str(telegram_id)] = new_hp
     session.medkits_used[str(telegram_id)] = True
-    session.log.append(f"{h(player.nickname)} использовал аптечку.")
+    medkit_text = f"{player.nickname}, использует аптечку."
+    session.log.append(medkit_text)
     _advance(session)
     done = _after_player_turn(storage, session)
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
         return ActionResult(False, "Ход уже выполнен.")
-    return ActionResult(True, result.text, payload={"rgrid_active": True})
+    return ActionResult(True, medkit_text, payload={"rgrid_active": True})
 
 
 def rgrid_forfeit(storage: Storage, telegram_id: int) -> ActionResult:
