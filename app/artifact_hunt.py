@@ -557,7 +557,7 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             False,
             f"Ты влетел в аномалию на «{session.location}».\n"
             "Сознание гаснет… Респавн из инвентаря (мутанты обшарят рюкзак).",
-            payload={"hunt_active": False, "hunt_dead": True},
+            payload={"hunt_active": False, "hunt_dead": True, "death_location": session.location},
         )
 
     gain = _signal_gain(session.player, session.artifact)

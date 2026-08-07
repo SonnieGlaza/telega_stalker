@@ -187,6 +187,7 @@ from app.game_logic import (
     build_faction_member_rank_pick_text,
     character_rank_title,
     build_dead_character_text,
+    build_battle_death_text,
     respawn_character,
     format_personal_stash,
     deposit_to_personal_stash,
@@ -2421,6 +2422,37 @@ async def contract_work_callback(callback: CallbackQuery) -> None:
             pass
 
 
+async def _dismiss_battle_map(callback: CallbackQuery) -> None:
+    """Убрать карту боя (фото с кнопками) из чата."""
+    message = callback.message
+    if message is None:
+        return
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        try:
+            await message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+
+
+async def _send_battle_death_notice(
+    bot: Bot,
+    user_id: int,
+    player: Character,
+    *,
+    callback: CallbackQuery | None = None,
+    where: str | None = None,
+) -> None:
+    if callback is not None:
+        await _dismiss_battle_map(callback)
+    text = build_battle_death_text(player, where=where)
+    try:
+        await bot.send_message(user_id, text, reply_markup=dead_character_keyboard())
+    except Exception:
+        logger.exception("Failed battle death notice to %s", user_id)
+
+
 async def _send_or_edit_quest_mission_frame(
     callback: CallbackQuery,
     *,
@@ -2626,10 +2658,20 @@ async def _notify_coop_finished(bot: Bot, result: Any) -> None:
     if not payload.get("coop_done"):
         return
     await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
+    storage = get_storage()
     notify_ids = [int(x) for x in (payload.get("notify_all") or [])]
+    death_where = payload.get("death_location")
     for pid in notify_ids:
+        player = storage.get_character(pid, refresh_energy=False)
         try:
-            await bot.send_message(pid, action_result_text(pid, result.text))
+            if player is not None and player.health <= 0 and not payload.get("coop_success"):
+                await bot.send_message(
+                    pid,
+                    build_battle_death_text(player, where=str(death_where or player.location)),
+                    reply_markup=dead_character_keyboard(),
+                )
+            else:
+                await bot.send_message(pid, action_result_text(pid, result.text))
         except Exception:
             logger.exception("Failed coop result notify to %s", pid)
 
@@ -2701,13 +2743,18 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
     payload = result.payload or {}
 
     if payload.get("mission_dead"):
-        await reply_action_result(callback, result.text)
         player = storage.get_character(telegram_id, refresh_energy=False)
-        if player is not None and player.health <= 0 and callback.message:
-            await callback.message.answer(
-                build_dead_character_text(player),
-                reply_markup=dead_character_keyboard(),
+        if player is not None and player.health <= 0:
+            await _send_battle_death_notice(
+                callback.bot,
+                telegram_id,
+                player,
+                callback=callback,
+                where=str(payload.get("death_location") or player.location),
             )
+            await safe_callback_answer(callback, "☠️ Откинулся…")
+        else:
+            await reply_action_result(callback, result.text)
         return
 
     if payload.get("mission_done") or not payload.get("mission_active"):
@@ -3212,13 +3259,18 @@ async def artifact_hunt_callback(callback: CallbackQuery) -> None:
     payload = result.payload or {}
 
     if payload.get("hunt_dead"):
-        await reply_action_result(callback, result.text)
         player = storage.get_character(telegram_id, refresh_energy=False)
-        if player is not None and player.health <= 0 and callback.message:
-            await callback.message.answer(
-                build_dead_character_text(player),
-                reply_markup=dead_character_keyboard(),
+        if player is not None and player.health <= 0:
+            await _send_battle_death_notice(
+                callback.bot,
+                telegram_id,
+                player,
+                callback=callback,
+                where=str(payload.get("death_location") or player.location),
             )
+            await safe_callback_answer(callback, "☠️ Аномалия…")
+        else:
+            await reply_action_result(callback, result.text)
         return
 
     if payload.get("hunt_done") or not payload.get("hunt_active"):

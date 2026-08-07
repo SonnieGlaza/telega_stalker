@@ -765,7 +765,7 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
             return ActionResult(
                 False,
                 f"Ты пал в бою на «{session.location}».\nКонтракт сорван.",
-                payload={"mission_active": False, "mission_dead": True},
+                payload={"mission_active": False, "mission_dead": True, "death_location": session.location},
             )
         return None
 
@@ -785,7 +785,7 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
             return ActionResult(
                 False,
                 f"Аномалия на «{session.location}». Сознание гаснет…\nКонтракт сорван.",
-                payload={"mission_active": False, "mission_dead": True},
+                payload={"mission_active": False, "mission_dead": True, "death_location": session.location},
             )
         dmg = _hazard_damage(session.kind, player)
         storage.change_health(telegram_id, -dmg)
@@ -798,7 +798,7 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
             return ActionResult(
                 False,
                 f"Раны оказались смертельными на «{session.location}».\nКонтракт сорван.",
-                payload={"mission_active": False, "mission_dead": True},
+                payload={"mission_active": False, "mission_dead": True, "death_location": session.location},
             )
 
     # Мутанты и НПС: 50% сдвиг на соседнюю клетку.

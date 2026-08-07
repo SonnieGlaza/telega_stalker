@@ -693,6 +693,7 @@ def _finish_fail(storage: Storage, session: CoopMissionSession, reason: str) -> 
             "notify_all": player_ids,
             "message_ids": message_ids,
             "session_id": session.session_id,
+            "death_location": session.location,
         },
     )
 
@@ -701,7 +702,7 @@ def _check_team_wipe(storage: Storage, session: CoopMissionSession) -> ActionRes
     alive = [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
     if alive:
         return None
-    return _finish_fail(storage, session, "Вся группа пала на вылазке.")
+    return _finish_fail(storage, session, "Вся группа откинулась на вылазке — медики ждут на базе.")
 
 
 def start_coop_mission(storage: Storage, host_id: int) -> ActionResult:

@@ -1175,6 +1175,22 @@ def build_dead_character_text(character: Character) -> str:
     )
 
 
+def build_battle_death_text(character: Character, *, where: str | None = None) -> str:
+    """Смерть на поле боя — сталкерский флavor + медпункт на базе."""
+    spot = where or character.location
+    home = faction_home_base(character.faction)
+    max_hp = effective_max_health(character)
+    return (
+        f"☠️ {h(character.nickname)}, на «{spot}» тебя размотали — сознание ушло в чёрную тьму.\n\n"
+        "Очнулся под гудение лампы: йод, мокрая койка, чей-то хриплый голос — "
+        "«Дыши, стalker, живой… в медпункт везём, не дёргайся».\n"
+        f"Братва затащила на «{home}». Зона забрала почти всё, но не дожала.\n\n"
+        f"HP: {character.health}/{max_hp}\n"
+        "Мутанты уже шарят по рюкзаку (~80% хабара снимут).\n"
+        f"Спасение на базе — {RESPAWN_COST_RU} RU. Личный схрон не трогают."
+    )
+
+
 def _apply_death_inventory_loot(storage: Storage, telegram_id: int) -> str:
     """Оставить ~20% каждого стака в инвентаре. Экипировка и схрон не трогаются."""
     player = storage.get_character(telegram_id, refresh_energy=False)
