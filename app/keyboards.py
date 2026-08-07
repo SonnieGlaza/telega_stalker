@@ -877,10 +877,15 @@ def faction_group_keyboard(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="🏛 Клановые задачи", callback_data="clanquest:open")],
-        [InlineKeyboardButton(text="📥 Сдать патрон (1 шт.)", callback_data="eco:warehouse:deposit:ammo_pack")],
-        [InlineKeyboardButton(text="📥 Сдать аптечку (1 шт.)", callback_data="eco:warehouse:deposit:medkit")],
-        [InlineKeyboardButton(text="📥 Сдать энергетик (1 шт.)", callback_data="eco:warehouse:deposit:energy_drink")],
-        [InlineKeyboardButton(text="📥 Сдать артефакт (1 шт.)", callback_data="eco:warehouse:deposit:artifact")],
+        [InlineKeyboardButton(text="📥 Сдать патрон — своё количество", callback_data="eco:warehouse:deposit:ammo_pack")],
+        [InlineKeyboardButton(text="📥 Сдать аптечку — своё количество", callback_data="eco:warehouse:deposit:medkit")],
+        [
+            InlineKeyboardButton(
+                text="📥 Сдать энергетик — своё количество",
+                callback_data="eco:warehouse:deposit:energy_drink",
+            )
+        ],
+        [InlineKeyboardButton(text="📥 Сдать артефакт — своё количество", callback_data="eco:warehouse:deposit:artifact")],
         [InlineKeyboardButton(text="💰 Внести своё количество", callback_data="eco:treasury:deposit:custom")],
         [InlineKeyboardButton(text="🏚 Гараж: сдать канистру бензина", callback_data="faction:garage:deposit:gasoline")],
         [InlineKeyboardButton(text="🏚 Гараж: сдать канистру дизеля", callback_data="faction:garage:deposit:diesel")],
@@ -906,10 +911,15 @@ def faction_group_keyboard(
         rows.extend(
             [
                 [InlineKeyboardButton(text=request_label, callback_data="faction:garage:requests")],
-                [InlineKeyboardButton(text="📤 Забрать патрон (1 шт.)", callback_data="eco:warehouse:withdraw:ammo_pack")],
-                [InlineKeyboardButton(text="📤 Забрать аптечку (1 шт.)", callback_data="eco:warehouse:withdraw:medkit")],
-                [InlineKeyboardButton(text="📤 Забрать энергетик (1 шт.)", callback_data="eco:warehouse:withdraw:energy_drink")],
-                [InlineKeyboardButton(text="📤 Забрать артефакт (1 шт.)", callback_data="eco:warehouse:withdraw:artifact")],
+                [InlineKeyboardButton(text="📤 Забрать патрон — своё количество", callback_data="eco:warehouse:withdraw:ammo_pack")],
+                [InlineKeyboardButton(text="📤 Забрать аптечку — своё количество", callback_data="eco:warehouse:withdraw:medkit")],
+                [
+                    InlineKeyboardButton(
+                        text="📤 Забрать энергетик — своё количество",
+                        callback_data="eco:warehouse:withdraw:energy_drink",
+                    )
+                ],
+                [InlineKeyboardButton(text="📤 Забрать артефакт — своё количество", callback_data="eco:warehouse:withdraw:artifact")],
                 [InlineKeyboardButton(text="🏚 Гараж: забрать канистру бензина", callback_data="faction:garage:withdraw:gasoline")],
                 [InlineKeyboardButton(text="🏚 Гараж: забрать канистру дизеля", callback_data="faction:garage:withdraw:diesel")],
                 [InlineKeyboardButton(text="🏚 Забрать Ниву из гаража", callback_data="faction:garage:withdraw:niva")],

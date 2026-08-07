@@ -609,10 +609,15 @@ class Registration(StatesGroup):
     auction_lot_price = State()
     treasury_deposit_custom = State()
     treasury_withdraw_custom = State()
+    warehouse_deposit_custom = State()
+    warehouse_withdraw_custom = State()
 
 
 TREASURY_CUSTOM_MIN_RU = 1
 TREASURY_CUSTOM_MAX_RU = 1_000_000
+WAREHOUSE_CUSTOM_MIN = 1
+WAREHOUSE_CUSTOM_MAX = 10_000
+WAREHOUSE_CUSTOM_ITEM_KEYS = frozenset({"ammo_pack", "medkit", "energy_drink", "artifact"})
 
 
 def get_storage() -> Storage:
@@ -5016,17 +5021,53 @@ async def show_economy(message: Message) -> None:
 
 
 @router.callback_query(F.data.startswith("eco:warehouse:deposit:"))
-async def warehouse_deposit_callback(callback: CallbackQuery) -> None:
+async def warehouse_deposit_callback(callback: CallbackQuery, state: FSMContext) -> None:
     item_key = (callback.data or "").split(":", maxsplit=3)[3]
-    result = deposit_to_faction_warehouse(get_storage(), callback.from_user.id, item_key, 1)
-    await reply_action_result(callback, result.text)
+    if item_key not in WAREHOUSE_CUSTOM_ITEM_KEYS:
+        await callback.answer("Неизвестный предмет для склада.", show_alert=True)
+        return
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Сначала выбери группировку.", show_alert=True)
+        return
+    label = ITEM_LABELS.get(item_key, item_key)
+    await state.set_state(Registration.warehouse_deposit_custom)
+    await state.update_data(warehouse_item_key=item_key)
+    if callback.message is not None:
+        await callback.message.answer(
+            f"Сколько «{label}» сдать на склад?\n"
+            f"Введи целое число от {WAREHOUSE_CUSTOM_MIN} до {WAREHOUSE_CUSTOM_MAX}."
+        )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("eco:warehouse:withdraw:"))
-async def warehouse_withdraw_callback(callback: CallbackQuery) -> None:
+async def warehouse_withdraw_callback(callback: CallbackQuery, state: FSMContext) -> None:
     item_key = (callback.data or "").split(":", maxsplit=3)[3]
-    result = withdraw_from_faction_warehouse(get_storage(), callback.from_user.id, item_key, 1)
-    await reply_action_result(callback, result.text)
+    if item_key not in WAREHOUSE_CUSTOM_ITEM_KEYS:
+        await callback.answer("Неизвестный предмет для склада.", show_alert=True)
+        return
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Сначала выбери группировку.", show_alert=True)
+        return
+    if not can_withdraw_faction_warehouse(storage, player):
+        await callback.answer(
+            "Забирать со склада можно с 5 ранга (или лидеру группировки).",
+            show_alert=True,
+        )
+        return
+    label = ITEM_LABELS.get(item_key, item_key)
+    await state.set_state(Registration.warehouse_withdraw_custom)
+    await state.update_data(warehouse_item_key=item_key)
+    if callback.message is not None:
+        await callback.message.answer(
+            f"Сколько «{label}» забрать со склада?\n"
+            f"Введи целое число от {WAREHOUSE_CUSTOM_MIN} до {WAREHOUSE_CUSTOM_MAX}."
+        )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("faction:garage:deposit:"))
@@ -5135,6 +5176,74 @@ async def faction_garage_deny_callback(callback: CallbackQuery) -> None:
             await edit_menu_message(callback, text, keyboard, answer_callback=False)
         except TelegramBadRequest:
             pass
+
+
+def _parse_warehouse_custom_amount(raw: str) -> int | None:
+    cleaned = (raw or "").strip().replace(" ", "").replace("_", "")
+    try:
+        amount = int(cleaned)
+    except ValueError:
+        return None
+    if amount < WAREHOUSE_CUSTOM_MIN or amount > WAREHOUSE_CUSTOM_MAX:
+        return None
+    return amount
+
+
+@router.message(Registration.warehouse_deposit_custom)
+async def process_warehouse_deposit_custom(message: Message, state: FSMContext) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await state.clear()
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if player.faction is None:
+        await state.clear()
+        await message.answer("Сначала выбери группировку.")
+        return
+    data = await state.get_data()
+    item_key = str(data.get("warehouse_item_key") or "")
+    if item_key not in WAREHOUSE_CUSTOM_ITEM_KEYS:
+        await state.clear()
+        await message.answer("Неизвестный предмет. Начни снова из меню группировки.")
+        return
+    amount = _parse_warehouse_custom_amount(message.text or "")
+    if amount is None:
+        await message.answer(
+            f"Нужно целое число от {WAREHOUSE_CUSTOM_MIN} до {WAREHOUSE_CUSTOM_MAX}, например: 5"
+        )
+        return
+    await state.clear()
+    result = deposit_to_faction_warehouse(get_storage(), message.from_user.id, item_key, amount)
+    await message.answer(action_result_text(message.from_user.id, result.text))
+
+
+@router.message(Registration.warehouse_withdraw_custom)
+async def process_warehouse_withdraw_custom(message: Message, state: FSMContext) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await state.clear()
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    storage = get_storage()
+    if player.faction is None or not can_withdraw_faction_warehouse(storage, player):
+        await state.clear()
+        await message.answer("Забирать со склада можно с 5 ранга (или лидеру группировки).")
+        return
+    data = await state.get_data()
+    item_key = str(data.get("warehouse_item_key") or "")
+    if item_key not in WAREHOUSE_CUSTOM_ITEM_KEYS:
+        await state.clear()
+        await message.answer("Неизвестный предмет. Начни снова из меню группировки.")
+        return
+    amount = _parse_warehouse_custom_amount(message.text or "")
+    if amount is None:
+        await message.answer(
+            f"Нужно целое число от {WAREHOUSE_CUSTOM_MIN} до {WAREHOUSE_CUSTOM_MAX}, например: 5"
+        )
+        return
+    await state.clear()
+    result = withdraw_from_faction_warehouse(storage, message.from_user.id, item_key, amount)
+    await message.answer(action_result_text(message.from_user.id, result.text))
 
 
 @router.callback_query(F.data.startswith("eco:treasury:deposit:"))
