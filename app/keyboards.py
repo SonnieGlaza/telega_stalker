@@ -279,6 +279,7 @@ def trader_buy_repair_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="Ремонт брони", callback_data="repair:armor")],
             [InlineKeyboardButton(text="Купить улучшение брони (+1 защита, 5000 RU)", callback_data="upgrade:armor")],
             [InlineKeyboardButton(text="Ремонт грузовика", callback_data="repair:truck")],
+            [InlineKeyboardButton(text="Ремонт Нивы", callback_data="repair:niva")],
             [InlineKeyboardButton(text="⬅️ Назад к категориям покупки", callback_data="trade:menu:buy")],
         ]
     )
@@ -859,6 +860,9 @@ def faction_group_keyboard(
         [InlineKeyboardButton(text="💰 Внести 500 RU в казну", callback_data="eco:treasury:deposit:500")],
         [InlineKeyboardButton(text="💰 Внести 1000 RU в казну", callback_data="eco:treasury:deposit:1000")],
         [InlineKeyboardButton(text="💰 Внести своё количество", callback_data="eco:treasury:deposit:custom")],
+        [InlineKeyboardButton(text="🏚 Гараж: сдать канистру бензина", callback_data="faction:garage:deposit:gasoline")],
+        [InlineKeyboardButton(text="🏚 Гараж: сдать канистру дизеля", callback_data="faction:garage:deposit:diesel")],
+        [InlineKeyboardButton(text="🏚 Сдать Ниву в гараж", callback_data="faction:garage:deposit:niva")],
     ]
     if can_withdraw_warehouse:
         rows.extend(
@@ -867,6 +871,9 @@ def faction_group_keyboard(
                 [InlineKeyboardButton(text="📤 Забрать 1 аптечку со склада", callback_data="eco:warehouse:withdraw:medkit")],
                 [InlineKeyboardButton(text="📤 Забрать 1 энергетик со склада", callback_data="eco:warehouse:withdraw:energy_drink")],
                 [InlineKeyboardButton(text="📤 Забрать 1 артефакт со склада", callback_data="eco:warehouse:withdraw:artifact")],
+                [InlineKeyboardButton(text="🏚 Гараж: забрать канистру бензина", callback_data="faction:garage:withdraw:gasoline")],
+                [InlineKeyboardButton(text="🏚 Гараж: забрать канистру дизеля", callback_data="faction:garage:withdraw:diesel")],
+                [InlineKeyboardButton(text="🏚 Забрать Ниву из гаража", callback_data="faction:garage:withdraw:niva")],
             ]
         )
     if can_withdraw_treasury:

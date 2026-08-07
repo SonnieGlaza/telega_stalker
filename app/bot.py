@@ -73,6 +73,7 @@ from app.coop_mission import (
 from app.config import load_settings
 from app.html_utils import html_safe as h
 from app.game_logic import (
+    ActionResult,
     apply_referral_rewards,
     build_referral_link,
     parse_referral_payload,
@@ -135,6 +136,10 @@ from app.game_logic import (
     build_faction_broadcast_text,
     list_faction_broadcast_targets,
     deposit_to_faction_warehouse,
+    garage_deposit_fuel,
+    garage_withdraw_fuel,
+    garage_deposit_niva,
+    garage_withdraw_niva,
     format_inventory,
     repair_gear,
     upgrade_armor,
@@ -150,6 +155,7 @@ from app.game_logic import (
     use_medkit_army,
     use_medkit_science,
     repair_truck,
+    repair_niva,
     use_vodka,
     use_antirad,
     use_bread,
@@ -789,10 +795,10 @@ def _build_info_text(player: Character) -> str:
     return (
         "ℹ️ Информация по игре\n\n"
         "Разделы меню:\n"
-        "• 📟 КПК — профиль, чаты, рейтинг, карта, игроки, рефералка.\n"
-        "• 🏕 Вылазка — война, переходы и рейды.\n"
+        "• 📟 КПК — профиль, чаты, рейтинг, карта, игроки, рефералка, ☠️ журнал смертей (последние 5).\n"
+        "• 🏕 Вылазка — война, переходы, рейды и 👥 кооп-вылазка (можно эвакуировать раненого напарника).\n"
         "• 👥 Группировка — склад/казна: сдать может любой; забрать склад с 5 ранга, казна — только лидер.\n"
-        "• 🏦 Экономика — биржа, рынок, перевозка контрабанды.\n"
+        "• 🏦 Экономика — биржа (список открытых лотов расходников/артефактов), рынок снаряжения, перевозка контрабанды.\n"
         "• 📋 Задания — контракты с переездом; контрабанда — рисковый курьерский рейс.\n\n"
         "Команды:\n"
         "• /start — создать персонажа или войти.\n"
@@ -1888,7 +1894,8 @@ async def show_buy_repair(callback: CallbackQuery) -> None:
         "• Оружие и броня — по текущей прочности.\n"
         "• Улучшение брони — предмет в инвентарь (5000 RU, +1 защита).\n"
         "  Установи/сними в «Экипировка» на любую броню.\n"
-        "• Грузовик — восстановление прочности кузова.",
+        "• Грузовик — восстановление прочности кузова.\n"
+        "• Нива — восстановление прочности (дешевле грузовика).",
         trader_buy_repair_keyboard(),
     )
 
@@ -2027,6 +2034,12 @@ async def upgrade_armor_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "repair:truck")
 async def repair_truck_callback(callback: CallbackQuery) -> None:
     result = repair_truck(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "repair:niva")
+async def repair_niva_callback(callback: CallbackQuery) -> None:
+    result = repair_niva(get_storage(), callback.from_user.id)
     await reply_action_result(callback, result.text)
 
 
@@ -3906,6 +3919,8 @@ async def show_war(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
+    if await reject_if_dead(message, player):
+        return
     if not player_ready(player):
         await message.answer("Сначала выбери группировку.")
         return
@@ -4149,6 +4164,8 @@ async def show_raids(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
+    if await reject_if_dead(message, player):
+        return
     if not player_ready(player):
         await message.answer("Сначала выбери группировку.")
         return
@@ -4292,6 +4309,8 @@ async def show_events(message: Message) -> None:
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
         return
+    if await reject_if_dead(message, player):
+        return
     overview = build_events_overview(get_storage())
     await message.answer(overview)
 
@@ -4301,6 +4320,8 @@ async def show_faction_group(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
         return
     if not player_ready(player):
         await message.answer("Сначала выбери группировку.")
@@ -4314,6 +4335,8 @@ async def show_economy(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
         return
     if not player_ready(player):
         await message.answer("Сначала выбери группировку.")
@@ -4333,6 +4356,32 @@ async def warehouse_deposit_callback(callback: CallbackQuery) -> None:
 async def warehouse_withdraw_callback(callback: CallbackQuery) -> None:
     item_key = (callback.data or "").split(":", maxsplit=3)[3]
     result = withdraw_from_faction_warehouse(get_storage(), callback.from_user.id, item_key, 1)
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data.startswith("faction:garage:deposit:"))
+async def faction_garage_deposit_callback(callback: CallbackQuery) -> None:
+    kind = (callback.data or "").split(":", maxsplit=3)[3]
+    storage = get_storage()
+    if kind == "niva":
+        result = garage_deposit_niva(storage, callback.from_user.id)
+    elif kind in ("gasoline", "diesel"):
+        result = garage_deposit_fuel(storage, callback.from_user.id, kind)
+    else:
+        result = ActionResult(False, "Неизвестный тип сдачи в гараж.")
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data.startswith("faction:garage:withdraw:"))
+async def faction_garage_withdraw_callback(callback: CallbackQuery) -> None:
+    kind = (callback.data or "").split(":", maxsplit=3)[3]
+    storage = get_storage()
+    if kind == "niva":
+        result = garage_withdraw_niva(storage, callback.from_user.id)
+    elif kind in ("gasoline", "diesel"):
+        result = garage_withdraw_fuel(storage, callback.from_user.id, kind)
+    else:
+        result = ActionResult(False, "Неизвестный тип выдачи из гаража.")
     await reply_action_result(callback, result.text)
 
 

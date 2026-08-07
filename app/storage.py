@@ -45,6 +45,7 @@ class Character:
     truck_owned: bool
     truck_durability: int
     niva_owned: bool
+    niva_durability: int
     bicycle_owned: bool
     sleeping_bag_owned: bool
     diesel: int
@@ -323,8 +324,9 @@ class Storage:
                     telegram_id, player_uid, avatar_style, nickname, gender, faction, faction_rank, money,
                     energy, max_energy, energy_updated_at, health, gear_power, location,
                     inventory_json, equipment_json, truck_owned, truck_durability, sleeping_bag_owned, fuel,
-                    radiation, hunger, thirst, needs_updated_at, survival_damage_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    radiation, hunger, thirst, needs_updated_at, survival_damage_at,
+                    niva_owned, niva_durability
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(row.get("telegram_id")),
@@ -353,6 +355,8 @@ class Storage:
                     int(row.get("thirst", 0)),
                     row.get("needs_updated_at") or now_iso,
                     row.get("survival_damage_at") or now_iso,
+                    int(row.get("niva_owned", 0)),
+                    int(row.get("niva_durability", 100 if int(row.get("niva_owned", 0)) else 0)),
                 ),
             )
         for row in topup_payments:
@@ -596,6 +600,7 @@ class Storage:
                     equipment_json TEXT NOT NULL DEFAULT '{"weapon":"Нож","armor":"Куртка новичка","weapon_durability":100,"armor_durability":100}',
                     truck_owned INTEGER NOT NULL DEFAULT 0,
                     truck_durability INTEGER NOT NULL DEFAULT 0,
+                    niva_durability INTEGER NOT NULL DEFAULT 0,
                     sleeping_bag_owned INTEGER NOT NULL DEFAULT 0,
                     fuel INTEGER NOT NULL DEFAULT 0,
                     radiation INTEGER NOT NULL DEFAULT 0,
@@ -1609,7 +1614,7 @@ class Storage:
     def set_niva_owned(self, telegram_id: int) -> None:
         with self._connect() as conn:
             conn.execute(
-                "UPDATE characters SET niva_owned = 1 WHERE telegram_id = ?",
+                "UPDATE characters SET niva_owned = 1, niva_durability = 100 WHERE telegram_id = ?",
                 (telegram_id,),
             )
         self.save_snapshot()
@@ -1617,10 +1622,37 @@ class Storage:
     def clear_niva_owned(self, telegram_id: int) -> None:
         with self._connect() as conn:
             conn.execute(
-                "UPDATE characters SET niva_owned = 0 WHERE telegram_id = ?",
+                "UPDATE characters SET niva_owned = 0, niva_durability = 0 WHERE telegram_id = ?",
                 (telegram_id,),
             )
         self.save_snapshot()
+
+    def apply_niva_wear(self, telegram_id: int, wear_percent: int) -> int | None:
+        character = self.get_character(telegram_id, refresh_energy=False)
+        if character is None or not character.niva_owned:
+            return None
+        wear = max(0, int(wear_percent))
+        new_durability = max(0, min(100, int(character.niva_durability) - wear))
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET niva_durability = ?, niva_owned = ? WHERE telegram_id = ?",
+                (new_durability, 1 if new_durability > 0 else 0, telegram_id),
+            )
+        self.save_snapshot()
+        return new_durability
+
+    def set_niva_durability(self, telegram_id: int, durability: int) -> bool:
+        character = self.get_character(telegram_id, refresh_energy=False)
+        if character is None:
+            return False
+        value = max(0, min(100, int(durability)))
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET niva_durability = ?, niva_owned = ? WHERE telegram_id = ?",
+                (value, 1 if value > 0 else 0, telegram_id),
+            )
+        self.save_snapshot()
+        return True
 
     def set_bicycle_owned(self, telegram_id: int) -> None:
         with self._connect() as conn:
@@ -3469,6 +3501,15 @@ class Storage:
                 WHERE truck_owned = 1 AND COALESCE(truck_durability, 0) <= 0
                 """
             )
+        # Аналогично для Нивы — старым владельцам проставляем стартовую прочность.
+        if "niva_durability" in self._table_columns(conn, "characters"):
+            conn.execute(
+                """
+                UPDATE characters
+                SET niva_durability = 100
+                WHERE niva_owned = 1 AND COALESCE(niva_durability, 0) <= 0
+                """
+            )
 
     def _ensure_player_stats_row(self, conn: DbConnection, telegram_id: int) -> None:
         conn.execute(
@@ -3550,6 +3591,10 @@ class Storage:
             ),
             ("faction_rank", "ALTER TABLE characters ADD COLUMN faction_rank TEXT"),
             ("niva_owned", "ALTER TABLE characters ADD COLUMN niva_owned INTEGER NOT NULL DEFAULT 0"),
+            (
+                "niva_durability",
+                "ALTER TABLE characters ADD COLUMN niva_durability INTEGER NOT NULL DEFAULT 0",
+            ),
             ("bicycle_owned", "ALTER TABLE characters ADD COLUMN bicycle_owned INTEGER NOT NULL DEFAULT 0"),
             ("travel_destination", "ALTER TABLE characters ADD COLUMN travel_destination TEXT"),
             ("travel_arrives_at", "ALTER TABLE characters ADD COLUMN travel_arrives_at TEXT"),
@@ -3793,6 +3838,7 @@ class Storage:
             truck_owned=bool(Storage._row_get(row, "truck_owned", 0)),
             truck_durability=max(0, min(100, _as_int(Storage._row_get(row, "truck_durability"), 0))),
             niva_owned=bool(Storage._row_get(row, "niva_owned", 0)),
+            niva_durability=max(0, min(100, _as_int(Storage._row_get(row, "niva_durability"), 0))),
             bicycle_owned=bool(Storage._row_get(row, "bicycle_owned", 0)),
             sleeping_bag_owned=bool(Storage._row_get(row, "sleeping_bag_owned", 0)),
             diesel=_as_int(

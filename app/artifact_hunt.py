@@ -26,10 +26,15 @@ from app.game_logic import (
     travel_block_text,
 )
 from app.storage import Character, Storage
-from app.mission_icons import ANOMALY_ICON_KEY, mission_icon_image
+from app.mission_icons import ANOMALY_ICON_KEY, MISSION_ICON_GRID_DIAMETER, mission_icon_image
 
-# Диаметр иконки аномалии на поле охоты (клетка 118px).
-HUNT_ANOMALY_ICON_DIAMETER = 88
+# Тот же спрайт аномалии (mission_icon_image/ANOMALY_ICON_KEY), что и в quest_mission.py/coop_mission.py —
+# единый арт для угроз на всех сетках. Клетка охоты крупнее (118px против 108px в quest_mission),
+# поэтому масштабируем от общего MISSION_ICON_GRID_DIAMETER, сохраняя ту же пропорцию иконка/клетка,
+# чтобы аномалии выглядели одинаково узнаваемо во всех режимах (квесты/кооп/охота).
+HUNT_GRID_CELL_PX = 118
+_QUEST_GRID_CELL_PX = 108
+HUNT_ANOMALY_ICON_DIAMETER = round(MISSION_ICON_GRID_DIAMETER * HUNT_GRID_CELL_PX / _QUEST_GRID_CELL_PX)
 
 
 HUNT_META_PREFIX = "artifact_hunt:"
@@ -809,7 +814,7 @@ def render_hunt_frame(
     rating_points: int = 0,
 ) -> bytes:
     """HD-кадр: поле слева, PDA-панель справа (референс-мокап)."""
-    cell = 118
+    cell = HUNT_GRID_CELL_PX
     grid = session.grid
     grid_px = grid * cell
     margin = 28

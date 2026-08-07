@@ -816,6 +816,8 @@ SURVIVAL_OVERLIMIT_HP_DRAIN = 10
 TRANSFER_FEE_PERCENT = 20
 TRUCK_WEAR_MIN = 3
 TRUCK_WEAR_MAX = 8
+NIVA_WEAR_MIN = 2
+NIVA_WEAR_MAX = 6
 
 SURVIVAL_CRAVING_THRESHOLD = 40
 SURVIVAL_URGENT_THRESHOLD = 75
@@ -2145,7 +2147,7 @@ def can_travel_by_truck(character: Character) -> bool:
 
 
 def can_travel_by_niva(character: Character) -> bool:
-    return bool(character.niva_owned and character.gasoline > 0)
+    return bool(character.niva_owned and character.niva_durability > 0 and character.gasoline > 0)
 
 
 def can_travel_by_bicycle(character: Character) -> bool:
@@ -2164,7 +2166,10 @@ def describe_travel_fuel_status(character: Character) -> str:
     if can_travel_by_niva(character):
         lines.append("Нива готова (×2, −1 бензин за переход).")
     elif character.niva_owned:
-        lines.append("Нива без бензина — ускорение недоступно.")
+        if character.niva_durability <= 0:
+            lines.append("Нива сломана — без ускорения.")
+        else:
+            lines.append("Нива без бензина — ускорение недоступно.")
     if can_travel_by_bicycle(character):
         lines.append(
             f"Велосипед готов (×{TRAVEL_SPEED_BICYCLE:g}, без топлива; "
@@ -4016,6 +4021,29 @@ def repair_truck(storage: Storage, telegram_id: int) -> ActionResult:
     return ActionResult(True, f"Грузовик полностью отремонтирован за {price} RU.{achievements_text}")
 
 
+def repair_niva(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if not player.niva_owned:
+        return ActionResult(False, "У тебя нет Нивы для ремонта.")
+    current = max(0, min(100, int(player.niva_durability)))
+    if current >= 100:
+        return ActionResult(False, "Нива уже в идеальном состоянии.")
+    missing = 100 - current
+    # Ремонт Нивы дешевле грузовика: missing×35, минимум 200 RU.
+    price = max(200, int(round(missing * 35)))
+    if not storage.change_money(telegram_id, -price):
+        return ActionResult(False, f"Недостаточно денег на ремонт Нивы ({price} RU).")
+    storage.set_niva_durability(telegram_id, 100)
+    storage.add_player_stat(telegram_id, "trades_done", 1)
+    _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
+    achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    return ActionResult(True, f"Нива полностью отремонтирована за {price} RU.{achievements_text}")
+
+
 def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = None) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
@@ -4109,7 +4137,7 @@ def format_inventory(
     if character.truck_owned:
         vehicle_parts.append(f"Грузовик ({max(0, min(100, int(character.truck_durability)))}%)")
     if character.niva_owned:
-        vehicle_parts.append("Нива")
+        vehicle_parts.append(f"Нива ({max(0, min(100, int(character.niva_durability)))}%)")
     if character.bicycle_owned:
         vehicle_parts.append("Велосипед")
     vehicle = " + ".join(vehicle_parts) if vehicle_parts else "Нет транспорта"
@@ -4182,6 +4210,18 @@ def _compute_truck_wear(distance_px: float | None, travel_minutes: int) -> int:
     return random.randint(min_wear, max_wear)
 
 
+def _compute_niva_wear(distance_px: float | None, travel_minutes: int) -> int:
+    if distance_px is not None:
+        factor = max(0.0, min(1.0, float(distance_px) / 420.0))
+    else:
+        factor = max(0.0, min(1.0, (travel_minutes - 5) / 20))
+    min_wear = NIVA_WEAR_MIN + int(round(3 * factor))
+    max_wear = NIVA_WEAR_MIN + int(round(8 * factor))
+    min_wear = max(NIVA_WEAR_MIN, min(NIVA_WEAR_MAX, min_wear))
+    max_wear = max(min_wear, min(NIVA_WEAR_MAX, max_wear))
+    return random.randint(min_wear, max_wear)
+
+
 def list_available_travel_modes(character: Character) -> list[tuple[str, str, float, int]]:
     """Доступные режимы: (mode, label, speed_mult, energy_cost). Всегда можно пешком; велик не прячется за Нивой."""
     options: list[tuple[str, str, float, int]] = [
@@ -4224,8 +4264,10 @@ def _resolve_travel_transport(
         notes.append("Нет дизеля — грузовик недоступен.")
     elif character.truck_owned and character.truck_durability <= 0:
         notes.append("Грузовик сломан.")
-    if character.niva_owned and character.gasoline <= 0:
+    if character.niva_owned and character.niva_durability > 0 and character.gasoline <= 0:
         notes.append("Нет бензина — Нива недоступна.")
+    elif character.niva_owned and character.niva_durability <= 0:
+        notes.append("Нива сломана.")
     foot_note = " ".join(notes) if notes else None
 
     if preferred_mode:
@@ -4371,7 +4413,7 @@ def travel_to(
     if not storage.spend_energy(telegram_id, energy_cost):
         return ActionResult(False, f"Не хватает энергии для перехода (нужно {energy_cost}).")
 
-    truck_wear_text = ""
+    vehicle_wear_text = ""
     fuel_text = ""
     if transport_mode == "truck":
         if not storage.change_diesel(telegram_id, -1):
@@ -4383,14 +4425,22 @@ def travel_to(
         if durability is None:
             durability = max(0, int(character.truck_durability) - wear)
         if durability <= 0:
-            truck_wear_text = f"\nГрузовик изношен на {wear}% и окончательно сломан."
+            vehicle_wear_text = f"\nГрузовик изношен на {wear}% и окончательно сломан."
         else:
-            truck_wear_text = f"\nИзнос грузовика: -{wear}% (прочность: {durability}%)."
+            vehicle_wear_text = f"\nИзнос грузовика: -{wear}% (прочность: {durability}%)."
     elif transport_mode == "niva":
         if not storage.change_gasoline(telegram_id, -1):
             storage.restore_energy(telegram_id, energy_cost)
             return ActionResult(False, "Не удалось списать бензин, переход отменён.")
         fuel_text = "\nБензин: −1."
+        niva_wear = _compute_niva_wear(distance_px, travel_minutes)
+        niva_durability = storage.apply_niva_wear(telegram_id, niva_wear)
+        if niva_durability is None:
+            niva_durability = max(0, int(character.niva_durability) - niva_wear)
+        if niva_durability <= 0:
+            vehicle_wear_text = f"\nНива изношена на {niva_wear}% и окончательно сломана."
+        else:
+            vehicle_wear_text = f"\nИзнос Нивы: -{niva_wear}% (прочность: {niva_durability}%)."
 
     storage.start_travel(telegram_id, destination, arrives_at, transport_mode)
     transport_labels = {
@@ -4404,7 +4454,7 @@ def travel_to(
         True,
         f"Выехал из «{character.location}» → «{destination}» {transport_labels[transport_mode]}.\n"
         f"Затрачено энергии: {energy_cost}."
-        f"{fuel_text}{truck_wear_text}{note_text}",
+        f"{fuel_text}{vehicle_wear_text}{note_text}",
     )
 
 
@@ -5827,6 +5877,141 @@ def transfer_location_to_ally(storage: Storage, telegram_id: int, location_name:
     return ActionResult(True, f"Локация «{location_name}» передана союзнику: {ally_faction}.")
 
 
+FACTION_GARAGE_META_PREFIX = "garage:"
+FACTION_GARAGE_KEYS: tuple[str, ...] = ("niva", "truck", "gasoline", "diesel")
+
+
+def _faction_garage_meta_key(faction: str) -> str:
+    return f"{FACTION_GARAGE_META_PREFIX}{faction}"
+
+
+def get_faction_garage(storage: Storage, faction: str) -> dict[str, int]:
+    """Гараж группировки: сданные Нивы/грузовики и канистры топлива."""
+    data = {key: 0 for key in FACTION_GARAGE_KEYS}
+    raw = storage.get_meta(_faction_garage_meta_key(faction))
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            for key in FACTION_GARAGE_KEYS:
+                try:
+                    data[key] = max(0, int(parsed.get(key, 0) or 0))
+                except (TypeError, ValueError):
+                    data[key] = 0
+    return data
+
+
+def _set_faction_garage(storage: Storage, faction: str, data: dict[str, int]) -> None:
+    storage.set_meta(_faction_garage_meta_key(faction), json.dumps(data, ensure_ascii=False))
+
+
+def build_faction_garage_overview(storage: Storage, faction: str) -> str:
+    garage = get_faction_garage(storage, faction)
+    return (
+        f"🏚 Гараж «{faction}»:\n"
+        f"• Нив в гараже: {garage['niva']}\n"
+        f"• Грузовиков в гараже: {garage['truck']}\n"
+        f"• Канистр бензина (+{FUEL_CAN_GASOLINE_AMOUNT} каждая): {garage['gasoline']}\n"
+        f"• Канистр дизеля (+{FUEL_CAN_DIESEL_AMOUNT} каждая): {garage['diesel']}\n\n"
+        "Сдать канистру можно из своего запаса топлива; забрать — с 5 ранга (или лидеру)."
+    )
+
+
+_GARAGE_FUEL_LABELS: dict[str, str] = {"gasoline": "бензина", "diesel": "дизеля"}
+
+
+def garage_deposit_fuel(storage: Storage, telegram_id: int, fuel_type: str) -> ActionResult:
+    if fuel_type not in ("gasoline", "diesel"):
+        return ActionResult(False, "Неизвестный тип топлива для гаража.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Гараж доступен только бойцам группировки.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    amount = FUEL_CAN_GASOLINE_AMOUNT if fuel_type == "gasoline" else FUEL_CAN_DIESEL_AMOUNT
+    changer = storage.change_gasoline if fuel_type == "gasoline" else storage.change_diesel
+    label = _GARAGE_FUEL_LABELS[fuel_type]
+    if not changer(telegram_id, -amount):
+        return ActionResult(False, f"Недостаточно {label} для сдачи канистры (нужно {amount}).")
+    garage = get_faction_garage(storage, player.faction)
+    garage[fuel_type] = garage.get(fuel_type, 0) + 1
+    _set_faction_garage(storage, player.faction, garage)
+    return ActionResult(
+        True,
+        f"В гараж «{player.faction}» сдана канистра {label} (−{amount} из личного запаса).\n"
+        f"В гараже теперь: {garage[fuel_type]} канистр {label}.",
+    )
+
+
+def garage_withdraw_fuel(storage: Storage, telegram_id: int, fuel_type: str) -> ActionResult:
+    if fuel_type not in ("gasoline", "diesel"):
+        return ActionResult(False, "Неизвестный тип топлива для гаража.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Гараж доступен только бойцам группировки.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if not can_withdraw_faction_warehouse(storage, player):
+        return ActionResult(False, "Забирать из гаража можно с 5 ранга (или лидеру группировки).")
+    label = _GARAGE_FUEL_LABELS[fuel_type]
+    garage = get_faction_garage(storage, player.faction)
+    if garage.get(fuel_type, 0) <= 0:
+        return ActionResult(False, f"В гараже нет канистр {label}.")
+    amount = FUEL_CAN_GASOLINE_AMOUNT if fuel_type == "gasoline" else FUEL_CAN_DIESEL_AMOUNT
+    changer = storage.change_gasoline if fuel_type == "gasoline" else storage.change_diesel
+    if not changer(telegram_id, amount):
+        return ActionResult(False, "Не удалось получить топливо.")
+    garage[fuel_type] -= 1
+    _set_faction_garage(storage, player.faction, garage)
+    return ActionResult(
+        True,
+        f"Из гаража «{player.faction}» получена канистра {label} (+{amount} в личный запас).\n"
+        f"В гараже осталось: {garage[fuel_type]} канистр {label}.",
+    )
+
+
+def garage_deposit_niva(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Гараж доступен только бойцам группировки.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if not player.niva_owned:
+        return ActionResult(False, "У тебя нет Нивы, чтобы сдать её в гараж.")
+    storage.clear_niva_owned(telegram_id)
+    garage = get_faction_garage(storage, player.faction)
+    garage["niva"] = garage.get("niva", 0) + 1
+    _set_faction_garage(storage, player.faction, garage)
+    return ActionResult(
+        True,
+        f"Нива сдана в гараж «{player.faction}». В гараже: {garage['niva']} шт.",
+    )
+
+
+def garage_withdraw_niva(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Гараж доступен только бойцам группировки.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if player.niva_owned:
+        return ActionResult(False, "У тебя уже есть своя Нива.")
+    if not can_withdraw_faction_warehouse(storage, player):
+        return ActionResult(False, "Забирать из гаража можно с 5 ранга (или лидеру группировки).")
+    garage = get_faction_garage(storage, player.faction)
+    if garage.get("niva", 0) <= 0:
+        return ActionResult(False, "В гараже нет свободных Нив.")
+    garage["niva"] -= 1
+    _set_faction_garage(storage, player.faction, garage)
+    storage.set_niva_owned(telegram_id)
+    return ActionResult(
+        True,
+        f"Нива из гаража закреплена за тобой (прочность 100%). В гараже осталось: {garage['niva']} шт.",
+    )
+
+
 def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction is None:
@@ -5869,12 +6054,15 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
             f"Укрепление: +{bonus} к пассивной защите при чужом штурме"
         )
 
+    garage_overview = build_faction_garage_overview(storage, player.faction)
+
     return (
         f"Группировка «{player.faction}»\n"
         f"Казна: {treasury} RU"
         f"{income_note}"
         f"{base_line}\n\n"
         f"Склад:\n{chr(10).join(warehouse_lines)}\n\n"
+        f"{garage_overview}\n\n"
         f"Пассивный доход с точек:\n"
         f"• точка ресурсов: {RESOURCE_POINT_INCOME_PER_HOUR} RU/ч\n"
         f"• база: {BASE_POINT_INCOME_PER_HOUR} RU/ч\n\n"
