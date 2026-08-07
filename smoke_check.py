@@ -405,7 +405,7 @@ def run_smoke_check() -> None:
         )
         first_daily = turn_in_quest_contract(storage, 111)
         assert first_daily.ok, first_daily.text
-        assert "Контракт дня" in first_daily.text
+        assert "Бонус: +500 RU" in first_daily.text
         after_first = storage.get_character(111, refresh_energy=False).money
         assert after_first >= before_money + 100 + 500  # 10% turn-in + 50% daily
 
@@ -416,7 +416,7 @@ def run_smoke_check() -> None:
         before_repeat = storage.get_character(111, refresh_energy=False).money
         repeat_daily = turn_in_quest_contract(storage, 111)
         assert repeat_daily.ok, repeat_daily.text
-        assert "Контракт дня" not in repeat_daily.text
+        assert "Бонус: +500 RU" not in repeat_daily.text
         after_repeat = storage.get_character(111, refresh_energy=False).money
         assert after_repeat == before_repeat + 100  # only 10% turn-in
 
@@ -427,7 +427,7 @@ def run_smoke_check() -> None:
         before_second = storage.get_character(111, refresh_energy=False).money
         second_daily = turn_in_quest_contract(storage, 111)
         assert second_daily.ok, second_daily.text
-        assert "Контракт дня" in second_daily.text
+        assert "Бонус: +400 RU" in second_daily.text
         after_second = storage.get_character(111, refresh_energy=False).money
         assert after_second >= before_second + 80 + 400  # 10% + 50% for other daily
         storage.set_active_contract(111, None)

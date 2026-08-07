@@ -2606,8 +2606,7 @@ def _grant_contract_rotation_bonus(
                 storage.add_player_stat(telegram_id, "money_earned", weekly_bonus)
             _add_rating(storage, telegram_id, WEEKLY_CONTRACT_RATING_BONUS)
             extra_lines.append(
-                f"📅 Контракт недели выполнен! Бонус: +{weekly_bonus} RU, "
-                f"+{WEEKLY_CONTRACT_RATING_BONUS} рейтинга."
+                f"Бонус: +{weekly_bonus} RU, +{WEEKLY_CONTRACT_RATING_BONUS} рейтинга."
             )
         if template_key in daily_keys:
             storage.set_meta_if_absent(
@@ -2625,8 +2624,7 @@ def _grant_contract_rotation_bonus(
                 storage.add_player_stat(telegram_id, "money_earned", daily_bonus)
             _add_rating(storage, telegram_id, DAILY_CONTRACT_RATING_BONUS)
             extra_lines.append(
-                f"🗓 Контракт дня выполнен! Бонус: +{daily_bonus} RU, "
-                f"+{DAILY_CONTRACT_RATING_BONUS} рейтинга."
+                f"Бонус: +{daily_bonus} RU, +{DAILY_CONTRACT_RATING_BONUS} рейтинга."
             )
     return extra_lines
 
