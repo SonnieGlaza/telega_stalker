@@ -539,6 +539,8 @@ def run_smoke_check() -> None:
 
         rgrid_session = get_raid_grid_session_by_player(storage, 111)
         assert rgrid_session is not None
+        assert rgrid_session.player_ids == [111, 222]
+        assert rgrid_session.participant_ids() == [111, 222]
         clear_raid_grid_session(storage, rgrid_session)
         storage.finish_raid(int(rgrid_session.raid_id), status="cancelled", result_text="smoke cleanup")
         assert build_raids_overview(storage, 111)

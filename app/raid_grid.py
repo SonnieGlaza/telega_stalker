@@ -147,6 +147,13 @@ class RaidGridSession:
     def set_pos(self, player_id: int, pos: tuple[int, int]) -> None:
         self.positions[str(player_id)] = [pos[0], pos[1]]
 
+    def participant_ids(self) -> list[int]:
+        if self.player_ids:
+            return list(self.player_ids)
+        if self.turn_order:
+            return list(dict.fromkeys(int(x) for x in self.turn_order))
+        return [int(pid) for pid in self.hp.keys() if str(pid).isdigit()]
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
@@ -154,6 +161,7 @@ class RaidGridSession:
             "raid_kind": self.raid_kind,
             "location_label": self.location_label,
             "attacker_faction": self.attacker_faction,
+            "player_ids": list(self.player_ids),
             "target_faction": self.target_faction,
             "enemy_power": self.enemy_power,
             "energy_cost": self.energy_cost,
@@ -222,6 +230,12 @@ class RaidGridSession:
             log=[str(x) for x in (raw.get("log") or [])],
             message_ids={str(k): int(v) for k, v in (raw.get("message_ids") or {}).items()},
         )
+        if not session.player_ids:
+            if session.turn_order:
+                session.player_ids = list(dict.fromkeys(int(x) for x in session.turn_order))
+            elif session.hp:
+                session.player_ids = [int(k) for k in session.hp.keys() if str(k).isdigit()]
+        return session
 
 
 def _session_key(sid: str) -> str:

@@ -2939,7 +2939,7 @@ async def _broadcast_rgrid_session(
     note: str | None = None,
     callback: CallbackQuery | None = None,
 ) -> None:
-    for pid in session.player_ids:
+    for pid in session.participant_ids():
         ch = storage.get_character(pid, refresh_energy=False)
         is_active = session.active_player() == pid
         medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(ch)
