@@ -384,6 +384,54 @@ def run_smoke_check() -> None:
         assert "100" in manual.text or "+100" in manual.text  # 10% of 1000
         assert storage.get_active_contract(111) is None
 
+        # Daily contract bonus: once per template per day, not per turn-in repeat.
+        import json
+        from datetime import datetime, timezone
+
+        from app.game_logic import DAILY_CONTRACTS_META_KEY, _daily_key
+
+        today = _daily_key(datetime.now(timezone.utc))
+        storage.set_meta(
+            DAILY_CONTRACTS_META_KEY,
+            json.dumps({"date": today, "keys": ["easy_boloto", "easy_dump"]}, ensure_ascii=False),
+        )
+        home_dolg = faction_home_base("Долг")
+        storage.set_location(111, home_dolg)
+        before_money = storage.get_character(111, refresh_energy=False).money
+
+        storage.set_active_contract(
+            111,
+            {"template_key": "easy_boloto", "stage": "return", "pending_reward": 1000},
+        )
+        first_daily = turn_in_quest_contract(storage, 111)
+        assert first_daily.ok, first_daily.text
+        assert "Контракт дня" in first_daily.text
+        after_first = storage.get_character(111, refresh_energy=False).money
+        assert after_first >= before_money + 100 + 500  # 10% turn-in + 50% daily
+
+        storage.set_active_contract(
+            111,
+            {"template_key": "easy_boloto", "stage": "return", "pending_reward": 1000},
+        )
+        before_repeat = storage.get_character(111, refresh_energy=False).money
+        repeat_daily = turn_in_quest_contract(storage, 111)
+        assert repeat_daily.ok, repeat_daily.text
+        assert "Контракт дня" not in repeat_daily.text
+        after_repeat = storage.get_character(111, refresh_energy=False).money
+        assert after_repeat == before_repeat + 100  # only 10% turn-in
+
+        storage.set_active_contract(
+            111,
+            {"template_key": "easy_dump", "stage": "return", "pending_reward": 800},
+        )
+        before_second = storage.get_character(111, refresh_energy=False).money
+        second_daily = turn_in_quest_contract(storage, 111)
+        assert second_daily.ok, second_daily.text
+        assert "Контракт дня" in second_daily.text
+        after_second = storage.get_character(111, refresh_energy=False).money
+        assert after_second >= before_second + 80 + 400  # 10% + 50% for other daily
+        storage.set_active_contract(111, None)
+
         # Turn-in blocked off-base.
         storage.set_active_contract(
             111,

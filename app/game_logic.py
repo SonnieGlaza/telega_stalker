@@ -2421,12 +2421,73 @@ def get_weekly_contract_key(storage: Storage, now: datetime | None = None) -> st
     return picked
 
 
-def _contract_daily_done_meta_key(telegram_id: int, date_key: str) -> str:
-    return f"{CONTRACT_DAILY_DONE_META_PREFIX}{telegram_id}:{date_key}"
+def _contract_daily_done_meta_key(telegram_id: int, date_key: str, template_key: str) -> str:
+    return f"{CONTRACT_DAILY_DONE_META_PREFIX}{telegram_id}:{date_key}:{template_key}"
 
 
-def _contract_weekly_done_meta_key(telegram_id: int, week_key: str) -> str:
-    return f"{CONTRACT_WEEKLY_DONE_META_PREFIX}{telegram_id}:{week_key}"
+def _contract_weekly_done_meta_key(telegram_id: int, week_key: str, template_key: str) -> str:
+    return f"{CONTRACT_WEEKLY_DONE_META_PREFIX}{telegram_id}:{week_key}:{template_key}"
+
+
+def _contract_daily_bonus_claimed(
+    storage: Storage, telegram_id: int, date_key: str, template_key: str
+) -> bool:
+    return storage.get_meta(_contract_daily_done_meta_key(telegram_id, date_key, template_key)) is not None
+
+
+def _contract_weekly_bonus_claimed(
+    storage: Storage, telegram_id: int, week_key: str, template_key: str
+) -> bool:
+    return storage.get_meta(_contract_weekly_done_meta_key(telegram_id, week_key, template_key)) is not None
+
+
+def _grant_contract_rotation_bonus(
+    storage: Storage,
+    telegram_id: int,
+    *,
+    template_key: str,
+    pending: int,
+    now: datetime,
+) -> list[str]:
+    """Бонус дня/недели — строго один раз за конкретный контракт в периоде."""
+    extra_lines: list[str] = []
+    weekly_key = get_weekly_contract_key(storage, now)
+    week_key = _weekly_key(now)
+    date_key = _daily_key(now)
+    daily_keys = set(get_daily_contract_keys(storage, now))
+
+    if template_key == weekly_key:
+        done_meta = _contract_weekly_done_meta_key(telegram_id, week_key, template_key)
+        if storage.set_meta_if_absent(done_meta, "1"):
+            weekly_bonus = max(0, int(round(pending * WEEKLY_CONTRACT_BONUS_PERCENT / 100)))
+            if weekly_bonus > 0:
+                storage.change_money(telegram_id, weekly_bonus)
+                storage.add_player_stat(telegram_id, "money_earned", weekly_bonus)
+            _add_rating(storage, telegram_id, WEEKLY_CONTRACT_RATING_BONUS)
+            extra_lines.append(
+                f"📅 Контракт недели выполнен! Бонус: +{weekly_bonus} RU, "
+                f"+{WEEKLY_CONTRACT_RATING_BONUS} рейтинга."
+            )
+        if template_key in daily_keys:
+            storage.set_meta_if_absent(
+                _contract_daily_done_meta_key(telegram_id, date_key, template_key),
+                "1",
+            )
+        return extra_lines
+
+    if template_key in daily_keys:
+        done_meta = _contract_daily_done_meta_key(telegram_id, date_key, template_key)
+        if storage.set_meta_if_absent(done_meta, "1"):
+            daily_bonus = max(0, int(round(pending * DAILY_CONTRACT_BONUS_PERCENT / 100)))
+            if daily_bonus > 0:
+                storage.change_money(telegram_id, daily_bonus)
+                storage.add_player_stat(telegram_id, "money_earned", daily_bonus)
+            _add_rating(storage, telegram_id, DAILY_CONTRACT_RATING_BONUS)
+            extra_lines.append(
+                f"🗓 Контракт дня выполнен! Бонус: +{daily_bonus} RU, "
+                f"+{DAILY_CONTRACT_RATING_BONUS} рейтинга."
+            )
+    return extra_lines
 
 
 def get_active_contract_template(storage: Storage, telegram_id: int) -> QuestContractTemplate | None:
@@ -2502,24 +2563,25 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
     daily_date = _daily_key(now)
     weekly_week = _weekly_key(now)
     tid = character.telegram_id
-    daily_done = storage.get_meta(_contract_daily_done_meta_key(tid, daily_date)) is not None
-    weekly_done = storage.get_meta(_contract_weekly_done_meta_key(tid, weekly_week)) is not None
 
     lines.append(
         f"🗓 Контракты дня (бонус +{DAILY_CONTRACT_BONUS_PERCENT}% RU, +{DAILY_CONTRACT_RATING_BONUS} рейтинг, "
-        f"1 раз в сутки{' — уже получен сегодня' if daily_done else ''}):"
+        "1 раз за каждый контракт):"
     )
     for key in daily_keys:
         template = QUEST_CONTRACTS.get(key)
         if template:
-            lines.append(f"  • {template.title} («{template.work_location}»)")
+            claimed = _contract_daily_bonus_claimed(storage, tid, daily_date, key)
+            mark = " ✅" if claimed else ""
+            lines.append(f"  • {template.title} («{template.work_location}»){mark}")
     if weekly_key:
         weekly_template = QUEST_CONTRACTS.get(weekly_key)
         if weekly_template:
+            claimed = _contract_weekly_bonus_claimed(storage, tid, weekly_week, weekly_key)
             lines.append(
                 f"📅 Контракт недели (бонус +{WEEKLY_CONTRACT_BONUS_PERCENT}% RU, "
-                f"+{WEEKLY_CONTRACT_RATING_BONUS} рейтинг, 1 раз в неделю"
-                f"{' — уже получен' if weekly_done else ''}): "
+                f"+{WEEKLY_CONTRACT_RATING_BONUS} рейтинг, 1 раз за задание"
+                f"{' — уже получен' if claimed else ''}): "
                 f"{weekly_template.title} («{weekly_template.work_location}»)"
             )
     lines.append("")
@@ -2885,44 +2947,18 @@ def turn_in_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
 
     pending = int(active.get("pending_reward", 0) or 0)
     bonus = max(0, int(round(pending * CONTRACT_TURN_IN_BONUS_PERCENT / 100)))
+    now = datetime.now(timezone.utc)
+    extra_lines = _grant_contract_rotation_bonus(
+        storage,
+        telegram_id,
+        template_key=template.key,
+        pending=pending,
+        now=now,
+    )
     if bonus > 0:
         storage.change_money(telegram_id, bonus)
         storage.add_player_stat(telegram_id, "money_earned", bonus)
     storage.set_active_contract(telegram_id, None)
-
-    extra_lines: list[str] = []
-    now = datetime.now(timezone.utc)
-    weekly_key = get_weekly_contract_key(storage, now)
-    if template.key == weekly_key:
-        week_key = _weekly_key(now)
-        done_meta = _contract_weekly_done_meta_key(telegram_id, week_key)
-        if storage.get_meta(done_meta) is None:
-            weekly_bonus = max(0, int(round(pending * WEEKLY_CONTRACT_BONUS_PERCENT / 100)))
-            if weekly_bonus > 0:
-                storage.change_money(telegram_id, weekly_bonus)
-                storage.add_player_stat(telegram_id, "money_earned", weekly_bonus)
-            _add_rating(storage, telegram_id, WEEKLY_CONTRACT_RATING_BONUS)
-            storage.set_meta(done_meta, "1")
-            extra_lines.append(
-                f"📅 Контракт недели выполнен! Бонус: +{weekly_bonus} RU, "
-                f"+{WEEKLY_CONTRACT_RATING_BONUS} рейтинга."
-            )
-    else:
-        daily_keys = set(get_daily_contract_keys(storage, now))
-        if template.key in daily_keys:
-            date_key = _daily_key(now)
-            done_meta = _contract_daily_done_meta_key(telegram_id, date_key)
-            if storage.get_meta(done_meta) is None:
-                daily_bonus = max(0, int(round(pending * DAILY_CONTRACT_BONUS_PERCENT / 100)))
-                if daily_bonus > 0:
-                    storage.change_money(telegram_id, daily_bonus)
-                    storage.add_player_stat(telegram_id, "money_earned", daily_bonus)
-                _add_rating(storage, telegram_id, DAILY_CONTRACT_RATING_BONUS)
-                storage.set_meta(done_meta, "1")
-                extra_lines.append(
-                    f"🗓 Контракт дня выполнен! Бонус: +{daily_bonus} RU, "
-                    f"+{DAILY_CONTRACT_RATING_BONUS} рейтинга."
-                )
 
     text = (
         f"Отчёт по «{template.title}» сдан на «{home}».\n"
