@@ -863,6 +863,7 @@ def faction_group_keyboard(
         [InlineKeyboardButton(text="🏚 Гараж: сдать канистру бензина", callback_data="faction:garage:deposit:gasoline")],
         [InlineKeyboardButton(text="🏚 Гараж: сдать канистру дизеля", callback_data="faction:garage:deposit:diesel")],
         [InlineKeyboardButton(text="🏚 Сдать Ниву в гараж", callback_data="faction:garage:deposit:niva")],
+        [InlineKeyboardButton(text="🏚 Сдать грузовик в гараж", callback_data="faction:garage:deposit:truck")],
     ]
     if can_withdraw_warehouse:
         rows.extend(
@@ -874,6 +875,7 @@ def faction_group_keyboard(
                 [InlineKeyboardButton(text="🏚 Гараж: забрать канистру бензина", callback_data="faction:garage:withdraw:gasoline")],
                 [InlineKeyboardButton(text="🏚 Гараж: забрать канистру дизеля", callback_data="faction:garage:withdraw:diesel")],
                 [InlineKeyboardButton(text="🏚 Забрать Ниву из гаража", callback_data="faction:garage:withdraw:niva")],
+                [InlineKeyboardButton(text="🏚 Забрать грузовик из гаража", callback_data="faction:garage:withdraw:truck")],
             ]
         )
     if can_withdraw_treasury:

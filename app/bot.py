@@ -146,6 +146,8 @@ from app.game_logic import (
     garage_withdraw_fuel,
     garage_deposit_niva,
     garage_withdraw_niva,
+    garage_deposit_truck,
+    garage_withdraw_truck,
     format_inventory,
     repair_gear,
     upgrade_armor,
@@ -4394,6 +4396,8 @@ async def faction_garage_deposit_callback(callback: CallbackQuery) -> None:
     storage = get_storage()
     if kind == "niva":
         result = garage_deposit_niva(storage, callback.from_user.id)
+    elif kind == "truck":
+        result = garage_deposit_truck(storage, callback.from_user.id)
     elif kind in ("gasoline", "diesel"):
         result = garage_deposit_fuel(storage, callback.from_user.id, kind)
     else:
@@ -4407,6 +4411,8 @@ async def faction_garage_withdraw_callback(callback: CallbackQuery) -> None:
     storage = get_storage()
     if kind == "niva":
         result = garage_withdraw_niva(storage, callback.from_user.id)
+    elif kind == "truck":
+        result = garage_withdraw_truck(storage, callback.from_user.id)
     elif kind in ("gasoline", "diesel"):
         result = garage_withdraw_fuel(storage, callback.from_user.id, kind)
     else:

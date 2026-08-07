@@ -6356,6 +6356,48 @@ def garage_withdraw_niva(storage: Storage, telegram_id: int) -> ActionResult:
     )
 
 
+def garage_deposit_truck(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Гараж доступен только бойцам группировки.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if not player.truck_owned:
+        return ActionResult(False, "У тебя нет грузовика, чтобы сдать его в гараж.")
+    storage.clear_truck_owned(telegram_id)
+    garage = get_faction_garage(storage, player.faction)
+    garage["truck"] = garage.get("truck", 0) + 1
+    _set_faction_garage(storage, player.faction, garage)
+    return ActionResult(
+        True,
+        f"Грузовик сдан в гараж «{player.faction}». В гараже: {garage['truck']} шт.",
+    )
+
+
+def garage_withdraw_truck(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Гараж доступен только бойцам группировки.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if player.truck_owned:
+        return ActionResult(False, "У тебя уже есть свой грузовик.")
+    if not can_withdraw_faction_warehouse(storage, player):
+        return ActionResult(False, "Забирать из гаража можно с 5 ранга (или лидеру группировки).")
+    garage = get_faction_garage(storage, player.faction)
+    if garage.get("truck", 0) <= 0:
+        return ActionResult(False, "В гараже нет свободных грузовиков.")
+    garage["truck"] -= 1
+    _set_faction_garage(storage, player.faction, garage)
+    storage.set_truck_owned(telegram_id)
+    if hasattr(storage, "set_truck_durability"):
+        storage.set_truck_durability(telegram_id, 100)
+    return ActionResult(
+        True,
+        f"Грузовик из гаража закреплён за тобой (прочность 100%). В гараже осталось: {garage['truck']} шт.",
+    )
+
+
 def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction is None:
