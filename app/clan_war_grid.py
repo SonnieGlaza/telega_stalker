@@ -26,8 +26,11 @@ from app.tactical_render import load_tactical_font, paste_npc_sprite, paste_play
 from app.tactical_combat import (
     BASE_COVER_ARMOR_BONUS,
     MOVE_DELTAS,
+    NPC_MOVE_CHANCE,
     NPC_WEAPONS,
+    best_step_toward,
     cover_blocks_shot,
+    manhattan_distance,
     random_hostile_shots,
     ray_cast_first_hit,
     weapon_shoot_range,
@@ -316,6 +319,27 @@ def _hostile_turn(storage: Storage, session: ClanWarGridSession) -> list[str]:
     alive_ids = [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
     player_pos = {pid: session.pos(pid) for pid in alive_ids}
     player_chars = {pid: storage.get_character(pid, refresh_energy=False) for pid in alive_ids}
+    player_cells = set(player_pos.values())
+
+    occupied = _occupied(session)
+    new_defenders: list[tuple[int, int]] = []
+    for pos in session.defenders:
+        origin = pos
+        occupied.discard(origin)
+        current = origin
+        if alive_ids and random.random() < NPC_MOVE_CHANCE:
+            target = min(player_cells, key=lambda p: manhattan_distance(origin, p))
+            current = best_step_toward(
+                origin,
+                target,
+                grid=session.grid,
+                blocked=occupied,
+                forbidden=player_cells,
+            )
+        new_defenders.append(current)
+        occupied.add(current)
+    session.defenders = new_defenders
+
     return random_hostile_shots(
         session.defenders,
         session.defender_weapons,

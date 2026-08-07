@@ -36,6 +36,7 @@ from app.storage import Character, Storage
 from app.tactical_combat import (
     BASE_COVER_ARMOR_BONUS,
     MOVE_DELTAS,
+    NPC_MOVE_CHANCE,
     best_step_toward,
     cover_blocks_shot,
     manhattan_distance,
@@ -487,6 +488,27 @@ def _hostile_turn(storage: Storage, session: RaidGridSession) -> list[str]:
     player_pos = {pid: session.pos(pid) for pid in alive_ids}
     player_chars = {pid: storage.get_character(pid, refresh_energy=False) for pid in alive_ids}
     player_cells = set(player_pos.values())
+
+    occupied = _occupied(session)
+    moved_hostiles = list(session.hostiles)
+    for i, pos in enumerate(session.hostiles):
+        if i >= len(session.hostile_types) or session.hostile_types[i] != "bot":
+            continue
+        origin = pos
+        occupied.discard(origin)
+        current = origin
+        if alive_ids and random.random() < NPC_MOVE_CHANCE:
+            target = min(player_cells, key=lambda p: manhattan_distance(origin, p))
+            current = best_step_toward(
+                origin,
+                target,
+                grid=session.grid,
+                blocked=occupied,
+                forbidden=player_cells,
+            )
+        moved_hostiles[i] = current
+        occupied.add(current)
+    session.hostiles = moved_hostiles
 
     bot_pos, bot_weapons = _bot_shooters(session)
     if bot_pos:

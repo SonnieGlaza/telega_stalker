@@ -604,6 +604,31 @@ def run_smoke_check() -> None:
         assert all(hpos not in player_cells for hpos in mutant_session.hostiles)
         assert mutant_session.hostiles == [(4, 5)]
 
+        # Defensive bots may reposition toward players (25% chance), never onto player cells.
+        from unittest.mock import patch
+        from app.tactical_combat import NPC_MOVE_CHANCE
+
+        bot_session = RaidGridSession(
+            session_id="botest",
+            raid_id=9998,
+            raid_kind="lair",
+            location_label="test",
+            attacker_faction="Долг",
+            player_ids=[111],
+        )
+        bot_session.grid = 9
+        bot_session.set_pos(111, (0, 4))
+        bot_session.hp = {"111": 100}
+        bot_session.hostiles = [(8, 4)]
+        bot_session.hostile_types = ["bot"]
+        bot_session.hostile_kinds = ["maloy"]
+        bot_session.hostile_weapons = ["ПМ"]
+        with patch("app.raid_grid.random.random", return_value=0.0):
+            _hostile_turn(storage, bot_session)
+        assert bot_session.hostiles != [(8, 4)]
+        assert bot_session.hostiles[0] not in {(0, 4)}
+        assert 0.0 < NPC_MOVE_CHANCE < 1.0
+
         # Stale rgrid session must not block a new raid launch.
         from app.raid_grid import clear_stale_raid_grid_session, start_raid_grid
 

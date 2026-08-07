@@ -17,6 +17,7 @@ MOVE_DELTAS: dict[str, tuple[int, int]] = {
 
 COVER_HIT_CHANCE = 0.5
 BASE_COVER_ARMOR_BONUS = 5
+NPC_MOVE_CHANCE = 0.25
 
 # Пистолеты и дробовики — 1 клетка.
 _PISTOL_SHOTGUN = frozenset(
