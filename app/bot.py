@@ -59,6 +59,7 @@ from app.clan_war_grid import (
     get_cwar_session_by_player,
     process_cwar_turn_timeouts,
     render_cwar_frame,
+    render_war_lobby_preview_frame,
     save_cwar_session,
 )
 from app.raid_grid import (
@@ -222,6 +223,7 @@ from app.game_logic import (
     dissolve_war_lobby,
     can_dissolve_war_lobby,
     build_war_lobby_overview,
+    find_open_war_lobby_for_character,
     transfer_location_to_ally,
     create_market_lot,
     buy_first_market_lot,
@@ -4517,37 +4519,87 @@ async def war_scenario_section_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "war:section:lobby")
-async def war_lobby_section_callback(callback: CallbackQuery) -> None:
+async def war_lobby_section_callback(callback: CallbackQuery, bot: Bot) -> None:
     db = get_storage()
     player = db.get_character(callback.from_user.id, refresh_energy=False)
     if player is None or not player_ready(player):
         await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
         return
-    await edit_menu_message(
-        callback,
-        build_war_lobby_overview(db, player.telegram_id),
-        war_lobby_keyboard(
-            list_assaultable_locations(db, player.faction),
-            can_dissolve=can_dissolve_war_lobby(db, player.telegram_id),
-        ),
-    )
+    await _show_war_lobby_menu(callback, bot)
 
 
-async def _refresh_war_lobby_menu(callback: CallbackQuery) -> None:
+async def _show_war_lobby_menu(callback: CallbackQuery, bot: Bot) -> None:
     db = get_storage()
     player = db.get_character(callback.from_user.id, refresh_energy=False)
-    if player is None or callback.message is None:
+    if player is None:
+        return
+    overview = build_war_lobby_overview(db, player.telegram_id)
+    markup = war_lobby_keyboard(
+        list_assaultable_locations(db, player.faction or ""),
+        can_dissolve=can_dissolve_war_lobby(db, player.telegram_id),
+    )
+    session = get_cwar_session_by_player(db, player.telegram_id)
+    if session is not None:
+        await _broadcast_cwar_session(bot, db, session)
+        await safe_callback_answer(callback)
+        return
+    lobby = find_open_war_lobby_for_character(db, player)
+    if lobby is None:
+        await edit_menu_message(callback, overview, markup)
+        return
+    member_ids = db.get_war_lobby_member_ids(int(lobby["id"]))
+    frame = render_war_lobby_preview_frame(
+        db,
+        location_name=str(lobby["location"]),
+        member_ids=member_ids,
+        viewer_id=player.telegram_id,
+        leader_id=int(lobby["leader_id"]),
+    )
+    await _edit_menu_photo(callback, frame, overview, markup)
+
+
+async def _edit_menu_photo(
+    callback: CallbackQuery,
+    image_bytes: bytes,
+    caption: str,
+    reply_markup: Any,
+    *,
+    answer_callback: bool = True,
+) -> None:
+    message = callback.message
+    media = BufferedInputFile(image_bytes, filename="war_lobby.png")
+    if message is None:
+        if answer_callback:
+            await safe_callback_answer(callback)
         return
     try:
-        await callback.message.edit_text(
-            build_war_lobby_overview(db, player.telegram_id),
-            reply_markup=war_lobby_keyboard(
-                list_assaultable_locations(db, player.faction or ""),
-                can_dissolve=can_dissolve_war_lobby(db, player.telegram_id),
-            ),
-        )
-    except TelegramBadRequest:
-        pass
+        if message.photo:
+            await message.edit_media(
+                media=InputMediaPhoto(media=media, caption=caption),
+                reply_markup=reply_markup,
+            )
+        else:
+            await message.answer_photo(photo=media, caption=caption, reply_markup=reply_markup)
+            try:
+                await message.delete()
+            except TelegramBadRequest:
+                pass
+    except TelegramBadRequest as exc:
+        if "message is not modified" in str(exc).lower():
+            if answer_callback:
+                await safe_callback_answer(callback)
+            return
+        await message.answer_photo(photo=media, caption=caption, reply_markup=reply_markup)
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
+    if answer_callback:
+        await safe_callback_answer(callback)
+
+
+async def _refresh_war_lobby_menu(callback: CallbackQuery, bot: Bot) -> None:
+    await _show_war_lobby_menu(callback, bot)
 
 
 @router.callback_query(F.data.startswith("war:transfer:"))
@@ -4580,16 +4632,16 @@ async def handle_war_legacy_callback(callback: CallbackQuery, bot: Bot) -> None:
 
 
 @router.callback_query(F.data.startswith("war_lobby:create:"))
-async def war_lobby_create_callback(callback: CallbackQuery) -> None:
+async def war_lobby_create_callback(callback: CallbackQuery, bot: Bot) -> None:
     location = (callback.data or "").split(":", maxsplit=2)[2]
     result = create_or_join_war_lobby(get_storage(), callback.from_user.id, location)
     await reply_action_result(callback, result.text)
     if result.ok:
-        await _refresh_war_lobby_menu(callback)
+        await _refresh_war_lobby_menu(callback, bot)
 
 
 @router.callback_query(F.data == "war_lobby:join")
-async def war_lobby_join_callback(callback: CallbackQuery) -> None:
+async def war_lobby_join_callback(callback: CallbackQuery, bot: Bot) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     if player is None or player.faction is None:
         await callback.answer("Нужен персонаж с группировкой.", show_alert=True)
@@ -4601,7 +4653,7 @@ async def war_lobby_join_callback(callback: CallbackQuery) -> None:
     result = create_or_join_war_lobby(get_storage(), callback.from_user.id, str(lobby["location"]))
     await reply_action_result(callback, result.text)
     if result.ok:
-        await _refresh_war_lobby_menu(callback)
+        await _refresh_war_lobby_menu(callback, bot)
 
 
 @router.callback_query(F.data == "war_lobby:launch")
@@ -4612,19 +4664,11 @@ async def war_lobby_launch_callback(callback: CallbackQuery, bot: Bot) -> None:
         session = get_cwar_session_by_player(storage, callback.from_user.id)
         if session is not None:
             await _broadcast_cwar_session(bot, storage, session, note=result.text)
-            for pid in result.notify_member_ids:
-                if pid == callback.from_user.id:
-                    continue
-                try:
-                    await bot.send_message(pid, action_result_text(pid, result.text))
-                except Exception:
-                    logger.exception("Failed to notify cwar start to %s", pid)
             await safe_callback_answer(callback, "Тактический штурм!")
-            await _refresh_war_lobby_menu(callback)
             return
     await deliver_group_result(callback, bot, result, prefix="📣 Итог штурма:")
     if result.ok:
-        await _refresh_war_lobby_menu(callback)
+        await _refresh_war_lobby_menu(callback, bot)
 
 
 @router.callback_query(F.data == "war_lobby:dissolve")
@@ -4632,7 +4676,7 @@ async def war_lobby_dissolve_callback(callback: CallbackQuery, bot: Bot) -> None
     result = dissolve_war_lobby(get_storage(), callback.from_user.id)
     await deliver_group_result(callback, bot, result, prefix="📣 Лобби распущено:")
     if result.ok:
-        await _refresh_war_lobby_menu(callback)
+        await _refresh_war_lobby_menu(callback, bot)
 
 
 @router.callback_query(F.data.startswith("alliance:propose:"))

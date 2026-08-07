@@ -550,6 +550,19 @@ def run_smoke_check() -> None:
 
         war_create2 = create_or_join_war_lobby(storage, 111, "Янтарь")
         assert war_create2.ok, war_create2.text
+        from app.clan_war_grid import render_war_lobby_preview_frame
+
+        lobby = storage.get_open_war_lobby_for_faction("Долг")
+        assert lobby is not None
+        preview_members = storage.get_war_lobby_member_ids(int(lobby["id"]))
+        preview = render_war_lobby_preview_frame(
+            storage,
+            location_name="Янтарь",
+            member_ids=preview_members,
+            viewer_id=111,
+            leader_id=111,
+        )
+        assert len(preview) > 1000
         storage.restore_energy(111, 100)
         storage.restore_energy(222, 100)
         create_or_join_war_lobby(storage, 222, "Янтарь")
@@ -562,13 +575,20 @@ def run_smoke_check() -> None:
         war_launch = launch_war_lobby(storage, 111)
         assert war_launch.text
         if war_launch.tactical_cwar:
-            from app.clan_war_grid import clear_cwar_session, get_cwar_session_by_player
+            from app.clan_war_grid import (
+                clear_cwar_session,
+                cwar_status_caption,
+                get_cwar_session_by_player,
+                render_cwar_frame,
+            )
 
             seen: set[str] = set()
             for pid in war_launch.notify_member_ids:
                 sess = get_cwar_session_by_player(storage, pid)
                 if sess and sess.session_id not in seen:
                     seen.add(sess.session_id)
+                    assert len(render_cwar_frame(storage, sess, pid)) > 1000
+                    assert "квадрат" not in cwar_status_caption(storage, sess, pid).lower()
                     clear_cwar_session(storage, sess)
             with storage._connect() as conn:
                 conn.execute(
