@@ -5311,7 +5311,7 @@ def _launch_depot_raid(
         )
 
     home_location_name = FACTION_HOME_BASE.get(target_faction)
-    base_power = REGULAR_LOCATION_NPC_POWER
+    base_power = 60  # запасное значение силы, если домашняя база цели не найдена
     if home_location_name:
         home_location = storage.get_location(home_location_name)
         if home_location is not None:
