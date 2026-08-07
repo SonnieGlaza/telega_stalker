@@ -64,6 +64,7 @@ from app.clan_war_grid import (
 )
 from app.raid_grid import (
     clear_stale_raid_grid_session,
+    find_raid_grid_session_for_faction,
     get_raid_grid_session_by_player,
     process_rgrid_turn_timeouts,
     render_rgrid_frame,
@@ -2725,6 +2726,10 @@ def _duel_status_caption(storage: Storage, session: Any, viewer_id: int) -> str:
     return "\n".join(lines)
 
 
+def _tactical_photo_file(image_bytes: bytes) -> BufferedInputFile:
+    return BufferedInputFile(image_bytes, filename="tactical.png")
+
+
 async def _upsert_tactical_photo(
     bot: Bot,
     *,
@@ -2733,20 +2738,61 @@ async def _upsert_tactical_photo(
     image_bytes: bytes,
     caption: str,
     markup: InlineKeyboardMarkup | None,
+    callback_message: Message | None = None,
+    parse_mode: ParseMode | None | str = ParseMode.HTML,
 ) -> int:
-    media = BufferedInputFile(image_bytes, filename="tactical.png")
+    photo_kwargs: dict[str, Any] = {
+        "caption": caption,
+        "reply_markup": markup,
+    }
+    if parse_mode is not None:
+        photo_kwargs["parse_mode"] = parse_mode
+
     if message_id is not None:
         try:
             await bot.edit_message_media(
                 chat_id=chat_id,
                 message_id=message_id,
-                media=InputMediaPhoto(media=media, caption=caption),
+                media=InputMediaPhoto(
+                    media=_tactical_photo_file(image_bytes),
+                    caption=caption,
+                    parse_mode=parse_mode,
+                ),
                 reply_markup=markup,
             )
             return message_id
         except TelegramBadRequest:
             pass
-    sent = await bot.send_photo(chat_id, photo=media, caption=caption, reply_markup=markup)
+
+    if callback_message is not None:
+        try:
+            if callback_message.photo:
+                await callback_message.edit_media(
+                    media=InputMediaPhoto(
+                        media=_tactical_photo_file(image_bytes),
+                        caption=caption,
+                        parse_mode=parse_mode,
+                    ),
+                    reply_markup=markup,
+                )
+                return callback_message.message_id
+            sent = await callback_message.answer_photo(
+                photo=_tactical_photo_file(image_bytes),
+                **photo_kwargs,
+            )
+            try:
+                await callback_message.delete()
+            except TelegramBadRequest:
+                pass
+            return sent.message_id
+        except TelegramBadRequest:
+            pass
+
+    sent = await bot.send_photo(
+        chat_id,
+        photo=_tactical_photo_file(image_bytes),
+        **photo_kwargs,
+    )
     return sent.message_id
 
 
@@ -2891,6 +2937,7 @@ async def _broadcast_rgrid_session(
     session: Any,
     *,
     note: str | None = None,
+    callback: CallbackQuery | None = None,
 ) -> None:
     for pid in session.player_ids:
         ch = storage.get_character(pid, refresh_energy=False)
@@ -2902,6 +2949,7 @@ async def _broadcast_rgrid_session(
             caption = f"{caption}\n\n{note}" if pid == session.active_player() else f"{caption}\n\n↪ {note}"
         frame = render_rgrid_frame(storage, session, pid)
         msg_id = session.message_ids.get(str(pid))
+        callback_message = callback.message if callback is not None and pid == callback.from_user.id else None
         new_id = await _upsert_tactical_photo(
             bot,
             chat_id=pid,
@@ -2909,6 +2957,8 @@ async def _broadcast_rgrid_session(
             image_bytes=frame,
             caption=caption,
             markup=markup,
+            callback_message=callback_message,
+            parse_mode=None,
         )
         session.message_ids[str(pid)] = new_id
     save_raid_grid_session(storage, session)
@@ -2945,7 +2995,7 @@ async def _handle_rgrid_action(bot: Bot, callback: CallbackQuery, result: Any) -
     if session is None:
         await reply_action_result(callback, result.text)
         return
-    await _broadcast_rgrid_session(bot, storage, session, note=result.text)
+    await _broadcast_rgrid_session(bot, storage, session, note=result.text, callback=callback)
     await safe_callback_answer(callback, result.text[:CALLBACK_ALERT_MAX_LEN] if len(result.text) <= CALLBACK_ALERT_MAX_LEN else "Готово")
 
 
@@ -4093,7 +4143,7 @@ async def rgrid_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
         if session is None:
             await callback.answer("Нет активного рейда.", show_alert=True)
             return
-        await _broadcast_rgrid_session(bot, storage, session)
+        await _broadcast_rgrid_session(bot, storage, session, callback=callback)
         await safe_callback_answer(callback)
         return
 
@@ -4947,10 +4997,15 @@ async def launch_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
     clear_stale_raid_grid_session(storage, telegram_id)
 
     session = get_raid_grid_session_by_player(storage, telegram_id)
+    if session is None:
+        player = storage.get_character(telegram_id, refresh_energy=False)
+        if player is not None and player.faction:
+            session = find_raid_grid_session_for_faction(storage, player.faction)
+
     if session is not None:
         await safe_callback_answer(callback, "Карта рейда")
         try:
-            await _broadcast_rgrid_session(bot, storage, session)
+            await _broadcast_rgrid_session(bot, storage, session, callback=callback)
         except Exception:
             logger.exception("Failed to re-open tactical raid map for user %s", telegram_id)
             await reply_action_result(callback, "Не удалось показать карту рейда.", bot=bot)
@@ -4967,7 +5022,7 @@ async def launch_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
         if session is not None:
             await safe_callback_answer(callback, "Тактический рейд!")
             try:
-                await _broadcast_rgrid_session(bot, storage, session, note=result.text)
+                await _broadcast_rgrid_session(bot, storage, session, note=result.text, callback=callback)
             except Exception:
                 logger.exception("Failed to broadcast tactical raid map for raid #%s", session.raid_id)
                 await reply_action_result(

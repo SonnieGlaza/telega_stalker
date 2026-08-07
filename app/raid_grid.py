@@ -1000,9 +1000,21 @@ def process_rgrid_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResul
     return outcomes
 
 
+def find_raid_grid_session_for_faction(storage: Storage, faction: str) -> RaidGridSession | None:
+    in_progress = storage.get_in_progress_raid_for_faction(faction)
+    if in_progress is None:
+        return None
+    raid_id = int(in_progress["id"])
+    for pid in storage.get_raid_member_ids(raid_id):
+        session = get_raid_grid_session_by_player(storage, pid)
+        if session is not None and int(session.raid_id) == raid_id:
+            return session
+    return None
+
+
 def rgrid_status_caption(storage: Storage, session: RaidGridSession, viewer_id: int) -> str:
     active = storage.get_character(session.active_player(), refresh_energy=False)
-    active_name = h(active.nickname) if active else str(session.active_player())
+    active_name = active.nickname if active else str(session.active_player())
     lines = [f"🪖 Тактический рейд «{session.location_label}» · ход {active_name}"]
     deadline = _parse_deadline(session.match_deadline)
     if deadline:
@@ -1015,7 +1027,7 @@ def rgrid_status_caption(storage: Storage, session: RaidGridSession, viewer_id: 
         lines.append(f"Захват: {session.capture_progress}/{RAID_CAPTURE_TURNS}")
     for pid in session.player_ids[:5]:
         ch = storage.get_character(pid, refresh_energy=False)
-        name = h(ch.nickname) if ch else str(pid)
+        name = ch.nickname if ch else str(pid)
         hp = session.hp.get(str(pid), 0)
         mark = " ◀" if pid == session.active_player() else ""
         if pid == viewer_id:
