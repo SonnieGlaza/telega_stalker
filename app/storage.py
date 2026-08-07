@@ -490,8 +490,8 @@ class Storage:
                 INSERT OR REPLACE INTO player_stats(
                     telegram_id, quests_completed, quests_failed, raids_completed, raids_failed,
                     wars_won, enemy_bases_captured, smuggling_success, trades_done, money_earned, artifacts_found,
-                    deaths, rating_points, achievements_unlocked
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    deaths, rating_points, achievements_unlocked, season_rating
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(row.get("telegram_id")),
@@ -508,6 +508,7 @@ class Storage:
                     int(row.get("deaths", 0)),
                     int(row.get("rating_points", 0)),
                     int(row.get("achievements_unlocked", 0)),
+                    int(row.get("season_rating", 0)),
                 ),
             )
         for row in player_achievements:
@@ -776,7 +777,8 @@ class Storage:
                     artifacts_found INTEGER NOT NULL DEFAULT 0,
                     deaths INTEGER NOT NULL DEFAULT 0,
                     rating_points INTEGER NOT NULL DEFAULT 0,
-                    achievements_unlocked INTEGER NOT NULL DEFAULT 0
+                    achievements_unlocked INTEGER NOT NULL DEFAULT 0,
+                    season_rating INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -2234,6 +2236,7 @@ class Storage:
             "deaths": "deaths",
             "rating_points": "rating_points",
             "achievements_unlocked": "achievements_unlocked",
+            "season_rating": "season_rating",
         }
         column = allowed_columns.get(stat_key)
         if column is None or delta == 0:
@@ -2254,7 +2257,7 @@ class Storage:
                 """
                 SELECT quests_completed, quests_failed, raids_completed, raids_failed, wars_won,
                        enemy_bases_captured, smuggling_success, trades_done, money_earned, artifacts_found, deaths,
-                       rating_points, achievements_unlocked
+                       rating_points, achievements_unlocked, season_rating
                 FROM player_stats
                 WHERE telegram_id = ?
                 """,
@@ -2275,6 +2278,7 @@ class Storage:
                 "deaths": 0,
                 "rating_points": 0,
                 "achievements_unlocked": 0,
+                "season_rating": 0,
             }
         return {
             "quests_completed": int(row["quests_completed"]),
@@ -2290,6 +2294,7 @@ class Storage:
             "deaths": int(row["deaths"]),
             "rating_points": int(row["rating_points"]),
             "achievements_unlocked": int(row["achievements_unlocked"]),
+            "season_rating": int(row["season_rating"] or 0),
         }
 
     def unlock_player_achievement(self, telegram_id: int, achievement_key: str) -> bool:
@@ -2359,6 +2364,31 @@ class Storage:
                 (safe_limit,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_season_rating_leaderboard(self, limit: int = 10) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(100, int(limit)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    c.telegram_id,
+                    c.nickname,
+                    c.faction,
+                    COALESCE(ps.season_rating, 0) AS season_rating
+                FROM characters c
+                LEFT JOIN player_stats ps ON ps.telegram_id = c.telegram_id
+                WHERE COALESCE(ps.season_rating, 0) > 0
+                ORDER BY season_rating DESC, c.money DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def reset_all_season_ratings(self) -> None:
+        with self._connect() as conn:
+            conn.execute("UPDATE player_stats SET season_rating = 0")
+        self.save_snapshot()
 
     def set_avatar_style(self, telegram_id: int, style: str) -> None:
         if style not in {"classic", "realistic"}:
@@ -3475,6 +3505,10 @@ class Storage:
             (
                 "enemy_bases_captured",
                 "ALTER TABLE player_stats ADD COLUMN enemy_bases_captured INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "season_rating",
+                "ALTER TABLE player_stats ADD COLUMN season_rating INTEGER NOT NULL DEFAULT 0",
             ),
         ]
         for col_name, ddl in add_columns:

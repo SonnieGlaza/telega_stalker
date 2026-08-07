@@ -716,6 +716,20 @@ ZONE_EVENT_META_NEXT_AT = "zone_event_next_at"
 ZONE_EVENT_INTERVAL_MIN_MINUTES = 30
 ZONE_EVENT_INTERVAL_MAX_MINUTES = 90
 
+DAILY_CONTRACTS_META_KEY = "contracts:daily"
+WEEKLY_CONTRACT_META_KEY = "contracts:weekly"
+DAILY_CONTRACTS_COUNT = 3
+DAILY_CONTRACT_BONUS_PERCENT = 50
+DAILY_CONTRACT_RATING_BONUS = 5
+WEEKLY_CONTRACT_BONUS_PERCENT = 120
+WEEKLY_CONTRACT_RATING_BONUS = 15
+WEEKLY_CONTRACT_DIFFICULTIES: frozenset[str] = frozenset({"heavy", "impossible"})
+CONTRACT_DAILY_DONE_META_PREFIX = "contracts:daily_done:"
+CONTRACT_WEEKLY_DONE_META_PREFIX = "contracts:weekly_done:"
+
+RATING_SEASON_META_KEY = "rating_season"
+RATING_SEASON_LENGTH_DAYS = 14
+
 FACTION_HOME_BASE: dict[str, str] = {
     "Долг": "Росток",
     "Свобода": "Армейские склады",
@@ -1505,6 +1519,66 @@ def _add_rating(storage: Storage, telegram_id: int, amount: int) -> None:
     if amount == 0:
         return
     storage.add_player_stat(telegram_id, "rating_points", amount)
+    if amount > 0:
+        storage.add_player_stat(telegram_id, "season_rating", amount)
+
+
+def get_rating_season(storage: Storage, now: datetime | None = None) -> dict[str, Any]:
+    """Текущий рейтинговый сезон; создаёт первый сезон при первом обращении."""
+    now = now or datetime.now(timezone.utc)
+    raw = storage.get_meta(RATING_SEASON_META_KEY)
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict) and "id" in parsed and "started_at" in parsed and "ends_at" in parsed:
+            return parsed
+
+    season = {
+        "id": 1,
+        "started_at": now.isoformat(),
+        "ends_at": (now + timedelta(days=RATING_SEASON_LENGTH_DAYS)).isoformat(),
+    }
+    storage.set_meta(RATING_SEASON_META_KEY, json.dumps(season, ensure_ascii=False))
+    return season
+
+
+def _season_days_left(season: dict[str, Any], now: datetime) -> int:
+    ends_at = _parse_meta_datetime(str(season.get("ends_at") or ""), now)
+    return max(0, int((ends_at - now).total_seconds() // 86400))
+
+
+def process_rating_season(storage: Storage) -> str | None:
+    """Проверяет окончание сезона: архивирует топ-3, сбрасывает очки, начинает новый сезон."""
+    now = datetime.now(timezone.utc)
+    season = get_rating_season(storage, now)
+    ends_at = _parse_meta_datetime(str(season.get("ends_at") or ""), now + timedelta(days=RATING_SEASON_LENGTH_DAYS))
+    if now < ends_at:
+        return None
+
+    top = storage.get_season_rating_leaderboard(limit=3)
+    lines = [f"🏁 Сезон рейтинга #{season.get('id')} завершён!"]
+    if top:
+        medals = ["🥇", "🥈", "🥉"]
+        for idx, row in enumerate(top):
+            nickname = str(row.get("nickname") or f"Игрок {row.get('telegram_id')}")
+            points = int(row.get("season_rating") or 0)
+            medal = medals[idx] if idx < len(medals) else "•"
+            lines.append(f"{medal} {nickname} — {points} очк. сезона")
+    else:
+        lines.append("В этом сезоне никто не набрал очков.")
+
+    storage.reset_all_season_ratings()
+    new_season_id = int(season.get("id") or 0) + 1
+    new_season = {
+        "id": new_season_id,
+        "started_at": now.isoformat(),
+        "ends_at": (now + timedelta(days=RATING_SEASON_LENGTH_DAYS)).isoformat(),
+    }
+    storage.set_meta(RATING_SEASON_META_KEY, json.dumps(new_season, ensure_ascii=False))
+    lines.append(f"\n🆕 Начался сезон #{new_season_id} на {RATING_SEASON_LENGTH_DAYS} дней. Удачи, сталкер!")
+    return "\n".join(lines)
 
 
 def _player_rating_rank(storage: Storage, telegram_id: int, *, limit: int = 10) -> int | None:
@@ -1968,6 +2042,21 @@ def build_rating_overview(
         lines.append(f"\nТвоя позиция: #{requester_rank}")
     elif top:
         lines.append("\nТебя нет в топ-100.")
+
+    now = datetime.now(timezone.utc)
+    season = get_rating_season(storage, now)
+    days_left = _season_days_left(season, now)
+    season_top = storage.get_season_rating_leaderboard(limit=5)
+    lines.append(f"\n📅 Сезон #{season.get('id')} — осталось дней: {days_left}")
+    if season_top:
+        medals = ["🥇", "🥈", "🥉"]
+        for idx, row in enumerate(season_top):
+            nickname = h(str(row.get("nickname") or f"Игрок {row.get('telegram_id')}"))
+            points = int(row.get("season_rating") or 0)
+            medal = medals[idx] if idx < len(medals) else f"{idx + 1}."
+            lines.append(f"{medal} {nickname} — {points} очк. сезона")
+    else:
+        lines.append("В этом сезоне ещё никто не набрал очков.")
     return ("\n".join(lines), safe_page, total_pages)
 
 
@@ -2215,6 +2304,78 @@ def list_quest_contracts_for_character(character: Character) -> list[QuestContra
     ]
 
 
+def _daily_key(now: datetime) -> str:
+    return now.strftime("%Y-%m-%d")
+
+
+def _weekly_key(now: datetime) -> str:
+    iso = now.isocalendar()
+    return f"{iso[0]}-W{iso[1]:02d}"
+
+
+def get_daily_contract_keys(storage: Storage, now: datetime | None = None) -> list[str]:
+    """Ротация 2-3 контрактов дня; пересчитывается раз в сутки, хранится в meta."""
+    now = now or datetime.now(timezone.utc)
+    today = _daily_key(now)
+    raw = storage.get_meta(DAILY_CONTRACTS_META_KEY)
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict) and parsed.get("date") == today:
+            keys = parsed.get("keys")
+            if isinstance(keys, list) and keys:
+                return [str(key) for key in keys if str(key) in QUEST_CONTRACTS]
+
+    rng = random.Random(today)
+    pool = list(QUEST_CONTRACTS.keys())
+    count = min(DAILY_CONTRACTS_COUNT, len(pool))
+    picked = rng.sample(pool, count) if pool else []
+    storage.set_meta(
+        DAILY_CONTRACTS_META_KEY,
+        json.dumps({"date": today, "keys": picked}, ensure_ascii=False),
+    )
+    return picked
+
+
+def get_weekly_contract_key(storage: Storage, now: datetime | None = None) -> str | None:
+    """Один тяжёлый контракт недели с крупным бонусом; хранится в meta."""
+    now = now or datetime.now(timezone.utc)
+    week = _weekly_key(now)
+    raw = storage.get_meta(WEEKLY_CONTRACT_META_KEY)
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict) and parsed.get("week") == week:
+            key = parsed.get("key")
+            if key and str(key) in QUEST_CONTRACTS:
+                return str(key)
+
+    rng = random.Random(week)
+    pool = [
+        key
+        for key, template in QUEST_CONTRACTS.items()
+        if template.difficulty in WEEKLY_CONTRACT_DIFFICULTIES
+    ] or list(QUEST_CONTRACTS.keys())
+    picked = rng.choice(pool) if pool else None
+    storage.set_meta(
+        WEEKLY_CONTRACT_META_KEY,
+        json.dumps({"week": week, "key": picked}, ensure_ascii=False),
+    )
+    return picked
+
+
+def _contract_daily_done_meta_key(telegram_id: int, date_key: str) -> str:
+    return f"{CONTRACT_DAILY_DONE_META_PREFIX}{telegram_id}:{date_key}"
+
+
+def _contract_weekly_done_meta_key(telegram_id: int, week_key: str) -> str:
+    return f"{CONTRACT_WEEKLY_DONE_META_PREFIX}{telegram_id}:{week_key}"
+
+
 def get_active_contract_template(storage: Storage, telegram_id: int) -> QuestContractTemplate | None:
     active = storage.get_active_contract(telegram_id)
     if not active:
@@ -2282,6 +2443,34 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
         lines.append("Нет активного контракта — выбери ниже (только на домашней базе).")
         lines.append("")
 
+    now = datetime.now(timezone.utc)
+    daily_keys = set(get_daily_contract_keys(storage, now))
+    weekly_key = get_weekly_contract_key(storage, now)
+    daily_date = _daily_key(now)
+    weekly_week = _weekly_key(now)
+    tid = character.telegram_id
+    daily_done = storage.get_meta(_contract_daily_done_meta_key(tid, daily_date)) is not None
+    weekly_done = storage.get_meta(_contract_weekly_done_meta_key(tid, weekly_week)) is not None
+
+    lines.append(
+        f"🗓 Контракты дня (бонус +{DAILY_CONTRACT_BONUS_PERCENT}% RU, +{DAILY_CONTRACT_RATING_BONUS} рейтинг, "
+        f"1 раз в сутки{' — уже получен сегодня' if daily_done else ''}):"
+    )
+    for key in daily_keys:
+        template = QUEST_CONTRACTS.get(key)
+        if template:
+            lines.append(f"  • {template.title} («{template.work_location}»)")
+    if weekly_key:
+        weekly_template = QUEST_CONTRACTS.get(weekly_key)
+        if weekly_template:
+            lines.append(
+                f"📅 Контракт недели (бонус +{WEEKLY_CONTRACT_BONUS_PERCENT}% RU, "
+                f"+{WEEKLY_CONTRACT_RATING_BONUS} рейтинг, 1 раз в неделю"
+                f"{' — уже получен' if weekly_done else ''}): "
+                f"{weekly_template.title} («{weekly_template.work_location}»)"
+            )
+    lines.append("")
+
     lines.append("Доступные контракты:")
     for template in list_quest_contracts_for_character(character):
         quest = QUESTS.get(template.difficulty)
@@ -2289,8 +2478,13 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
             continue
         rating_gain = QUEST_RATING_BY_DIFFICULTY.get(template.difficulty, (12, 2))[0]
         transport_note = _transport_requirement_text(template.min_transport)
+        badge = ""
+        if template.key == weekly_key:
+            badge = " 📅"
+        elif template.key in daily_keys:
+            badge = " 🗓"
         lines.append(
-            f"• {template.title}{transport_note}\n"
+            f"• {template.title}{badge}{transport_note}\n"
             f"  {quest.title} → «{template.work_location}» | поле 6×6 | "
             f"RU {quest.reward_min}–{quest.reward_max} | рейтинг +{rating_gain}"
         )
@@ -2642,12 +2836,49 @@ def turn_in_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
         storage.change_money(telegram_id, bonus)
         storage.add_player_stat(telegram_id, "money_earned", bonus)
     storage.set_active_contract(telegram_id, None)
-    return ActionResult(
-        True,
+
+    extra_lines: list[str] = []
+    now = datetime.now(timezone.utc)
+    weekly_key = get_weekly_contract_key(storage, now)
+    if template.key == weekly_key:
+        week_key = _weekly_key(now)
+        done_meta = _contract_weekly_done_meta_key(telegram_id, week_key)
+        if storage.get_meta(done_meta) is None:
+            weekly_bonus = max(0, int(round(pending * WEEKLY_CONTRACT_BONUS_PERCENT / 100)))
+            if weekly_bonus > 0:
+                storage.change_money(telegram_id, weekly_bonus)
+                storage.add_player_stat(telegram_id, "money_earned", weekly_bonus)
+            _add_rating(storage, telegram_id, WEEKLY_CONTRACT_RATING_BONUS)
+            storage.set_meta(done_meta, "1")
+            extra_lines.append(
+                f"📅 Контракт недели выполнен! Бонус: +{weekly_bonus} RU, "
+                f"+{WEEKLY_CONTRACT_RATING_BONUS} рейтинга."
+            )
+    else:
+        daily_keys = set(get_daily_contract_keys(storage, now))
+        if template.key in daily_keys:
+            date_key = _daily_key(now)
+            done_meta = _contract_daily_done_meta_key(telegram_id, date_key)
+            if storage.get_meta(done_meta) is None:
+                daily_bonus = max(0, int(round(pending * DAILY_CONTRACT_BONUS_PERCENT / 100)))
+                if daily_bonus > 0:
+                    storage.change_money(telegram_id, daily_bonus)
+                    storage.add_player_stat(telegram_id, "money_earned", daily_bonus)
+                _add_rating(storage, telegram_id, DAILY_CONTRACT_RATING_BONUS)
+                storage.set_meta(done_meta, "1")
+                extra_lines.append(
+                    f"🗓 Контракт дня выполнен! Бонус: +{daily_bonus} RU, "
+                    f"+{DAILY_CONTRACT_RATING_BONUS} рейтинга."
+                )
+
+    text = (
         f"Отчёт по «{template.title}» сдан на «{home}».\n"
         f"Бонус за доставку данных: +{bonus} RU.\n"
-        "Контракт закрыт.",
+        "Контракт закрыт."
     )
+    if extra_lines:
+        text += "\n\n" + "\n".join(extra_lines)
+    return ActionResult(True, text)
 
 
 def try_auto_turn_in_contract(storage: Storage, telegram_id: int) -> str | None:

@@ -131,6 +131,7 @@ from app.game_logic import (
     QUEST_CONTRACTS,
     apply_controlled_points_income,
     process_emission_cycle,
+    process_rating_season,
     process_due_travels,
     collect_travel_eta_notices,
     process_zone_event_cycle,
@@ -2374,14 +2375,26 @@ def _quests_menu_payload(storage, player):
         if stage == "return":
             show_turnin = player.location == home and not traveling
     elif at_home:
-        from app.game_logic import list_quest_contracts_for_character, _has_transport
+        from app.game_logic import (
+            list_quest_contracts_for_character,
+            _has_transport,
+            get_daily_contract_keys,
+            get_weekly_contract_key,
+        )
 
+        daily_keys = set(get_daily_contract_keys(storage))
+        weekly_key = get_weekly_contract_key(storage)
         for template in list_quest_contracts_for_character(player):
             if not _has_transport(player, template.min_transport):
                 continue
             emoji = QUEST_DIFFICULTY_EMOJI.get(template.difficulty, "📋")
+            badge = ""
+            if template.key == weekly_key:
+                badge = "📅 "
+            elif template.key in daily_keys:
+                badge = "🗓 "
             contract_buttons.append(
-                (f"{emoji} {template.title}", f"contract:accept:{template.key}")
+                (f"{badge}{emoji} {template.title}", f"contract:accept:{template.key}")
             )
 
     keyboard = quests_keyboard(
@@ -4956,6 +4969,16 @@ async def run_bot() -> None:
                             logger.debug("Failed zone event notify to %s", user_id)
             except Exception:
                 logger.exception("Zone event cycle tick failed")
+            try:
+                season_message = process_rating_season(get_storage())
+                if season_message:
+                    for user_id in get_storage().list_player_ids():
+                        try:
+                            await bot.send_message(user_id, season_message)
+                        except Exception:
+                            logger.debug("Failed rating season notify to %s", user_id)
+            except Exception:
+                logger.exception("Rating season tick failed")
             if zone_tick_counter["n"] % SURVIVAL_DEATH_CHECK_EVERY_TICKS == 0:
                 try:
                     await _push_offline_survival_deaths(bot, get_storage())
