@@ -5339,6 +5339,45 @@ def _refund_spent_energy(storage: Storage, telegram_ids: list[int], amount: int)
         storage.restore_energy(telegram_id, amount)
 
 
+def resolve_open_raid_kind(open_raid: dict[str, Any]) -> str:
+    """Определить тип открытого рейда: lair, warehouse или garage.
+
+    Старые записи могли сохранить raid_kind='lair' для рейдов на склад/гараж —
+    тогда ориентируемся на target_faction и подпись location.
+    """
+    kind = str(open_raid.get("raid_kind") or "lair").strip().lower()
+    if kind in DEPOT_RAID_KINDS:
+        return kind
+    target = str(open_raid.get("target_faction") or "").strip()
+    location = str(open_raid.get("location") or "")
+    if target:
+        if location.startswith("Склад"):
+            return "warehouse"
+        if location.startswith("Гараж"):
+            return "garage"
+    return "lair"
+
+
+def _raid_join_notify(
+    storage: Storage,
+    raid_id: int,
+    joiner_id: int,
+    *,
+    raid_label: str,
+    joined_now: bool,
+) -> list[list[Any]]:
+    if not joined_now:
+        return []
+    joiner = storage.get_character(joiner_id, refresh_energy=False)
+    joiner_name = h(joiner.nickname) if joiner else str(joiner_id)
+    member_ids = storage.get_raid_member_ids(raid_id)
+    note = (
+        f"👥 {joiner_name} присоединился к рейду #{raid_id} ({raid_label}).\n"
+        f"Состав: {len(member_ids)}/{RAID_MAX_MEMBERS}."
+    )
+    return [[pid, note] for pid in member_ids if pid != joiner_id]
+
+
 def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
@@ -5387,16 +5426,26 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
     if not storage.are_factions_allied(host_faction, member_faction) and host_faction != member_faction:
         return ActionResult(False, "К рейду можно присоединяться только своей группировкой или союзниками.")
     member_ids = storage.get_raid_member_ids(raid_id)
+    joined_now = False
     if telegram_id not in member_ids:
         if len(member_ids) >= RAID_MAX_MEMBERS:
             return ActionResult(False, f"В рейде уже максимум {RAID_MAX_MEMBERS} бойцов.")
         if not storage.add_raid_member(raid_id, telegram_id):
             return ActionResult(False, "Не удалось присоединиться к рейду.")
+        joined_now = True
         member_ids = storage.get_raid_member_ids(raid_id)
+    notify = _raid_join_notify(
+        storage,
+        raid_id,
+        telegram_id,
+        raid_label=f"логово «{location_name}»",
+        joined_now=joined_now,
+    )
     return ActionResult(
         True,
         f"Ты в составе рейда #{raid_id} на логово «{location_name}».\n"
         f"Состав рейда: {len(member_ids)}/{RAID_MAX_MEMBERS} бойцов.",
+        payload={"notify": notify} if notify else None,
     )
 
 
@@ -5447,7 +5496,7 @@ def create_or_join_depot_raid(
             ally_open = storage.get_open_raid_for_faction(ally)
             if (
                 ally_open is not None
-                and str(ally_open.get("raid_kind") or "lair") == depot
+                and resolve_open_raid_kind(ally_open) == depot
                 and str(ally_open.get("target_faction") or "") == target_faction
             ):
                 open_raid = ally_open
@@ -5468,7 +5517,7 @@ def create_or_join_depot_raid(
             "Позови товарищей по группировке и нажми «Запустить».",
         )
 
-    open_kind = str(open_raid.get("raid_kind") or "lair")
+    open_kind = resolve_open_raid_kind(open_raid)
     open_target = str(open_raid.get("target_faction") or "")
     if open_kind != depot or open_target != target_faction:
         current_label = DEPOT_RAID_LABELS.get(open_kind, "логово")
@@ -5484,16 +5533,26 @@ def create_or_join_depot_raid(
     if not storage.are_factions_allied(host_faction, player.faction) and host_faction != player.faction:
         return ActionResult(False, "К рейду можно присоединяться только своей группировкой или союзниками.")
     member_ids = storage.get_raid_member_ids(raid_id)
+    joined_now = False
     if telegram_id not in member_ids:
         if len(member_ids) >= RAID_MAX_MEMBERS:
             return ActionResult(False, f"В рейде уже максимум {RAID_MAX_MEMBERS} бойцов.")
         if not storage.add_raid_member(raid_id, telegram_id):
             return ActionResult(False, "Не удалось присоединиться к рейду.")
+        joined_now = True
         member_ids = storage.get_raid_member_ids(raid_id)
+    notify = _raid_join_notify(
+        storage,
+        raid_id,
+        telegram_id,
+        raid_label=f"{label} «{target_faction}»",
+        joined_now=joined_now,
+    )
     return ActionResult(
         True,
         f"Ты в составе рейда #{raid_id} на {label} группировки «{target_faction}».\n"
         f"Состав рейда: {len(member_ids)}/{RAID_MAX_MEMBERS} бойцов.",
+        payload={"notify": notify} if notify else None,
     )
 
 
@@ -5690,7 +5749,7 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
     if len(members) < RAID_MIN_MEMBERS:
         return RaidLaunchResult(False, "Недостаточно бойцов с нормальным здоровьем для запуска рейда.", ())
 
-    raid_kind = str(open_raid.get("raid_kind") or "lair")
+    raid_kind = resolve_open_raid_kind(open_raid)
     raid_energy_cost = DEPOT_RAID_ENERGY_COST if raid_kind in DEPOT_RAID_KINDS else 18
     ready_members: list[Character] = []
     spent_ids: list[int] = []
@@ -5826,7 +5885,7 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
         )
 
     raid_id = int(open_raid["id"])
-    raid_kind = str(open_raid.get("raid_kind") or "lair")
+    raid_kind = resolve_open_raid_kind(open_raid)
     member_ids = storage.get_raid_member_ids(raid_id)
     members = storage.get_characters_by_ids(member_ids)
     members_text = "\n".join(

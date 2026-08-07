@@ -157,6 +157,7 @@ from app.game_logic import (
     create_or_join_faction_raid,
     create_or_join_depot_raid,
     launch_open_raid,
+    resolve_open_raid_kind,
     list_war_enemy_factions,
     DEPOT_RAID_KINDS,
     build_quest_overview,
@@ -4868,25 +4869,25 @@ async def show_raids(message: Message) -> None:
 
 
 @router.callback_query(F.data.startswith("raid:create:"))
-async def create_raid_callback(callback: CallbackQuery) -> None:
+async def create_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
     location = (callback.data or "").split(":", maxsplit=2)[2]
     result = create_or_join_faction_raid(get_storage(), callback.from_user.id, location)
-    await reply_action_result(callback, result.text)
+    await finish_callback_action(callback, result, bot)
 
 
 @router.callback_query(F.data.startswith("raid:depot:"))
-async def create_depot_raid_callback(callback: CallbackQuery) -> None:
+async def create_depot_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
     parts = (callback.data or "").split(":", maxsplit=3)
     if len(parts) != 4 or parts[2] not in DEPOT_RAID_KINDS:
         await callback.answer("Некорректный запрос рейда.", show_alert=True)
         return
     depot_kind, target_faction = parts[2], parts[3]
     result = create_or_join_depot_raid(get_storage(), callback.from_user.id, target_faction, depot=depot_kind)
-    await reply_action_result(callback, result.text)
+    await finish_callback_action(callback, result, bot)
 
 
 @router.callback_query(F.data == "raid:join")
-async def join_raid_callback(callback: CallbackQuery) -> None:
+async def join_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     if player is None or player.faction is None:
         await callback.answer("Нужен персонаж с группировкой.", show_alert=True)
@@ -4895,7 +4896,7 @@ async def join_raid_callback(callback: CallbackQuery) -> None:
     if open_raid is None:
         await callback.answer("Открытых рейдов нет.", show_alert=True)
         return
-    raid_kind = str(open_raid.get("raid_kind") or "lair")
+    raid_kind = resolve_open_raid_kind(open_raid)
     if raid_kind in DEPOT_RAID_KINDS:
         result = create_or_join_depot_raid(
             get_storage(),
@@ -4905,11 +4906,11 @@ async def join_raid_callback(callback: CallbackQuery) -> None:
         )
     else:
         result = create_or_join_faction_raid(get_storage(), callback.from_user.id, str(open_raid["location"]))
-    await reply_action_result(callback, result.text)
+    await finish_callback_action(callback, result, bot)
 
 
 @router.callback_query(F.data == "raid:ally:join")
-async def join_raid_as_ally_callback(callback: CallbackQuery) -> None:
+async def join_raid_as_ally_callback(callback: CallbackQuery, bot: Bot) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     if player is None or player.faction is None:
         await callback.answer("Нужен персонаж с группировкой.", show_alert=True)
@@ -4925,7 +4926,7 @@ async def join_raid_as_ally_callback(callback: CallbackQuery) -> None:
     if open_raid is None:
         await callback.answer("Открытых рейдов союзников нет.", show_alert=True)
         return
-    raid_kind = str(open_raid.get("raid_kind") or "lair")
+    raid_kind = resolve_open_raid_kind(open_raid)
     if raid_kind in DEPOT_RAID_KINDS:
         result = create_or_join_depot_raid(
             storage,
@@ -4935,7 +4936,7 @@ async def join_raid_as_ally_callback(callback: CallbackQuery) -> None:
         )
     else:
         result = create_or_join_faction_raid(storage, callback.from_user.id, str(open_raid["location"]))
-    await reply_action_result(callback, result.text)
+    await finish_callback_action(callback, result, bot)
 
 
 @router.callback_query(F.data == "raid:launch")
@@ -4944,17 +4945,25 @@ async def launch_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
     if result.ok and result.tactical_raid:
         storage = get_storage()
         session = get_raid_grid_session_by_player(storage, callback.from_user.id)
-        if session is not None:
-            await _broadcast_rgrid_session(bot, storage, session, note=result.text)
+        if session is None:
             for pid in result.notify_member_ids:
-                if pid == callback.from_user.id:
-                    continue
-                try:
-                    await bot.send_message(pid, action_result_text(pid, result.text))
-                except Exception:
-                    logger.exception("Failed to notify rgrid start to %s", pid)
+                session = get_raid_grid_session_by_player(storage, pid)
+                if session is not None:
+                    break
+        if session is not None:
+            try:
+                await _broadcast_rgrid_session(bot, storage, session, note=result.text)
+            except Exception:
+                logger.exception("Failed to broadcast tactical raid map for raid #%s", session.raid_id)
+                await deliver_group_result(callback, bot, result, prefix="📣 Итог рейда:")
+                return
             await safe_callback_answer(callback, "Тактический рейд!")
             return
+        logger.error(
+            "Tactical raid started but rgrid session missing (leader=%s, members=%s)",
+            callback.from_user.id,
+            result.notify_member_ids,
+        )
     await deliver_group_result(callback, bot, result, prefix="📣 Итог рейда:")
 
 

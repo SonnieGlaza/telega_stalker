@@ -543,6 +543,38 @@ def run_smoke_check() -> None:
         storage.finish_raid(int(rgrid_session.raid_id), status="cancelled", result_text="smoke cleanup")
         assert build_raids_overview(storage, 111)
 
+        # Depot raids (warehouse/garage) — tactical map + legacy raid_kind fix.
+        from app.game_logic import (
+            create_or_join_depot_raid,
+            get_faction_garage,
+            _set_faction_garage,
+            resolve_open_raid_kind,
+        )
+
+        bandit_garage = get_faction_garage(storage, "Бандиты")
+        bandit_garage["gasoline"] = 4
+        _set_faction_garage(storage, "Бандиты", bandit_garage)
+        storage.change_faction_warehouse_item("Бандиты", "ammo_pack", 6)
+        depot_create = create_or_join_depot_raid(storage, 111, "Бандиты", depot="warehouse")
+        assert depot_create.ok, depot_create.text
+        depot_join = create_or_join_depot_raid(storage, 222, "Бандиты", depot="warehouse")
+        assert depot_join.ok, depot_join.text
+        assert depot_join.payload and depot_join.payload.get("notify")
+        open_depot = storage.get_open_raid_for_faction("Долг")
+        assert open_depot is not None
+        with storage._connect() as conn:
+            conn.execute("UPDATE raids SET raid_kind = 'lair' WHERE id = ?", (int(open_depot["id"]),))
+        open_depot = storage.get_open_raid_for_faction("Долг")
+        assert resolve_open_raid_kind(open_depot) == "warehouse"
+        depot_launch = launch_open_raid(storage, 111)
+        assert depot_launch.ok, depot_launch.text
+        assert depot_launch.tactical_raid
+        depot_session = get_raid_grid_session_by_player(storage, 111)
+        assert depot_session is not None
+        assert depot_session.raid_kind == "warehouse"
+        clear_raid_grid_session(storage, depot_session)
+        storage.finish_raid(int(depot_session.raid_id), status="cancelled", result_text="smoke depot cleanup")
+
         # War lobby.
         war_create = create_or_join_war_lobby(storage, 111, "Свалка")
         assert war_create.ok, war_create.text
