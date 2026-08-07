@@ -41,6 +41,13 @@ from app.mutant_assets import (
     mutant_sprite_image,
     pick_mutant_kind,
 )
+from app.npc_assets import (
+    MISSION_NPC_GRID_DIAMETER,
+    NPC_SPRITE_KEYS,
+    NPC_SPRITES,
+    npc_sprite_image,
+    pick_npc_kind,
+)
 from app.storage import Character, Storage
 
 
@@ -111,6 +118,7 @@ class QuestMissionSession:
     enemies: list[tuple[int, int]] = field(default_factory=list)  # мутанты
     enemy_kinds: list[str] = field(default_factory=list)  # blind_dog, tushkano, …
     npcs: list[tuple[int, int]] = field(default_factory=list)  # мародёры / НПС
+    npc_kinds: list[str] = field(default_factory=list)  # maloy, …
     moves: int = 0
     max_moves: int = MAX_MOVES
     grid: int = GRID_SIZE
@@ -132,6 +140,7 @@ class QuestMissionSession:
             "enemies": [list(p) for p in self.enemies],
             "enemy_kinds": list(self.enemy_kinds),
             "npcs": [list(p) for p in self.npcs],
+            "npc_kinds": list(self.npc_kinds),
             "moves": self.moves,
             "max_moves": self.max_moves,
             "grid": self.grid,
@@ -155,6 +164,7 @@ class QuestMissionSession:
             enemies=[(int(p[0]), int(p[1])) for p in (raw.get("enemies") or [])],
             enemy_kinds=_parse_enemy_kinds(raw.get("enemies") or [], raw.get("enemy_kinds")),
             npcs=[(int(p[0]), int(p[1])) for p in (raw.get("npcs") or [])],
+            npc_kinds=_parse_npc_kinds(raw.get("npcs") or [], raw.get("npc_kinds")),
             moves=int(raw.get("moves") or 0),
             max_moves=int(raw.get("max_moves") or MAX_MOVES),
             grid=int(raw.get("grid") or GRID_SIZE),
@@ -176,6 +186,19 @@ def _parse_enemy_kinds(enemies_raw: list, kinds_raw: Any) -> list[str]:
             )
         return parsed
     return [MUTANT_SPRITE_KEYS[i % len(MUTANT_SPRITE_KEYS)] for i in range(n)]
+
+
+def _parse_npc_kinds(npcs_raw: list, kinds_raw: Any) -> list[str]:
+    n = len(npcs_raw)
+    if not n:
+        return []
+    if isinstance(kinds_raw, list) and len(kinds_raw) == n:
+        parsed: list[str] = []
+        for i, k in enumerate(kinds_raw):
+            key = str(k)
+            parsed.append(key if key in NPC_SPRITES else NPC_SPRITE_KEYS[i % len(NPC_SPRITE_KEYS)])
+        return parsed
+    return [NPC_SPRITE_KEYS[i % len(NPC_SPRITE_KEYS)] for i in range(n)]
 
 
 def _meta_key(telegram_id: int) -> str:
@@ -263,6 +286,20 @@ def _spawn_mutants(
         forbidden.add(cell)
 
 
+def _spawn_npcs(
+    n: int,
+    grid: int,
+    forbidden: set[tuple[int, int]],
+    npcs: list[tuple[int, int]],
+    kinds: list[str],
+) -> None:
+    for _ in range(max(0, n)):
+        cell = _free_cell(grid, forbidden)
+        npcs.append(cell)
+        kinds.append(pick_npc_kind())
+        forbidden.add(cell)
+
+
 def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMissionSession:
     kind = template.mission_kind
     difficulty = template.difficulty
@@ -276,6 +313,7 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
     enemies: list[tuple[int, int]] = []
     enemy_kinds: list[str] = []
     npcs: list[tuple[int, int]] = []
+    npc_kinds: list[str] = []
 
     # Цели задания — по типу контракта.
     if kind in {"clear_mutant", "clear_marauder"}:
@@ -303,7 +341,7 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
         _spawn_mutants(mut_n, grid, forbidden, enemies, enemy_kinds)
     if want_npc:
         npc_n = base_n + (1 if kind == "clear_marauder" else 0)
-        _spawn_n(npc_n, grid, forbidden, npcs)
+        _spawn_npcs(npc_n, grid, forbidden, npcs, npc_kinds)
 
     return QuestMissionSession(
         contract_key=template.key,
@@ -318,6 +356,7 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
         enemies=enemies,
         enemy_kinds=enemy_kinds,
         npcs=npcs,
+        npc_kinds=npc_kinds,
         max_moves=MAX_MOVES + danger,
         resources_spent=False,
     )
@@ -386,7 +425,9 @@ def _maybe_move_hostiles(session: QuestMissionSession) -> list[str]:
     session.enemies, session.enemy_kinds, mut_moved = _move_hostile_units(
         list(session.enemies), session, list(session.enemy_kinds)
     )
-    session.npcs, _, npc_moved = _move_hostile_units(list(session.npcs), session)
+    session.npcs, session.npc_kinds, npc_moved = _move_hostile_units(
+        list(session.npcs), session, list(session.npc_kinds)
+    )
     if mut_moved:
         notes.append(f"Мутанты сдвинулись ({mut_moved}).")
     if npc_moved:
@@ -714,7 +755,7 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
     dead = _fight_on_cell("мутанта", "enemies", kinds_attr="enemy_kinds")
     if dead is not None:
         return dead
-    dead = _fight_on_cell("НПС", "npcs")
+    dead = _fight_on_cell("НПС", "npcs", kinds_attr="npc_kinds")
     if dead is not None:
         return dead
 
@@ -750,7 +791,7 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
     dead = _fight_on_cell("мутанта", "enemies", kinds_attr="enemy_kinds")
     if dead is not None:
         return dead
-    dead = _fight_on_cell("НПС", "npcs")
+    dead = _fight_on_cell("НПС", "npcs", kinds_attr="npc_kinds")
     if dead is not None:
         return dead
 
@@ -901,11 +942,28 @@ def render_mission_frame(
         else:
             _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=False)
 
-    for nx_, ny_ in session.npcs:
+    for i, (nx_, ny_) in enumerate(session.npcs):
         cx = margin + nx_ * cell + cell // 2
         cy = margin + ny_ * cell + cell // 2
         _glow(canvas, cx, cy, (200, 60, 50), 18)
-        _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=True)
+        kind = (
+            session.npc_kinds[i]
+            if i < len(session.npc_kinds)
+            else NPC_SPRITE_KEYS[i % len(NPC_SPRITE_KEYS)]
+        )
+        sprite = npc_sprite_image(kind)
+        if sprite is not None:
+            _paste_circle(
+                canvas,
+                sprite,
+                cx,
+                cy,
+                MISSION_NPC_GRID_DIAMETER,
+                ring_color=(200, 80, 60),
+                ring_width=3,
+            )
+        else:
+            _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=True)
 
     for ox, oy in session.objectives:
         if (ox, oy) in session.collected:
