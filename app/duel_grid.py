@@ -20,41 +20,32 @@ from app.game_logic import (
     RATING_REWARD,
     ActionResult,
     _add_rating,
-    _weapon_rating,
     apply_incoming_damage,
     effective_max_health,
     equipment_power,
     h,
 )
 from app.storage import Character, Storage
+from app.tactical_combat import (
+    COVER_HIT_CHANCE,
+    MOVE_DELTAS,
+    cover_blocks_shot,
+    move_toward,
+    ray_cast_first_hit,
+    spawn_edge_positions,
+    weapon_shoot_range,
+)
 from app.tactical_hp import sync_session_hp_to_db, use_tactical_medkit
 
 DUEL_GRID_SIZE = 8
 DUEL_TURN_SECONDS = 10
-DUEL_COVER_HIT_CHANCE = 0.5
-DUEL_MUTANT_COUNT = 2
+DUEL_MATCH_SECONDS = 3 * 60
+DUEL_COVER_HIT_CHANCE = COVER_HIT_CHANCE
+DUEL_WAVE_MUTANT_SPAWN = 3
+DUEL_WAVE_MUTANT_STEPS = 2
 
 DUEL_SESSION_PREFIX = "duel:grid:session:"
 DUEL_PLAYER_PREFIX = "duel:grid:player:"
-
-MOVE_DELTAS: dict[str, tuple[int, int]] = {
-    "up": (0, -1),
-    "down": (0, 1),
-    "left": (-1, 0),
-    "right": (1, 0),
-}
-
-
-def weapon_shoot_range(weapon_name: str) -> int:
-    """Нож=1, пистолеты=2, автоматы=3, топ/гаусс=4."""
-    if weapon_name == "Нож":
-        return 1
-    rating = _weapon_rating(weapon_name)
-    if rating <= 3:
-        return 2
-    if rating <= 6:
-        return 3
-    return 4
 
 
 def _utc_now() -> datetime:
@@ -92,13 +83,15 @@ class DuelGridSession:
     grid: int = DUEL_GRID_SIZE
     cover: list[tuple[int, int]] = field(default_factory=list)
     mutants: list[tuple[int, int]] = field(default_factory=list)
-    positions: dict[str, list[int]] = field(default_factory=dict)  # telegram_id -> [x,y]
+    positions: dict[str, list[int]] = field(default_factory=dict)
     hp: dict[str, int] = field(default_factory=dict)
     medkits_used: dict[str, bool] = field(default_factory=dict)
     turn_order: list[int] = field(default_factory=list)
     active_index: int = 0
     turn_seq: int = 0
     turn_deadline: str | None = None
+    match_deadline: str | None = None
+    wave_mode: bool = False
     finished: bool = False
     winner_id: int | None = None
     loser_id: int | None = None
@@ -133,6 +126,8 @@ class DuelGridSession:
             "active_index": self.active_index,
             "turn_seq": self.turn_seq,
             "turn_deadline": self.turn_deadline,
+            "match_deadline": self.match_deadline,
+            "wave_mode": self.wave_mode,
             "finished": self.finished,
             "winner_id": self.winner_id,
             "loser_id": self.loser_id,
@@ -156,6 +151,8 @@ class DuelGridSession:
             active_index=int(raw.get("active_index") or 0),
             turn_seq=int(raw.get("turn_seq") or 0),
             turn_deadline=raw.get("turn_deadline"),
+            match_deadline=raw.get("match_deadline"),
+            wave_mode=bool(raw.get("wave_mode")),
             finished=bool(raw.get("finished")),
             winner_id=int(raw["winner_id"]) if raw.get("winner_id") is not None else None,
             loser_id=int(raw["loser_id"]) if raw.get("loser_id") is not None else None,
@@ -237,10 +234,6 @@ def _build_duel_map(session: DuelGridSession) -> None:
         cell = _free_cell(grid, forbidden)
         session.cover.append(cell)
         forbidden.add(cell)
-    for _ in range(DUEL_MUTANT_COUNT):
-        cell = _free_cell(grid, forbidden)
-        session.mutants.append(cell)
-        forbidden.add(cell)
 
 
 def _finalize_duel_rewards(storage: Storage, winner_id: int, loser_id: int) -> tuple[str, str]:
@@ -306,6 +299,7 @@ def start_duel_grid(
         turn_order=[challenger_id, target_id],
         active_index=0,
         turn_deadline=_deadline_iso(),
+        match_deadline=_deadline_iso(DUEL_MATCH_SECONDS),
     )
     _build_duel_map(session)
     session.hp[str(challenger_id)] = int(challenger.health)
@@ -314,14 +308,15 @@ def start_duel_grid(
     session.medkits_used[str(target_id)] = False
     session.log.append(
         f"Дуэль: {h(challenger.nickname)} vs {h(target.nickname)}. "
-        f"Ход {DUEL_TURN_SECONDS} сек. Укрытие = 50% промах."
+        f"Таймер боя {DUEL_MATCH_SECONDS // 60} мин. Укрытие = 50% промах."
     )
     save_duel_session(storage, session)
     register_active_duel(storage, duel_id)
     text = (
         f"⚔️ Тактическая дуэль началась!\n"
         f"{h(challenger.nickname)} vs {h(target.nickname)}\n"
-        f"Дальность: нож 1 / пистолет 2 / автомат 3 / снайпер·гаусс 4 клетки.\n"
+        f"Дальность: пистолет/дробовик 1 · автомат 2 · снайперка 3 · гаус 4 клетки (90°).\n"
+        f"Таймер боя: {DUEL_MATCH_SECONDS // 60} мин — потом волна мутантов.\n"
         f"Урон ≈ сила×2 ±2. Аптечка — 1 раз за бой.\n"
         f"Первый ход: {h(challenger.nickname)}."
     )
@@ -329,8 +324,6 @@ def start_duel_grid(
 
 
 def _end_duel(storage: Storage, session: DuelGridSession, winner_id: int, loser_id: int, note: str) -> ActionResult:
-    # Не синхронизируем HP проигравшего в БД здесь: на поле оно часто 0, а change_health(0)
-    # засчитает ложную смерть ещё до того, как _finalize_duel_rewards выставит "живой" остаток HP.
     winner_hp = session.hp.get(str(winner_id))
     if winner_hp is not None:
         sync_session_hp_to_db(storage, winner_id, int(winner_hp))
@@ -359,18 +352,33 @@ def _end_duel(storage: Storage, session: DuelGridSession, winner_id: int, loser_
     return ActionResult(True, note, payload=payload)
 
 
+def _end_duel_wave(storage: Storage, session: DuelGridSession, note: str) -> ActionResult:
+    """Оба проиграли волне — победитель с большим HP (или ничья → challenger wins by HP tie)."""
+    c_hp = session.hp.get(str(session.challenger_id), 0)
+    t_hp = session.hp.get(str(session.target_id), 0)
+    if c_hp > t_hp:
+        winner_id, loser_id = session.challenger_id, session.target_id
+    elif t_hp > c_hp:
+        winner_id, loser_id = session.target_id, session.challenger_id
+    else:
+        winner_id, loser_id = session.challenger_id, session.target_id
+    return _end_duel(storage, session, winner_id, loser_id, note)
+
+
 def _check_hp_end(storage: Storage, session: DuelGridSession) -> ActionResult | None:
-    for pid in (session.challenger_id, session.target_id):
-        if session.hp.get(str(pid), 0) <= 0:
-            loser_id = pid
-            winner_id = session.opponent_of(pid)
-            return _end_duel(
-                storage,
-                session,
-                winner_id,
-                loser_id,
-                f"{h(storage.get_character(winner_id).nickname if storage.get_character(winner_id) else str(winner_id))} победил — HP противника 0.",
-            )
+    alive = [pid for pid in (session.challenger_id, session.target_id) if session.hp.get(str(pid), 0) > 0]
+    if len(alive) == 1:
+        winner_id = alive[0]
+        loser_id = session.opponent_of(winner_id)
+        return _end_duel(
+            storage,
+            session,
+            winner_id,
+            loser_id,
+            f"{h(storage.get_character(winner_id).nickname if storage.get_character(winner_id) else str(winner_id))} победил — HP противника 0.",
+        )
+    if len(alive) == 0 and session.wave_mode:
+        return _end_duel_wave(storage, session, "Оба бойца пали под волной мутантов.")
     return None
 
 
@@ -390,45 +398,89 @@ def _advance_turn(session: DuelGridSession) -> None:
     session.turn_deadline = _deadline_iso()
 
 
+def _spawn_wave_mutants(session: DuelGridSession) -> None:
+    forbidden = _occupied(session)
+    new_spawns = spawn_edge_positions(session.grid, DUEL_WAVE_MUTANT_SPAWN, forbidden)
+    session.mutants.extend(new_spawns)
+
+
 def _move_mutants(session: DuelGridSession) -> None:
+    if not session.mutants and session.wave_mode:
+        _spawn_wave_mutants(session)
     occupied = _occupied(session)
     new_positions: list[tuple[int, int]] = []
+    steps = DUEL_WAVE_MUTANT_STEPS if session.wave_mode else 1
     for pos in session.mutants:
         occupied.discard(pos)
         players = [session.pos(session.challenger_id), session.pos(session.target_id)]
         target = min(players, key=lambda p: abs(p[0] - pos[0]) + abs(p[1] - pos[1]))
-        candidates = []
-        for dx, dy in MOVE_DELTAS.values():
-            nx, ny = pos[0] + dx, pos[1] + dy
-            if 0 <= nx < session.grid and 0 <= ny < session.grid:
-                nxt = (nx, ny)
-                if nxt not in occupied or nxt in players:
-                    candidates.append(nxt)
-        if not candidates:
-            new_positions.append(pos)
-            occupied.add(pos)
-            continue
-        best = min(
-            candidates,
-            key=lambda c: abs(c[0] - target[0]) + abs(c[1] - target[1]),
-        )
-        new_positions.append(best)
-        occupied.add(best)
+        current = pos
+        for _ in range(steps):
+            candidates = []
+            for dx, dy in MOVE_DELTAS.values():
+                nx, ny = current[0] + dx, current[1] + dy
+                if 0 <= nx < session.grid and 0 <= ny < session.grid:
+                    nxt = (nx, ny)
+                    if nxt not in occupied or nxt in players:
+                        candidates.append(nxt)
+            if not candidates:
+                break
+            best = min(
+                candidates,
+                key=lambda c: abs(c[0] - target[0]) + abs(c[1] - target[1]),
+            )
+            current = best
+        new_positions.append(current)
+        occupied.add(current)
     session.mutants = new_positions
+    if session.wave_mode:
+        _spawn_wave_mutants(session)
 
 
 def _mutants_attack(session: DuelGridSession, storage: Storage) -> list[str]:
     notes: list[str] = []
+    wave_dmg = (14, 22) if session.wave_mode else (6, 12)
     for mpos in session.mutants:
         for pid in (session.challenger_id, session.target_id):
             if session.pos(pid) == mpos:
                 player = storage.get_character(pid, refresh_energy=False)
                 if player is None:
                     continue
-                dmg = apply_incoming_damage(random.randint(6, 12), player, min_damage=2)
+                dmg = apply_incoming_damage(random.randint(*wave_dmg), player, min_damage=2)
                 session.hp[str(pid)] = max(0, session.hp.get(str(pid), 0) - dmg)
-                notes.append(f"Мутант ранит {h(player.nickname)}: −{dmg} HP.")
+                label = "Волна мутантов" if session.wave_mode else "Мутант"
+                notes.append(f"{label} ранит {h(player.nickname)}: −{dmg} HP.")
     return notes
+
+
+def _after_turn_mutants(storage: Storage, session: DuelGridSession) -> ActionResult | None:
+    _move_mutants(session)
+    session.log.extend(_mutants_attack(session, storage))
+    return _check_hp_end(storage, session)
+
+
+def _start_wave_mode(session: DuelGridSession) -> None:
+    if session.wave_mode:
+        return
+    session.wave_mode = True
+    session.mutants.clear()
+    _spawn_wave_mutants(session)
+    session.log.append("⏱ Время вышло! Бесконечная волна мутантов — бегите или погибните!")
+
+
+def _check_match_timeout(storage: Storage, session: DuelGridSession) -> ActionResult | None:
+    if session.wave_mode:
+        return None
+    deadline = _parse_deadline(session.match_deadline)
+    if deadline is None or _utc_now() <= deadline:
+        return None
+    c_alive = session.hp.get(str(session.challenger_id), 0) > 0
+    t_alive = session.hp.get(str(session.target_id), 0) > 0
+    if c_alive and t_alive:
+        _start_wave_mode(session)
+        session.log.extend(_mutants_attack(session, storage))
+        return _check_hp_end(storage, session)
+    return None
 
 
 def duel_move(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
@@ -460,10 +512,12 @@ def duel_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
     done = _check_hp_end(storage, session)
     if done:
         return done
+    match_done = _check_match_timeout(storage, session)
+    if match_done:
+        if session.finished:
+            return match_done
     _advance_turn(session)
-    _move_mutants(session)
-    session.log.extend(_mutants_attack(session, storage))
-    done = _check_hp_end(storage, session)
+    done = _after_turn_mutants(storage, session)
     if done:
         return done
     if not _save_if_turn_ok(storage, session, turn_seq):
@@ -478,8 +532,7 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     if session.active_player() != telegram_id:
         return ActionResult(False, "Сейчас ход соперника.")
     turn_seq = session.turn_seq
-    delta = MOVE_DELTAS.get(direction)
-    if delta is None:
+    if direction not in MOVE_DELTAS:
         return ActionResult(False, "Некорректный выстрел.")
     attacker = storage.get_character(telegram_id, refresh_energy=False)
     if attacker is None:
@@ -487,26 +540,22 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     weapon = str(attacker.equipment.get("weapon", "Нож"))
     rng = weapon_shoot_range(weapon)
     origin = session.pos(telegram_id)
-    hit_pos: tuple[int, int] | None = None
-    hit_kind = ""
-    for step in range(1, rng + 1):
-        cell = (origin[0] + delta[0] * step, origin[1] + delta[1] * step)
-        if not (0 <= cell[0] < session.grid and 0 <= cell[1] < session.grid):
-            break
-        if cell == session.pos(session.opponent_of(telegram_id)):
-            hit_pos = cell
-            hit_kind = "player"
-            break
-        if cell in session.mutants:
-            hit_pos = cell
-            hit_kind = "mutant"
-            break
-    if hit_pos is None:
+    cover_set = set(session.cover)
+    targets = {session.pos(session.opponent_of(telegram_id)): "player"}
+    for mpos in session.mutants:
+        targets[mpos] = "mutant"
+    hit_cell, hit_kind = ray_cast_first_hit(
+        origin,
+        direction,
+        grid=session.grid,
+        max_range=rng,
+        blockers=cover_set,
+        targets=targets,
+    )
+    if hit_cell is None:
         session.log.append(f"{h(attacker.nickname)} промахнулся.")
         _advance_turn(session)
-        _move_mutants(session)
-        session.log.extend(_mutants_attack(session, storage))
-        done = _check_hp_end(storage, session)
+        done = _after_turn_mutants(storage, session)
         if done:
             return done
         if not _save_if_turn_ok(storage, session, turn_seq):
@@ -514,21 +563,19 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
         return ActionResult(True, "Промах — пуля не нашла цель.", payload={"duel_active": True})
 
     if hit_kind == "mutant":
-        if hit_pos in session.mutants:
-            session.mutants.remove(hit_pos)
-        session.log.append(f"{h(attacker.nickname)} убил мутанта.")
-        note = "Мутант уничтожен."
+        if hit_cell in session.mutants and not session.wave_mode:
+            session.mutants.remove(hit_cell)
+        session.log.append(f"{h(attacker.nickname)} попал в мутанта.")
+        note = "Мутант поражён." if not session.wave_mode else "Мутант снова встанет в волне."
     else:
         defender_id = session.opponent_of(telegram_id)
         defender = storage.get_character(defender_id, refresh_energy=False)
         if defender is None:
             return ActionResult(False, "Соперник не найден.")
-        if hit_pos in session.cover and random.random() > DUEL_COVER_HIT_CHANCE:
+        if cover_blocks_shot(hit_cell, cover_set):
             session.log.append(f"{h(defender.nickname)} укрылся — промах!")
             _advance_turn(session)
-            _move_mutants(session)
-            session.log.extend(_mutants_attack(session, storage))
-            done = _check_hp_end(storage, session)
+            done = _after_turn_mutants(storage, session)
             if done:
                 return done
             if not _save_if_turn_ok(storage, session, turn_seq):
@@ -543,10 +590,11 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
         if done:
             return done
 
+    match_done = _check_match_timeout(storage, session)
+    if match_done and session.finished:
+        return match_done
     _advance_turn(session)
-    _move_mutants(session)
-    session.log.extend(_mutants_attack(session, storage))
-    done = _check_hp_end(storage, session)
+    done = _after_turn_mutants(storage, session)
     if done:
         return done
     if not _save_if_turn_ok(storage, session, turn_seq):
@@ -574,9 +622,7 @@ def duel_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     session.medkits_used[str(telegram_id)] = True
     session.log.append(f"{h(player.nickname)} использовал аптечку.")
     _advance_turn(session)
-    _move_mutants(session)
-    session.log.extend(_mutants_attack(session, storage))
-    done = _check_hp_end(storage, session)
+    done = _after_turn_mutants(storage, session)
     if done:
         return done
     if not _save_if_turn_ok(storage, session, turn_seq):
@@ -595,13 +641,9 @@ def duel_forfeit(storage: Storage, telegram_id: int) -> ActionResult:
 
 
 def process_duel_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult]]:
-    """Автопропуск хода по таймеру. Возвращает (player_id, result) для уведомлений."""
+    """Автопропуск хода по таймеру и проверка волны мутантов."""
     outcomes: list[tuple[int, ActionResult]] = []
     now = _utc_now()
-    # scan via meta keys — only active duel sessions stored under duel:grid:session:*
-    # Storage has no list_meta; iterate players is hard. Store active duel ids list?
-    # For MVP: check both players of known sessions via player keys only when timeout triggered from bot tick on active travels pattern.
-    # Use a registry meta key duel:grid:active -> json list of duel ids
     raw = storage.get_meta("duel:grid:active_ids")
     if not raw:
         return outcomes
@@ -623,6 +665,19 @@ def process_duel_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
             continue
         if session.finished:
             continue
+
+        match_done = _check_match_timeout(storage, session)
+        if match_done:
+            if session.finished:
+                if str(duel_id) not in finished:
+                    finished.add(str(duel_id))
+                    outcomes.append((session.challenger_id, match_done))
+                continue
+            save_duel_session(storage, session)
+            still_active.append(str(duel_id))
+            outcomes.append((session.active_player(), ActionResult(True, "Волна мутантов!", payload={"duel_active": True})))
+            continue
+
         deadline = _parse_deadline(session.turn_deadline)
         if deadline is None or now <= deadline:
             still_active.append(str(duel_id))
@@ -632,9 +687,7 @@ def process_duel_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
         turn_seq = session.turn_seq
         session.log.append(f"Тайм-аут хода {h(player.nickname) if player else active}.")
         _advance_turn(session)
-        _move_mutants(session)
-        session.log.extend(_mutants_attack(session, storage))
-        done = _check_hp_end(storage, session)
+        done = _after_turn_mutants(storage, session)
         if done:
             if str(duel_id) not in finished:
                 finished.add(str(duel_id))
@@ -689,6 +742,15 @@ def _load_font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
+def _match_seconds_left(session: DuelGridSession) -> int | None:
+    if session.wave_mode:
+        return 0
+    deadline = _parse_deadline(session.match_deadline)
+    if deadline is None:
+        return None
+    return max(0, int((deadline - _utc_now()).total_seconds()))
+
+
 def render_duel_frame(
     storage: Storage,
     session: DuelGridSession,
@@ -724,7 +786,9 @@ def render_duel_frame(
     for mx, my in session.mutants:
         cx = margin + mx * cell + cell // 2
         cy = margin + my * cell + cell // 2
-        draw.ellipse((cx - 22, cy - 22, cx + 22, cy + 22), fill=(60, 90, 45), outline=(130, 200, 80), width=2)
+        color = (180, 60, 40) if session.wave_mode else (60, 90, 45)
+        outline = (255, 120, 80) if session.wave_mode else (130, 200, 80)
+        draw.ellipse((cx - 22, cy - 22, cx + 22, cy + 22), fill=color, outline=outline, width=2)
     colors = {session.challenger_id: (80, 200, 255), session.target_id: (255, 120, 90)}
     for pid in (session.challenger_id, session.target_id):
         px, py = session.pos(pid)
@@ -744,6 +808,12 @@ def render_duel_frame(
     y = margin + 16
     draw.text((pl + 14, y), "⚔️ Тактическая дуэль", fill=(240, 240, 240), font=body)
     y += 28
+    secs = _match_seconds_left(session)
+    if session.wave_mode:
+        draw.text((pl + 14, y), "🌊 ВОЛНА МУТАНТОВ", fill=(255, 100, 80), font=small)
+    elif secs is not None:
+        draw.text((pl + 14, y), f"⏱ До волны: {secs // 60}:{secs % 60:02d}", fill=(200, 200, 120), font=small)
+    y += 20
     for pid in (session.challenger_id, session.target_id):
         ch = storage.get_character(pid, refresh_energy=False)
         name = ch.nickname if ch else str(pid)

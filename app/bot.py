@@ -51,6 +51,27 @@ from app.duel_grid import (
     render_duel_frame,
     save_duel_session,
 )
+from app.clan_war_grid import (
+    cwar_move,
+    cwar_shoot,
+    cwar_status_caption,
+    cwar_use_medkit,
+    get_cwar_session_by_player,
+    process_cwar_turn_timeouts,
+    render_cwar_frame,
+    save_cwar_session,
+)
+from app.neutral_capture import (
+    get_ncap_session,
+    ncap_forfeit,
+    ncap_move,
+    ncap_shoot,
+    ncap_status_caption,
+    ncap_use_medkit,
+    process_ncap_turn_timeouts,
+    render_ncap_frame,
+    save_ncap_session,
+)
 from app.coop_mission import (
     can_evacuate,
     coop_evacuate,
@@ -288,6 +309,8 @@ from app.keyboards import (
     alliance_pending_keyboard,
     duel_challenge_keyboard,
     duel_grid_keyboard,
+    cwar_grid_keyboard,
+    ncap_grid_keyboard,
     coop_menu_keyboard,
     coop_lobby_list_keyboard,
     coop_mission_keyboard,
@@ -2658,10 +2681,20 @@ def _duel_status_caption(storage: Storage, session: Any, viewer_id: int) -> str:
         if pid == viewer_id:
             mark += " (ты)"
         weapon = str(ch.equipment.get("weapon", "Нож")) if ch else "Нож"
-        from app.duel_grid import weapon_shoot_range
+        from app.tactical_combat import weapon_shoot_range
 
         rng = weapon_shoot_range(weapon)
         lines.append(f"{name}{mark}: HP {hp} · дальность {rng}")
+    deadline_raw = getattr(session, "match_deadline", None)
+    if getattr(session, "wave_mode", False):
+        lines.append("🌊 Волна мутантов!")
+    elif deadline_raw:
+        from app.duel_grid import _parse_deadline, _utc_now
+
+        dl = _parse_deadline(deadline_raw)
+        if dl:
+            secs = max(0, int((dl - _utc_now()).total_seconds()))
+            lines.append(f"⏱ До волны: {secs // 60}:{secs % 60:02d}")
     if session.log:
         lines.append(session.log[-1][:80])
     return "\n".join(lines)
@@ -2764,6 +2797,113 @@ async def _handle_duel_action(bot: Bot, callback: CallbackQuery, result: Any) ->
         await reply_action_result(callback, result.text)
         return
     await _broadcast_duel_session(bot, storage, session, note=result.text)
+    await safe_callback_answer(callback, result.text[:CALLBACK_ALERT_MAX_LEN] if len(result.text) <= CALLBACK_ALERT_MAX_LEN else "Готово")
+
+
+async def _broadcast_cwar_session(
+    bot: Bot,
+    storage: Storage,
+    session: Any,
+    *,
+    note: str | None = None,
+) -> None:
+    for pid in session.player_ids:
+        ch = storage.get_character(pid, refresh_energy=False)
+        is_active = session.active_player() == pid
+        medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(ch)
+        markup = cwar_grid_keyboard(is_active_turn=is_active, medkit_available=medkit)
+        caption = cwar_status_caption(storage, session, pid)
+        if note:
+            caption = f"{caption}\n\n{note}" if pid == session.active_player() else f"{caption}\n\n↪ {note}"
+        frame = render_cwar_frame(storage, session, pid)
+        msg_id = session.message_ids.get(str(pid))
+        new_id = await _upsert_tactical_photo(
+            bot,
+            chat_id=pid,
+            message_id=msg_id,
+            image_bytes=frame,
+            caption=caption,
+            markup=markup,
+        )
+        session.message_ids[str(pid)] = new_id
+    save_cwar_session(storage, session)
+
+
+async def _notify_cwar_finished(bot: Bot, result: Any) -> None:
+    payload = result.payload or {}
+    if not payload.get("cwar_done"):
+        return
+    await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
+    member_ids = payload.get("member_ids") or []
+    for pid in member_ids:
+        try:
+            await bot.send_message(int(pid), action_result_text(int(pid), result.text))
+        except Exception:
+            logger.exception("Failed cwar result notify to %s", pid)
+
+
+async def _handle_cwar_action(bot: Bot, callback: CallbackQuery, result: Any) -> None:
+    storage = get_storage()
+    payload = result.payload or {}
+    if payload.get("cwar_done"):
+        await _notify_cwar_finished(bot, result)
+        await safe_callback_answer(callback, "Штурм завершён")
+        return
+    if not result.ok:
+        await reply_action_result(callback, result.text)
+        return
+    session = get_cwar_session_by_player(storage, callback.from_user.id)
+    if session is None:
+        await reply_action_result(callback, result.text)
+        return
+    await _broadcast_cwar_session(bot, storage, session, note=result.text)
+    await safe_callback_answer(callback, result.text[:CALLBACK_ALERT_MAX_LEN] if len(result.text) <= CALLBACK_ALERT_MAX_LEN else "Готово")
+
+
+async def _broadcast_ncap_session(
+    bot: Bot,
+    storage: Storage,
+    session: Any,
+    *,
+    note: str | None = None,
+) -> None:
+    player = storage.get_character(session.telegram_id, refresh_energy=False)
+    medkit = not session.medkit_used and _player_has_medkit(player)
+    markup = ncap_grid_keyboard(medkit_available=medkit)
+    caption = ncap_status_caption(session, player)
+    if note:
+        caption = f"{caption}\n\n{note}"
+    frame = render_ncap_frame(storage, session)
+    new_id = await _upsert_tactical_photo(
+        bot,
+        chat_id=session.telegram_id,
+        message_id=session.message_id,
+        image_bytes=frame,
+        caption=caption,
+        markup=markup,
+    )
+    session.message_id = new_id
+    save_ncap_session(storage, session)
+
+
+async def _handle_ncap_action(bot: Bot, callback: CallbackQuery, result: Any) -> None:
+    storage = get_storage()
+    payload = result.payload or {}
+    if payload.get("ncap_done"):
+        msg_id = payload.get("message_id")
+        if msg_id:
+            await _clear_tactical_keyboards(bot, {str(payload.get("telegram_id", callback.from_user.id)): int(msg_id)})
+        await bot.send_message(callback.from_user.id, action_result_text(callback.from_user.id, result.text))
+        await safe_callback_answer(callback, "Захват завершён")
+        return
+    if not result.ok:
+        await reply_action_result(callback, result.text)
+        return
+    session = get_ncap_session(storage, callback.from_user.id)
+    if session is None:
+        await reply_action_result(callback, result.text)
+        return
+    await _broadcast_ncap_session(bot, storage, session, note=result.text)
     await safe_callback_answer(callback, result.text[:CALLBACK_ALERT_MAX_LEN] if len(result.text) <= CALLBACK_ALERT_MAX_LEN else "Готово")
 
 
@@ -3755,6 +3895,83 @@ async def duel_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
     await callback.answer("Неизвестное действие.", show_alert=True)
 
 
+@router.callback_query(F.data.startswith("cwar:"))
+async def cwar_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
+    assert callback.data and callback.from_user
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+    action = (callback.data or "").removeprefix("cwar:").strip()
+
+    if action == "refresh":
+        session = get_cwar_session_by_player(storage, telegram_id)
+        if session is None:
+            await callback.answer("Нет активного штурма.", show_alert=True)
+            return
+        await _broadcast_cwar_session(bot, storage, session)
+        await safe_callback_answer(callback)
+        return
+
+    if action == "forfeit":
+        await callback.answer("Сдаться нельзя — только захват или поражение.", show_alert=True)
+        return
+
+    if action == "medkit":
+        result = cwar_use_medkit(storage, telegram_id)
+        await _handle_cwar_action(bot, callback, result)
+        return
+
+    if action.startswith("move:"):
+        result = cwar_move(storage, telegram_id, action.removeprefix("move:"))
+        await _handle_cwar_action(bot, callback, result)
+        return
+
+    if action.startswith("shoot:"):
+        result = cwar_shoot(storage, telegram_id, action.removeprefix("shoot:"))
+        await _handle_cwar_action(bot, callback, result)
+        return
+
+    await callback.answer("Неизвестное действие.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("ncap:"))
+async def ncap_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
+    assert callback.data and callback.from_user
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+    action = (callback.data or "").removeprefix("ncap:").strip()
+
+    if action == "refresh":
+        session = get_ncap_session(storage, telegram_id)
+        if session is None:
+            await callback.answer("Нет активного захвата.", show_alert=True)
+            return
+        await _broadcast_ncap_session(bot, storage, session)
+        await safe_callback_answer(callback)
+        return
+
+    if action == "forfeit":
+        result = ncap_forfeit(storage, telegram_id)
+        await _handle_ncap_action(bot, callback, result)
+        return
+
+    if action == "medkit":
+        result = ncap_use_medkit(storage, telegram_id)
+        await _handle_ncap_action(bot, callback, result)
+        return
+
+    if action.startswith("move:"):
+        result = ncap_move(storage, telegram_id, action.removeprefix("move:"))
+        await _handle_ncap_action(bot, callback, result)
+        return
+
+    if action.startswith("shoot:"):
+        result = ncap_shoot(storage, telegram_id, action.removeprefix("shoot:"))
+        await _handle_ncap_action(bot, callback, result)
+        return
+
+    await callback.answer("Неизвестное действие.", show_alert=True)
+
+
 @router.callback_query(F.data.startswith("duel:decline:"))
 async def duel_decline_callback(callback: CallbackQuery, bot: Bot) -> None:
     assert callback.data and callback.from_user
@@ -4193,13 +4410,20 @@ async def war_transfer_location_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("war:"))
-async def handle_war_legacy_callback(callback: CallbackQuery) -> None:
-    """Старые кнопки solo-штурма (war:<локация>) — только отказ."""
+async def handle_war_legacy_callback(callback: CallbackQuery, bot: Bot) -> None:
+    """Кнопки штурма: нейтральные точки — тактический захват."""
     location = (callback.data or "").split(":", maxsplit=1)[1]
     if location.startswith("section:") or location.startswith("transfer:"):
         await safe_callback_answer(callback)
         return
     result = attack_location(get_storage(), callback.from_user.id, location)
+    if result.ok and (result.payload or {}).get("ncap_session"):
+        storage = get_storage()
+        session = get_ncap_session(storage, callback.from_user.id)
+        if session is not None:
+            await _broadcast_ncap_session(bot, storage, session, note=result.text)
+            await safe_callback_answer(callback, "Захват начался!")
+            return
     await reply_action_result(callback, result.text)
 
 
@@ -4231,6 +4455,21 @@ async def war_lobby_join_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "war_lobby:launch")
 async def war_lobby_launch_callback(callback: CallbackQuery, bot: Bot) -> None:
     result = launch_war_lobby(get_storage(), callback.from_user.id)
+    if result.ok and result.tactical_cwar:
+        storage = get_storage()
+        session = get_cwar_session_by_player(storage, callback.from_user.id)
+        if session is not None:
+            await _broadcast_cwar_session(bot, storage, session, note=result.text)
+            for pid in result.notify_member_ids:
+                if pid == callback.from_user.id:
+                    continue
+                try:
+                    await bot.send_message(pid, action_result_text(pid, result.text))
+                except Exception:
+                    logger.exception("Failed to notify cwar start to %s", pid)
+            await safe_callback_answer(callback, "Тактический штурм!")
+            await _refresh_war_lobby_menu(callback)
+            return
     await deliver_group_result(callback, bot, result, prefix="📣 Итог штурма:")
     if result.ok:
         await _refresh_war_lobby_menu(callback)
@@ -5329,6 +5568,39 @@ async def run_bot() -> None:
                         await _broadcast_coop_session(bot, storage, session, note=result.text)
             except Exception:
                 logger.exception("Coop timeout tick failed")
+            try:
+                cwar_updates: set[str] = set()
+                cwar_done_ids: set[str] = set()
+                for pid, result in process_cwar_turn_timeouts(storage):
+                    payload = result.payload or {}
+                    if payload.get("cwar_done"):
+                        sid = str(payload.get("session_id") or "")
+                        if sid and sid in cwar_done_ids:
+                            continue
+                        if sid:
+                            cwar_done_ids.add(sid)
+                        await _notify_cwar_finished(bot, result)
+                        continue
+                    session = get_cwar_session_by_player(storage, pid)
+                    if session and session.session_id not in cwar_updates:
+                        cwar_updates.add(session.session_id)
+                        await _broadcast_cwar_session(bot, storage, session, note=result.text)
+            except Exception:
+                logger.exception("Clan war timeout tick failed")
+            try:
+                for pid, result in process_ncap_turn_timeouts(storage):
+                    payload = result.payload or {}
+                    if payload.get("ncap_done"):
+                        msg_id = payload.get("message_id")
+                        if msg_id:
+                            await _clear_tactical_keyboards(bot, {str(pid): int(msg_id)})
+                        await bot.send_message(pid, action_result_text(pid, result.text))
+                        continue
+                    session = get_ncap_session(storage, pid)
+                    if session:
+                        await _broadcast_ncap_session(bot, storage, session, note=result.text)
+            except Exception:
+                logger.exception("Neutral capture timeout tick failed")
 
     sync_task = asyncio.create_task(periodic_snapshot_sync())
     zone_task = asyncio.create_task(periodic_zone_systems())

@@ -1036,6 +1036,7 @@ class WarLobbyResult:
     ok: bool
     text: str
     notify_member_ids: tuple[int, ...] = ()
+    tactical_cwar: bool = False
 
 
 @dataclass(frozen=True)
@@ -3342,7 +3343,9 @@ def calculate_duel_challenger_chance(challenger_power: int, target_power: int) -
 
 def _duel_conditions_text() -> str:
     return (
-        f"Тактическая дуэль 8×8: ход, выстрел (дальность от оружия), 1 аптечка, укрытия 50% промах.\n"
+        f"Тактическая дуэль 8×8: ход, выстрел (90°), 1 аптечка, укрытия 50% промах.\n"
+        f"Дальность: пистолет/дробовик 1 · автомат 2 · снайперка 3 · гаус 4 клетки.\n"
+        f"Таймер боя 3 мин — потом бесконечная волна мутантов (2 клетки/ход).\n"
         f"Стоимость при согласии: {DUEL_ENERGY_COST} энергии у каждого.\n"
         f"Проигравший: HP до {DUEL_LOSER_HP_REMAINING}, "
         f"−{DUEL_LOSER_MONEY_PERCENT}% денег (макс. {DUEL_LOSER_MONEY_CAP} RU), −{RATING_REWARD['duel_lose']} рейтинга.\n"
@@ -4938,13 +4941,24 @@ def declare_war(storage: Storage, telegram_id: int, target_faction: str) -> Acti
 
 
 def attack_location(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
-    """Сolo-штурм отключён: захват точек только через военное лобби (мин. 5 бойцов)."""
-    _ = (storage, telegram_id, location_name)
-    return ActionResult(
-        False,
-        f"Соло-штурм отключён. Собери военное лобби и запусти штурм минимум из "
-        f"{WAR_MIN_FACTION_MEMBERS} живых бойцов (раздел «⚔️ Война» → «🪖 Военные лобби»).",
-    )
+    """Сolo-штурм чужих точек отключён; нейтральные — тактический захват."""
+    loc = storage.get_location(location_name)
+    if loc is None:
+        return ActionResult(False, "Локация не найдена.")
+    if loc.get("controlled_by"):
+        return ActionResult(
+            False,
+            f"Сolo-штурм занятой точки отключён. Собери военное лобби минимум из "
+            f"{WAR_MIN_FACTION_MEMBERS} бойцов (раздел «⚔️ Война» → «🪖 Военные лобби»).",
+        )
+    from app.neutral_capture import start_neutral_capture
+
+    result, session = start_neutral_capture(storage, telegram_id, location_name)
+    if session is not None:
+        payload = dict(result.payload or {})
+        payload["ncap_session"] = True
+        return ActionResult(result.ok, result.text, payload=payload)
+    return result
 
 
 def _weapon_rating(weapon_name: str) -> int:
@@ -6563,6 +6577,24 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
     if _location_is_friendly_to_faction(storage, target, host_faction):
         _refund_spent_energy(storage, spent_ids, 24)
         return WarLobbyResult(False, "Нельзя штурмовать свою или союзническую точку.")
+    member_id_list = [m.telegram_id for m in active]
+    from app.clan_war_grid import start_clan_war_grid
+
+    tactical_result, cwar_session = start_clan_war_grid(
+        storage,
+        war_id=war_id,
+        location_name=location_name,
+        host_faction=host_faction,
+        player_ids=member_id_list,
+    )
+    if tactical_result.ok and cwar_session is not None:
+        return WarLobbyResult(
+            True,
+            tactical_result.text,
+            tuple(member_id_list),
+            tactical_cwar=True,
+        )
+    # Fallback: старая RNG-система, если тактический штурм не удалось запустить.
     enemy_power = int(target["npc_power"]) + max(0, int(target.get("defense_bonus") or 0))
     total_power = sum(equipment_power(member) for member in active)
     chance = int(round((total_power / (total_power + enemy_power + 10)) * 100))

@@ -1185,30 +1185,53 @@ def duel_challenge_keyboard(challenger_id: int) -> InlineKeyboardMarkup:
 
 
 def duel_grid_keyboard(*, is_active_turn: bool, medkit_available: bool) -> InlineKeyboardMarkup:
+    return _tactical_grid_keyboard("dgrid", is_active_turn=is_active_turn, medkit_available=medkit_available)
+
+
+def _tactical_grid_keyboard(
+    prefix: str,
+    *,
+    is_active_turn: bool,
+    medkit_available: bool,
+    forfeit_label: str = "🏳 Сдаться",
+) -> InlineKeyboardMarkup:
     refresh_row = [
-        InlineKeyboardButton(text="🔄 Обновить", callback_data="dgrid:refresh"),
-        InlineKeyboardButton(text="🏳 Сдаться", callback_data="dgrid:forfeit"),
+        InlineKeyboardButton(text="🔄 Обновить", callback_data=f"{prefix}:refresh"),
+        InlineKeyboardButton(text=forfeit_label, callback_data=f"{prefix}:forfeit"),
     ]
     if not is_active_turn:
         return InlineKeyboardMarkup(inline_keyboard=[refresh_row])
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="🚶 ⬆️", callback_data="dgrid:move:up")],
+        [InlineKeyboardButton(text="🚶 ⬆️", callback_data=f"{prefix}:move:up")],
         [
-            InlineKeyboardButton(text="🚶 ⬅️", callback_data="dgrid:move:left"),
-            InlineKeyboardButton(text="🚶 ⬇️", callback_data="dgrid:move:down"),
-            InlineKeyboardButton(text="🚶 ➡️", callback_data="dgrid:move:right"),
+            InlineKeyboardButton(text="🚶 ⬅️", callback_data=f"{prefix}:move:left"),
+            InlineKeyboardButton(text="🚶 ⬇️", callback_data=f"{prefix}:move:down"),
+            InlineKeyboardButton(text="🚶 ➡️", callback_data=f"{prefix}:move:right"),
         ],
-        [InlineKeyboardButton(text="🔫 ⬆️", callback_data="dgrid:shoot:up")],
+        [InlineKeyboardButton(text="🔫 ⬆️", callback_data=f"{prefix}:shoot:up")],
         [
-            InlineKeyboardButton(text="🔫 ⬅️", callback_data="dgrid:shoot:left"),
-            InlineKeyboardButton(text="🔫 ⬇️", callback_data="dgrid:shoot:down"),
-            InlineKeyboardButton(text="🔫 ➡️", callback_data="dgrid:shoot:right"),
+            InlineKeyboardButton(text="🔫 ⬅️", callback_data=f"{prefix}:shoot:left"),
+            InlineKeyboardButton(text="🔫 ⬇️", callback_data=f"{prefix}:shoot:down"),
+            InlineKeyboardButton(text="🔫 ➡️", callback_data=f"{prefix}:shoot:right"),
         ],
     ]
     if medkit_available:
-        rows.append([InlineKeyboardButton(text="💊 Аптечка (1×)", callback_data="dgrid:medkit")])
+        rows.append([InlineKeyboardButton(text="💊 Аптечка (1×)", callback_data=f"{prefix}:medkit")])
     rows.append(refresh_row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def cwar_grid_keyboard(*, is_active_turn: bool, medkit_available: bool) -> InlineKeyboardMarkup:
+    return _tactical_grid_keyboard("cwar", is_active_turn=is_active_turn, medkit_available=medkit_available)
+
+
+def ncap_grid_keyboard(*, medkit_available: bool) -> InlineKeyboardMarkup:
+    return _tactical_grid_keyboard(
+        "ncap",
+        is_active_turn=True,
+        medkit_available=medkit_available,
+        forfeit_label="🏃 Отступить",
+    )
 
 
 def coop_menu_keyboard(*, in_lobby: bool, is_host: bool, lobby_id: str | None = None) -> InlineKeyboardMarkup:
