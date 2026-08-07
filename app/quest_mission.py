@@ -34,6 +34,13 @@ from app.game_logic import (
     try_auto_turn_in_contract,
     use_medkit_item,
 )
+from app.mutant_assets import (
+    MISSION_MUTANT_GRID_DIAMETER,
+    MUTANT_SPRITE_KEYS,
+    MUTANT_SPRITES,
+    mutant_sprite_image,
+    pick_mutant_kind,
+)
 from app.storage import Character, Storage
 
 
@@ -102,6 +109,7 @@ class QuestMissionSession:
     collected: list[tuple[int, int]] = field(default_factory=list)
     hazards: list[tuple[int, int]] = field(default_factory=list)  # аномалии
     enemies: list[tuple[int, int]] = field(default_factory=list)  # мутанты
+    enemy_kinds: list[str] = field(default_factory=list)  # blind_dog, tushkano, …
     npcs: list[tuple[int, int]] = field(default_factory=list)  # мародёры / НПС
     moves: int = 0
     max_moves: int = MAX_MOVES
@@ -122,6 +130,7 @@ class QuestMissionSession:
             "collected": [list(p) for p in self.collected],
             "hazards": [list(p) for p in self.hazards],
             "enemies": [list(p) for p in self.enemies],
+            "enemy_kinds": list(self.enemy_kinds),
             "npcs": [list(p) for p in self.npcs],
             "moves": self.moves,
             "max_moves": self.max_moves,
@@ -144,6 +153,7 @@ class QuestMissionSession:
             collected=[(int(p[0]), int(p[1])) for p in (raw.get("collected") or [])],
             hazards=[(int(p[0]), int(p[1])) for p in (raw.get("hazards") or [])],
             enemies=[(int(p[0]), int(p[1])) for p in (raw.get("enemies") or [])],
+            enemy_kinds=_parse_enemy_kinds(raw.get("enemies") or [], raw.get("enemy_kinds")),
             npcs=[(int(p[0]), int(p[1])) for p in (raw.get("npcs") or [])],
             moves=int(raw.get("moves") or 0),
             max_moves=int(raw.get("max_moves") or MAX_MOVES),
@@ -151,6 +161,21 @@ class QuestMissionSession:
             objectives_done=bool(raw.get("objectives_done")),
             resources_spent=bool(raw.get("resources_spent")),
         )
+
+
+def _parse_enemy_kinds(enemies_raw: list, kinds_raw: Any) -> list[str]:
+    n = len(enemies_raw)
+    if not n:
+        return []
+    if isinstance(kinds_raw, list) and len(kinds_raw) == n:
+        parsed: list[str] = []
+        for i, k in enumerate(kinds_raw):
+            key = str(k)
+            parsed.append(
+                key if key in MUTANT_SPRITES else MUTANT_SPRITE_KEYS[i % len(MUTANT_SPRITE_KEYS)]
+            )
+        return parsed
+    return [MUTANT_SPRITE_KEYS[i % len(MUTANT_SPRITE_KEYS)] for i in range(n)]
 
 
 def _meta_key(telegram_id: int) -> str:
@@ -224,6 +249,20 @@ def _spawn_n(
         forbidden.add(cell)
 
 
+def _spawn_mutants(
+    n: int,
+    grid: int,
+    forbidden: set[tuple[int, int]],
+    enemies: list[tuple[int, int]],
+    kinds: list[str],
+) -> None:
+    for _ in range(max(0, n)):
+        cell = _free_cell(grid, forbidden)
+        enemies.append(cell)
+        kinds.append(pick_mutant_kind())
+        forbidden.add(cell)
+
+
 def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMissionSession:
     kind = template.mission_kind
     difficulty = template.difficulty
@@ -235,6 +274,7 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
     objectives: list[tuple[int, int]] = []
     hazards: list[tuple[int, int]] = []
     enemies: list[tuple[int, int]] = []
+    enemy_kinds: list[str] = []
     npcs: list[tuple[int, int]] = []
 
     # Цели задания — по типу контракта.
@@ -260,7 +300,7 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
         _spawn_n(anom_n, grid, forbidden, hazards)
     if want_mut:
         mut_n = base_n + (1 if kind == "clear_mutant" else 0)
-        _spawn_n(mut_n, grid, forbidden, enemies)
+        _spawn_mutants(mut_n, grid, forbidden, enemies, enemy_kinds)
     if want_npc:
         npc_n = base_n + (1 if kind == "clear_marauder" else 0)
         _spawn_n(npc_n, grid, forbidden, npcs)
@@ -276,6 +316,7 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
         objectives=objectives,
         hazards=hazards,
         enemies=enemies,
+        enemy_kinds=enemy_kinds,
         npcs=npcs,
         max_moves=MAX_MOVES + danger,
         resources_spent=False,
@@ -302,16 +343,20 @@ def _occupied_for_hostile_move(session: QuestMissionSession) -> set[tuple[int, i
 def _move_hostile_units(
     units: list[tuple[int, int]],
     session: QuestMissionSession,
-) -> tuple[list[tuple[int, int]], int]:
-    """С шансом HOSTILE_MOVE_CHANCE сдвинуть юнит на соседнюю клетку. Возвращает (новые позиции, сколько сдвинулось)."""
+    kinds: list[str] | None = None,
+) -> tuple[list[tuple[int, int]], list[str] | None, int]:
+    """С шансом HOSTILE_MOVE_CHANCE сдвинуть юнит на соседнюю клетку."""
     moved = 0
     result: list[tuple[int, int]] = []
-    # Работаем с копией занятости, обновляя по мере ходов.
+    result_kinds: list[str] = []
     occupied = _occupied_for_hostile_move(session)
-    for pos in units:
+    for i, pos in enumerate(units):
+        kind = kinds[i] if kinds is not None and i < len(kinds) else None
         occupied.discard(pos)
         if random.random() >= HOSTILE_MOVE_CHANCE:
             result.append(pos)
+            if kind is not None:
+                result_kinds.append(kind)
             occupied.add(pos)
             continue
         candidates = [
@@ -321,20 +366,27 @@ def _move_hostile_units(
         ]
         if not candidates:
             result.append(pos)
+            if kind is not None:
+                result_kinds.append(kind)
             occupied.add(pos)
             continue
         nxt = random.choice(candidates)
         result.append(nxt)
+        if kind is not None:
+            result_kinds.append(kind)
         occupied.add(nxt)
         if nxt != pos:
             moved += 1
-    return result, moved
+    out_kinds = result_kinds if kinds is not None else None
+    return result, out_kinds, moved
 
 
 def _maybe_move_hostiles(session: QuestMissionSession) -> list[str]:
     notes: list[str] = []
-    session.enemies, mut_moved = _move_hostile_units(list(session.enemies), session)
-    session.npcs, npc_moved = _move_hostile_units(list(session.npcs), session)
+    session.enemies, session.enemy_kinds, mut_moved = _move_hostile_units(
+        list(session.enemies), session, list(session.enemy_kinds)
+    )
+    session.npcs, _, npc_moved = _move_hostile_units(list(session.npcs), session)
     if mut_moved:
         notes.append(f"Мутанты сдвинулись ({mut_moved}).")
     if npc_moved:
@@ -623,14 +675,30 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
         session.collected.append(session.player)
         notes.append("Цель отмечена.")
 
-    def _fight_on_cell(label: str, unit_attr: str) -> ActionResult | None:
+    def _fight_on_cell(
+        label: str,
+        unit_attr: str,
+        *,
+        kinds_attr: str | None = None,
+    ) -> ActionResult | None:
         nonlocal player, notes
         units: list[tuple[int, int]] = getattr(session, unit_attr)
         if session.player not in units:
             return None
         dmg = _combat_damage(session.location, session.difficulty, player)
         storage.change_health(telegram_id, -dmg)
-        setattr(session, unit_attr, [e for e in units if e != session.player])
+        kinds: list[str] | None = getattr(session, kinds_attr) if kinds_attr else None
+        if kinds is not None and len(kinds) == len(units):
+            new_units: list[tuple[int, int]] = []
+            new_kinds: list[str] = []
+            for pos, kind in zip(units, kinds):
+                if pos != session.player:
+                    new_units.append(pos)
+                    new_kinds.append(kind)
+            setattr(session, unit_attr, new_units)
+            setattr(session, kinds_attr, new_kinds)
+        else:
+            setattr(session, unit_attr, [e for e in units if e != session.player])
         notes.append(f"Бой с {label}: −{dmg} HP.")
         player = storage.get_character(telegram_id, refresh_energy=False) or player
         if player.health <= 0:
@@ -643,7 +711,7 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
             )
         return None
 
-    dead = _fight_on_cell("мутанта", "enemies")
+    dead = _fight_on_cell("мутанта", "enemies", kinds_attr="enemy_kinds")
     if dead is not None:
         return dead
     dead = _fight_on_cell("НПС", "npcs")
@@ -679,7 +747,7 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
     notes.extend(_maybe_move_hostiles(session))
 
     # Если враг зашёл на клетку игрока после хода — бой.
-    dead = _fight_on_cell("мутанта", "enemies")
+    dead = _fight_on_cell("мутанта", "enemies", kinds_attr="enemy_kinds")
     if dead is not None:
         return dead
     dead = _fight_on_cell("НПС", "npcs")
@@ -810,11 +878,28 @@ def render_mission_frame(
         # Аномалия — оранжевое свечение.
         _glow(canvas, cx, cy, (255, 120, 40), 24)
 
-    for ex, ey in session.enemies:
+    for i, (ex, ey) in enumerate(session.enemies):
         cx = margin + ex * cell + cell // 2
         cy = margin + ey * cell + cell // 2
         _glow(canvas, cx, cy, (90, 200, 70), 18)
-        _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=False)
+        kind = (
+            session.enemy_kinds[i]
+            if i < len(session.enemy_kinds)
+            else MUTANT_SPRITE_KEYS[i % len(MUTANT_SPRITE_KEYS)]
+        )
+        sprite = mutant_sprite_image(kind)
+        if sprite is not None:
+            _paste_circle(
+                canvas,
+                sprite,
+                cx,
+                cy,
+                MISSION_MUTANT_GRID_DIAMETER,
+                ring_color=(120, 200, 80),
+                ring_width=3,
+            )
+        else:
+            _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=False)
 
     for nx_, ny_ in session.npcs:
         cx = margin + nx_ * cell + cell // 2
