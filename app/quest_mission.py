@@ -451,33 +451,43 @@ def _resolve_hostile_contact(
     unit_attr: str,
     *,
     kinds_attr: str | None = None,
+    npc: bool = False,
 ) -> tuple[Character, str | None, ActionResult | None]:
     """Бой на клетке игрока с юнитами unit_attr. Возвращает (player, заметку, результат смерти или None)."""
+    from app.death_flavor import encounter_phrase_for_kind, killer_label_for_kind
+
     units: list[tuple[int, int]] = getattr(session, unit_attr)
     if session.player not in units:
         return player, None, None
     dmg = _combat_damage(session.location, session.difficulty, player)
     storage.change_health(telegram_id, -dmg)
     kinds: list[str] | None = getattr(session, kinds_attr) if kinds_attr else None
+    kind = ""
     if kinds is not None and len(kinds) == len(units):
+        idx = units.index(session.player)
+        kind = kinds[idx]
         new_units: list[tuple[int, int]] = []
         new_kinds: list[str] = []
-        for pos, kind in zip(units, kinds):
+        for pos, k in zip(units, kinds):
             if pos != session.player:
                 new_units.append(pos)
-                new_kinds.append(kind)
+                new_kinds.append(k)
         setattr(session, unit_attr, new_units)
         setattr(session, kinds_attr, new_kinds)
     else:
         setattr(session, unit_attr, [e for e in units if e != session.player])
-    note = f"Бой с {label}: −{dmg} HP."
+    phrase = encounter_phrase_for_kind(kind, npc=npc) if kind else f"с {label}"
+    note = f"Бой {phrase}: −{dmg} HP."
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     if player.health <= 0:
         clear_mission_session(storage, telegram_id)
         storage.set_active_contract(telegram_id, None)
-        from app.game_logic import remember_death_cause
+        from app.game_logic import remember_death_cause, remember_death_killer
 
-        remember_death_cause(storage, telegram_id, "combat")
+        death_cause = "npc" if npc else "mutant"
+        remember_death_cause(storage, telegram_id, death_cause)
+        killer_name = killer_label_for_kind(kind, npc=npc) if kind else label
+        remember_death_killer(storage, telegram_id, killer_name)
         return (
             player,
             note,
@@ -488,7 +498,7 @@ def _resolve_hostile_contact(
                     "mission_active": False,
                     "mission_dead": True,
                     "death_location": session.location,
-                    "death_cause": "combat",
+                    "death_cause": death_cause,
                 },
             ),
         )
@@ -738,12 +748,12 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     if result.ok:
         # Аптечка не бесплатна по времени: враги на поле ходят, как при обычном шаге.
         notes.extend(_maybe_move_hostiles(session))
-        for label, unit_attr, kinds_attr in (
-            ("мутанта", "enemies", "enemy_kinds"),
-            ("НПС", "npcs", "npc_kinds"),
+        for label, unit_attr, kinds_attr, is_npc in (
+            ("мутантом", "enemies", "enemy_kinds", False),
+            ("НПС", "npcs", "npc_kinds", True),
         ):
             player, note, dead_result = _resolve_hostile_contact(
-                storage, telegram_id, session, player, label, unit_attr, kinds_attr=kinds_attr
+                storage, telegram_id, session, player, label, unit_attr, kinds_attr=kinds_attr, npc=is_npc
             )
             if note is not None:
                 notes.append(note)
@@ -808,19 +818,20 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
         unit_attr: str,
         *,
         kinds_attr: str | None = None,
+        npc: bool = False,
     ) -> ActionResult | None:
         nonlocal player, notes
         player, note, dead_result = _resolve_hostile_contact(
-            storage, telegram_id, session, player, label, unit_attr, kinds_attr=kinds_attr
+            storage, telegram_id, session, player, label, unit_attr, kinds_attr=kinds_attr, npc=npc
         )
         if note is not None:
             notes.append(note)
         return dead_result
 
-    dead = _fight_on_cell("мутанта", "enemies", kinds_attr="enemy_kinds")
+    dead = _fight_on_cell("мутантом", "enemies", kinds_attr="enemy_kinds", npc=False)
     if dead is not None:
         return dead
-    dead = _fight_on_cell("НПС", "npcs", kinds_attr="npc_kinds")
+    dead = _fight_on_cell("НПС", "npcs", kinds_attr="npc_kinds", npc=True)
     if dead is not None:
         return dead
 

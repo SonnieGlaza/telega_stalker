@@ -20,6 +20,9 @@ MISSION_NPC_CARD_SIZE = 256
 
 NPC_SPRITES: dict[str, str] = {
     "maloy": "Малой",
+    "bandit": "Бандит",
+    "mercenary": "Наёмник",
+    "soldier": "Военный",
 }
 
 NPC_SPRITE_KEYS: tuple[str, ...] = tuple(NPC_SPRITES.keys())

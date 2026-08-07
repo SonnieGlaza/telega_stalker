@@ -217,7 +217,8 @@ LOOT_LINES: list[str] = [
     "Личный схрон не трогают. А вот то, что на поясе было — считай, прощай.",
 ]
 
-# Человекочитаемые «имена» убийц по типу мутанта/НПС — для строки «Добил: …».
+# Человекочитаемые «имена» убийц по типу мутанта/НПС — для строки «Добил: …»
+# и для боевого лога («Кровосос ранит …» вместо обезличенного «Мутант ранит …»).
 MUTANT_NAME_OPENERS: dict[str, str] = {
     "blind_dog": "Слепой пёс",
     "tushkano": "Тушкан",
@@ -228,8 +229,30 @@ MUTANT_NAME_OPENERS: dict[str, str] = {
 
 NPC_NAME_OPENERS: dict[str, str] = {
     "maloy": "Малой",
+    "bandit": "Бандит",
+    "mercenary": "Наёмник",
+    "soldier": "Военный",
 }
 NPC_GENERIC_NAME = "Мародёр"
+
+# Творительный падеж («сразился с/со …») для строки ближнего боя при наступании
+# на клетку врага. Ключ — kind мутанта/НПС, значение — фраза с предлогом.
+MUTANT_NAME_INSTRUMENTAL: dict[str, str] = {
+    "blind_dog": "со Слепым псом",
+    "tushkano": "с Тушканом",
+    "pseudodog": "с Псевдопсом",
+    "bloodsucker": "с Кровососом",
+    "flesh": "с Плотью",
+}
+
+NPC_NAME_INSTRUMENTAL: dict[str, str] = {
+    "maloy": "с Малым",
+    "bandit": "с Бандитом",
+    "mercenary": "с Наёмником",
+    "soldier": "с Военным",
+}
+NPC_GENERIC_INSTRUMENTAL = "с Мародёром"
+MUTANT_GENERIC_INSTRUMENTAL = "с мутантом"
 
 
 def killer_label_for_kind(kind: str, *, npc: bool = False) -> str:
@@ -237,6 +260,13 @@ def killer_label_for_kind(kind: str, *, npc: bool = False) -> str:
     if npc:
         return NPC_NAME_OPENERS.get(kind, NPC_GENERIC_NAME)
     return MUTANT_NAME_OPENERS.get(kind, kind or "мутант")
+
+
+def encounter_phrase_for_kind(kind: str, *, npc: bool = False) -> str:
+    """Фраза «с/со <Имя>» (творительный падеж) для лога ближнего столкновения."""
+    if npc:
+        return NPC_NAME_INSTRUMENTAL.get(kind, NPC_GENERIC_INSTRUMENTAL)
+    return MUTANT_NAME_INSTRUMENTAL.get(kind, MUTANT_GENERIC_INSTRUMENTAL)
 
 
 def infer_death_cause(character: Character, *, cause: str | None = None) -> DeathCause:
