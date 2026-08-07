@@ -762,10 +762,18 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
         if player.health <= 0:
             clear_mission_session(storage, telegram_id)
             storage.set_active_contract(telegram_id, None)
+            from app.game_logic import remember_death_cause
+
+            remember_death_cause(storage, telegram_id, "combat")
             return ActionResult(
                 False,
                 f"Ты пал в бою на «{session.location}».\nКонтракт сорван.",
-                payload={"mission_active": False, "mission_dead": True, "death_location": session.location},
+                payload={
+                    "mission_active": False,
+                    "mission_dead": True,
+                    "death_location": session.location,
+                    "death_cause": "combat",
+                },
             )
         return None
 
@@ -782,10 +790,18 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
             clear_mission_session(storage, telegram_id)
             storage.set_active_contract(telegram_id, None)
             storage.change_health(telegram_id, -10_000)
+            from app.game_logic import remember_death_cause
+
+            remember_death_cause(storage, telegram_id, "anomaly")
             return ActionResult(
                 False,
                 f"Аномалия на «{session.location}». Сознание гаснет…\nКонтракт сорван.",
-                payload={"mission_active": False, "mission_dead": True, "death_location": session.location},
+                payload={
+                    "mission_active": False,
+                    "mission_dead": True,
+                    "death_location": session.location,
+                    "death_cause": "anomaly",
+                },
             )
         dmg = _hazard_damage(session.kind, player)
         storage.change_health(telegram_id, -dmg)
@@ -795,10 +811,18 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
         if player.health <= 0:
             clear_mission_session(storage, telegram_id)
             storage.set_active_contract(telegram_id, None)
+            from app.game_logic import remember_death_cause
+
+            remember_death_cause(storage, telegram_id, "anomaly")
             return ActionResult(
                 False,
                 f"Раны оказались смертельными на «{session.location}».\nКонтракт сорван.",
-                payload={"mission_active": False, "mission_dead": True, "death_location": session.location},
+                payload={
+                    "mission_active": False,
+                    "mission_dead": True,
+                    "death_location": session.location,
+                    "death_cause": "anomaly",
+                },
             )
 
     # Мутанты и НПС: 50% сдвиг на соседнюю клетку.

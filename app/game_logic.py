@@ -1162,33 +1162,61 @@ def _dead_block_text() -> str:
     return "Персонаж мертв (HP=0). Используй респавн из инвентаря."
 
 
-def build_dead_character_text(character: Character) -> str:
-    max_hp = effective_max_health(character)
-    return (
-        f"☠️ {h(character.nickname)}, ты погиб в Зоне.\n"
-        f"HP: {character.health}/{max_hp}\n"
-        f"Локация: {character.location}\n\n"
-        "Мутанты уже обшаривают твой рюкзак (потеряешь ~80% инвентаря).\n"
-        "Сталкеры готовы доставить тебя на базу — но не бесплатно.\n"
-        f"Стоимость спасения: {RESPAWN_COST_RU} RU.\n"
-        "Вещи в личном схроне не трогают."
+DEATH_CAUSE_META_PREFIX = "death:last_cause:"
+
+
+def _death_cause_key(telegram_id: int) -> str:
+    return f"{DEATH_CAUSE_META_PREFIX}{int(telegram_id)}"
+
+
+def remember_death_cause(storage: Storage, telegram_id: int, cause: str) -> None:
+    storage.set_meta(_death_cause_key(telegram_id), cause)
+
+
+def pop_death_cause(storage: Storage, telegram_id: int) -> str | None:
+    key = _death_cause_key(telegram_id)
+    raw = storage.get_meta(key)
+    if raw:
+        storage.delete_meta(key)
+    return raw
+
+
+def peek_death_cause(storage: Storage, telegram_id: int) -> str | None:
+    return storage.get_meta(_death_cause_key(telegram_id))
+
+
+def build_dead_character_text(
+    character: Character,
+    *,
+    where: str | None = None,
+    cause: str | None = None,
+    storage: Storage | None = None,
+) -> str:
+    """Текст смерти: каждый раз новый, с локацией и причиной (бой/голод/рад…)."""
+    from app.death_flavor import generate_death_story
+
+    resolved = cause
+    if resolved is None and storage is not None:
+        resolved = peek_death_cause(storage, character.telegram_id)
+    return generate_death_story(
+        character,
+        where=where,
+        cause=resolved,
+        home=faction_home_base(character.faction),
+        respawn_cost=RESPAWN_COST_RU,
+        max_hp=effective_max_health(character),
     )
 
 
-def build_battle_death_text(character: Character, *, where: str | None = None) -> str:
-    """Смерть на поле боя — сталкерский флavor + медпункт на базе."""
-    spot = where or character.location
-    home = faction_home_base(character.faction)
-    max_hp = effective_max_health(character)
-    return (
-        f"☠️ {h(character.nickname)}, на «{spot}» тебя размотали — сознание ушло в чёрную тьму.\n\n"
-        "Очнулся под гудение лампы: йод, мокрая койка, чей-то хриплый голос — "
-        "«Дыши, стalker, живой… в медпункт везём, не дёргайся».\n"
-        f"Братва затащила на «{home}». Зона забрала почти всё, но не дожала.\n\n"
-        f"HP: {character.health}/{max_hp}\n"
-        "Мутанты уже шарят по рюкзаку (~80% хабара снимут).\n"
-        f"Спасение на базе — {RESPAWN_COST_RU} RU. Личный схрон не трогают."
-    )
+def build_battle_death_text(
+    character: Character,
+    *,
+    where: str | None = None,
+    cause: str | None = "combat",
+    storage: Storage | None = None,
+) -> str:
+    """Смерть на поле / вылазке — тот же генератор, явная причина."""
+    return build_dead_character_text(character, where=where, cause=cause, storage=storage)
 
 
 def _apply_death_inventory_loot(storage: Storage, telegram_id: int) -> str:
@@ -1363,6 +1391,7 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
     storage.restore_energy(telegram_id, RESPAWN_ENERGY - current_energy)
     home = faction_home_base(player.faction)
     storage.set_location(telegram_id, home)
+    pop_death_cause(storage, telegram_id)
     return ActionResult(
         True,
         f"Сталкеры нашли тебя без сознания и доставили на «{home}».\n"
@@ -6048,6 +6077,7 @@ def process_emission_cycle(storage: Storage) -> tuple[str, list[int]]:
             continue
         telegram_id = int(row["telegram_id"])
         storage.change_health(telegram_id, -int(row["health"]))
+        remember_death_cause(storage, telegram_id, "emission")
         killed.append(str(row.get("nickname") or telegram_id))
 
     next_at = now + timedelta(hours=EMISSION_INTERVAL_HOURS)

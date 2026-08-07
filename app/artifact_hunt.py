@@ -553,11 +553,19 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
     if session.player in set(session.anomalies):
         clear_hunt_session(storage, telegram_id)
         storage.change_health(telegram_id, -10_000)
+        from app.game_logic import remember_death_cause
+
+        remember_death_cause(storage, telegram_id, "anomaly")
         return ActionResult(
             False,
             f"Ты влетел в аномалию на «{session.location}».\n"
             "Сознание гаснет… Респавн из инвентаря (мутанты обшарят рюкзак).",
-            payload={"hunt_active": False, "hunt_dead": True, "death_location": session.location},
+            payload={
+                "hunt_active": False,
+                "hunt_dead": True,
+                "death_location": session.location,
+                "death_cause": "anomaly",
+            },
         )
 
     gain = _signal_gain(session.player, session.artifact)

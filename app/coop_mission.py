@@ -683,6 +683,11 @@ def _finish_fail(storage: Storage, session: CoopMissionSession, reason: str) -> 
     session.log.append(reason)
     save_coop_session(storage, session)
     player_ids = list(session.player_ids)
+    from app.game_logic import remember_death_cause
+
+    for pid in player_ids:
+        if session.hp.get(str(pid), 0) <= 0:
+            remember_death_cause(storage, pid, "coop")
     clear_coop_session(storage, session)
     return ActionResult(
         False,
@@ -694,6 +699,7 @@ def _finish_fail(storage: Storage, session: CoopMissionSession, reason: str) -> 
             "message_ids": message_ids,
             "session_id": session.session_id,
             "death_location": session.location,
+            "death_cause": "coop",
         },
     )
 

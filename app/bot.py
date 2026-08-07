@@ -2443,10 +2443,17 @@ async def _send_battle_death_notice(
     *,
     callback: CallbackQuery | None = None,
     where: str | None = None,
+    cause: str | None = None,
 ) -> None:
     if callback is not None:
         await _dismiss_battle_map(callback)
-    text = build_battle_death_text(player, where=where)
+    storage = get_storage()
+    text = build_battle_death_text(
+        player,
+        where=where,
+        cause=cause or "combat",
+        storage=storage,
+    )
     try:
         await bot.send_message(user_id, text, reply_markup=dead_character_keyboard())
     except Exception:
@@ -2661,13 +2668,19 @@ async def _notify_coop_finished(bot: Bot, result: Any) -> None:
     storage = get_storage()
     notify_ids = [int(x) for x in (payload.get("notify_all") or [])]
     death_where = payload.get("death_location")
+    death_cause = str(payload.get("death_cause") or "coop")
     for pid in notify_ids:
         player = storage.get_character(pid, refresh_energy=False)
         try:
             if player is not None and player.health <= 0 and not payload.get("coop_success"):
                 await bot.send_message(
                     pid,
-                    build_battle_death_text(player, where=str(death_where or player.location)),
+                    build_battle_death_text(
+                        player,
+                        where=str(death_where or player.location),
+                        cause=death_cause,
+                        storage=storage,
+                    ),
                     reply_markup=dead_character_keyboard(),
                 )
             else:
@@ -2751,6 +2764,7 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
                 player,
                 callback=callback,
                 where=str(payload.get("death_location") or player.location),
+                cause=str(payload.get("death_cause") or "combat"),
             )
             await safe_callback_answer(callback, "☠️ Откинулся…")
         else:
@@ -3267,6 +3281,7 @@ async def artifact_hunt_callback(callback: CallbackQuery) -> None:
                 player,
                 callback=callback,
                 where=str(payload.get("death_location") or player.location),
+                cause=str(payload.get("death_cause") or "combat"),
             )
             await safe_callback_answer(callback, "☠️ Аномалия…")
         else:

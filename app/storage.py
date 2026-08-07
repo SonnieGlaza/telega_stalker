@@ -64,6 +64,7 @@ class Character:
 SURVIVAL_HOURLY_GAIN = 1
 SURVIVAL_DAMAGE_PER_TICK = 10
 SURVIVAL_DAMAGE_TICK_MINUTES = 30
+SURVIVAL_CRITICAL_NEED = 100  # голод/жажда/радиация ≥ порога → урон HP
 
 # Telegram user id > 2^31-1 → Postgres INTEGER overflow. Everywhere BIGINT.
 TELEGRAM_ID_COLUMNS: tuple[tuple[str, str], ...] = (
@@ -1729,8 +1730,16 @@ class Storage:
                 needs_updated_at = now
                 changed = True
 
-            was_damaging = orig_hunger >= 100 or orig_thirst >= 100
-            in_damage = hunger >= 100 or thirst >= 100
+            was_damaging = (
+                orig_hunger >= SURVIVAL_CRITICAL_NEED
+                or orig_thirst >= SURVIVAL_CRITICAL_NEED
+                or radiation >= SURVIVAL_CRITICAL_NEED
+            )
+            in_damage = (
+                hunger >= SURVIVAL_CRITICAL_NEED
+                or thirst >= SURVIVAL_CRITICAL_NEED
+                or radiation >= SURVIVAL_CRITICAL_NEED
+            )
             if in_damage:
                 if not was_damaging:
                     survival_damage_at = now
@@ -1739,7 +1748,11 @@ class Storage:
                     (now - survival_damage_at).total_seconds() // (SURVIVAL_DAMAGE_TICK_MINUTES * 60)
                 )
                 if ticks > 0:
-                    health = max(0, health - ticks * SURVIVAL_DAMAGE_PER_TICK)
+                    # Радиация бьёт сильнее голодного тика, если фон критический.
+                    per_tick = SURVIVAL_DAMAGE_PER_TICK
+                    if radiation >= SURVIVAL_CRITICAL_NEED:
+                        per_tick = SURVIVAL_DAMAGE_PER_TICK + 5
+                    health = max(0, health - ticks * per_tick)
                     survival_damage_at = now
                     changed = True
 
@@ -1766,6 +1779,20 @@ class Storage:
         self.save_snapshot()
         if was_alive and final_health <= 0:
             self.add_player_stat(telegram_id, "deaths", 1)
+            # Причина для текста смерти (голод / жажда / радиация).
+            try:
+                from app.game_logic import remember_death_cause
+
+                scores = {
+                    "hunger": hunger,
+                    "thirst": thirst,
+                    "radiation": radiation,
+                }
+                cause = max(scores, key=lambda k: scores[k])
+                if scores[cause] >= SURVIVAL_CRITICAL_NEED:
+                    remember_death_cause(self, telegram_id, cause)
+            except Exception:
+                pass
 
     def adjust_survival(
         self,
