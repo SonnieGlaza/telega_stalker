@@ -1144,6 +1144,12 @@ def run_smoke_check() -> None:
         assert "detector_otklik" in ITEM_LABELS
         assert "sleeping_bag" in ITEM_LABELS
 
+        from app.game_logic import TUTORIAL_PAGES
+
+        arena_pages = [body for title, body in TUTORIAL_PAGES if title == "Арена"]
+        assert len(arena_pages) == 1
+        assert "⚔️ Арена" in arena_pages[0]
+
 
 if __name__ == "__main__":
     run_smoke_check()
