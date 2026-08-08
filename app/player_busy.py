@@ -6,7 +6,7 @@ from app.storage import Storage
 
 
 def player_busy_reason(storage: Storage, telegram_id: int, *, skip: str | None = None) -> str | None:
-    """Вернёт текст блокировки или None если свободен. skip: duel|coop|quest|hunt|cwar|ncap."""
+    """Вернёт текст блокировки или None если свободен. skip: duel|coop|quest|hunt|cwar|ncap|rgrid|arena."""
     from app.duel_grid import get_duel_session_by_player
     from app.coop_mission import get_coop_session_by_player, get_coop_lobby_by_player
     from app.quest_mission import get_mission_session
@@ -26,6 +26,11 @@ def player_busy_reason(storage: Storage, telegram_id: int, *, skip: str | None =
             return "Ты в тактическом рейде — сначала закончи бой."
     if skip != "ncap" and get_ncap_session(storage, telegram_id):
         return "Ты захватываешь нейтральную точку — сначала закончи."
+    if skip != "arena":
+        from app.arena_grid import get_arena_session
+
+        if get_arena_session(storage, telegram_id):
+            return "Ты на арене — сначала закончи бой."
     if skip != "coop":
         if get_coop_session_by_player(storage, telegram_id):
             return "Ты на кооп-вылазке — сначала закончи миссию."

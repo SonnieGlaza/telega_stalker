@@ -192,12 +192,12 @@ def paste_npc_sprite(
     key = kind or "bandit"
     if key not in NPC_SPRITE_KEYS:
         key = NPC_SPRITE_KEYS[0]
-    sprite = npc_sprite_image(key)
+    sprite = npc_sprite_image("maloy")
     if sprite is not None:
         _paste_circle(canvas, sprite, cx, cy, diameter, ring_color=ring_color, ring_width=2)
         return
     r = diameter // 2 - 4
-    draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(120, 50, 50), outline=(200, 80, 80), width=2)
+    draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(90, 90, 90), outline=(160, 160, 160), width=2)
 
 
 def hostile_kind_to_sprite(kind: str) -> tuple[str, bool]:

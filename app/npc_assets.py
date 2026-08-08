@@ -29,7 +29,7 @@ NPC_SPRITE_KEYS: tuple[str, ...] = tuple(NPC_SPRITES.keys())
 
 
 def pick_npc_kind() -> str:
-    return random.choice(NPC_SPRITE_KEYS)
+    return "maloy"
 
 
 @lru_cache(maxsize=32)

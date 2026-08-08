@@ -679,6 +679,78 @@ def run_smoke_check() -> None:
         clear_stale_raid_grid_session(storage, 111)
         assert get_raid_grid_session_by_player(storage, 111) is None
 
+        # Brown cover on all blue base_cover cells.
+        from app.raid_grid import _apply_cover_on_base
+
+        cover_session = RaidGridSession(
+            session_id="covertest",
+            raid_id=9996,
+            raid_kind="lair",
+            location_label="test",
+            attacker_faction="Долг",
+            player_ids=[111],
+        )
+        cover_session.base_cover = [(6, 0), (7, 1), (8, 2)]
+        cover_session.cover = [(6, 0)]
+        _apply_cover_on_base(cover_session)
+        assert all(cell in set(cover_session.cover) for cell in cover_session.base_cover)
+
+        # Revive down ally on adjacent cell with inventory medkit.
+        from app.raid_grid import (
+            _adjacent_down_allies,
+            rgrid_revive_ally,
+            save_raid_grid_session,
+        )
+
+        revive_session = RaidGridSession(
+            session_id="revivetest",
+            raid_id=9995,
+            raid_kind="lair",
+            location_label="test",
+            attacker_faction="Долг",
+            player_ids=[111, 222],
+            turn_order=[111, 222],
+        )
+        revive_session.set_pos(111, (3, 3))
+        revive_session.set_pos(222, (4, 3))
+        revive_session.hp = {"111": 100, "222": 0}
+        save_raid_grid_session(storage, revive_session)
+        assert _adjacent_down_allies(revive_session, 111) == [222]
+        storage.add_item(111, "medkit", 1)
+        revive_result = rgrid_revive_ally(storage, 111, 222)
+        assert revive_result.ok, revive_result.text
+        revived = get_raid_grid_session_by_player(storage, 111)
+        assert revived is not None
+        assert revived.hp["222"] > 0
+        clear_raid_grid_session(storage, revived)
+
+        # NPC sprites: only maloy.
+        from app.npc_assets import pick_npc_kind
+
+        assert pick_npc_kind() == "maloy"
+
+        # Arena on home base: training reward like easy quest after at least one wave.
+        from app.arena_grid import arena_forfeit, get_arena_session, save_arena_session, start_arena
+        from app.game_logic import QUESTS
+
+        storage.set_location(111, faction_home_base("Долг"))
+        storage.clear_travel(111)
+        money_before = storage.get_character(111, refresh_energy=False).money
+        arena_start = start_arena(storage, 111)
+        assert arena_start.ok, arena_start.text
+        arena_session = get_arena_session(storage, 111)
+        assert arena_session is not None
+        assert arena_session.arena_medkits == 3
+        assert arena_session.home_base == faction_home_base("Долг")
+        arena_session.waves_cleared = 1
+        save_arena_session(storage, arena_session)
+        arena_end = arena_forfeit(storage, 111)
+        assert arena_end.ok, arena_end.text
+        assert get_arena_session(storage, 111) is None
+        money_after = storage.get_character(111, refresh_energy=False).money
+        assert money_after - money_before >= QUESTS["easy"].reward_min
+        assert money_after - money_before <= QUESTS["easy"].reward_max
+
         # War lobby.
         war_create = create_or_join_war_lobby(storage, 111, "Свалка")
         assert war_create.ok, war_create.text

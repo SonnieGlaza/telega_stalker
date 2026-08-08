@@ -70,6 +70,7 @@ from app.raid_grid import (
     render_rgrid_frame,
     rgrid_forfeit,
     rgrid_move,
+    rgrid_revive_ally,
     rgrid_shoot,
     rgrid_status_caption,
     rgrid_use_medkit,
@@ -85,6 +86,18 @@ from app.neutral_capture import (
     process_ncap_turn_timeouts,
     render_ncap_frame,
     save_ncap_session,
+)
+from app.arena_grid import (
+    arena_forfeit,
+    arena_move,
+    arena_shoot,
+    arena_status_caption,
+    arena_use_medkit,
+    get_arena_session,
+    process_arena_turn_timeouts,
+    render_arena_frame,
+    save_arena_session,
+    start_arena,
 )
 from app.coop_mission import (
     can_evacuate,
@@ -338,6 +351,7 @@ from app.keyboards import (
     cwar_grid_keyboard,
     rgrid_keyboard,
     ncap_grid_keyboard,
+    arena_grid_keyboard,
     coop_menu_keyboard,
     coop_lobby_list_keyboard,
     coop_mission_keyboard,
@@ -2943,7 +2957,19 @@ async def _broadcast_rgrid_session(
         ch = storage.get_character(pid, refresh_energy=False)
         is_active = session.active_player() == pid
         medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(ch)
-        markup = rgrid_keyboard(is_active_turn=is_active, medkit_available=medkit)
+        revive_targets: list[tuple[int, str]] = []
+        if is_active:
+            from app.raid_grid import _adjacent_down_allies
+
+            for ally_id in _adjacent_down_allies(session, pid):
+                ally = storage.get_character(ally_id, refresh_energy=False)
+                if ally is not None and _player_has_medkit(ch):
+                    revive_targets.append((ally_id, ally.nickname[:16]))
+        markup = rgrid_keyboard(
+            is_active_turn=is_active,
+            medkit_available=medkit,
+            revive_targets=revive_targets or None,
+        )
         caption = rgrid_status_caption(storage, session, pid)
         if note:
             caption = f"{caption}\n\n{note}" if pid == session.active_player() else f"{caption}\n\n↪ {note}"
@@ -3043,6 +3069,57 @@ async def _handle_ncap_action(bot: Bot, callback: CallbackQuery, result: Any) ->
         await reply_action_result(callback, result.text)
         return
     await _broadcast_ncap_session(bot, storage, session, note=result.text)
+    await safe_callback_answer(callback, result.text[:CALLBACK_ALERT_MAX_LEN] if len(result.text) <= CALLBACK_ALERT_MAX_LEN else "Готово")
+
+
+async def _broadcast_arena_session(
+    bot: Bot,
+    storage: Storage,
+    session: Any,
+    *,
+    note: str | None = None,
+    callback: CallbackQuery | None = None,
+) -> None:
+    medkit = session.arena_medkits > 0 and session.hp < session.max_hp
+    markup = arena_grid_keyboard(medkit_available=medkit)
+    caption = arena_status_caption(session)
+    if note:
+        caption = f"{caption}\n\n{note}"
+    frame = render_arena_frame(storage, session)
+    callback_message = callback.message if callback is not None else None
+    new_id = await _upsert_tactical_photo(
+        bot,
+        chat_id=session.telegram_id,
+        message_id=session.message_id,
+        image_bytes=frame,
+        caption=caption,
+        markup=markup,
+        callback_message=callback_message,
+        parse_mode=None,
+    )
+    session.message_id = new_id
+    save_arena_session(storage, session)
+
+
+async def _handle_arena_action(bot: Bot, callback: CallbackQuery, result: Any) -> None:
+    storage = get_storage()
+    payload = result.payload or {}
+    if payload.get("arena_done"):
+        msg_id = payload.get("message_id")
+        tid = int(payload.get("telegram_id") or callback.from_user.id)
+        if msg_id:
+            await _clear_tactical_keyboards(bot, {str(tid): int(msg_id)})
+        await bot.send_message(tid, action_result_text(tid, result.text))
+        await safe_callback_answer(callback, "Арена завершена")
+        return
+    if not result.ok:
+        await reply_action_result(callback, result.text)
+        return
+    session = get_arena_session(storage, callback.from_user.id)
+    if session is None:
+        await reply_action_result(callback, result.text)
+        return
+    await _broadcast_arena_session(bot, storage, session, note=result.text, callback=callback)
     await safe_callback_answer(callback, result.text[:CALLBACK_ALERT_MAX_LEN] if len(result.text) <= CALLBACK_ALERT_MAX_LEN else "Готово")
 
 
@@ -4157,6 +4234,16 @@ async def rgrid_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
         await _handle_rgrid_action(bot, callback, result)
         return
 
+    if action.startswith("revive:"):
+        try:
+            target_id = int(action.removeprefix("revive:"))
+        except ValueError:
+            await callback.answer("Некорректный союзник.", show_alert=True)
+            return
+        result = rgrid_revive_ally(storage, telegram_id, target_id)
+        await _handle_rgrid_action(bot, callback, result)
+        return
+
     if action.startswith("move:"):
         result = rgrid_move(storage, telegram_id, action.removeprefix("move:"))
         await _handle_rgrid_action(bot, callback, result)
@@ -4165,6 +4252,45 @@ async def rgrid_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
     if action.startswith("shoot:"):
         result = rgrid_shoot(storage, telegram_id, action.removeprefix("shoot:"))
         await _handle_rgrid_action(bot, callback, result)
+        return
+
+    await callback.answer("Неизвестное действие.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("agrid:"))
+async def arena_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
+    assert callback.data and callback.from_user
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+    action = (callback.data or "").removeprefix("agrid:").strip()
+
+    if action == "refresh":
+        session = get_arena_session(storage, telegram_id)
+        if session is None:
+            await callback.answer("Нет активной арены.", show_alert=True)
+            return
+        await _broadcast_arena_session(bot, storage, session, callback=callback)
+        await safe_callback_answer(callback)
+        return
+
+    if action == "forfeit":
+        result = arena_forfeit(storage, telegram_id)
+        await _handle_arena_action(bot, callback, result)
+        return
+
+    if action == "medkit":
+        result = arena_use_medkit(storage, telegram_id)
+        await _handle_arena_action(bot, callback, result)
+        return
+
+    if action.startswith("move:"):
+        result = arena_move(storage, telegram_id, action.removeprefix("move:"))
+        await _handle_arena_action(bot, callback, result)
+        return
+
+    if action.startswith("shoot:"):
+        result = arena_shoot(storage, telegram_id, action.removeprefix("shoot:"))
+        await _handle_arena_action(bot, callback, result)
         return
 
     await callback.answer("Неизвестное действие.", show_alert=True)
@@ -4246,9 +4372,33 @@ async def show_sortie(message: Message) -> None:
         return
     await message.answer(
         "🏕 Вылазка\n"
-        "Война, переходы по Зоне, рейды и кооп.",
+        "Война, переходы по Зоне, арена, рейды и кооп.",
         reply_markup=sortie_keyboard(),
     )
+
+
+@router.message(F.text == "⚔️ Арена")
+async def show_arena(message: Message, bot: Bot) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
+        return
+    storage = get_storage()
+    session = get_arena_session(storage, player.telegram_id)
+    if session is not None:
+        await _broadcast_arena_session(bot, storage, session)
+        return
+    result = start_arena(storage, player.telegram_id)
+    if not result.ok:
+        await message.answer(result.text)
+        return
+    session = get_arena_session(storage, player.telegram_id)
+    if session is None:
+        await message.answer(result.text)
+        return
+    await _broadcast_arena_session(bot, storage, session, note=result.text)
 
 
 @router.message(F.text == "👥 Совместная вылазка")
@@ -6249,6 +6399,20 @@ async def run_bot() -> None:
                         await _broadcast_ncap_session(bot, storage, session, note=result.text)
             except Exception:
                 logger.exception("Neutral capture timeout tick failed")
+            try:
+                for pid, result in process_arena_turn_timeouts(storage):
+                    payload = result.payload or {}
+                    if payload.get("arena_done"):
+                        msg_id = payload.get("message_id")
+                        if msg_id:
+                            await _clear_tactical_keyboards(bot, {str(pid): int(msg_id)})
+                        await bot.send_message(pid, action_result_text(pid, result.text))
+                        continue
+                    session = get_arena_session(storage, pid)
+                    if session:
+                        await _broadcast_arena_session(bot, storage, session, note=result.text)
+            except Exception:
+                logger.exception("Arena timeout tick failed")
 
     sync_task = asyncio.create_task(periodic_snapshot_sync())
     zone_task = asyncio.create_task(periodic_zone_systems())

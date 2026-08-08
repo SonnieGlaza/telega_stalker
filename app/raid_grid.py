@@ -27,6 +27,7 @@ from app.game_logic import (
     _steal_faction_garage,
     _steal_faction_warehouse,
     apply_incoming_damage,
+    effective_max_health,
     h,
     pick_weighted_raid_artifact_key,
 )
@@ -74,7 +75,8 @@ PLAYER_COLORS = [
     (180, 140, 255),
 ]
 
-LOOT_ZONE_LABELS = {"warehouse": "СКЛ", "garage": "ГЖ", "lair": "ЦЕЛЬ"}
+RAID_GRID_RENDER_CELL = 80
+RAID_GRID_SPRITE_DIAMETER = 62
 
 
 def _utc_now() -> datetime:
@@ -376,6 +378,15 @@ def _spawn_hostiles(
         forbidden.add(cell)
 
 
+def _apply_cover_on_base(session: RaidGridSession) -> None:
+    """Коричневые укрытия на всех синих клетках базы."""
+    cover_set = set(session.cover)
+    for cell in session.base_cover:
+        if cell not in cover_set:
+            session.cover.append(cell)
+            cover_set.add(cell)
+
+
 def _build_lair_map(session: RaidGridSession) -> None:
     grid = session.grid
     forbidden: set[tuple[int, int]] = {session.control_point}
@@ -386,6 +397,8 @@ def _build_lair_map(session: RaidGridSession) -> None:
         cell = _free_cell(grid, forbidden)
         session.cover.append(cell)
         forbidden.add(cell)
+    _apply_cover_on_base(session)
+    forbidden.update(session.cover)
     spawn_cols = list(range(0, 3))
     for pid in session.player_ids:
         for _ in range(40):
@@ -422,6 +435,8 @@ def _build_depot_map_with_storage(session: RaidGridSession, storage: Storage, de
                 if cell not in forbidden:
                     session.cover.append(cell)
                     forbidden.add(cell)
+    _apply_cover_on_base(session)
+    forbidden.update(session.cover)
     spawn_cols = list(range(0, 3))
     for pid in session.player_ids:
         for _ in range(40):
@@ -1033,6 +1048,66 @@ def rgrid_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     return ActionResult(True, medkit_text, payload={"rgrid_active": True})
 
 
+def _adjacent_down_allies(session: RaidGridSession, telegram_id: int) -> list[int]:
+    pos = session.pos(telegram_id)
+    down: list[int] = []
+    for pid in session.player_ids:
+        if pid == telegram_id:
+            continue
+        if session.hp.get(str(pid), 0) > 0:
+            continue
+        if manhattan_distance(pos, session.pos(pid)) == 1:
+            down.append(pid)
+    return down
+
+
+def _spend_inventory_medkit(storage: Storage, telegram_id: int) -> str | None:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return None
+    for key in ("medkit_science", "medkit_army", "medkit"):
+        if int(player.inventory.get(key, 0) or 0) > 0:
+            if storage.remove_item(telegram_id, key, 1):
+                from app.game_logic import ITEM_LABELS
+
+                return ITEM_LABELS.get(key, key)
+    return None
+
+
+def rgrid_revive_ally(storage: Storage, telegram_id: int, target_id: int) -> ActionResult:
+    session = get_raid_grid_session_by_player(storage, telegram_id)
+    if session is None:
+        return ActionResult(False, "Нет активного тактического рейда.")
+    if session.active_player() != telegram_id:
+        return ActionResult(False, "Сейчас ход другого бойца.")
+    if target_id not in session.player_ids:
+        return ActionResult(False, "Этот боец не в рейде.")
+    if session.hp.get(str(target_id), 0) > 0:
+        return ActionResult(False, "Союзник уже на ногах.")
+    if target_id not in _adjacent_down_allies(session, telegram_id):
+        return ActionResult(False, "Поднять можно только союзника на соседней клетке.")
+    turn_seq = session.turn_seq
+    actor = storage.get_character(telegram_id, refresh_energy=False)
+    target = storage.get_character(target_id, refresh_energy=False)
+    if actor is None or target is None:
+        return ActionResult(False, "Персонаж не найден.")
+    med_label = _spend_inventory_medkit(storage, telegram_id)
+    if med_label is None:
+        return ActionResult(False, "Нужна аптечка в инвентаре.")
+    max_hp = effective_max_health(target)
+    revived_hp = max(1, int(max_hp * 0.4))
+    session.hp[str(target_id)] = revived_hp
+    note = f"{actor.nickname} поднял {target.nickname} ({med_label}): HP {revived_hp}."
+    session.log.append(note)
+    _advance(session)
+    done = _after_player_turn(storage, session)
+    if done:
+        return done
+    if not _save_turn(storage, session, turn_seq):
+        return ActionResult(False, "Ход уже выполнен.")
+    return ActionResult(True, note, payload={"rgrid_active": True})
+
+
 def rgrid_forfeit(storage: Storage, telegram_id: int) -> ActionResult:
     session = get_raid_grid_session_by_player(storage, telegram_id)
     if session is None:
@@ -1135,7 +1210,7 @@ def rgrid_status_caption(storage: Storage, session: RaidGridSession, viewer_id: 
 
 
 def render_rgrid_frame(storage: Storage, session: RaidGridSession, viewer_id: int) -> bytes:
-    cell = 64
+    cell = RAID_GRID_RENDER_CELL
     grid = session.grid
     grid_px = grid * cell
     margin = 16
@@ -1188,9 +1263,9 @@ def render_rgrid_frame(storage: Storage, session: RaidGridSession, viewer_id: in
         htype = session.hostile_types[i] if i < len(session.hostile_types) else "mutant"
         kind = session.hostile_kinds[i] if i < len(session.hostile_kinds) else None
         if htype == "mutant":
-            paste_mutant_sprite(canvas, draw, cx=cxp, cy=cyp, kind=kind, diameter=52)
+            paste_mutant_sprite(canvas, draw, cx=cxp, cy=cyp, kind=kind, diameter=RAID_GRID_SPRITE_DIAMETER)
         else:
-            paste_npc_sprite(canvas, draw, cx=cxp, cy=cyp, kind=kind, diameter=52, ring_color=(255, 90, 70))
+            paste_npc_sprite(canvas, draw, cx=cxp, cy=cyp, kind=kind, diameter=RAID_GRID_SPRITE_DIAMETER, ring_color=(255, 90, 70))
     for i, pid in enumerate(session.player_ids):
         px, py = session.pos(pid)
         cxp = margin + px * cell + cell // 2
@@ -1204,7 +1279,7 @@ def render_rgrid_frame(storage: Storage, session: RaidGridSession, viewer_id: in
             pid=pid,
             cx=cxp,
             cy=cyp,
-            diameter=46,
+            diameter=RAID_GRID_SPRITE_DIAMETER - 6,
             ring_color=ring,
             hp=session.hp.get(str(pid), 0),
             is_active=pid == session.active_player(),

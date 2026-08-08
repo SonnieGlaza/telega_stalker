@@ -1055,12 +1055,7 @@ def render_mission_frame(
     for i, (nx_, ny_) in enumerate(session.npcs):
         cx = margin + nx_ * cell + cell // 2
         cy = margin + ny_ * cell + cell // 2
-        kind = (
-            session.npc_kinds[i]
-            if i < len(session.npc_kinds)
-            else NPC_SPRITE_KEYS[i % len(NPC_SPRITE_KEYS)]
-        )
-        sprite = npc_sprite_image(kind)
+        sprite = npc_sprite_image("maloy")
         if sprite is not None:
             _paste_circle(
                 canvas,
@@ -1072,7 +1067,7 @@ def render_mission_frame(
                 ring_width=3,
             )
         else:
-            _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=True)
+            _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=False)
 
     objective_ring = (72, 220, 90)
     for ox, oy in session.objectives:

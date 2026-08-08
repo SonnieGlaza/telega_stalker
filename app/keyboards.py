@@ -60,7 +60,8 @@ def sortie_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="⚔️ Война"), KeyboardButton(text="🗺 Переход")],
-            [KeyboardButton(text="🪖 Рейды"), KeyboardButton(text="👥 Совместная вылазка")],
+            [KeyboardButton(text="⚔️ Арена"), KeyboardButton(text="🪖 Рейды")],
+            [KeyboardButton(text="👥 Совместная вылазка")],
             [KeyboardButton(text="⬅️ В меню")],
         ],
         resize_keyboard=True,
@@ -1232,6 +1233,8 @@ def _tactical_grid_keyboard(
     is_active_turn: bool,
     medkit_available: bool,
     forfeit_label: str = "🏳 Сдаться",
+    medkit_label: str = "💊 Аптечка (1×)",
+    revive_targets: list[tuple[int, str]] | None = None,
 ) -> InlineKeyboardMarkup:
     refresh_row = [
         InlineKeyboardButton(text="🔄 Обновить", callback_data=f"{prefix}:refresh"),
@@ -1254,7 +1257,11 @@ def _tactical_grid_keyboard(
         ],
     ]
     if medkit_available:
-        rows.append([InlineKeyboardButton(text="💊 Аптечка (1×)", callback_data=f"{prefix}:medkit")])
+        rows.append([InlineKeyboardButton(text=medkit_label, callback_data=f"{prefix}:medkit")])
+    for target_id, label in revive_targets or []:
+        rows.append(
+            [InlineKeyboardButton(text=f"💊 Поднять {label}", callback_data=f"{prefix}:revive:{target_id}")]
+        )
     rows.append(refresh_row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -1263,8 +1270,18 @@ def cwar_grid_keyboard(*, is_active_turn: bool, medkit_available: bool) -> Inlin
     return _tactical_grid_keyboard("cwar", is_active_turn=is_active_turn, medkit_available=medkit_available)
 
 
-def rgrid_keyboard(*, is_active_turn: bool, medkit_available: bool) -> InlineKeyboardMarkup:
-    return _tactical_grid_keyboard("rgrid", is_active_turn=is_active_turn, medkit_available=medkit_available)
+def rgrid_keyboard(
+    *,
+    is_active_turn: bool,
+    medkit_available: bool,
+    revive_targets: list[tuple[int, str]] | None = None,
+) -> InlineKeyboardMarkup:
+    return _tactical_grid_keyboard(
+        "rgrid",
+        is_active_turn=is_active_turn,
+        medkit_available=medkit_available,
+        revive_targets=revive_targets,
+    )
 
 
 def ncap_grid_keyboard(*, medkit_available: bool) -> InlineKeyboardMarkup:
@@ -1273,6 +1290,16 @@ def ncap_grid_keyboard(*, medkit_available: bool) -> InlineKeyboardMarkup:
         is_active_turn=True,
         medkit_available=medkit_available,
         forfeit_label="🏃 Отступить",
+    )
+
+
+def arena_grid_keyboard(*, medkit_available: bool) -> InlineKeyboardMarkup:
+    return _tactical_grid_keyboard(
+        "agrid",
+        is_active_turn=True,
+        medkit_available=medkit_available,
+        forfeit_label="🏃 Покинуть арену",
+        medkit_label="💊 Аптечка арены",
     )
 
 
