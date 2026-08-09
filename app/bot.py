@@ -1713,11 +1713,16 @@ def _raid_grid_downed(storage: Storage, telegram_id: int) -> bool:
     return int(session.hp.get(str(telegram_id), 0)) <= 0
 
 
-def resolve_dead_player(storage: Storage, telegram_id: int) -> Character | None:
+def resolve_dead_player(
+    storage: Storage,
+    telegram_id: int,
+    *,
+    refresh_survival: bool = True,
+) -> Character | None:
     """Мёртв для UI: HP=0 в БД (с учётом голода/жажды) или выведен из строя в тактике."""
     from app.player_busy import clear_stale_activity_for_dead_player
 
-    player = storage.get_character(telegram_id, refresh_energy=True)
+    player = storage.get_character(telegram_id, refresh_energy=refresh_survival)
     if player is None:
         return None
     if player.health <= 0:
@@ -1765,6 +1770,9 @@ def resolve_dead_player(storage: Storage, telegram_id: int) -> Character | None:
 
 
 DEAD_PLAYER_CALLBACKS = frozenset({"respawn:base", "death:log"})
+
+# Вылазка по контракту / охота — смерть обрабатывает свой хендлер, middleware не перехватывает.
+FIELD_MISSION_CALLBACK_PREFIXES = ("qmission:", "hunt:")
 
 # Команды, которые middleware не перехватывает у мёртвого (обрабатываются хендлерами).
 DEAD_BYPASS_MESSAGE_COMMANDS = frozenset({"/respawn", "/fixme", "/cancel"})
@@ -1845,6 +1853,8 @@ class DeadPlayerCallbackMiddleware(BaseMiddleware):
         callback_data = (event.data or "").strip()
         if callback_data in DEAD_PLAYER_CALLBACKS:
             return await handler(event, data)
+        if callback_data.startswith(FIELD_MISSION_CALLBACK_PREFIXES):
+            return await handler(event, data)
         storage = get_storage()
         telegram_id = event.from_user.id
         if _raid_grid_downed(storage, telegram_id):
@@ -1854,7 +1864,7 @@ class DeadPlayerCallbackMiddleware(BaseMiddleware):
                 show_alert=True,
             )
             return None
-        player = resolve_dead_player(storage, telegram_id)
+        player = resolve_dead_player(storage, telegram_id, refresh_survival=False)
         if player is None:
             return await handler(event, data)
         await show_death_screen(event, player, bot=event.bot)
@@ -2984,15 +2994,17 @@ async def _handle_quest_mission_death_callback(
     if player is None:
         await safe_callback_answer(callback, "Персонаж не найден.", show_alert=True)
         return
-    await _send_battle_death_notice(
-        callback.bot,
-        telegram_id,
-        player,
-        callback=callback,
-        where=str(payload.get("death_location") or player.location),
-        cause=str(payload.get("death_cause") or "combat"),
-    )
-    await safe_callback_answer(callback, "☠️ Откинулся…")
+    try:
+        await _send_battle_death_notice(
+            callback.bot,
+            telegram_id,
+            player,
+            callback=callback,
+            where=str(payload.get("death_location") or player.location),
+            cause=str(payload.get("death_cause") or "combat"),
+        )
+    finally:
+        await safe_callback_answer(callback, "☠️ Откинулся…")
 
 
 SURVIVAL_DEATH_CHECK_EVERY_TICKS = 5  # ~раз в 5 мин при POINTS_INCOME_TICK_SECONDS=60
@@ -3158,7 +3170,8 @@ async def _send_or_edit_quest_mission_frame(
             caption=text,
             reply_markup=markup,
         )
-    await safe_callback_answer(callback)
+    finally:
+        await safe_callback_answer(callback)
 
 
 def _player_has_medkit(player: Character | None) -> bool:
@@ -3742,80 +3755,95 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
     storage = get_storage()
     telegram_id = callback.from_user.id
 
-    if action == "leave":
-        result = abandon_quest_mission(storage, telegram_id)
-        await reply_action_result(callback, result.text)
-        return
-
-    if action == "medkit":
-        result = use_mission_medkit(storage, telegram_id)
-        payload = result.payload or {}
-        if payload.get("mission_dead"):
-            await _handle_quest_mission_death_callback(callback, telegram_id, payload)
-            return
-        image = payload.get("mission_image")
-        if image and payload.get("mission_active"):
-            await _send_or_edit_quest_mission_frame(
-                callback,
-                image_bytes=image,
-                caption=str(payload.get("caption") or ""),
-                note=str(payload.get("move_note") or result.text),
-            )
-            return
-        await reply_action_result(callback, result.text)
-        return
-
-    if action == "refresh":
-        session = get_mission_session(storage, telegram_id)
-        player = storage.get_character(telegram_id, refresh_energy=False)
-        if session is None or player is None:
-            await callback.answer("Активной вылазки нет.", show_alert=True)
-            return
-        image = render_mission_for_player(storage, telegram_id, session, player)
-        await _send_or_edit_quest_mission_frame(
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is not None and player.health <= 0:
+        await _handle_quest_mission_death_callback(
             callback,
-            image_bytes=image,
-            caption=mission_status_caption(session, player),
+            telegram_id,
+            {
+                "death_location": player.location,
+                "death_cause": "combat",
+            },
         )
         return
 
-    if action not in {"up", "down", "left", "right"}:
-        await callback.answer("Неизвестное действие.", show_alert=True)
-        return
+    try:
+        if action == "leave":
+            result = abandon_quest_mission(storage, telegram_id)
+            await reply_action_result(callback, result.text)
+            return
 
-    result = move_quest_mission(storage, telegram_id, action)
-    payload = result.payload or {}
+        if action == "medkit":
+            result = use_mission_medkit(storage, telegram_id)
+            payload = result.payload or {}
+            if payload.get("mission_dead"):
+                await _handle_quest_mission_death_callback(callback, telegram_id, payload)
+                return
+            image = payload.get("mission_image")
+            if image and payload.get("mission_active"):
+                await _send_or_edit_quest_mission_frame(
+                    callback,
+                    image_bytes=image,
+                    caption=str(payload.get("caption") or ""),
+                    note=str(payload.get("move_note") or result.text),
+                )
+                return
+            await reply_action_result(callback, result.text)
+            return
 
-    if payload.get("mission_dead"):
-        await _handle_quest_mission_death_callback(callback, telegram_id, payload)
-        return
+        if action == "refresh":
+            session = get_mission_session(storage, telegram_id)
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if session is None or player is None:
+                await callback.answer("Активной вылазки нет.", show_alert=True)
+                return
+            image = render_mission_for_player(storage, telegram_id, session, player)
+            await _send_or_edit_quest_mission_frame(
+                callback,
+                image_bytes=image,
+                caption=mission_status_caption(session, player),
+            )
+            return
 
-    if payload.get("mission_done") or not payload.get("mission_active"):
-        await reply_action_result(callback, result.text)
-        # После миссии показать меню заданий (кнопка сдачи отчёта / автосдача на базе).
-        player = storage.get_character(telegram_id, refresh_energy=False)
-        if player is not None and callback.message is not None:
-            auto = try_auto_turn_in_contract(storage, telegram_id)
-            player = storage.get_character(telegram_id, refresh_energy=False) or player
-            text, keyboard = _quests_menu_payload(storage, player)
-            if auto:
-                text = f"{auto}\n\n{text}"
-            try:
-                await callback.message.answer(text, reply_markup=keyboard)
-            except Exception:
-                pass
-        return
+        if action not in {"up", "down", "left", "right"}:
+            await callback.answer("Неизвестное действие.", show_alert=True)
+            return
 
-    image = payload.get("mission_image")
-    if not image:
-        await reply_action_result(callback, result.text)
-        return
-    await _send_or_edit_quest_mission_frame(
-        callback,
-        image_bytes=image,
-        caption=str(payload.get("caption") or ""),
-        note=str(payload.get("move_note") or result.text),
-    )
+        result = move_quest_mission(storage, telegram_id, action)
+        payload = result.payload or {}
+
+        if payload.get("mission_dead"):
+            await _handle_quest_mission_death_callback(callback, telegram_id, payload)
+            return
+
+        if payload.get("mission_done") or not payload.get("mission_active"):
+            await reply_action_result(callback, result.text)
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if player is not None and callback.message is not None:
+                auto = try_auto_turn_in_contract(storage, telegram_id)
+                player = storage.get_character(telegram_id, refresh_energy=False) or player
+                text, keyboard = _quests_menu_payload(storage, player)
+                if auto:
+                    text = f"{auto}\n\n{text}"
+                try:
+                    await callback.message.answer(text, reply_markup=keyboard)
+                except Exception:
+                    pass
+            return
+
+        image = payload.get("mission_image")
+        if not image:
+            await reply_action_result(callback, result.text)
+            return
+        await _send_or_edit_quest_mission_frame(
+            callback,
+            image_bytes=image,
+            caption=str(payload.get("caption") or ""),
+            note=str(payload.get("move_note") or result.text),
+        )
+    except Exception:
+        logger.exception("Quest mission callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка вылазки. Попробуй ещё раз или /fixme", show_alert=True)
 
 @router.callback_query(F.data == "contract:go_home")
 async def contract_go_home_callback(callback: CallbackQuery, bot: Bot) -> None:
@@ -4445,7 +4473,8 @@ async def _send_or_edit_hunt_frame(
             caption=text,
             reply_markup=markup,
         )
-    await safe_callback_answer(callback)
+    finally:
+        await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "artifact:search")
@@ -4470,50 +4499,66 @@ async def artifact_hunt_callback(callback: CallbackQuery) -> None:
     storage = get_storage()
     telegram_id = callback.from_user.id
 
-    if action == "leave":
-        result = abandon_artifact_hunt(storage, telegram_id)
-        await reply_action_result(callback, result.text)
-        return
-
-    if action == "refresh":
-        session = get_hunt_session(storage, telegram_id)
-        player = storage.get_character(telegram_id, refresh_energy=False)
-        if session is None or player is None:
-            await callback.answer("Активной вылазки нет.", show_alert=True)
-            return
-        image = render_hunt_for_player(storage, telegram_id, session, player)
-        await _send_or_edit_hunt_frame(
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is not None and player.health <= 0:
+        await _handle_quest_mission_death_callback(
             callback,
-            image_bytes=image,
-            caption=hunt_status_caption(session, player),
+            telegram_id,
+            {
+                "death_location": player.location,
+                "death_cause": "combat",
+            },
         )
         return
 
-    if action not in {"up", "down", "left", "right"}:
-        await callback.answer("Неизвестное действие.", show_alert=True)
-        return
+    try:
+        if action == "leave":
+            result = abandon_artifact_hunt(storage, telegram_id)
+            await reply_action_result(callback, result.text)
+            return
 
-    result = move_artifact_hunt(storage, telegram_id, action)
-    payload = result.payload or {}
+        if action == "refresh":
+            session = get_hunt_session(storage, telegram_id)
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if session is None or player is None:
+                await callback.answer("Активной вылазки нет.", show_alert=True)
+                return
+            image = render_hunt_for_player(storage, telegram_id, session, player)
+            await _send_or_edit_hunt_frame(
+                callback,
+                image_bytes=image,
+                caption=hunt_status_caption(session, player),
+            )
+            return
 
-    if payload.get("hunt_dead"):
-        await _handle_quest_mission_death_callback(callback, telegram_id, payload)
-        return
+        if action not in {"up", "down", "left", "right"}:
+            await callback.answer("Неизвестное действие.", show_alert=True)
+            return
 
-    if payload.get("hunt_done") or not payload.get("hunt_active"):
-        await reply_action_result(callback, result.text)
-        return
+        result = move_artifact_hunt(storage, telegram_id, action)
+        payload = result.payload or {}
 
-    image = payload.get("hunt_image")
-    if not image:
-        await reply_action_result(callback, result.text)
-        return
-    await _send_or_edit_hunt_frame(
-        callback,
-        image_bytes=image,
-        caption=str(payload.get("caption") or ""),
-        note=str(payload.get("move_note") or result.text),
-    )
+        if payload.get("hunt_dead"):
+            await _handle_quest_mission_death_callback(callback, telegram_id, payload)
+            return
+
+        if payload.get("hunt_done") or not payload.get("hunt_active"):
+            await reply_action_result(callback, result.text)
+            return
+
+        image = payload.get("hunt_image")
+        if not image:
+            await reply_action_result(callback, result.text)
+            return
+        await _send_or_edit_hunt_frame(
+            callback,
+            image_bytes=image,
+            caption=str(payload.get("caption") or ""),
+            note=str(payload.get("move_note") or result.text),
+        )
+    except Exception:
+        logger.exception("Artifact hunt callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка охоты. Попробуй ещё раз или /fixme", show_alert=True)
 
 
 @router.message(Command("pay"))
