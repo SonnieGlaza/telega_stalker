@@ -475,17 +475,16 @@ def arena_move(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     if not (0 <= nxt[0] < session.grid and 0 <= nxt[1] < session.grid):
         return ActionResult(False, "Край поля.")
     blocked = set(session.hostiles) | set(session.cover)
-    if nxt in blocked and nxt not in session.cover and nxt not in session.base_cover:
-        if nxt in session.hostiles:
-            idx = session.hostiles.index(nxt)
-            session.hostiles.pop(idx)
-            if idx < len(session.hostile_weapons):
-                session.hostile_weapons.pop(idx)
-            dmg = _arena_apply_damage(random.randint(8, 14), session.player_armor_level)
-            session.hp = max(0, session.hp - dmg)
-            session.log.append(f"Ближний бой: −{dmg} HP.")
-        else:
-            return ActionResult(False, "Клетка занята.")
+    if nxt in session.hostiles:
+        idx = session.hostiles.index(nxt)
+        session.hostiles.pop(idx)
+        if idx < len(session.hostile_weapons):
+            session.hostile_weapons.pop(idx)
+        dmg = _arena_apply_damage(random.randint(8, 14), session.player_armor_level)
+        session.hp = max(0, session.hp - dmg)
+        session.log.append(f"Ближний бой: −{dmg} HP.")
+    elif nxt in blocked and nxt not in session.cover and nxt not in session.base_cover:
+        return ActionResult(False, "Клетка занята.")
     else:
         session.player_pos = nxt
     session.turn_seq += 1
