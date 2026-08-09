@@ -2982,44 +2982,29 @@ _DEATH_FALLBACK_TEXT = (
     "Нажми ♻️ «Спасение на базе» ниже."
 )
 
-_DEATH_MAP_CAPTION = (
-    "☠️ Ты погиб на вылазке.\n"
-    "Нажми ♻️ «Спасение на базе» ниже."
-)
-
 
 def _plain_death_text(text: str) -> str:
     """Текст смерти без HTML — бот по умолчанию шлёт parse_mode=HTML."""
     return unescape(text or "")
 
 
-async def _attach_death_keyboard(message: Message, keyboard: InlineKeyboardMarkup) -> bool:
-    """Поставить кнопку респавна на сообщение с картой."""
+async def _send_death_text_reply(
+    callback: CallbackQuery,
+    plain: str,
+    keyboard: InlineKeyboardMarkup,
+) -> bool:
+    """Новое текстовое сообщение со смертью; карту-фото убираем."""
+    message = callback.message
+    if message is None:
+        return False
+    is_map = bool(message.photo)
     try:
-        await message.edit_reply_markup(reply_markup=keyboard)
+        await message.answer(plain, reply_markup=keyboard, parse_mode=None)
+        if is_map:
+            await _dismiss_battle_map(callback)
         return True
-    except TelegramBadRequest:
-        pass
-    if message.photo:
-        try:
-            await message.edit_caption(
-                caption=_DEATH_MAP_CAPTION,
-                reply_markup=keyboard,
-                parse_mode=None,
-            )
-            return True
-        except TelegramBadRequest:
-            pass
-    elif message.text:
-        try:
-            await message.edit_text(
-                text=message.text,
-                reply_markup=keyboard,
-                parse_mode=None,
-            )
-            return True
-        except TelegramBadRequest:
-            pass
+    except Exception:
+        logger.exception("Death reply failed for %s", callback.from_user.id)
     return False
 
 
@@ -3063,47 +3048,28 @@ async def _deliver_death_screen(
     keyboard: InlineKeyboardMarkup,
     *,
     callback: CallbackQuery | None = None,
-) -> tuple[bool, bool]:
-    """Доставить экран смерти с кнопкой респавна.
-
-    Returns:
-        (delivered, dismiss_map) — dismiss_map=True если отправлено новое сообщение.
-    """
+) -> bool:
+    """Доставить текст смерти + кнопку респавна. Карту-фото убираем."""
     plain = _plain_death_text(text)
     if len(plain) > 4096:
         plain = plain[:4090].rstrip() + "…"
 
     if callback is not None and callback.message is not None:
-        message = callback.message
-        try:
-            await message.answer(
-                plain,
-                reply_markup=keyboard,
-                parse_mode=None,
-            )
-            return True, True
-        except Exception:
-            logger.exception("Death reply failed for %s", user_id)
-        try:
-            await message.answer(
-                _DEATH_FALLBACK_TEXT,
-                reply_markup=keyboard,
-                parse_mode=None,
-            )
-            return True, True
-        except Exception:
-            logger.exception("Death reply fallback failed for %s", user_id)
-        if await _attach_death_keyboard(message, keyboard):
-            return True, False
+        if await _send_death_text_reply(callback, plain, keyboard):
+            return True
+        if await _send_death_text_reply(callback, _DEATH_FALLBACK_TEXT, keyboard):
+            return True
 
     if await _send_death_message_safe(bot, user_id, text, keyboard):
-        return True, callback is not None
+        if (
+            callback is not None
+            and callback.message is not None
+            and callback.message.photo
+        ):
+            await _dismiss_battle_map(callback)
+        return True
 
-    if callback is not None and callback.message is not None:
-        if await _attach_death_keyboard(callback.message, keyboard):
-            return True, False
-
-    return False, False
+    return False
 
 
 async def _finalize_death_delivery(storage: Storage, telegram_id: int, sent: bool) -> None:
@@ -3119,32 +3085,54 @@ async def _force_death_keyboard_delivery(
     user_id: int,
     *,
     callback: CallbackQuery | None = None,
+    text: str | None = None,
 ) -> bool:
-    """Последняя попытка: только кнопка респавна, без длинного текста."""
+    """Аварийная доставка: текст смерти + кнопка, карту убрать."""
     keyboard = dead_character_keyboard()
-    if callback is not None and callback.message is not None:
-        if await _attach_death_keyboard(callback.message, keyboard):
+    plain = _plain_death_text(text) if text else _DEATH_FALLBACK_TEXT
+    if len(plain) > 4096:
+        plain = plain[:4090].rstrip() + "…"
+    if callback is not None:
+        if await _send_death_text_reply(callback, plain, keyboard):
             return True
-        try:
-            await callback.message.answer(
-                _DEATH_FALLBACK_TEXT,
-                reply_markup=keyboard,
-                parse_mode=None,
-            )
-            return True
-        except Exception:
-            logger.exception("Emergency death reply failed for %s", user_id)
     try:
-        await bot.send_message(
-            user_id,
-            _DEATH_FALLBACK_TEXT,
-            reply_markup=keyboard,
-            parse_mode=None,
-        )
+        await bot.send_message(user_id, plain, reply_markup=keyboard, parse_mode=None)
+        if (
+            callback is not None
+            and callback.message is not None
+            and callback.message.photo
+        ):
+            await _dismiss_battle_map(callback)
         return True
     except Exception:
         logger.exception("Emergency death send failed for %s", user_id)
     return False
+
+
+async def _ensure_death_keyboard(callback: CallbackQuery, telegram_id: int) -> None:
+    """Игрок уже мёртв — показать историю смерти и кнопку, карту убрать."""
+    storage = get_storage()
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    await safe_callback_answer(callback)
+    if player is None:
+        return
+    text = _build_death_text(player, storage)
+    keyboard = dead_character_keyboard()
+    sent = await _deliver_death_screen(
+        callback.bot,
+        telegram_id,
+        text,
+        keyboard,
+        callback=callback,
+    )
+    if not sent:
+        sent = await _force_death_keyboard_delivery(
+            callback.bot,
+            telegram_id,
+            callback=callback,
+            text=text,
+        )
+    await _finalize_death_delivery(storage, telegram_id, sent)
 
 
 async def _handle_quest_mission_death_callback(
@@ -3198,17 +3186,6 @@ async def _push_offline_survival_deaths(bot: Bot, storage: Storage) -> None:
             await asyncio.sleep(0)
 
 
-async def _ensure_death_keyboard(callback: CallbackQuery, telegram_id: int) -> None:
-    """Игрок уже мёртв — только кнопка респавна, без повторной истории."""
-    await safe_callback_answer(callback)
-    sent = await _force_death_keyboard_delivery(
-        callback.bot,
-        telegram_id,
-        callback=callback,
-    )
-    await _finalize_death_delivery(get_storage(), telegram_id, sent)
-
-
 async def _send_battle_death_notice(
     bot: Bot,
     user_id: int,
@@ -3222,12 +3199,15 @@ async def _send_battle_death_notice(
     text = _build_death_text(player, storage, where=where, cause=cause)
     append_death_log(storage, user_id, text)
     keyboard = dead_character_keyboard()
-    sent, dismiss_map = await _deliver_death_screen(bot, user_id, text, keyboard, callback=callback)
+    sent = await _deliver_death_screen(bot, user_id, text, keyboard, callback=callback)
     if not sent:
-        sent = await _force_death_keyboard_delivery(bot, user_id, callback=callback)
+        sent = await _force_death_keyboard_delivery(
+            bot,
+            user_id,
+            callback=callback,
+            text=text,
+        )
     await _finalize_death_delivery(storage, user_id, sent)
-    if callback is not None and sent and dismiss_map:
-        await _dismiss_battle_map(callback)
     return sent
 
 
