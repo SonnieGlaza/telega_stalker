@@ -1786,6 +1786,23 @@ DEATH_MIDDLEWARE_BYPASS_PREFIXES = (
 DEAD_BYPASS_MESSAGE_COMMANDS = frozenset({"/respawn", "/fixme", "/cancel"})
 
 
+def _build_death_text(
+    player: Character,
+    storage: Storage,
+    *,
+    where: str | None = None,
+    cause: str | None = None,
+) -> str:
+    if where is not None or cause is not None:
+        return build_battle_death_text(
+            player,
+            where=where or player.location,
+            cause=cause or "combat",
+            storage=storage,
+        )
+    return build_dead_character_text(player, storage=storage)
+
+
 async def show_death_screen(
     message_or_callback: Message | CallbackQuery,
     player: Character,
@@ -1795,19 +1812,8 @@ async def show_death_screen(
     cause: str | None = None,
 ) -> None:
     storage = get_storage()
-    if where is not None or cause is not None:
-        text = build_battle_death_text(
-            player,
-            where=where or player.location,
-            cause=cause or "combat",
-            storage=storage,
-        )
-    else:
-        text = build_dead_character_text(player, storage=storage)
-    keyboard = dead_character_keyboard()
-    append_death_log(storage, player.telegram_id, text)
-    send_bot = bot
     callback: CallbackQuery | None = None
+    send_bot = bot
     if isinstance(message_or_callback, CallbackQuery):
         callback = message_or_callback
         await safe_callback_answer(message_or_callback)
@@ -1816,37 +1822,25 @@ async def show_death_screen(
         send_bot = send_bot or message_or_callback.bot  # type: ignore[attr-defined]
 
     if send_bot is not None:
-        sent, dismiss_map = await _deliver_death_screen(
+        await _send_battle_death_notice(
             send_bot,
             player.telegram_id,
-            text,
-            keyboard,
+            player,
             callback=callback,
+            where=where,
+            cause=cause,
         )
-        if not sent and callback is not None and callback.message is not None:
-            sent = await _force_death_keyboard_delivery(
-                send_bot,
-                player.telegram_id,
-                callback=callback,
-            )
-        await _finalize_death_delivery(storage, player.telegram_id, sent)
-        if callback is not None and sent and dismiss_map:
-            await _dismiss_battle_map(callback)
         return
 
-    if isinstance(message_or_callback, CallbackQuery):
-        if message_or_callback.message is not None:
-            await message_or_callback.message.answer(
-                _plain_death_text(text),
-                reply_markup=keyboard,
-                parse_mode=None,
-            )
-        return
-    await message_or_callback.answer(
-        _plain_death_text(text),
-        reply_markup=keyboard,
-        parse_mode=None,
-    )
+    text = _build_death_text(player, storage, where=where, cause=cause)
+    keyboard = dead_character_keyboard()
+    append_death_log(storage, player.telegram_id, text)
+    plain = _plain_death_text(text)
+    if isinstance(message_or_callback, CallbackQuery) and message_or_callback.message is not None:
+        await message_or_callback.message.answer(plain, reply_markup=keyboard, parse_mode=None)
+    elif isinstance(message_or_callback, Message):
+        await message_or_callback.answer(plain, reply_markup=keyboard, parse_mode=None)
+    await _finalize_death_delivery(storage, player.telegram_id, True)
 
 
 class DeadPlayerMenuMiddleware(BaseMiddleware):
@@ -1908,7 +1902,7 @@ class DeadPlayerCallbackMiddleware(BaseMiddleware):
         player = resolve_dead_player(storage, telegram_id, refresh_survival=False)
         if player is None:
             return await handler(event, data)
-        await show_death_screen(event, player, bot=event.bot)
+        await _ensure_death_keyboard(event, telegram_id)
         return None
 
 
@@ -1928,12 +1922,12 @@ async def reject_if_dead(message_or_callback: Message | CallbackQuery, player: C
 
 
 async def _reject_tactical_callback_if_dead(callback: CallbackQuery) -> bool:
-    """Если HP=0 в БД — экран смерти и True."""
+    """Если HP=0 в БД — кнопка респавна и True."""
     storage = get_storage()
     telegram_id = callback.from_user.id
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is not None and player.health <= 0:
-        await show_death_screen(callback, player, bot=callback.bot)
+        await _ensure_death_keyboard(callback, telegram_id)
         return True
     return False
 
@@ -3194,12 +3188,25 @@ async def _push_offline_survival_deaths(bot: Bot, storage: Storage) -> None:
                 text = build_dead_character_text(after, storage=storage)
                 append_death_log(storage, telegram_id, text)
                 keyboard = dead_character_keyboard()
-                if not await _send_death_message_safe(bot, telegram_id, text, keyboard):
-                    await _force_death_keyboard_delivery(bot, telegram_id)
+                sent = await _send_death_message_safe(bot, telegram_id, text, keyboard)
+                if not sent:
+                    sent = await _force_death_keyboard_delivery(bot, telegram_id)
+                await _finalize_death_delivery(storage, telegram_id, sent)
             except Exception:
                 logger.debug("Failed offline survival death push to %s", telegram_id)
         if index % SURVIVAL_DEATH_CHECK_YIELD_EVERY == 0:
             await asyncio.sleep(0)
+
+
+async def _ensure_death_keyboard(callback: CallbackQuery, telegram_id: int) -> None:
+    """Игрок уже мёртв — только кнопка респавна, без повторной истории."""
+    await safe_callback_answer(callback)
+    sent = await _force_death_keyboard_delivery(
+        callback.bot,
+        telegram_id,
+        callback=callback,
+    )
+    await _finalize_death_delivery(get_storage(), telegram_id, sent)
 
 
 async def _send_battle_death_notice(
@@ -3212,16 +3219,11 @@ async def _send_battle_death_notice(
     cause: str | None = None,
 ) -> bool:
     storage = get_storage()
-    text = build_battle_death_text(
-        player,
-        where=where,
-        cause=cause or "combat",
-        storage=storage,
-    )
+    text = _build_death_text(player, storage, where=where, cause=cause)
     append_death_log(storage, user_id, text)
     keyboard = dead_character_keyboard()
     sent, dismiss_map = await _deliver_death_screen(bot, user_id, text, keyboard, callback=callback)
-    if not sent and callback is not None:
+    if not sent:
         sent = await _force_death_keyboard_delivery(bot, user_id, callback=callback)
     await _finalize_death_delivery(storage, user_id, sent)
     if callback is not None and sent and dismiss_map:
@@ -3921,14 +3923,7 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
 
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is not None and player.health <= 0:
-        await _handle_quest_mission_death_callback(
-            callback,
-            telegram_id,
-            {
-                "death_location": player.location,
-                "death_cause": "combat",
-            },
-        )
+        await _ensure_death_keyboard(callback, telegram_id)
         return
 
     try:
@@ -4665,14 +4660,7 @@ async def artifact_hunt_callback(callback: CallbackQuery) -> None:
 
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is not None and player.health <= 0:
-        await _handle_quest_mission_death_callback(
-            callback,
-            telegram_id,
-            {
-                "death_location": player.location,
-                "death_cause": "combat",
-            },
-        )
+        await _ensure_death_keyboard(callback, telegram_id)
         return
 
     try:
