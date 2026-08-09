@@ -5200,7 +5200,7 @@ def declare_war(storage: Storage, telegram_id: int, target_faction: str) -> Acti
 
 
 def attack_location(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
-    """Соло-захват нейтральных точек — тактическая сетка; занятые — только лобби."""
+    """Захват нейтральных точек — группа от 2 бойцов; занятые — только военное лобби."""
     loc = storage.get_location(location_name)
     if loc is None:
         return ActionResult(False, "Локация не найдена.")
@@ -5210,14 +5210,9 @@ def attack_location(storage: Storage, telegram_id: int, location_name: str) -> A
             f"Соло-штурм занятой точки отключён. Собери военное лобби минимум из "
             f"{WAR_MIN_FACTION_MEMBERS} бойцов (раздел «⚔️ Война» → «🪖 Военные лобби»).",
         )
-    from app.neutral_capture import start_neutral_capture
+    from app.neutral_capture import create_or_join_ncap_lobby
 
-    result, session = start_neutral_capture(storage, telegram_id, location_name)
-    if session is not None:
-        payload = dict(result.payload or {})
-        payload["ncap_session"] = True
-        return ActionResult(result.ok, result.text, payload=payload)
-    return result
+    return create_or_join_ncap_lobby(storage, telegram_id, location_name)
 
 
 def _weapon_rating(weapon_name: str) -> int:
@@ -6656,7 +6651,7 @@ def build_war_lobby_overview(storage: Storage, telegram_id: int) -> str:
             "Открытых военных лобби нет. Создай лобби на нужную локацию.\n"
             f"Для захвата занятой точки нужно минимум {WAR_MIN_FACTION_MEMBERS} живых бойцов в лобби "
             f"(−{WAR_LOBBY_ENERGY_COST} энергии каждому при запуске).\n"
-            f"Нейтральные точки можно захватить соло («🎯 Захват нейтральных точек»): "
+            f"Нейтральные точки — группа от 2 («🎯 Захват нейтральных точек»): "
             f"+{NCAP_SUCCESS_PAY_RU} RU, −18 энергии."
         )
     war_id = int(lobby["id"])
@@ -8557,7 +8552,7 @@ TUTORIAL_PAGES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Война и рейды",
-        "«🏕 Вылазка» → «⚔️ Война»: нейтральные — соло 6×6 "
+        "«🏕 Вылазка» → «⚔️ Война»: нейтральные — группа от 2 на тактической сетке 6×6 "
         f"(+{NCAP_SUCCESS_PAY_RU} RU, +{RATING_REWARD['war_success']} рейт., −18 энергии, "
         "8 мин / ход 10 сек; можно захватить удержанием центра) "
         "или лобби от 5 на ту же точку (9×9, больше награда суммарно). "

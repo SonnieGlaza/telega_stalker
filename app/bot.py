@@ -77,8 +77,14 @@ from app.raid_grid import (
     save_raid_grid_session,
 )
 from app.neutral_capture import (
+    NCAP_MIN_MEMBERS,
+    get_ncap_lobby_by_player,
     get_ncap_session,
+    join_ncap_lobby,
+    leave_ncap_lobby,
+    list_open_ncap_lobbies,
     ncap_forfeit,
+    ncap_lobby_menu_text,
     ncap_move,
     ncap_shoot,
     ncap_status_caption,
@@ -86,6 +92,7 @@ from app.neutral_capture import (
     process_ncap_turn_timeouts,
     render_ncap_frame,
     save_ncap_session,
+    start_ncap_from_lobby,
 )
 from app.arena_grid import (
     arena_forfeit,
@@ -360,6 +367,8 @@ from app.keyboards import (
     cwar_grid_keyboard,
     rgrid_keyboard,
     ncap_grid_keyboard,
+    ncap_lobby_keyboard,
+    ncap_lobby_list_keyboard,
     arena_grid_keyboard,
     coop_menu_keyboard,
     coop_lobby_list_keyboard,
@@ -957,7 +966,7 @@ def _build_info_text(player: Character) -> str:
         "• 🛏 Спальник — ×2 реген энергии.\n"
         f"• 💎 Артефакты — «📡 Поиск артефактов» в инвентаре: тактическая охота "
         f"(−{ARTIFACT_SEARCH_ENERGY_COST} энергии, до 24 ходов, нужен детектор).\n"
-        f"• ⚔️ Война: нейтральные — соло 6×6 (+{NCAP_SUCCESS_PAY_RU} RU, +{RATING_REWARD['war_success']} рейт., "
+        f"• ⚔️ Война: нейтральные — группа от {NCAP_MIN_MEMBERS} на 6×6 (+{NCAP_SUCCESS_PAY_RU} RU, +{RATING_REWARD['war_success']} рейт., "
         f"−18 энергии) или лобби от 5 на ту же точку (9×9, суммарно выгоднее команде); "
         f"занятые — только лобби (−{WAR_LOBBY_ENERGY_COST} энергии, 1 аптечка/боец, "
         f"хост +{WAR_SUCCESS_PAY_RU}/+{RATING_REWARD['war_success']} рейт., "
@@ -3090,33 +3099,50 @@ async def _broadcast_ncap_session(
     *,
     note: str | None = None,
 ) -> None:
-    player = storage.get_character(session.telegram_id, refresh_energy=False)
-    medkit = not session.medkit_used and _player_has_medkit(player)
-    markup = ncap_grid_keyboard(medkit_available=medkit)
-    caption = ncap_status_caption(session, player)
-    if note:
-        caption = f"{caption}\n\n{note}"
-    frame = render_ncap_frame(storage, session)
-    new_id = await _upsert_tactical_photo(
-        bot,
-        chat_id=session.telegram_id,
-        message_id=session.message_id,
-        image_bytes=frame,
-        caption=caption,
-        markup=markup,
-    )
-    session.message_id = new_id
+    for pid in session.player_ids:
+        player = storage.get_character(pid, refresh_energy=False)
+        is_active = session.active_player() == pid
+        medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(player)
+        markup = ncap_grid_keyboard(is_active_turn=is_active, medkit_available=medkit)
+        caption = ncap_status_caption(session, player, pid)
+        if note:
+            caption = f"{caption}\n\n{note}" if pid == session.active_player() else f"{caption}\n\n↪ {note}"
+        frame = render_ncap_frame(storage, session, pid)
+        msg_id = session.message_ids.get(str(pid))
+        new_id = await _upsert_tactical_photo(
+            bot,
+            chat_id=pid,
+            message_id=msg_id,
+            image_bytes=frame,
+            caption=caption,
+            markup=markup,
+        )
+        session.message_ids[str(pid)] = new_id
     save_ncap_session(storage, session)
+
+
+async def _show_ncap_lobby_menu(callback: CallbackQuery, telegram_id: int) -> None:
+    storage = get_storage()
+    lobby = get_ncap_lobby_by_player(storage, telegram_id)
+    await edit_menu_message(
+        callback,
+        ncap_lobby_menu_text(storage, telegram_id),
+        ncap_lobby_keyboard(
+            in_lobby=lobby is not None,
+            is_host=lobby.host_id == telegram_id if lobby else False,
+            lobby_id=lobby.lobby_id if lobby else None,
+        ),
+    )
 
 
 async def _handle_ncap_action(bot: Bot, callback: CallbackQuery, result: Any) -> None:
     storage = get_storage()
     payload = result.payload or {}
     if payload.get("ncap_done"):
-        msg_id = payload.get("message_id")
-        if msg_id:
-            await _clear_tactical_keyboards(bot, {str(payload.get("telegram_id", callback.from_user.id)): int(msg_id)})
-        await bot.send_message(callback.from_user.id, action_result_text(callback.from_user.id, result.text))
+        await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
+        notify_ids = [int(x) for x in (payload.get("notify_all") or [callback.from_user.id])]
+        for pid in notify_ids:
+            await bot.send_message(pid, action_result_text(pid, result.text))
         await safe_callback_answer(callback, "Захват завершён")
         return
     if not result.ok:
@@ -4355,13 +4381,55 @@ async def ncap_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
     telegram_id = callback.from_user.id
     action = (callback.data or "").removeprefix("ncap:").strip()
 
-    if action == "refresh":
+    if action in {"menu", "refresh"}:
         session = get_ncap_session(storage, telegram_id)
-        if session is None:
-            await callback.answer("Нет активного захвата.", show_alert=True)
+        if session is not None:
+            await _broadcast_ncap_session(bot, storage, session)
+            await safe_callback_answer(callback)
             return
-        await _broadcast_ncap_session(bot, storage, session)
+        await _show_ncap_lobby_menu(callback, telegram_id)
         await safe_callback_answer(callback)
+        return
+
+    if action == "leave":
+        result = leave_ncap_lobby(storage, telegram_id)
+        await apply_action_notifies(bot, result)
+        await reply_action_result(callback, result.text)
+        if result.ok:
+            await edit_menu_message(
+                callback,
+                ncap_lobby_menu_text(storage, telegram_id),
+                ncap_lobby_keyboard(in_lobby=False, is_host=False),
+            )
+        return
+
+    if action.startswith("join:"):
+        lobby_id = action.removeprefix("join:")
+        result = join_ncap_lobby(storage, telegram_id, lobby_id)
+        if not result.ok:
+            await reply_action_result(callback, result.text)
+            return
+        await _show_ncap_lobby_menu(callback, telegram_id)
+        await safe_callback_answer(callback, "Ты в группе")
+        return
+
+    if action.startswith("start:"):
+        lobby_id = action.removeprefix("start:")
+        lobby = get_ncap_lobby_by_player(storage, telegram_id)
+        if lobby is None or lobby.lobby_id != lobby_id:
+            await callback.answer("Группа не найдена.", show_alert=True)
+            return
+        result, session = start_ncap_from_lobby(storage, telegram_id)
+        if not result.ok:
+            await reply_action_result(callback, result.text)
+            return
+        if session is not None:
+            await _broadcast_ncap_session(bot, storage, session, note=result.text)
+        notify_ids = [int(x) for x in (result.payload or {}).get("notify_all") or [])]
+        for pid in notify_ids:
+            if pid != telegram_id:
+                await bot.send_message(pid, action_result_text(pid, result.text))
+        await safe_callback_answer(callback, "Захват начался!")
         return
 
     if action == "forfeit":
@@ -4796,7 +4864,7 @@ async def war_scenario_section_callback(callback: CallbackQuery) -> None:
     alliance_overview = build_alliance_overview(db, player.telegram_id)
     explainer = (
         "Правила войны:\n"
-        f"• Нейтральные — соло 6×6 («🎯 Захват нейтральных точек», +{NCAP_SUCCESS_PAY_RU} RU, "
+        f"• Нейтральные — от {NCAP_MIN_MEMBERS} бойцов на 6×6 («🎯 Захват нейтральных точек», +{NCAP_SUCCESS_PAY_RU} RU, "
         f"+{RATING_REWARD['war_success']} рейт., −18 энергии, 8 мин; захват удержанием центра) "
         "или лобби от 5 на ту же точку (9×9, −24 энергии).\n"
         "• Занятые точки и базы — только лобби (мин. 5 бойцов), штурм 9×9, 10 мин / ход 10 сек, "
@@ -4842,7 +4910,7 @@ async def war_ncap_section_callback(callback: CallbackQuery) -> None:
         return
     await edit_menu_message(
         callback,
-        "Выбери нейтральную точку для соло-захвата (тактическая сетка):",
+        "Выбери нейтральную точку для захвата (нужна группа от 2 бойцов):",
         locations_keyboard(neutral, mode="war", back_callback="war:section:root"),
     )
 
@@ -4933,13 +5001,10 @@ async def handle_war_legacy_callback(callback: CallbackQuery, bot: Bot) -> None:
         await safe_callback_answer(callback)
         return
     result = attack_location(get_storage(), callback.from_user.id, location)
-    if result.ok and (result.payload or {}).get("ncap_session"):
-        storage = get_storage()
-        session = get_ncap_session(storage, callback.from_user.id)
-        if session is not None:
-            await _broadcast_ncap_session(bot, storage, session, note=result.text)
-            await safe_callback_answer(callback, "Захват начался!")
-            return
+    if result.ok and (result.payload or {}).get("ncap_lobby"):
+        await _show_ncap_lobby_menu(callback, callback.from_user.id)
+        await safe_callback_answer(callback, result.text[:CALLBACK_ALERT_MAX_LEN] if len(result.text) <= CALLBACK_ALERT_MAX_LEN else "Группа")
+        return
     await reply_action_result(callback, result.text)
 
 
@@ -6458,13 +6523,19 @@ async def run_bot() -> None:
             except Exception:
                 logger.exception("Raid grid timeout tick failed")
             try:
+                ncap_done_ids: set[str] = set()
                 for pid, result in process_ncap_turn_timeouts(storage):
                     payload = result.payload or {}
                     if payload.get("ncap_done"):
-                        msg_id = payload.get("message_id")
-                        if msg_id:
-                            await _clear_tactical_keyboards(bot, {str(pid): int(msg_id)})
-                        await bot.send_message(pid, action_result_text(pid, result.text))
+                        sid = payload.get("session_id")
+                        if sid and sid in ncap_done_ids:
+                            continue
+                        if sid:
+                            ncap_done_ids.add(str(sid))
+                        await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
+                        notify_ids = [int(x) for x in (payload.get("notify_all") or [pid])]
+                        for notify_pid in notify_ids:
+                            await bot.send_message(notify_pid, action_result_text(notify_pid, result.text))
                         continue
                     session = get_ncap_session(storage, pid)
                     if session:

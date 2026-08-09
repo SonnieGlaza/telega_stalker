@@ -1,4 +1,4 @@
-"""Захват нейтральной точки: бандиты/мутанты стреляют как в «Танчиках»."""
+"""Захват нейтральной точки: группа от 2 бойцов, бандиты/мутанты стреляют как в «Танчиках»."""
 
 from __future__ import annotations
 
@@ -17,8 +17,9 @@ from app.game_logic import (
     RATING_REWARD,
     ActionResult,
     _add_rating,
+    _dead_block_text,
+    _is_dead,
     apply_incoming_damage,
-    equipment_power,
     h,
 )
 from app.tactical_combat import (
@@ -33,7 +34,7 @@ from app.tactical_combat import (
 from app.mutant_assets import pick_mutant_kind
 from app.npc_assets import pick_npc_kind
 from app.storage import Character, Storage
-from app.tactical_hp import sync_session_hp_to_db
+from app.tactical_hp import sync_session_hp_to_db, use_tactical_medkit
 from app.tactical_render import hostile_kind_to_sprite, load_tactical_font, paste_mutant_sprite, paste_npc_sprite, paste_player_avatar
 
 NCAP_GRID_SIZE = 6
@@ -42,10 +43,23 @@ NCAP_MATCH_SECONDS = 8 * 60
 NCAP_HOSTILE_COUNT = 6
 NCAP_ENERGY_COST = 18
 NCAP_CAPTURE_TURNS = 2
+NCAP_MIN_MEMBERS = 2
+NCAP_MAX_MEMBERS = 5
 
+LOBBY_PREFIX = "ncap:lobby:"
 SESSION_PREFIX = "ncap:session:"
 PLAYER_PREFIX = "ncap:player:"
+OPEN_LOBBIES_KEY = "ncap:open_lobbies"
 ACTIVE_IDS_KEY = "ncap:active_ids"
+NCAP_LOCATION_LOCK_PREFIX = "ncap:loclock:"
+
+PLAYER_COLORS = [
+    (80, 200, 255),
+    (255, 180, 70),
+    (120, 255, 140),
+    (255, 120, 200),
+    (180, 140, 255),
+]
 
 
 def _utc_now() -> datetime:
@@ -68,21 +82,65 @@ def _parse_deadline(raw: str | None) -> datetime | None:
         return None
 
 
+def _player_ref(kind: str, ref_id: str) -> str:
+    return f"{kind}:{ref_id}"
+
+
+def _parse_player_ref(raw: str | None) -> tuple[str, str] | None:
+    if not raw or ":" not in raw:
+        return None
+    kind, ref_id = raw.split(":", 1)
+    if kind in {"lobby", "session"} and ref_id:
+        return kind, ref_id
+    return None
+
+
+@dataclass
+class NcapLobby:
+    lobby_id: str
+    host_id: int
+    member_ids: list[int]
+    location_name: str
+    faction: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "lobby_id": self.lobby_id,
+            "host_id": self.host_id,
+            "member_ids": list(self.member_ids),
+            "location_name": self.location_name,
+            "faction": self.faction,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> NcapLobby:
+        return cls(
+            lobby_id=str(raw.get("lobby_id") or ""),
+            host_id=int(raw.get("host_id") or 0),
+            member_ids=[int(x) for x in (raw.get("member_ids") or [])],
+            location_name=str(raw.get("location_name") or ""),
+            faction=str(raw.get("faction") or ""),
+        )
+
+
 @dataclass
 class NeutralCaptureSession:
     session_id: str
-    telegram_id: int
+    host_id: int
+    player_ids: list[int]
     location_name: str
     faction: str
     grid: int = NCAP_GRID_SIZE
     cover: list[tuple[int, int]] = field(default_factory=list)
     hostiles: list[tuple[int, int]] = field(default_factory=list)
     hostile_weapons: list[str] = field(default_factory=list)
-    hostile_kinds: list[str] = field(default_factory=list)  # bandit | mutant
+    hostile_kinds: list[str] = field(default_factory=list)
     capture_point: tuple[int, int] = (2, 2)
-    player_pos: tuple[int, int] = (0, 0)
-    hp: int = 0
-    medkit_used: bool = False
+    positions: dict[str, list[int]] = field(default_factory=dict)
+    hp: dict[str, int] = field(default_factory=dict)
+    medkits_used: dict[str, bool] = field(default_factory=dict)
+    turn_order: list[int] = field(default_factory=list)
+    active_index: int = 0
     turn_seq: int = 0
     turn_deadline: str | None = None
     match_deadline: str | None = None
@@ -90,12 +148,22 @@ class NeutralCaptureSession:
     finished: bool = False
     success: bool = False
     log: list[str] = field(default_factory=list)
-    message_id: int | None = None
+    message_ids: dict[str, int] = field(default_factory=dict)
+
+    def active_player(self) -> int:
+        if not self.turn_order:
+            return self.host_id
+        return self.turn_order[self.active_index % len(self.turn_order)]
+
+    def pos(self, player_id: int) -> tuple[int, int]:
+        raw = self.positions.get(str(player_id), [0, 0])
+        return int(raw[0]), int(raw[1])
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
-            "telegram_id": self.telegram_id,
+            "host_id": self.host_id,
+            "player_ids": list(self.player_ids),
             "location_name": self.location_name,
             "faction": self.faction,
             "grid": self.grid,
@@ -104,9 +172,11 @@ class NeutralCaptureSession:
             "hostile_weapons": self.hostile_weapons,
             "hostile_kinds": self.hostile_kinds,
             "capture_point": list(self.capture_point),
-            "player_pos": list(self.player_pos),
-            "hp": self.hp,
-            "medkit_used": self.medkit_used,
+            "positions": {k: list(v) for k, v in self.positions.items()},
+            "hp": {str(k): int(v) for k, v in self.hp.items()},
+            "medkits_used": {str(k): bool(v) for k, v in self.medkits_used.items()},
+            "turn_order": list(self.turn_order),
+            "active_index": self.active_index,
             "turn_seq": self.turn_seq,
             "turn_deadline": self.turn_deadline,
             "match_deadline": self.match_deadline,
@@ -114,16 +184,47 @@ class NeutralCaptureSession:
             "finished": self.finished,
             "success": self.success,
             "log": self.log[-12:],
-            "message_id": self.message_id,
+            "message_ids": {str(k): int(v) for k, v in self.message_ids.items()},
         }
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> NeutralCaptureSession:
-        pp = raw.get("player_pos") or [0, 0]
         cp = raw.get("capture_point") or [2, 2]
+        if raw.get("player_ids"):
+            return cls(
+                session_id=str(raw.get("session_id") or ""),
+                host_id=int(raw.get("host_id") or 0),
+                player_ids=[int(x) for x in (raw.get("player_ids") or [])],
+                location_name=str(raw.get("location_name") or ""),
+                faction=str(raw.get("faction") or ""),
+                grid=int(raw.get("grid") or NCAP_GRID_SIZE),
+                cover=[(int(p[0]), int(p[1])) for p in (raw.get("cover") or [])],
+                hostiles=[(int(p[0]), int(p[1])) for p in (raw.get("hostiles") or [])],
+                hostile_weapons=[str(w) for w in (raw.get("hostile_weapons") or [])],
+                hostile_kinds=[str(k) for k in (raw.get("hostile_kinds") or [])],
+                capture_point=(int(cp[0]), int(cp[1])),
+                positions={str(k): [int(v[0]), int(v[1])] for k, v in (raw.get("positions") or {}).items()},
+                hp={str(k): int(v) for k, v in (raw.get("hp") or {}).items()},
+                medkits_used={str(k): bool(v) for k, v in (raw.get("medkits_used") or {}).items()},
+                turn_order=[int(x) for x in (raw.get("turn_order") or [])],
+                active_index=int(raw.get("active_index") or 0),
+                turn_seq=int(raw.get("turn_seq") or 0),
+                turn_deadline=raw.get("turn_deadline"),
+                match_deadline=raw.get("match_deadline"),
+                capture_progress=int(raw.get("capture_progress") or 0),
+                finished=bool(raw.get("finished")),
+                success=bool(raw.get("success")),
+                log=[str(x) for x in (raw.get("log") or [])],
+                message_ids={str(k): int(v) for k, v in (raw.get("message_ids") or {}).items()},
+            )
+        legacy_id = int(raw.get("telegram_id") or 0)
+        pp = raw.get("player_pos") or [0, 0]
+        msg_id = raw.get("message_id")
+        message_ids = {str(legacy_id): int(msg_id)} if msg_id is not None else {}
         return cls(
             session_id=str(raw.get("session_id") or ""),
-            telegram_id=int(raw.get("telegram_id") or 0),
+            host_id=legacy_id,
+            player_ids=[legacy_id] if legacy_id else [],
             location_name=str(raw.get("location_name") or ""),
             faction=str(raw.get("faction") or ""),
             grid=int(raw.get("grid") or NCAP_GRID_SIZE),
@@ -132,9 +233,11 @@ class NeutralCaptureSession:
             hostile_weapons=[str(w) for w in (raw.get("hostile_weapons") or [])],
             hostile_kinds=[str(k) for k in (raw.get("hostile_kinds") or [])],
             capture_point=(int(cp[0]), int(cp[1])),
-            player_pos=(int(pp[0]), int(pp[1])),
-            hp=int(raw.get("hp") or 0),
-            medkit_used=bool(raw.get("medkit_used")),
+            positions={str(legacy_id): [int(pp[0]), int(pp[1])]},
+            hp={str(legacy_id): int(raw.get("hp") or 0)},
+            medkits_used={str(legacy_id): bool(raw.get("medkit_used"))},
+            turn_order=[legacy_id] if legacy_id else [],
+            active_index=0,
             turn_seq=int(raw.get("turn_seq") or 0),
             turn_deadline=raw.get("turn_deadline"),
             match_deadline=raw.get("match_deadline"),
@@ -142,8 +245,12 @@ class NeutralCaptureSession:
             finished=bool(raw.get("finished")),
             success=bool(raw.get("success")),
             log=[str(x) for x in (raw.get("log") or [])],
-            message_id=int(raw["message_id"]) if raw.get("message_id") is not None else None,
+            message_ids=message_ids,
         )
+
+
+def _lobby_key(lobby_id: str) -> str:
+    return f"{LOBBY_PREFIX}{lobby_id}"
 
 
 def _session_key(sid: str) -> str:
@@ -154,11 +261,48 @@ def _player_key(tid: int) -> str:
     return f"{PLAYER_PREFIX}{int(tid)}"
 
 
-def get_ncap_session(storage: Storage, telegram_id: int) -> NeutralCaptureSession | None:
-    sid = storage.get_meta(_player_key(telegram_id))
-    if not sid:
+def _ncap_location_lock_key(location_name: str) -> str:
+    return f"{NCAP_LOCATION_LOCK_PREFIX}{location_name}"
+
+
+def _release_ncap_location_lock(storage: Storage, location_name: str) -> None:
+    storage.delete_meta(_ncap_location_lock_key(location_name))
+
+
+def get_player_ncap_ref(storage: Storage, telegram_id: int) -> tuple[str, str] | None:
+    raw = storage.get_meta(_player_key(telegram_id))
+    if not raw:
         return None
-    raw = storage.get_meta(_session_key(sid))
+    ref = _parse_player_ref(raw)
+    if ref is not None:
+        return ref
+    if raw:
+        return "session", raw
+    return None
+
+
+def get_ncap_lobby(storage: Storage, lobby_id: str) -> NcapLobby | None:
+    raw = storage.get_meta(_lobby_key(lobby_id))
+    if not raw:
+        return None
+    try:
+        return NcapLobby.from_dict(json.loads(raw))
+    except Exception:
+        return None
+
+
+def get_ncap_lobby_by_player(storage: Storage, telegram_id: int) -> NcapLobby | None:
+    ref = get_player_ncap_ref(storage, telegram_id)
+    if ref is None or ref[0] != "lobby":
+        return None
+    return get_ncap_lobby(storage, ref[1])
+
+
+def get_ncap_session(storage: Storage, telegram_id: int) -> NeutralCaptureSession | None:
+    ref = get_player_ncap_ref(storage, telegram_id)
+    if ref is None or ref[0] != "session":
+        return None
+    raw = storage.get_meta(_session_key(ref[1]))
     if not raw:
         storage.delete_meta(_player_key(telegram_id))
         return None
@@ -172,26 +316,60 @@ def get_ncap_session(storage: Storage, telegram_id: int) -> NeutralCaptureSessio
     return session
 
 
+def _register_open_lobby(storage: Storage, lobby_id: str) -> None:
+    raw = storage.get_meta(OPEN_LOBBIES_KEY)
+    ids: list[str] = []
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                ids = [str(x) for x in parsed]
+        except json.JSONDecodeError:
+            ids = []
+    if lobby_id not in ids:
+        ids.append(lobby_id)
+    storage.set_meta(OPEN_LOBBIES_KEY, json.dumps(ids, ensure_ascii=False))
+
+
+def _unregister_open_lobby(storage: Storage, lobby_id: str) -> None:
+    raw = storage.get_meta(OPEN_LOBBIES_KEY)
+    if not raw:
+        return
+    try:
+        ids = [str(x) for x in json.loads(raw) if str(x) != lobby_id]
+    except json.JSONDecodeError:
+        ids = []
+    storage.set_meta(OPEN_LOBBIES_KEY, json.dumps(ids, ensure_ascii=False))
+
+
+def save_ncap_lobby(storage: Storage, lobby: NcapLobby) -> None:
+    storage.set_meta(_lobby_key(lobby.lobby_id), json.dumps(lobby.to_dict(), ensure_ascii=False))
+    for pid in lobby.member_ids:
+        storage.set_meta(_player_key(pid), _player_ref("lobby", lobby.lobby_id))
+
+
+def clear_ncap_lobby(storage: Storage, lobby: NcapLobby) -> None:
+    storage.delete_meta(_lobby_key(lobby.lobby_id))
+    _unregister_open_lobby(storage, lobby.lobby_id)
+    for pid in lobby.member_ids:
+        ref = get_player_ncap_ref(storage, pid)
+        if ref and ref[0] == "lobby" and ref[1] == lobby.lobby_id:
+            storage.delete_meta(_player_key(pid))
+
+
 def save_ncap_session(storage: Storage, session: NeutralCaptureSession) -> None:
     storage.set_meta(_session_key(session.session_id), json.dumps(session.to_dict(), ensure_ascii=False))
-    storage.set_meta(_player_key(session.telegram_id), session.session_id)
-
-
-NCAP_LOCATION_LOCK_PREFIX = "ncap:loclock:"
-
-
-def _ncap_location_lock_key(location_name: str) -> str:
-    return f"{NCAP_LOCATION_LOCK_PREFIX}{location_name}"
-
-
-def _release_ncap_location_lock(storage: Storage, location_name: str) -> None:
-    storage.delete_meta(_ncap_location_lock_key(location_name))
+    for pid in session.player_ids:
+        storage.set_meta(_player_key(pid), _player_ref("session", session.session_id))
 
 
 def clear_ncap_session(storage: Storage, session: NeutralCaptureSession) -> None:
     _release_ncap_location_lock(storage, session.location_name)
     storage.delete_meta(_session_key(session.session_id))
-    storage.delete_meta(_player_key(session.telegram_id))
+    for pid in session.player_ids:
+        ref = get_player_ncap_ref(storage, pid)
+        if ref and ref[0] == "session" and ref[1] == session.session_id:
+            storage.delete_meta(_player_key(pid))
     _unregister_active(storage, session.session_id)
 
 
@@ -221,6 +399,279 @@ def _unregister_active(storage: Storage, session_id: str) -> None:
     storage.set_meta(ACTIVE_IDS_KEY, json.dumps(ids, ensure_ascii=False))
 
 
+def list_open_ncap_lobbies(storage: Storage, location_name: str, faction: str) -> list[tuple[str, str, int]]:
+    raw = storage.get_meta(OPEN_LOBBIES_KEY)
+    if not raw:
+        return []
+    try:
+        lobby_ids = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    result: list[tuple[str, str, int]] = []
+    stale: list[str] = []
+    for lobby_id in lobby_ids:
+        lobby = get_ncap_lobby(storage, str(lobby_id))
+        if lobby is None:
+            stale.append(str(lobby_id))
+            continue
+        if lobby.location_name != location_name or lobby.faction != faction:
+            continue
+        host = storage.get_character(lobby.host_id, refresh_energy=False)
+        host_name = host.nickname if host else str(lobby.host_id)
+        result.append((lobby.lobby_id, host_name, len(lobby.member_ids)))
+    if stale:
+        ids = [str(x) for x in lobby_ids if str(x) not in stale]
+        storage.set_meta(OPEN_LOBBIES_KEY, json.dumps(ids, ensure_ascii=False))
+    return result
+
+
+def ncap_lobby_menu_text(storage: Storage, telegram_id: int) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return "Сначала создай персонажа."
+    session = get_ncap_session(storage, telegram_id)
+    if session is not None:
+        active = storage.get_character(session.active_player(), refresh_energy=False)
+        active_name = active.nickname if active else str(session.active_player())
+        return (
+            f"🎯 Захват «{session.location_name}».\n"
+            f"Бойцов: {len(session.player_ids)}. Ход: {h(active_name)} ({NCAP_TURN_SECONDS} сек).\n"
+            f"Удержите центр {NCAP_CAPTURE_TURNS} хода. Враги стреляют наугад."
+        )
+    lobby = get_ncap_lobby_by_player(storage, telegram_id)
+    if lobby is not None:
+        names = []
+        for pid in lobby.member_ids:
+            ch = storage.get_character(pid, refresh_energy=False)
+            names.append(h(ch.nickname) if ch else str(pid))
+        host_mark = " (лидер)" if lobby.host_id == telegram_id else ""
+        return (
+            f"🎯 Группа захвата «{lobby.location_name}»{host_mark}.\n"
+            f"Участники ({len(lobby.member_ids)}/{NCAP_MAX_MEMBERS}): {', '.join(names)}.\n"
+            f"Минимум {NCAP_MIN_MEMBERS} бойца для старта. Энергия: −{NCAP_ENERGY_COST} каждому.\n"
+            f"Награда выжившим: +{NCAP_SUCCESS_PAY_RU} RU, +{RATING_REWARD['war_success']} рейт."
+        )
+    return (
+        f"🎯 Захват нейтральных точек — от {NCAP_MIN_MEMBERS} бойцов.\n"
+        f"Поле {NCAP_GRID_SIZE}×{NCAP_GRID_SIZE}, −{NCAP_ENERGY_COST} энергии, {NCAP_MATCH_SECONDS // 60} мин."
+    )
+
+
+def create_or_join_ncap_lobby(storage: Storage, telegram_id: int, location_name: str) -> ActionResult:
+    from app.player_busy import player_busy_reason
+
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Нужен персонаж с группировкой.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    busy = player_busy_reason(storage, telegram_id, skip="ncap")
+    if busy:
+        return ActionResult(False, busy)
+    if get_ncap_session(storage, telegram_id):
+        return ActionResult(False, "Уже идёт захват точки.")
+    loc = storage.get_location(location_name)
+    if loc is None:
+        return ActionResult(False, "Локация не найдена.")
+    if loc.get("controlled_by"):
+        return ActionResult(False, "Точка уже под контролем.")
+    if storage.get_meta(_ncap_location_lock_key(location_name)):
+        return ActionResult(False, "Эту нейтральную точку уже штурмуют.")
+
+    existing = get_ncap_lobby_by_player(storage, telegram_id)
+    if existing is not None:
+        if existing.location_name == location_name:
+            return ActionResult(True, ncap_lobby_menu_text(storage, telegram_id), payload={"ncap_lobby": True})
+        return ActionResult(False, f"Ты уже в группе на «{existing.location_name}». Сначала выйди.")
+
+    for lobby_id in json.loads(storage.get_meta(OPEN_LOBBIES_KEY) or "[]"):
+        lobby = get_ncap_lobby(storage, str(lobby_id))
+        if (
+            lobby is not None
+            and lobby.location_name == location_name
+            and lobby.faction == player.faction
+            and len(lobby.member_ids) < NCAP_MAX_MEMBERS
+        ):
+            if telegram_id not in lobby.member_ids:
+                lobby.member_ids.append(telegram_id)
+                save_ncap_lobby(storage, lobby)
+                return ActionResult(
+                    True,
+                    f"Ты вступил в группу захвата «{location_name}». Участников: {len(lobby.member_ids)}.",
+                    payload={"ncap_lobby": True},
+                )
+            return ActionResult(True, ncap_lobby_menu_text(storage, telegram_id), payload={"ncap_lobby": True})
+
+    lobby_id = uuid.uuid4().hex[:10]
+    lobby = NcapLobby(
+        lobby_id=lobby_id,
+        host_id=telegram_id,
+        member_ids=[telegram_id],
+        location_name=location_name,
+        faction=str(player.faction),
+    )
+    save_ncap_lobby(storage, lobby)
+    _register_open_lobby(storage, lobby_id)
+    return ActionResult(
+        True,
+        f"Группа захвата «{location_name}» создана. Нужно ещё минимум {NCAP_MIN_MEMBERS - 1} боец.",
+        payload={"ncap_lobby": True},
+    )
+
+
+def join_ncap_lobby(storage: Storage, telegram_id: int, lobby_id: str) -> ActionResult:
+    from app.player_busy import player_busy_reason
+
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return ActionResult(False, "Нужен персонаж с группировкой.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if get_ncap_session(storage, telegram_id) or get_ncap_lobby_by_player(storage, telegram_id):
+        return ActionResult(False, "Сначала выйди из текущей группы или захвата.")
+    busy = player_busy_reason(storage, telegram_id, skip="ncap")
+    if busy:
+        return ActionResult(False, busy)
+    lobby = get_ncap_lobby(storage, lobby_id)
+    if lobby is None:
+        return ActionResult(False, "Группа не найдена.")
+    if lobby.faction != player.faction:
+        return ActionResult(False, "Вступать могут только бойцы своей группировки.")
+    if storage.get_meta(_ncap_location_lock_key(lobby.location_name)):
+        return ActionResult(False, "Эту точку уже штурмуют.")
+    if telegram_id in lobby.member_ids:
+        return ActionResult(True, "Ты уже в этой группе.", payload={"ncap_lobby": True})
+    if len(lobby.member_ids) >= NCAP_MAX_MEMBERS:
+        return ActionResult(False, f"В группе уже {NCAP_MAX_MEMBERS} бойцов.")
+    lobby.member_ids.append(telegram_id)
+    save_ncap_lobby(storage, lobby)
+    return ActionResult(
+        True,
+        f"Ты в группе захвата «{lobby.location_name}». Участников: {len(lobby.member_ids)}.",
+        payload={"ncap_lobby": True},
+    )
+
+
+def leave_ncap_lobby(storage: Storage, telegram_id: int) -> ActionResult:
+    lobby = get_ncap_lobby_by_player(storage, telegram_id)
+    if lobby is None:
+        return ActionResult(False, "Ты не в группе захвата.")
+    if telegram_id not in lobby.member_ids:
+        return ActionResult(False, "Ты не в этой группе.")
+    lobby.member_ids = [pid for pid in lobby.member_ids if pid != telegram_id]
+    storage.delete_meta(_player_key(telegram_id))
+    if not lobby.member_ids:
+        clear_ncap_lobby(storage, lobby)
+        return ActionResult(True, "Группа захвата распущена.")
+    if lobby.host_id == telegram_id:
+        lobby.host_id = lobby.member_ids[0]
+    save_ncap_lobby(storage, lobby)
+    notify = [pid for pid in lobby.member_ids]
+    return ActionResult(True, "Ты вышел из группы захвата.", payload={"notify": notify})
+
+
+def start_ncap_from_lobby(storage: Storage, host_id: int) -> tuple[ActionResult, NeutralCaptureSession | None]:
+    from app.player_busy import player_busy_reason
+
+    lobby = get_ncap_lobby_by_player(storage, host_id)
+    if lobby is None:
+        return ActionResult(False, "Группа захвата не найдена."), None
+    if lobby.host_id != host_id:
+        return ActionResult(False, "Запускать может только лидер группы."), None
+    if len(lobby.member_ids) < NCAP_MIN_MEMBERS:
+        return ActionResult(False, f"Нужно минимум {NCAP_MIN_MEMBERS} бойца для захвата."), None
+
+    loc = storage.get_location(lobby.location_name)
+    if loc is None:
+        return ActionResult(False, "Локация не найдена."), None
+    if loc.get("controlled_by"):
+        return ActionResult(False, "Точка уже под контролем."), None
+    lock_key = _ncap_location_lock_key(lobby.location_name)
+    if not storage.set_meta_if_absent(lock_key, lobby.lobby_id):
+        return ActionResult(False, "Эту нейтральную точку уже штурмуют."), None
+
+    for pid in lobby.member_ids:
+        busy = player_busy_reason(storage, pid, skip="ncap")
+        if busy:
+            _release_ncap_location_lock(storage, lobby.location_name)
+            ch = storage.get_character(pid, refresh_energy=False)
+            who = h(ch.nickname) if ch else str(pid)
+            return ActionResult(False, f"{who}: {busy.lower()}"), None
+
+    spent: list[int] = []
+    members: list[Character] = []
+    for pid in lobby.member_ids:
+        ch = storage.get_character(pid, refresh_energy=False)
+        if ch is None or _is_dead(ch) or ch.faction != lobby.faction:
+            _release_ncap_location_lock(storage, lobby.location_name)
+            for refund in spent:
+                storage.restore_energy(refund, NCAP_ENERGY_COST)
+            return ActionResult(False, "Один из участников недоступен."), None
+        if ch.energy < NCAP_ENERGY_COST:
+            _release_ncap_location_lock(storage, lobby.location_name)
+            for refund in spent:
+                storage.restore_energy(refund, NCAP_ENERGY_COST)
+            return ActionResult(False, f"У {h(ch.nickname)} не хватает энергии ({NCAP_ENERGY_COST})."), None
+        members.append(ch)
+
+    for ch in members:
+        if storage.spend_energy(ch.telegram_id, NCAP_ENERGY_COST):
+            spent.append(ch.telegram_id)
+        else:
+            _release_ncap_location_lock(storage, lobby.location_name)
+            for refund in spent:
+                storage.restore_energy(refund, NCAP_ENERGY_COST)
+            return ActionResult(False, "Не удалось списать энергию."), None
+
+    session_id = uuid.uuid4().hex[:12]
+    player_ids = list(lobby.member_ids)
+    session = NeutralCaptureSession(
+        session_id=session_id,
+        host_id=host_id,
+        player_ids=player_ids,
+        location_name=lobby.location_name,
+        faction=lobby.faction,
+        turn_order=list(player_ids),
+        active_index=0,
+        turn_deadline=_deadline_iso(NCAP_TURN_SECONDS),
+        match_deadline=_deadline_iso(NCAP_MATCH_SECONDS),
+    )
+    for ch in members:
+        session.hp[str(ch.telegram_id)] = int(ch.health)
+        session.medkits_used[str(ch.telegram_id)] = False
+    _build_map(session)
+    first = storage.get_character(session.active_player(), refresh_energy=False)
+    session.log.append(
+        f"Захват «{lobby.location_name}»: {len(player_ids)} бойцов, {NCAP_HOSTILE_COUNT} врагов. "
+        f"Первый ход — {h(first.nickname) if first else session.active_player()}."
+    )
+    clear_ncap_lobby(storage, lobby)
+    save_ncap_session(storage, session)
+    _register_active(storage, session_id)
+    text = (
+        f"🎯 Захват нейтральной точки «{lobby.location_name}»!\n"
+        f"Поле {NCAP_GRID_SIZE}×{NCAP_GRID_SIZE}, бойцов: {len(player_ids)}.\n"
+        f"Цель: удержать центр {NCAP_CAPTURE_TURNS} хода. "
+        f"Таймер {NCAP_MATCH_SECONDS // 60} мин, ход {NCAP_TURN_SECONDS} сек.\n"
+        f"Награда выжившим: +{NCAP_SUCCESS_PAY_RU} RU. Отступление: −{RATING_REWARD['war_fail']} рейтинга."
+    )
+    return ActionResult(
+        True,
+        text,
+        payload={"ncap_started": True, "notify_all": player_ids},
+    ), session
+
+
+def start_neutral_capture(
+    storage: Storage,
+    telegram_id: int,
+    location_name: str,
+) -> tuple[ActionResult, NeutralCaptureSession | None]:
+    """Legacy entry: redirects to lobby flow (min 2 fighters)."""
+    result = create_or_join_ncap_lobby(storage, telegram_id, location_name)
+    return result, None
+
+
 def _free_cell(grid: int, forbidden: set[tuple[int, int]]) -> tuple[int, int]:
     opts = [(x, y) for x in range(grid) for y in range(grid) if (x, y) not in forbidden]
     return random.choice(opts)
@@ -233,7 +684,7 @@ def _build_map(session: NeutralCaptureSession) -> None:
         cell = _free_cell(grid, forbidden)
         session.cover.append(cell)
         forbidden.add(cell)
-    for i in range(NCAP_HOSTILE_COUNT):
+    for _ in range(NCAP_HOSTILE_COUNT):
         cell = _free_cell(grid, forbidden)
         session.hostiles.append(cell)
         kind = "bandit" if random.random() < 0.65 else "mutant"
@@ -243,11 +694,21 @@ def _build_map(session: NeutralCaptureSession) -> None:
         else:
             session.hostile_weapons.append("ПМ")
         forbidden.add(cell)
-    session.player_pos = _free_cell(grid, forbidden)
+    for pid in session.player_ids:
+        cell = _free_cell(grid, forbidden)
+        session.positions[str(pid)] = [cell[0], cell[1]]
+        forbidden.add(cell)
 
 
 def _occupied(session: NeutralCaptureSession) -> set[tuple[int, int]]:
-    return set(session.cover) | set(session.hostiles) | {session.player_pos}
+    cells = set(session.cover) | set(session.hostiles)
+    for pid in session.player_ids:
+        cells.add(session.pos(pid))
+    return cells
+
+
+def _alive_players(session: NeutralCaptureSession) -> list[int]:
+    return [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
 
 
 def _hostile_damage(weapon: str) -> int:
@@ -256,115 +717,95 @@ def _hostile_damage(weapon: str) -> int:
 
 def _hostile_shoot_turn(storage: Storage, session: NeutralCaptureSession) -> list[str]:
     cover_set = set(session.cover)
-    player_pos = {session.telegram_id: session.player_pos}
-    player = storage.get_character(session.telegram_id, refresh_energy=False)
-    return random_hostile_shots(
+    alive = _alive_players(session)
+    if not alive:
+        return []
+    player_pos = {pid: session.pos(pid) for pid in alive}
+    player_chars = {
+        pid: ch
+        for pid in alive
+        if (ch := storage.get_character(pid, refresh_energy=False)) is not None
+    }
+    hp_snapshot = {str(pid): session.hp.get(str(pid), 0) for pid in alive}
+    notes = random_hostile_shots(
         session.hostiles,
         session.hostile_weapons,
         grid=session.grid,
         player_positions=player_pos,
-        player_hp={str(session.telegram_id): session.hp},
-        player_characters={session.telegram_id: player},
+        player_hp=hp_snapshot,
+        player_characters=player_chars,
         cover=cover_set,
         base_cover=set(),
         damage_fn=_hostile_damage,
     )
+    for key, val in hp_snapshot.items():
+        session.hp[key] = val
+    return notes
 
 
 def _finalize_success(storage: Storage, session: NeutralCaptureSession) -> ActionResult:
     storage.set_location_control(session.location_name, session.faction)
-    storage.add_player_stat(session.telegram_id, "wars_won", 1)
-    reward_ru = NCAP_SUCCESS_PAY_RU
-    storage.change_money(session.telegram_id, reward_ru)
-    storage.add_player_stat(session.telegram_id, "money_earned", reward_ru)
-    _add_rating(storage, session.telegram_id, RATING_REWARD["war_success"])
+    survivors = _alive_players(session)
+    for pid in survivors:
+        storage.add_player_stat(pid, "wars_won", 1)
+        storage.change_money(pid, NCAP_SUCCESS_PAY_RU)
+        storage.add_player_stat(pid, "money_earned", NCAP_SUCCESS_PAY_RU)
+        _add_rating(storage, pid, RATING_REWARD["war_success"])
     text = (
         f"🏆 Нейтральная точка «{session.location_name}» захвачена!\n"
-        f"Контроль: {session.faction}. +{reward_ru} RU, +{RATING_REWARD['war_success']} рейтинга."
+        f"Контроль: {session.faction}. Выжившим: +{NCAP_SUCCESS_PAY_RU} RU, "
+        f"+{RATING_REWARD['war_success']} рейтинга."
     )
-    return ActionResult(True, text, payload={"ncap_done": True, "success": True})
+    return ActionResult(
+        True,
+        text,
+        payload={"ncap_done": True, "success": True, "notify_all": list(session.player_ids)},
+    )
 
 
 def _finalize_fail(storage: Storage, session: NeutralCaptureSession, reason: str) -> ActionResult:
-    _add_rating(storage, session.telegram_id, -RATING_REWARD["war_fail"])
+    for pid in session.player_ids:
+        _add_rating(storage, pid, -RATING_REWARD["war_fail"])
     return ActionResult(
         False,
         f"💀 Захват «{session.location_name}» провален.\n{reason}\n−{RATING_REWARD['war_fail']} рейтинга.",
-        payload={"ncap_done": True, "success": False},
+        payload={"ncap_done": True, "success": False, "notify_all": list(session.player_ids)},
     )
 
 
 def _end_session(storage: Storage, session: NeutralCaptureSession, result: ActionResult) -> ActionResult:
-    sync_session_hp_to_db(storage, session.telegram_id, session.hp)
-    msg_id = session.message_id
+    for pid in session.player_ids:
+        sync_session_hp_to_db(storage, pid, session.hp.get(str(pid), 0))
+    message_ids = dict(session.message_ids)
     session.finished = True
     save_ncap_session(storage, session)
     clear_ncap_session(storage, session)
-    _unregister_active(storage, session.session_id)
     payload = dict(result.payload or {})
-    payload["message_id"] = msg_id
-    payload["telegram_id"] = session.telegram_id
+    payload["message_ids"] = message_ids
+    payload["notify_all"] = list(session.player_ids)
+    payload["session_id"] = session.session_id
     return ActionResult(result.ok, result.text, payload=payload)
 
 
-def start_neutral_capture(
-    storage: Storage,
-    telegram_id: int,
-    location_name: str,
-) -> tuple[ActionResult, NeutralCaptureSession | None]:
-    from app.player_busy import player_busy_reason
-
-    player = storage.get_character(telegram_id, refresh_energy=False)
-    if player is None or player.faction is None:
-        return ActionResult(False, "Нужен персонаж с группировкой."), None
-    if player.health <= 0:
-        return ActionResult(False, "Ты мёртв."), None
-    if get_ncap_session(storage, telegram_id):
-        return ActionResult(False, "Уже идёт захват точки."), None
-    busy = player_busy_reason(storage, telegram_id, skip="ncap")
-    if busy:
-        return ActionResult(False, busy), None
-    loc = storage.get_location(location_name)
-    if loc is None:
-        return ActionResult(False, "Локация не найдена."), None
-    if loc.get("controlled_by"):
-        return ActionResult(False, "Точка уже под контролем."), None
-    lock_key = _ncap_location_lock_key(location_name)
-    if not storage.set_meta_if_absent(lock_key, str(telegram_id)):
-        return ActionResult(False, "Эту нейтральную точку уже захватывают."), None
-    if not storage.spend_energy(telegram_id, NCAP_ENERGY_COST):
-        _release_ncap_location_lock(storage, location_name)
-        return ActionResult(False, f"Нужно {NCAP_ENERGY_COST} энергии."), None
-
-    session_id = uuid.uuid4().hex[:12]
-    session = NeutralCaptureSession(
-        session_id=session_id,
-        telegram_id=telegram_id,
-        location_name=location_name,
-        faction=str(player.faction),
-        turn_deadline=_deadline_iso(NCAP_TURN_SECONDS),
-        match_deadline=_deadline_iso(NCAP_MATCH_SECONDS),
-        hp=int(player.health),
-    )
-    _build_map(session)
-    session.log.append(
-        f"Захват «{location_name}»: {NCAP_HOSTILE_COUNT} врагов, стрельба как в танчиках. "
-        f"Дойди до центра и удержи {NCAP_CAPTURE_TURNS} хода."
-    )
-    save_ncap_session(storage, session)
-    _register_active(storage, session_id)
-    text = (
-        f"🎯 Захват нейтральной точки «{location_name}»!\n"
-        f"Поле {NCAP_GRID_SIZE}×{NCAP_GRID_SIZE}, враги стреляют наугад.\n"
-        f"Цель: удержать центр {NCAP_CAPTURE_TURNS} хода (зачистка не обязательна). "
-        f"Таймер {NCAP_MATCH_SECONDS // 60} мин, ход {NCAP_TURN_SECONDS} сек.\n"
-        f"Награда: +{NCAP_SUCCESS_PAY_RU} RU. Отступление: −{RATING_REWARD['war_fail']} рейтинга, энергия не возвращается."
-    )
-    return ActionResult(True, text, payload={"ncap_started": True}), session
+def _advance_turn(session: NeutralCaptureSession) -> None:
+    session.turn_seq += 1
+    session.turn_deadline = _deadline_iso(NCAP_TURN_SECONDS)
+    alive = _alive_players(session)
+    if not alive or not session.turn_order:
+        return
+    n = len(session.turn_order)
+    for _ in range(n):
+        session.active_index = (session.active_index + 1) % n
+        pid = session.turn_order[session.active_index]
+        if session.hp.get(str(pid), 0) > 0:
+            break
 
 
 def _check_capture(session: NeutralCaptureSession) -> bool:
-    if session.player_pos == session.capture_point:
+    holding = any(
+        session.pos(pid) == session.capture_point for pid in _alive_players(session)
+    )
+    if holding:
         session.capture_progress += 1
         session.log.append(f"Удержание точки: {session.capture_progress}/{NCAP_CAPTURE_TURNS}.")
         return session.capture_progress >= NCAP_CAPTURE_TURNS
@@ -372,16 +813,16 @@ def _check_capture(session: NeutralCaptureSession) -> bool:
     return False
 
 
-def _check_player_dead(storage: Storage, session: NeutralCaptureSession) -> ActionResult | None:
-    if session.hp <= 0:
-        return _end_session(storage, session, _finalize_fail(storage, session, "Ты выведен из строя."))
-    return None
+def _check_team_wipe(storage: Storage, session: NeutralCaptureSession) -> ActionResult | None:
+    if _alive_players(session):
+        return None
+    return _end_session(storage, session, _finalize_fail(storage, session, "Вся группа выведена из строя."))
 
 
 def _check_end(storage: Storage, session: NeutralCaptureSession) -> ActionResult | None:
-    dead = _check_player_dead(storage, session)
-    if dead:
-        return dead
+    wipe = _check_team_wipe(storage, session)
+    if wipe:
+        return wipe
     deadline = _parse_deadline(session.match_deadline)
     if deadline and _utc_now() > deadline:
         return _end_session(storage, session, _finalize_fail(storage, session, "Время вышло."))
@@ -390,11 +831,6 @@ def _check_end(storage: Storage, session: NeutralCaptureSession) -> ActionResult
     if _check_capture(session):
         return _end_session(storage, session, _finalize_success(storage, session))
     return None
-
-
-def _advance(session: NeutralCaptureSession) -> None:
-    session.turn_seq += 1
-    session.turn_deadline = _deadline_iso(NCAP_TURN_SECONDS)
 
 
 def _after_turn(storage: Storage, session: NeutralCaptureSession) -> ActionResult | None:
@@ -416,15 +852,27 @@ def _save_turn(storage: Storage, session: NeutralCaptureSession, expected_seq: i
     return True
 
 
+def _require_active_turn(session: NeutralCaptureSession, telegram_id: int) -> ActionResult | None:
+    if session.hp.get(str(telegram_id), 0) <= 0:
+        return ActionResult(False, "Ты выведен из строя.")
+    if session.active_player() != telegram_id:
+        active = session.active_player()
+        return ActionResult(False, f"Сейчас ход другого бойца (ID {active}).")
+    return None
+
+
 def ncap_move(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
     session = get_ncap_session(storage, telegram_id)
     if session is None:
         return ActionResult(False, "Нет активного захвата.")
+    blocked_turn = _require_active_turn(session, telegram_id)
+    if blocked_turn:
+        return blocked_turn
     delta = MOVE_DELTAS.get(direction)
     if delta is None:
         return ActionResult(False, "Некорректное направление.")
     turn_seq = session.turn_seq
-    pos = session.player_pos
+    pos = session.pos(telegram_id)
     nxt = (pos[0] + delta[0], pos[1] + delta[1])
     if not (0 <= nxt[0] < session.grid and 0 <= nxt[1] < session.grid):
         return ActionResult(False, "Край поля.")
@@ -432,7 +880,7 @@ def ncap_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
     blocked.discard(pos)
     if nxt in blocked and nxt not in session.cover:
         return ActionResult(False, "Клетка занята.")
-    session.player_pos = nxt
+    session.positions[str(telegram_id)] = [nxt[0], nxt[1]]
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player and nxt in session.hostiles:
         idx = session.hostiles.index(nxt)
@@ -443,25 +891,28 @@ def ncap_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         if idx < len(session.hostile_kinds):
             session.hostile_kinds.pop(idx)
         dmg = apply_incoming_damage(random.randint(6, 12), player, min_damage=2)
-        session.hp = max(0, session.hp - dmg)
+        session.hp[str(telegram_id)] = max(0, session.hp.get(str(telegram_id), 0) - dmg)
         label = "Бандит" if kind in ("bandit", "maloy", "mercenary", "soldier") else "Мутант"
         session.log.append(f"{label} в ближнем бою: −{dmg} HP.")
-    done = _check_player_dead(storage, session)
+    done = _check_end(storage, session)
     if done:
         return done
-    _advance(session)
+    _advance_turn(session)
     done = _after_turn(storage, session)
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)
-    return ActionResult(True, "Шаг.", payload={"ncap_active": True})
+    return ActionResult(True, "Шаг.", payload={"ncap_active": True, "notify_all": session.player_ids})
 
 
 def ncap_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
     session = get_ncap_session(storage, telegram_id)
     if session is None:
         return ActionResult(False, "Нет активного захвата.")
+    blocked_turn = _require_active_turn(session, telegram_id)
+    if blocked_turn:
+        return blocked_turn
     if direction not in MOVE_DELTAS:
         return ActionResult(False, "Некорректный выстрел.")
     turn_seq = session.turn_seq
@@ -470,7 +921,7 @@ def ncap_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
         return ActionResult(False, "Персонаж не найден.")
     weapon = str(player.equipment.get("weapon", "Нож"))
     rng = weapon_shoot_range(weapon)
-    origin = session.player_pos
+    origin = session.pos(telegram_id)
     cover_set = set(session.cover)
     targets = {pos: "host" for pos in session.hostiles}
     hit_cell, hit_kind = ray_cast_first_hit(
@@ -491,41 +942,48 @@ def ncap_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
             note = "Попал!"
     else:
         session.log.append("Промах.")
-    done = _check_player_dead(storage, session)
+    done = _check_end(storage, session)
     if done:
         return done
-    _advance(session)
+    _advance_turn(session)
     done = _after_turn(storage, session)
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)
-    return ActionResult(True, note, payload={"ncap_active": True})
+    return ActionResult(True, note, payload={"ncap_active": True, "notify_all": session.player_ids})
 
 
 def ncap_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     session = get_ncap_session(storage, telegram_id)
     if session is None:
         return ActionResult(False, "Нет активного захвата.")
-    if session.medkit_used:
+    blocked_turn = _require_active_turn(session, telegram_id)
+    if blocked_turn:
+        return blocked_turn
+    if session.medkits_used.get(str(telegram_id), False):
         return ActionResult(False, "Аптечку уже использовал.")
     turn_seq = session.turn_seq
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Персонаж не найден.")
-    result, new_hp = use_tactical_medkit(storage, telegram_id, session.hp)
+    current_hp = session.hp.get(str(telegram_id), 0)
+    result, new_hp = use_tactical_medkit(storage, telegram_id, current_hp)
     if not result.ok:
         return result
-    session.hp = new_hp
-    session.medkit_used = True
+    session.hp[str(telegram_id)] = new_hp
+    session.medkits_used[str(telegram_id)] = True
     session.log.append("Аптечка.")
-    _advance(session)
+    done = _check_end(storage, session)
+    if done:
+        return done
+    _advance_turn(session)
     done = _after_turn(storage, session)
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)
-    return ActionResult(True, result.text, payload={"ncap_active": True})
+    return ActionResult(True, result.text, payload={"ncap_active": True, "notify_all": session.player_ids})
 
 
 def ncap_forfeit(storage: Storage, telegram_id: int) -> ActionResult:
@@ -561,7 +1019,8 @@ def process_ncap_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
         match_deadline = _parse_deadline(session.match_deadline)
         if match_deadline and now > match_deadline:
             done = _end_session(storage, session, _finalize_fail(storage, session, "Время вышло."))
-            outcomes.append((session.telegram_id, done))
+            for pid in session.player_ids:
+                outcomes.append((pid, done))
             continue
         deadline = _parse_deadline(session.turn_deadline)
         if deadline is None or now <= deadline:
@@ -569,35 +1028,44 @@ def process_ncap_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
             continue
         turn_seq = session.turn_seq
         session.log.append("Тайм-аут хода.")
-        _advance(session)
+        _advance_turn(session)
         done = _after_turn(storage, session)
         if done:
-            outcomes.append((session.telegram_id, done))
+            for pid in session.player_ids:
+                outcomes.append((pid, done))
             continue
         still.append(str(sid))
         if _save_turn(storage, session, turn_seq):
-            outcomes.append((session.telegram_id, ActionResult(True, "Ход пропущен.", payload={"ncap_active": True})))
+            skip = ActionResult(True, "Ход пропущен.", payload={"ncap_active": True, "notify_all": session.player_ids})
+            for pid in session.player_ids:
+                outcomes.append((pid, skip))
     storage.set_meta(ACTIVE_IDS_KEY, json.dumps(still, ensure_ascii=False))
     return outcomes
 
 
-def ncap_status_caption(session: NeutralCaptureSession, player: Character | None) -> str:
+def ncap_status_caption(session: NeutralCaptureSession, player: Character | None, viewer_id: int) -> str:
     lines = [f"🎯 Захват «{session.location_name}»"]
     deadline = _parse_deadline(session.match_deadline)
     if deadline:
         secs = max(0, int((deadline - _utc_now()).total_seconds()))
         lines.append(f"⏱ {secs // 60}:{secs % 60:02d}")
+    active = session.active_player()
+    lines.append(f"Бойцов: {len(_alive_players(session))}/{len(session.player_ids)}")
     lines.append(f"Врагов: {len(session.hostiles)} · захват {session.capture_progress}/{NCAP_CAPTURE_TURNS}")
     if player:
         weapon = str(player.equipment.get("weapon", "Нож"))
-        lines.append(f"HP {session.hp} · дальность {weapon_shoot_range(weapon)}")
+        lines.append(f"HP {session.hp.get(str(viewer_id), 0)} · дальность {weapon_shoot_range(weapon)}")
+    if active == viewer_id:
+        lines.append("▶️ Твой ход")
+    else:
+        lines.append(f"⏳ Ход бойца ID {active}")
     lines.append("🔷 синяя клетка на карте = вы")
     if session.log:
         lines.append(session.log[-1][:80])
     return "\n".join(lines)
 
 
-def render_ncap_frame(storage: Storage, session: NeutralCaptureSession) -> bytes:
+def render_ncap_frame(storage: Storage, session: NeutralCaptureSession, viewer_id: int) -> bytes:
     cell = 72
     grid = session.grid
     grid_px = grid * cell
@@ -633,27 +1101,31 @@ def render_ncap_frame(storage: Storage, session: NeutralCaptureSession) -> bytes
             paste_npc_sprite(canvas, draw, cx=cx, cy=cy, kind=sprite_key, diameter=56)
         else:
             paste_mutant_sprite(canvas, draw, cx=cx, cy=cy, kind=sprite_key, diameter=56)
-    px, py = session.player_pos
-    pcx = margin + px * cell + cell // 2
-    pcy = margin + py * cell + cell // 2
-    paste_player_avatar(
-        canvas,
-        draw,
-        storage,
-        pid=session.telegram_id,
-        cx=pcx,
-        cy=pcy,
-        diameter=52,
-        ring_color=(80, 200, 255),
-        hp=session.hp,
-        is_active=True,
-        viewer_cell=(margin, cell, px, py),
-    )
+    active = session.active_player()
+    viewer_pos = session.pos(viewer_id)
+    for idx, pid in enumerate(session.player_ids):
+        px, py = session.pos(pid)
+        pcx = margin + px * cell + cell // 2
+        pcy = margin + py * cell + cell // 2
+        color = PLAYER_COLORS[idx % len(PLAYER_COLORS)]
+        paste_player_avatar(
+            canvas,
+            draw,
+            storage,
+            pid=pid,
+            cx=pcx,
+            cy=pcy,
+            diameter=52,
+            ring_color=color,
+            hp=session.hp.get(str(pid), 0),
+            is_active=(pid == active),
+            viewer_cell=(margin, cell, viewer_pos[0], viewer_pos[1]) if pid == viewer_id else None,
+        )
     pl = margin + grid_px + 16
     draw.rounded_rectangle((pl, margin, width - margin, height - margin), radius=14, fill=(44, 46, 50), outline=(90, 94, 100), width=2)
     small = load_tactical_font(13)
     y = margin + 16
-    player = storage.get_character(session.telegram_id, refresh_energy=False)
+    player = storage.get_character(viewer_id, refresh_energy=False)
     deadline = _parse_deadline(session.match_deadline)
     draw.text((pl + 14, y), f"Захват {session.location_name[:16]}", fill=(220, 220, 220), font=small)
     y += 18
@@ -667,7 +1139,7 @@ def render_ncap_frame(storage: Storage, session: NeutralCaptureSession) -> bytes
     y += 18
     if player:
         weapon = str(player.equipment.get("weapon", "Нож"))
-        draw.text((pl + 14, y), f"HP {session.hp} · дальн. {weapon_shoot_range(weapon)}", fill=(200, 200, 200), font=small)
+        draw.text((pl + 14, y), f"HP {session.hp.get(str(viewer_id), 0)} · дальн. {weapon_shoot_range(weapon)}", fill=(200, 200, 200), font=small)
         y += 18
     draw.text((pl + 14, y), "Голубой квадрат = вы", fill=(120, 200, 230), font=small)
     y += 18

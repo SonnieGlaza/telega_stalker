@@ -12,7 +12,7 @@ def player_busy_reason(storage: Storage, telegram_id: int, *, skip: str | None =
     from app.quest_mission import get_mission_session
     from app.artifact_hunt import get_hunt_session
     from app.clan_war_grid import get_cwar_session_by_player
-    from app.neutral_capture import get_ncap_session
+    from app.neutral_capture import get_ncap_session, get_ncap_lobby_by_player
     from app.game_logic import is_traveling
 
     if skip != "duel" and get_duel_session_by_player(storage, telegram_id):
@@ -26,6 +26,8 @@ def player_busy_reason(storage: Storage, telegram_id: int, *, skip: str | None =
             return "Ты в тактическом рейде — сначала закончи бой."
     if skip != "ncap" and get_ncap_session(storage, telegram_id):
         return "Ты захватываешь нейтральную точку — сначала закончи."
+    if skip != "ncap" and get_ncap_lobby_by_player(storage, telegram_id):
+        return "Ты в группе захвата нейтральной точки — сначала выйди или начни вылазку."
     if skip != "arena":
         from app.arena_grid import get_arena_session
 

@@ -1228,8 +1228,17 @@ def run_smoke_check() -> None:
         assert not daily2.ok
         assert "уже получена" in daily2.text.lower()
 
-        # Neutral capture: one assault per location at a time.
-        from app.neutral_capture import start_neutral_capture, ncap_forfeit, get_ncap_session
+        # Neutral capture: lobby min 2, one assault per location at a time.
+        from app.neutral_capture import (
+            NCAP_MIN_MEMBERS,
+            create_or_join_ncap_lobby,
+            get_ncap_lobby_by_player,
+            get_ncap_session,
+            join_ncap_lobby,
+            ncap_forfeit,
+            start_ncap_from_lobby,
+            start_neutral_capture,
+        )
 
         neutral_loc = next(
             loc["name"]
@@ -1238,12 +1247,19 @@ def run_smoke_check() -> None:
         )
         storage.restore_energy(111, 100)
         storage.restore_energy(222, 100)
-        ncap1, _ = start_neutral_capture(storage, 111, str(neutral_loc))
-        assert ncap1.ok, ncap1.text
-        ncap2, _ = start_neutral_capture(storage, 222, str(neutral_loc))
-        assert not ncap2.ok
-        assert "захват" in ncap2.text.lower()
+        solo_start, _ = start_neutral_capture(storage, 111, str(neutral_loc))
+        assert solo_start.ok
+        assert get_ncap_lobby_by_player(storage, 111) is not None
+        too_few, _ = start_ncap_from_lobby(storage, 111)
+        assert not too_few.ok
+        assert str(NCAP_MIN_MEMBERS) in too_few.text
+        join_ncap_lobby(storage, 222, get_ncap_lobby_by_player(storage, 111).lobby_id)
+        ncap_start, _ = start_ncap_from_lobby(storage, 111)
+        assert ncap_start.ok, ncap_start.text
         assert get_ncap_session(storage, 111) is not None
+        ncap_busy, _ = start_neutral_capture(storage, 222, str(neutral_loc))
+        assert not ncap_busy.ok
+        assert "захват" in ncap_busy.text.lower() or "штурм" in ncap_busy.text.lower()
         ncap_forfeit(storage, 111)
         assert get_ncap_session(storage, 111) is None
 
