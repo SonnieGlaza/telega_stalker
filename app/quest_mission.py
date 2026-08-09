@@ -740,7 +740,7 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
             "Нет аптечек в инвентаре (обычная / армейская / научная).",
             payload={"mission_active": True},
         )
-    result = use_medkit_item(storage, telegram_id, chosen)
+    result = use_medkit_item(storage, telegram_id, chosen, skip_busy="quest")
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return result

@@ -370,6 +370,34 @@ def normalize_shop_item_key(item_key: str) -> str:
     return SHOP_ITEM_ALIASES.get(item_key, item_key)
 
 
+# Предпочитаемые ключи каталога для групп алиасов (продажа/инвентарь).
+_SELL_CANONICAL_PRIMARY: dict[str, tuple[str, ...]] = {
+    "armor_zarya": ("armor_sunrise",),
+    "armor_berill5m": ("armor_bulat",),
+    "armor_exo": ("armor_exoskeleton",),
+    "weapon_fora12": ("weapon_fort12",),
+}
+
+
+def canonical_sell_item_key(item_key: str) -> str:
+    item_key = normalize_shop_item_key(item_key)
+    for canon, aliases in _SELL_CANONICAL_PRIMARY.items():
+        if item_key == canon or item_key in aliases:
+            return canon
+    return item_key
+
+
+def _reject_if_player_busy(
+    storage: Storage, telegram_id: int, *, skip: str | None = None
+) -> ActionResult | None:
+    from app.player_busy import player_busy_reason
+
+    busy = player_busy_reason(storage, telegram_id, skip=skip)
+    if busy:
+        return ActionResult(False, busy)
+    return None
+
+
 ARTIFACT_DETECTORS: tuple[tuple[str, str, int], ...] = (
     ("detector_otklik", "Отклик", 17),
     ("detector_medved", "Медведь", 20),
@@ -2806,6 +2834,9 @@ def accept_quest_contract(storage: Storage, telegram_id: int, contract_key: str)
         return ActionResult(False, travel_block_text(character) or "Ты в пути.")
     if storage.get_active_contract(telegram_id):
         return ActionResult(False, "Сначала заверши или отмени текущий контракт.")
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
 
     template = QUEST_CONTRACTS.get(contract_key)
     if template is None:
@@ -2857,6 +2888,9 @@ def cancel_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа.")
     if not storage.get_active_contract(telegram_id):
         return ActionResult(False, "Нет активного контракта.")
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     from app.quest_mission import clear_mission_session
 
     clear_mission_session(storage, telegram_id)
@@ -3123,13 +3157,18 @@ def use_energy_drink(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     if not storage.remove_item(telegram_id, "energy_drink", 1):
         return ActionResult(False, "У тебя нет энергетика в инвентаре.")
     storage.restore_energy(telegram_id, 35)
     return ActionResult(True, "Ты выпил энергетик и восстановил 35 энергии.")
 
 
-def use_medkit_item(storage: Storage, telegram_id: int, item_key: str = "medkit") -> ActionResult:
+def use_medkit_item(
+    storage: Storage, telegram_id: int, item_key: str = "medkit", *, skip_busy: str | None = None
+) -> ActionResult:
     effect = MEDKIT_EFFECTS.get(item_key)
     if effect is None:
         return ActionResult(False, "Неизвестный тип аптечки.")
@@ -3138,6 +3177,9 @@ def use_medkit_item(storage: Storage, telegram_id: int, item_key: str = "medkit"
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id, skip=skip_busy)
+    if blocked is not None:
+        return blocked
     label = ITEM_LABELS.get(item_key, item_key)
     max_hp = effective_max_health(player)
     heal_cap = int(effect["heal"])
@@ -3203,6 +3245,9 @@ def _consume_survival_item(
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     if not storage.remove_item(telegram_id, item_key, 1):
         return ActionResult(False, f"У тебя нет предмета: {ITEM_LABELS.get(item_key, item_key)}.")
     storage.adjust_survival(
@@ -3667,6 +3712,9 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(character):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
 
     if item_key == "truck" and character.truck_owned:
         return ActionResult(False, "У тебя уже есть грузовик.")
@@ -3699,7 +3747,7 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
         )
     if item_key == "niva":
         storage.set_niva_owned(telegram_id)
-        return ActionResult(True, "Нива куплена: переходы ускоряются в 2 раза.")
+        return ActionResult(True, f"Нива куплена: переходы ×{TRAVEL_SPEED_NIVA:g}.")
     if item_key == "bicycle":
         storage.set_bicycle_owned(telegram_id)
         return ActionResult(
@@ -3926,7 +3974,7 @@ def list_owned_trader_sell_buttons(character: Character, category: str) -> list[
     buttons: list[tuple[str, str]] = []
     seen: set[str] = set()
     for item_key in keys:
-        canon = normalize_shop_item_key(item_key)
+        canon = canonical_sell_item_key(item_key)
         if canon in seen:
             continue
         if not player_owns_sellable_item(character, item_key):
@@ -3964,7 +4012,7 @@ def default_trader_sell_catalog_buttons(category: str) -> list[tuple[str, str]]:
     buttons: list[tuple[str, str]] = []
     seen: set[str] = set()
     for item_key in TRADER_SELL_CATALOG.get(category, ()):
-        canon = normalize_shop_item_key(item_key)
+        canon = canonical_sell_item_key(item_key)
         if canon in seen:
             continue
         item = SHOP_ITEMS.get(canon)
@@ -3994,7 +4042,7 @@ def trader_sell_categories_with_stock(character: Character) -> list[tuple[str, s
 
 
 def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
-    item_key = normalize_shop_item_key(item_key)
+    item_key = canonical_sell_item_key(item_key)
     item = SHOP_ITEMS.get(item_key)
     if item is None:
         return ActionResult(False, "Такого предмета нет.")
@@ -4007,6 +4055,9 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(character):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     if item_key == "truck":
         if not character.truck_owned:
             return ActionResult(False, "У тебя нет грузовика для продажи.")
@@ -4280,6 +4331,9 @@ def unequip_artifact(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     equipped = str(player.equipment.get("artifact", "Нет") or "Нет")
     if not equipped or equipped == "Нет":
         return ActionResult(False, "Артефакт не экипирован.")
@@ -4293,6 +4347,9 @@ def equip_weapon(storage: Storage, telegram_id: int, item_key: str) -> ActionRes
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     if item_key not in WEAPON_CATALOG:
         return ActionResult(False, "Такое оружие нельзя экипировать.")
     if not storage.remove_item(telegram_id, item_key, 1):
@@ -4318,6 +4375,9 @@ def equip_armor(storage: Storage, telegram_id: int, item_key: str) -> ActionResu
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     if item_key not in ARMOR_CATALOG:
         return ActionResult(False, "Такую броню нельзя экипировать.")
     if not storage.remove_item(telegram_id, item_key, 1):
@@ -4347,6 +4407,9 @@ def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     if target not in {"weapon", "armor"}:
         return ActionResult(False, "Неизвестный тип ремонта.")
     item_name = str(player.equipment.get(target, "—"))
@@ -4380,6 +4443,9 @@ def install_armor_upgrade(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     armor_name = str(player.equipment.get("armor", "") or "").strip()
     if not armor_name:
         return ActionResult(False, "Сначала экипируй броню.")
@@ -4406,6 +4472,9 @@ def unequip_armor_upgrade(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     level = armor_defense(player)
     if level <= 0:
         return ActionResult(False, "На броне нет установленных улучшений.")
@@ -4426,6 +4495,9 @@ def repair_truck(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     if not player.truck_owned:
         return ActionResult(False, "У тебя нет грузовика для ремонта.")
     current = max(0, min(100, int(player.truck_durability)))
@@ -4449,6 +4521,9 @@ def repair_niva(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     if not player.niva_owned:
         return ActionResult(False, "У тебя нет Нивы для ремонта.")
     current = max(0, min(100, int(player.niva_durability)))
@@ -4472,6 +4547,9 @@ def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = No
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
 
     chosen_key = item_key
     if chosen_key is None or chosen_key not in ARTIFACT_DROP_KEYS:

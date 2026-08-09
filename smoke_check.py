@@ -184,7 +184,11 @@ def run_smoke_check() -> None:
         from app.game_logic import (
             default_trader_sell_catalog_buttons,
             list_owned_trader_sell_buttons,
+            canonical_sell_item_key,
         )
+
+        assert canonical_sell_item_key("armor_sunrise") == canonical_sell_item_key("armor_zarya")
+        assert canonical_sell_item_key("armor_bulat") == canonical_sell_item_key("armor_berill5m")
 
         storage.change_money(111, 50000)
         assert buy_item(storage, 111, "armor_zarya").ok
@@ -891,6 +895,10 @@ def run_smoke_check() -> None:
         assert smuggle_start.ok, smuggle_start.text
         assert get_active_smuggling(storage, 111)
         assert "ограб" in smuggle_start.text.lower() or "контрабанд" in smuggle_start.text.lower()
+        from app.player_busy import player_busy_reason
+
+        busy_smuggle = player_busy_reason(storage, 111, skip="travel")
+        assert busy_smuggle and "контрабанд" in busy_smuggle.lower()
         past_smuggle = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
         with storage._connect() as conn:
             conn.execute(
@@ -982,8 +990,18 @@ def run_smoke_check() -> None:
         assert session is not None
         assert session.challenger_id == 111
         assert session.target_id == 222
+        from app.player_busy import player_busy_reason
+
+        assert player_busy_reason(storage, 111) is not None
+        blocked_trade = buy_item(storage, 111, "medkit")
+        assert not blocked_trade.ok
         shoot = duel_shoot(storage, 111, "right")
         assert shoot.ok or shoot.payload, shoot.text
+        from app.duel_grid import duel_forfeit
+
+        forfeit = duel_forfeit(storage, 111)
+        assert forfeit.ok, forfeit.text
+        assert get_duel_session_by_player(storage, 111) is None
 
         # Alliance notify payload.
         alliance = propose_alliance(storage, 111, "Бандиты")

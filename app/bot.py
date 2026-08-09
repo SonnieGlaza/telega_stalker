@@ -146,6 +146,7 @@ from app.game_logic import (
     TRAVEL_SPEED_BICYCLE,
     TRAVEL_SPEED_NIVA,
     TRAVEL_SPEED_TRUCK,
+    TRANSPORT_QUEST_REWARD_MULT,
     RESOURCE_POINT_INCOME_PER_HOUR,
     BASE_POINT_INCOME_PER_HOUR,
     build_achievements_overview,
@@ -178,7 +179,6 @@ from app.game_logic import (
     build_quest_overview,
     accept_quest_contract,
     cancel_quest_contract,
-    turn_in_quest_contract,
     try_auto_turn_in_contract,
     run_contract_work,
     is_traveling,
@@ -932,7 +932,10 @@ def _build_info_text(player: Character) -> str:
         f"  пешком ×1, велосипед ×{TRAVEL_SPEED_BICYCLE:g}, "
         f"Нива ×{TRAVEL_SPEED_NIVA:g} + бензин, грузовик ×{TRAVEL_SPEED_TRUCK:g} + дизель. "
         "Награда за контракт (если доехал на этом транспорте): "
-        "пешком ×1, велосипед ×1.5, Нива ×2, грузовик ×3. "
+        f"пешком ×{TRANSPORT_QUEST_REWARD_MULT['foot']:g}, "
+        f"велосипед ×{TRANSPORT_QUEST_REWARD_MULT['bicycle']:g}, "
+        f"Нива ×{TRANSPORT_QUEST_REWARD_MULT['niva']:g}, "
+        f"грузовик ×{TRANSPORT_QUEST_REWARD_MULT['truck']:g}. "
         "На арендованной технике нельзя слезть и идти пешком.\n"
         "• 📋 Контракты: тактическая вылазка 6×6 — обходишь или побеждаешь аномалии, "
         "мутантов и НПС; лимит ходов ~28+ (зависит от локации); "
@@ -1646,6 +1649,8 @@ async def show_inventory(message: Message) -> None:
             build_dead_character_text(player, storage=get_storage()),
             reply_markup=dead_character_keyboard(),
         )
+        return
+    if await reject_if_busy(message, player.telegram_id):
         return
     await message.answer(
         action_result_text(
@@ -3395,20 +3400,6 @@ async def contract_go_home_callback(callback: CallbackQuery, bot: Bot) -> None:
             pass
 
 
-@router.callback_query(F.data == "contract:turnin")
-async def contract_turnin_callback(callback: CallbackQuery) -> None:
-    result = turn_in_quest_contract(get_storage(), callback.from_user.id)
-    await reply_action_result(callback, result.text)
-    storage = get_storage()
-    player = storage.get_character(callback.from_user.id, refresh_energy=False)
-    if player is not None:
-        text, keyboard = _quests_menu_payload(storage, player)
-        try:
-            await edit_menu_message(callback, text, keyboard, answer_callback=False)
-        except TelegramBadRequest:
-            pass
-
-
 @router.callback_query(F.data == "contract:cancel")
 async def contract_cancel_callback(callback: CallbackQuery) -> None:
     result = cancel_quest_contract(get_storage(), callback.from_user.id)
@@ -3876,6 +3867,8 @@ async def drink_energy(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_busy(message, player.telegram_id):
         return
     result = use_energy_drink(get_storage(), message.from_user.id)
     await message.answer(action_result_text(message.from_user.id, result.text))
@@ -4643,8 +4636,9 @@ async def show_travel(message: Message) -> None:
     else:
         text = (
             "Выбери локацию, затем транспорт (велик доступен даже если есть Нива/грузовик).\n"
-            f"Пешком ×1, велосипед ×1.5 (+награда контракта ×1.5 если доехал на нём), "
-            f"Нива ×2, грузовик ×{TRAVEL_SPEED_TRUCK:g} (+ дизель).\n"
+            f"Пешком ×1, велосипед ×{TRAVEL_SPEED_BICYCLE:g} "
+            f"(+награда контракта ×{TRANSPORT_QUEST_REWARD_MULT['bicycle']:g} если доехал на нём), "
+            f"Нива ×{TRAVEL_SPEED_NIVA:g}, грузовик ×{TRAVEL_SPEED_TRUCK:g} (+ дизель).\n"
             "Переход занимает реальное время (1 игровая мин ≈ 10 сек).\n\n"
             f"{describe_travel_fuel_status(player)}"
         )
