@@ -31,11 +31,17 @@ REPLY_NAV_BUTTONS: frozenset[str] = frozenset(
         "🔗 Реферальная система",
         "⬅️ В меню",
         "⚔️ Война",
+        "⚔️ Арена",
         "🗺 Переход",
         "🪖 Рейды",
         "👥 Совместная вылазка",
+        "⚡ Выпить энергетик",
     }
 )
+
+
+def is_reply_menu_button(text: str | None) -> bool:
+    return (text or "").strip() in REPLY_NAV_BUTTONS
 
 
 async def abort_fsm_if_nav(message: Message, state: FSMContext) -> bool:

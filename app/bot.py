@@ -5,9 +5,9 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
-from aiogram import Bot, Dispatcher, F, Router
+from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
@@ -23,9 +23,10 @@ from aiogram.types import (
     Message,
     PreCheckoutQuery,
     ReplyKeyboardMarkup,
+    TelegramObject,
 )
 
-from app.fsm_nav import abort_fsm_if_nav
+from app.fsm_nav import abort_fsm_if_nav, is_reply_menu_button
 from app.artifact_hunt import (
     abandon_artifact_hunt,
     get_hunt_session,
@@ -1584,6 +1585,41 @@ async def reject_if_busy(
     return True
 
 
+async def show_death_screen(
+    message_or_callback: Message | CallbackQuery,
+    player: Character,
+    *,
+    bot: Bot | None = None,
+) -> None:
+    text = build_dead_character_text(player, storage=get_storage())
+    keyboard = dead_character_keyboard()
+    if isinstance(message_or_callback, CallbackQuery):
+        await safe_callback_answer(message_or_callback)
+        if message_or_callback.message is not None:
+            await message_or_callback.message.answer(text, reply_markup=keyboard)
+        elif bot is not None:
+            await bot.send_message(player.telegram_id, text, reply_markup=keyboard)
+    else:
+        await message_or_callback.answer(text, reply_markup=keyboard)
+
+
+class DeadPlayerMenuMiddleware(BaseMiddleware):
+    """Любая кнопка reply-меню при HP=0 — показать экран смерти вместо действия."""
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        if isinstance(event, Message) and is_reply_menu_button(event.text):
+            player = get_storage().get_character(event.from_user.id, refresh_energy=False)
+            if player is not None and player.health <= 0:
+                await show_death_screen(event, player)
+                return None
+        return await handler(event, data)
+
+
 async def reject_if_dead(message_or_callback: Message | CallbackQuery, player: Character) -> bool:
     """Если персонаж мёртв — показать историю смерти + клавиатуру спасения и вернуть True.
 
@@ -1594,14 +1630,7 @@ async def reject_if_dead(message_or_callback: Message | CallbackQuery, player: C
     """
     if player.health > 0:
         return False
-    text = build_dead_character_text(player, storage=get_storage())
-    keyboard = dead_character_keyboard()
-    if isinstance(message_or_callback, CallbackQuery):
-        await safe_callback_answer(message_or_callback)
-        if message_or_callback.message is not None:
-            await message_or_callback.message.answer(text, reply_markup=keyboard)
-    else:
-        await message_or_callback.answer(text, reply_markup=keyboard)
+    await show_death_screen(message_or_callback, player)
     return True
 
 
@@ -2688,8 +2717,7 @@ async def _push_offline_survival_deaths(bot: Bot, storage: Storage) -> None:
             try:
                 text = build_dead_character_text(after, storage=storage)
                 append_death_log(storage, telegram_id, text)
-                if is_notify_enabled(storage, telegram_id, "death"):
-                    await bot.send_message(telegram_id, text, reply_markup=dead_character_keyboard())
+                await bot.send_message(telegram_id, text, reply_markup=dead_character_keyboard())
             except Exception:
                 logger.debug("Failed offline survival death push to %s", telegram_id)
         if index % SURVIVAL_DEATH_CHECK_YIELD_EVERY == 0:
@@ -2715,12 +2743,33 @@ async def _send_battle_death_notice(
         storage=storage,
     )
     append_death_log(storage, user_id, text)
-    if not is_notify_enabled(storage, user_id, "death"):
-        return
     try:
         await bot.send_message(user_id, text, reply_markup=dead_character_keyboard())
     except Exception:
         logger.exception("Failed battle death notice to %s", user_id)
+
+
+async def _deliver_player_message_or_death(
+    bot: Bot,
+    telegram_id: int,
+    result_text: str,
+    *,
+    cause: str | None = None,
+    where: str | None = None,
+    killer_name: str | None = None,
+) -> None:
+    storage = get_storage()
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is not None and player.health <= 0:
+        await _send_battle_death_notice(
+            bot,
+            telegram_id,
+            player,
+            where=where or player.location,
+            cause=cause or "combat",
+        )
+        return
+    await bot.send_message(telegram_id, action_result_text(telegram_id, result_text))
 
 
 async def _send_or_edit_quest_mission_frame(
@@ -2926,7 +2975,7 @@ async def _notify_duel_finished(bot: Bot, result: Any) -> None:
     for pid, key in ((winner_id, "winner_text"), (loser_id, "loser_text")):
         text = str(payload.get(key) or result.text)
         try:
-            await bot.send_message(pid, action_result_text(pid, text))
+            await _deliver_player_message_or_death(bot, pid, text, cause="duel")
         except Exception:
             logger.exception("Failed duel result notify to %s", pid)
 
@@ -2987,7 +3036,12 @@ async def _notify_cwar_finished(bot: Bot, result: Any) -> None:
     member_ids = payload.get("member_ids") or []
     for pid in member_ids:
         try:
-            await bot.send_message(int(pid), action_result_text(int(pid), result.text))
+            await _deliver_player_message_or_death(
+                bot,
+                int(pid),
+                result.text,
+                cause="cwar",
+            )
         except Exception:
             logger.exception("Failed cwar result notify to %s", pid)
 
@@ -3067,7 +3121,12 @@ async def _notify_rgrid_finished(bot: Bot, result: Any) -> None:
         notify_set.add(int(defender_leader_id))
     for pid in notify_set:
         try:
-            await bot.send_message(int(pid), action_result_text(int(pid), result.text))
+            await _deliver_player_message_or_death(
+                bot,
+                int(pid),
+                result.text,
+                cause="raid",
+            )
         except Exception:
             logger.exception("Failed rgrid result notify to %s", pid)
 
@@ -3140,7 +3199,7 @@ async def _handle_ncap_action(bot: Bot, callback: CallbackQuery, result: Any) ->
         await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
         notify_ids = [int(x) for x in (payload.get("notify_all") or [callback.from_user.id])]
         for pid in notify_ids:
-            await bot.send_message(pid, action_result_text(pid, result.text))
+            await _deliver_player_message_or_death(bot, pid, result.text, cause="ncap")
         await safe_callback_answer(callback, "Захват завершён")
         return
     if not result.ok:
@@ -3191,7 +3250,7 @@ async def _handle_arena_action(bot: Bot, callback: CallbackQuery, result: Any) -
         tid = int(payload.get("telegram_id") or callback.from_user.id)
         if msg_id:
             await _clear_tactical_keyboards(bot, {str(tid): int(msg_id)})
-        await bot.send_message(tid, action_result_text(tid, result.text))
+        await _deliver_player_message_or_death(bot, tid, result.text, cause="arena")
         await safe_callback_answer(callback, "Арена завершена")
         return
     if not result.ok:
@@ -3264,12 +3323,11 @@ async def _notify_coop_finished(bot: Bot, result: Any) -> None:
                     killer_name=killer_name,
                 )
                 append_death_log(storage, pid, death_text)
-                if is_notify_enabled(storage, pid, "death"):
-                    await bot.send_message(
-                        pid,
-                        death_text,
-                        reply_markup=dead_character_keyboard(),
-                    )
+                await bot.send_message(
+                    pid,
+                    death_text,
+                    reply_markup=dead_character_keyboard(),
+                )
                 # На успешном коопе живые видят награду; погибшему — только смерть.
                 if payload.get("coop_success"):
                     continue
@@ -6534,7 +6592,12 @@ async def run_bot() -> None:
                         await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
                         notify_ids = [int(x) for x in (payload.get("notify_all") or [pid])]
                         for notify_pid in notify_ids:
-                            await bot.send_message(notify_pid, action_result_text(notify_pid, result.text))
+                            await _deliver_player_message_or_death(
+                                bot,
+                                notify_pid,
+                                result.text,
+                                cause="ncap",
+                            )
                         continue
                     session = get_ncap_session(storage, pid)
                     if session:
@@ -6548,7 +6611,7 @@ async def run_bot() -> None:
                         msg_id = payload.get("message_id")
                         if msg_id:
                             await _clear_tactical_keyboards(bot, {str(pid): int(msg_id)})
-                        await bot.send_message(pid, action_result_text(pid, result.text))
+                        await _deliver_player_message_or_death(bot, pid, result.text, cause="arena")
                         continue
                     session = get_arena_session(storage, pid)
                     if session:
@@ -6560,6 +6623,7 @@ async def run_bot() -> None:
     zone_task = asyncio.create_task(periodic_zone_systems())
     travel_eta_task = asyncio.create_task(periodic_travel_live_eta())
     tactical_task = asyncio.create_task(periodic_tactical_turns())
+    router.message.middleware(DeadPlayerMenuMiddleware())
     dp = Dispatcher()
     dp.include_router(router)
     try:
