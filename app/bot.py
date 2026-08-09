@@ -930,8 +930,9 @@ async def admin_unstick_player(message: Message, bot: Bot, command: CommandObjec
         try:
             await bot.send_message(
                 telegram_id,
-                f"🔧 Админ разблокировал аккаунт.\n\n{text}",
+                f"🔧 Админ разблокировал аккаунт.\n\n{_plain_death_text(text)}",
                 reply_markup=dead_character_keyboard(),
+                parse_mode=None,
             )
         except Exception:
             logger.exception("Failed unstick death notify to %s", telegram_id)
@@ -1822,18 +1823,15 @@ async def show_death_screen(
             keyboard,
             callback=callback,
         )
-        if sent:
-            from app.player_busy import clear_stale_activity_for_dead_player
-
-            clear_stale_activity_for_dead_player(storage, player.telegram_id)
-        if callback is not None and sent and dismiss_map:
-            await _dismiss_battle_map(callback)
-        elif callback is not None and callback.message is not None and not sent:
-            await _force_death_keyboard_delivery(
+        if not sent and callback is not None and callback.message is not None:
+            sent = await _force_death_keyboard_delivery(
                 send_bot,
                 player.telegram_id,
                 callback=callback,
             )
+        await _finalize_death_delivery(storage, player.telegram_id, sent)
+        if callback is not None and sent and dismiss_map:
+            await _dismiss_battle_map(callback)
         return
 
     if isinstance(message_or_callback, CallbackQuery):
@@ -1991,10 +1989,7 @@ async def show_inventory(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     if player.health <= 0:
-        await message.answer(
-            build_dead_character_text(player, storage=get_storage()),
-            reply_markup=dead_character_keyboard(),
-        )
+        await show_death_screen(message, player)
         return
     if await reject_if_busy(message, player.telegram_id):
         return
@@ -2018,11 +2013,7 @@ async def open_inventory_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     if player.health <= 0:
-        await edit_menu_message(
-            callback,
-            build_dead_character_text(player, storage=get_storage()),
-            dead_character_keyboard(),
-        )
+        await show_death_screen(callback, player, bot=callback.bot)
         return
     await edit_menu_message(
         callback,
@@ -2042,11 +2033,7 @@ async def open_inventory_consumables_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     if player.health <= 0:
-        await edit_menu_message(
-            callback,
-            build_dead_character_text(player, storage=get_storage()),
-            dead_character_keyboard(),
-        )
+        await show_death_screen(callback, player, bot=callback.bot)
         return
     await edit_menu_message(
         callback,
@@ -2080,11 +2067,7 @@ async def stash_menu_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     if player.health <= 0:
-        await edit_menu_message(
-            callback,
-            build_dead_character_text(player, storage=storage),
-            dead_character_keyboard(),
-        )
+        await show_death_screen(callback, player, bot=callback.bot)
         return
     text, keyboard = _stash_menu_payload(storage, player)
     await edit_menu_message(callback, text, keyboard)
@@ -2257,10 +2240,7 @@ async def show_profile(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     if player.health <= 0:
-        await message.answer(
-            build_dead_character_text(player, storage=get_storage()),
-            reply_markup=dead_character_keyboard(),
-        )
+        await show_death_screen(message, player)
         return
     await send_profile_snapshot(message, player, reply_markup=_pda_keyboard_for(player))
 
@@ -2272,10 +2252,7 @@ async def show_trader(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     if player.health <= 0:
-        await message.answer(
-            build_dead_character_text(player, storage=get_storage()),
-            reply_markup=dead_character_keyboard(),
-        )
+        await show_death_screen(message, player)
         return
     if await reject_if_busy(message, player.telegram_id):
         return
@@ -2559,11 +2536,7 @@ async def equip_root_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     if player.health <= 0:
-        await edit_menu_message(
-            callback,
-            build_dead_character_text(player, storage=get_storage()),
-            dead_character_keyboard(),
-        )
+        await show_death_screen(callback, player, bot=callback.bot)
         return
     text, items = build_equip_root_text(player)
     inv_upgrades = int(player.inventory.get("armor_upgrade", 0))
@@ -3108,8 +3081,6 @@ async def _deliver_death_screen(
 
     if callback is not None and callback.message is not None:
         message = callback.message
-        if await _attach_death_keyboard(message, keyboard):
-            return True, False
         try:
             await message.answer(
                 plain,
@@ -3128,6 +3099,8 @@ async def _deliver_death_screen(
             return True, True
         except Exception:
             logger.exception("Death reply fallback failed for %s", user_id)
+        if await _attach_death_keyboard(message, keyboard):
+            return True, False
 
     if await _send_death_message_safe(bot, user_id, text, keyboard):
         return True, callback is not None
@@ -3137,6 +3110,14 @@ async def _deliver_death_screen(
             return True, False
 
     return False, False
+
+
+async def _finalize_death_delivery(storage: Storage, telegram_id: int, sent: bool) -> None:
+    if not sent:
+        return
+    from app.player_busy import clear_stale_activity_for_dead_player
+
+    clear_stale_activity_for_dead_player(storage, telegram_id)
 
 
 async def _force_death_keyboard_delivery(
@@ -3183,7 +3164,7 @@ async def _handle_quest_mission_death_callback(
         await safe_callback_answer(callback, "Персонаж не найден.", show_alert=True)
         return
     await safe_callback_answer(callback)
-    sent = await _send_battle_death_notice(
+    await _send_battle_death_notice(
         callback.bot,
         telegram_id,
         player,
@@ -3191,12 +3172,6 @@ async def _handle_quest_mission_death_callback(
         where=str(payload.get("death_location") or player.location),
         cause=str(payload.get("death_cause") or "combat"),
     )
-    if not sent:
-        await _force_death_keyboard_delivery(
-            callback.bot,
-            telegram_id,
-            callback=callback,
-        )
 
 
 SURVIVAL_DEATH_CHECK_EVERY_TICKS = 5  # ~раз в 5 мин при POINTS_INCOME_TICK_SECONDS=60
@@ -3218,12 +3193,9 @@ async def _push_offline_survival_deaths(bot: Bot, storage: Storage) -> None:
             try:
                 text = build_dead_character_text(after, storage=storage)
                 append_death_log(storage, telegram_id, text)
-                await bot.send_message(
-                    telegram_id,
-                    _plain_death_text(text),
-                    reply_markup=dead_character_keyboard(),
-                    parse_mode=None,
-                )
+                keyboard = dead_character_keyboard()
+                if not await _send_death_message_safe(bot, telegram_id, text, keyboard):
+                    await _force_death_keyboard_delivery(bot, telegram_id)
             except Exception:
                 logger.debug("Failed offline survival death push to %s", telegram_id)
         if index % SURVIVAL_DEATH_CHECK_YIELD_EVERY == 0:
@@ -3249,12 +3221,11 @@ async def _send_battle_death_notice(
     append_death_log(storage, user_id, text)
     keyboard = dead_character_keyboard()
     sent, dismiss_map = await _deliver_death_screen(bot, user_id, text, keyboard, callback=callback)
-    if sent:
-        from app.player_busy import clear_stale_activity_for_dead_player
-
-        clear_stale_activity_for_dead_player(storage, user_id)
-        if callback is not None and dismiss_map:
-            await _dismiss_battle_map(callback)
+    if not sent and callback is not None:
+        sent = await _force_death_keyboard_delivery(bot, user_id, callback=callback)
+    await _finalize_death_delivery(storage, user_id, sent)
+    if callback is not None and sent and dismiss_map:
+        await _dismiss_battle_map(callback)
     return sent
 
 
@@ -3910,8 +3881,9 @@ async def _notify_coop_finished(bot: Bot, result: Any) -> None:
                 append_death_log(storage, pid, death_text)
                 await bot.send_message(
                     pid,
-                    death_text,
+                    _plain_death_text(death_text),
                     reply_markup=dead_character_keyboard(),
+                    parse_mode=None,
                 )
                 # На успешном коопе живые видят награду; погибшему — только смерть.
                 if payload.get("coop_success"):

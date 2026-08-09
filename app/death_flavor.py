@@ -327,7 +327,7 @@ def generate_death_story(
     opener = _pick(CAUSE_OPENERS[death_cause], rng)
     wake = _pick(WAKE_LINES, rng)
     loot = _pick(LOOT_LINES, rng)
-    home_base = home or "базу"
+    home_base = h(home or "базу")
     hp = int(character.health)
     cap = int(max_hp) if max_hp is not None else max(hp, 100)
     name = h(character.nickname)

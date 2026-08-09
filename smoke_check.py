@@ -237,7 +237,10 @@ def run_smoke_check() -> None:
         ch = storage.get_character(111, refresh_energy=False)
         assert ch is not None
         if ch.health <= 0:
-            storage.change_health(111, ch.max_health - ch.health, max_health=ch.max_health)
+            from app.game_logic import effective_max_health
+
+            max_hp = int(effective_max_health(ch))
+            storage.change_health(111, max_hp - ch.health, max_health=max_hp)
 
         travel_result = travel_to(storage, 111, "Янтарь")
         assert travel_result.ok, travel_result.text
