@@ -1768,7 +1768,7 @@ def resolve_dead_player(
     return None
 
 
-DEAD_PLAYER_CALLBACKS = frozenset({"respawn:base", "death:log"})
+DEAD_PLAYER_CALLBACKS = frozenset({"respawn:base"})
 
 # Режимы с картой: смерть/урон обрабатывает свой хендлер, middleware не перехватывает.
 DEATH_MIDDLEWARE_BYPASS_PREFIXES = (
@@ -4068,7 +4068,7 @@ async def show_death_log(message: Message) -> None:
 
 @router.callback_query(F.data == "death:log")
 async def show_death_log_callback(callback: CallbackQuery) -> None:
-    """Доступен и мёртвым — кнопка есть прямо в dead_character_keyboard."""
+    """Журнал смертей (из КПК, когда игрок жив)."""
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     if player is None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
