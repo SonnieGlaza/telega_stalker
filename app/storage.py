@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -109,6 +110,8 @@ class Storage:
 
         requested = Path(snapshot_path) if snapshot_path else default_snapshot
         self.snapshot_path = self._resolve_writable_snapshot_path(requested)
+        self._snapshot_last_at: float = 0.0
+        self._snapshot_min_interval_sec: float = 15.0
 
     @staticmethod
     def _resolve_writable_snapshot_path(preferred: Path) -> Path:
@@ -571,7 +574,11 @@ class Storage:
         self._ensure_characters_schema(conn)
         self._sync_serial_sequences(conn)
 
-    def save_snapshot(self) -> None:
+    def save_snapshot(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and (now - self._snapshot_last_at) < self._snapshot_min_interval_sec:
+            return
+        self._snapshot_last_at = now
         self._write_snapshot()
 
     def restore_from_snapshot(self) -> None:
@@ -2043,19 +2050,25 @@ class Storage:
         self.save_snapshot()
 
     def change_money(self, telegram_id: int, delta: int) -> bool:
-        character = self.get_character(telegram_id, refresh_energy=False)
-        if character is None:
-            return False
-        new_money = character.money + delta
-        if new_money < 0:
-            return False
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE characters SET money = ? WHERE telegram_id = ?",
-                (new_money, telegram_id),
-            )
-        self.save_snapshot()
-        return True
+            if delta >= 0:
+                cur = conn.execute(
+                    "UPDATE characters SET money = money + ? WHERE telegram_id = ?",
+                    (delta, telegram_id),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    UPDATE characters
+                    SET money = money + ?
+                    WHERE telegram_id = ? AND money + ? >= 0
+                    """,
+                    (delta, telegram_id, delta),
+                )
+            ok = int(cur.rowcount or 0) > 0
+        if ok:
+            self.save_snapshot()
+        return ok
 
     def change_gear_power(self, telegram_id: int, delta: int) -> None:
         character = self.get_character(telegram_id, refresh_energy=False)

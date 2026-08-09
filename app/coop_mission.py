@@ -1304,7 +1304,7 @@ def coop_status_caption(session: CoopMissionSession, storage: Storage, viewer_id
         if pid == viewer_id:
             mark += " (ты)"
         lines.append(f"{h(name)}{mark}: HP {hp}")
-    lines.append("🔷 ваш квадрат = вы")
+    lines.append("🔷 синяя клетка = вы")
     return "\n".join(lines)
 
 

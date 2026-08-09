@@ -1214,6 +1214,52 @@ def run_smoke_check() -> None:
         inv333 = storage.get_character(333, refresh_energy=False).inventory
         assert inv333.get("armor_season_bronze", 0) >= 1
 
+        # Atomic money: balance cannot go negative.
+        bal_before = int(storage.get_character(111, refresh_energy=False).money)
+        assert not storage.change_money(111, -(bal_before + 1))
+        assert int(storage.get_character(111, refresh_energy=False).money) == bal_before
+
+        # Daily login: second claim same day rejected.
+        from app.game_logic import claim_daily_login
+
+        daily1 = claim_daily_login(storage, 333)
+        assert daily1.ok, daily1.text
+        daily2 = claim_daily_login(storage, 333)
+        assert not daily2.ok
+        assert "уже получена" in daily2.text.lower()
+
+        # Neutral capture: one assault per location at a time.
+        from app.neutral_capture import start_neutral_capture, ncap_forfeit, get_ncap_session
+
+        neutral_loc = next(
+            loc["name"]
+            for loc in storage.get_locations()
+            if not loc.get("controlled_by") and str(loc.get("point_type") or "") != "база"
+        )
+        storage.restore_energy(111, 100)
+        storage.restore_energy(222, 100)
+        ncap1, _ = start_neutral_capture(storage, 111, str(neutral_loc))
+        assert ncap1.ok, ncap1.text
+        ncap2, _ = start_neutral_capture(storage, 222, str(neutral_loc))
+        assert not ncap2.ok
+        assert "захват" in ncap2.text.lower()
+        assert get_ncap_session(storage, 111) is not None
+        ncap_forfeit(storage, 111)
+        assert get_ncap_session(storage, 111) is None
+
+        # Coop lobby creation.
+        from app.coop_mission import create_coop_lobby, get_coop_lobby_by_player
+
+        storage.restore_energy(111, 100)
+        coop = create_coop_lobby(storage, 111)
+        assert coop.ok, coop.text
+        assert get_coop_lobby_by_player(storage, 111) is not None
+
+        from app.html_utils import nickname_validation_error
+
+        assert nickname_validation_error("<bad>") is not None
+        assert nickname_validation_error("Stalker") is None
+
         _, _, missing_callbacks = _callback_handler_coverage()
         assert not missing_callbacks, f"Missing callback handlers: {', '.join(missing_callbacks)}"
 

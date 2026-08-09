@@ -851,7 +851,7 @@ def render_duel_frame(
     elif secs is not None:
         draw.text((pl + 14, y), f"До волны: {secs // 60}:{secs % 60:02d}", fill=(200, 200, 120), font=small)
     y += 20
-    draw.text((pl + 14, y), "Голубой квадрат = вы", fill=(120, 200, 230), font=small)
+    draw.text((pl + 14, y), "Синяя клетка = вы", fill=(120, 200, 230), font=small)
     y += 18
     for pid in (session.challenger_id, session.target_id):
         ch = storage.get_character(pid, refresh_energy=False)

@@ -908,8 +908,6 @@ QUEST_RATING_BY_DIFFICULTY: dict[str, tuple[int, int]] = {
 
 DUEL_ENERGY_COST = 10
 DUEL_PENDING_TTL_SECONDS = 10 * 60
-DUEL_CHANCE_MIN = 15
-DUEL_CHANCE_MAX = 85
 DUEL_WINNER_WOUND_MIN = 5
 DUEL_WINNER_WOUND_MAX = 12
 DUEL_LOSER_HP_REMAINING = 20
@@ -3427,6 +3425,9 @@ def transfer_money_with_fee(storage: Storage, sender_id: int, target_id: int, am
         return ActionResult(False, "Один из игроков не найден.")
     if _is_dead(sender):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, sender_id)
+    if blocked is not None:
+        return blocked
     fee = int(round(amount * (TRANSFER_FEE_PERCENT / 100)))
     total = amount + fee
     if not storage.change_money(sender_id, -total):
@@ -3486,12 +3487,6 @@ def get_pending_duel_challenger(storage: Storage, target_id: int) -> int | None:
         storage.delete_meta(_duel_out_key(challenger_id))
         return None
     return challenger_id
-
-
-def calculate_duel_challenger_chance(challenger_power: int, target_power: int) -> int:
-    """Шанс победы вызывающего: база 50% + разница силы×4, как вклад снаряги в заданиях."""
-    diff = int(challenger_power) - int(target_power)
-    return max(DUEL_CHANCE_MIN, min(DUEL_CHANCE_MAX, 50 + diff * 4))
 
 
 def _duel_conditions_text() -> str:
@@ -5334,6 +5329,9 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
         return ActionResult(False, "Сначала создай персонажа.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     if player.faction is None:
         return ActionResult(False, "Сначала выбери группировку.")
 
@@ -5429,6 +5427,9 @@ def create_or_join_depot_raid(
         return ActionResult(False, "Сначала создай персонажа.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     if player.faction is None:
         return ActionResult(False, "Сначала выбери группировку.")
 
@@ -5871,6 +5872,9 @@ def deposit_to_faction_warehouse(
         return ActionResult(False, "Склад доступен только бойцам группировки.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     key = _normalize_item_key(item_key)
     if not storage.remove_item(telegram_id, key, amount):
         return ActionResult(False, "В инвентаре недостаточно предметов для сдачи.")
@@ -5893,6 +5897,9 @@ def withdraw_from_faction_warehouse(
         return ActionResult(False, "Склад доступен только бойцам группировки.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     if not can_withdraw_faction_warehouse(storage, player):
         return ActionResult(
             False,
@@ -6394,6 +6401,9 @@ def create_market_lot(
         return ActionResult(False, "Сначала создай персонажа.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     if amount <= 0:
         return ActionResult(False, "Количество для лота должно быть больше нуля.")
     if item_key in {"first_gear", "auto"}:
@@ -6606,6 +6616,9 @@ def create_or_join_war_lobby(storage: Storage, telegram_id: int, location_name: 
         return ActionResult(False, "Сначала создай персонажа.")
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
     if player.faction is None:
         return ActionResult(False, "Сначала выбери группировку.")
     location = storage.get_location(location_name)
@@ -8403,6 +8416,15 @@ def claim_daily_login(storage: Storage, telegram_id: int) -> ActionResult:
     streak = int(state.get("streak") or 0)
 
     if last_str == today_str:
+        capped = min(streak, DAILY_LOGIN_STREAK_DISPLAY_CAP)
+        return ActionResult(
+            False,
+            f"📅 Ежедневная награда уже получена сегодня.\n"
+            f"Твой стрик: {capped} дн. подряд. Возвращайся завтра!",
+        )
+
+    claim_guard_key = f"daily:claimed:{telegram_id}:{today_str}"
+    if not storage.set_meta_if_absent(claim_guard_key, "1"):
         capped = min(streak, DAILY_LOGIN_STREAK_DISPLAY_CAP)
         return ActionResult(
             False,

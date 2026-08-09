@@ -119,7 +119,7 @@ from app.coop_mission import (
     start_coop_mission,
 )
 from app.config import load_settings
-from app.html_utils import html_safe as h
+from app.html_utils import html_safe as h, nickname_validation_error
 from app.game_logic import (
     ActionResult,
     apply_referral_rewards,
@@ -412,7 +412,7 @@ def _travel_eta_lock(telegram_id: int) -> asyncio.Lock:
 TOPUP_PAYLOAD_PREFIX = "topup_stars:"
 TOPUP_ALLOWED_AMOUNTS = {1, 5, 10, 25}
 TOPUP_MIN_STARS = 1
-TOPUP_MAX_STARS = 10000
+TOPUP_MAX_STARS = 500
 # Telegram callback alerts are limited to 200 characters.
 CALLBACK_ALERT_MAX_LEN = 200
 
@@ -738,7 +738,7 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject,
             return
         hint = maybe_daily_login_hint(db, telegram_id)
         await message.answer(
-            f"С возвращением, {player.nickname}! Добро пожаловать в Зону.{hint}",
+            f"С возвращением, {h(player.nickname)}! Добро пожаловать в Зону.{hint}",
             reply_markup=main_menu_keyboard(),
         )
         return
@@ -1098,6 +1098,9 @@ async def successful_payment_handler(message: Message) -> None:
     )
 
 
+ADMIN_GIVE_MAX_RU = 500_000
+
+
 @router.message(Command("give"))
 async def cmd_give(message: Message) -> None:
     sender_id = message.from_user.id
@@ -1119,6 +1122,9 @@ async def cmd_give(message: Message) -> None:
 
     if amount <= 0:
         await message.answer("Сумма должна быть положительным числом.")
+        return
+    if amount > ADMIN_GIVE_MAX_RU:
+        await message.answer(f"Максимум за одну выдачу: {ADMIN_GIVE_MAX_RU} RU.")
         return
 
     db = get_storage()
@@ -1328,7 +1334,7 @@ async def process_nickname(message: Message, state: FSMContext) -> None:
         await state.clear()
         if player_ready(existing):
             await message.answer(
-                f"Персонаж уже зарегистрирован: {existing.nickname}. Открываю меню.",
+                f"Персонаж уже зарегистрирован: {h(existing.nickname)}. Открываю меню.",
                 reply_markup=main_menu_keyboard(),
             )
         else:
@@ -1339,11 +1345,9 @@ async def process_nickname(message: Message, state: FSMContext) -> None:
         return
 
     nickname = (message.text or "").strip()
-    if len(nickname) < 2:
-        await message.answer("Прозвище слишком короткое. Введи хотя бы 2 символа.")
-        return
-    if len(nickname) > 24:
-        await message.answer("Прозвище слишком длинное. Максимум 24 символа.")
+    nick_err = nickname_validation_error(nickname)
+    if nick_err:
+        await message.answer(nick_err)
         return
 
     db = get_storage()
@@ -2788,7 +2792,7 @@ def _duel_status_caption(storage: Storage, session: Any, viewer_id: int) -> str:
         if dl:
             secs = max(0, int((dl - _utc_now()).total_seconds()))
             lines.append(f"⏱ До волны: {secs // 60}:{secs % 60:02d}")
-    lines.append("🔷 голубой квадрат на карте = вы")
+    lines.append("🔷 синяя клетка на карте = вы")
     if session.log:
         lines.append(session.log[-1][:80])
     return "\n".join(lines)
@@ -4074,6 +4078,12 @@ async def artifact_hunt_callback(callback: CallbackQuery) -> None:
 @router.message(Command("pay"))
 async def pay_command(message: Message, bot: Bot) -> None:
     sender_id = message.from_user.id
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_busy(message, sender_id):
+        return
     parts = (message.text or "").strip().split()
     if len(parts) != 3:
         await message.answer("Использование: /pay [telegram_id] [сумма]")

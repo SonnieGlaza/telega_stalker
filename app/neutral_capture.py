@@ -33,6 +33,7 @@ from app.tactical_combat import (
 from app.mutant_assets import pick_mutant_kind
 from app.npc_assets import pick_npc_kind
 from app.storage import Character, Storage
+from app.tactical_hp import sync_session_hp_to_db
 from app.tactical_render import hostile_kind_to_sprite, load_tactical_font, paste_mutant_sprite, paste_npc_sprite, paste_player_avatar
 
 NCAP_GRID_SIZE = 6
@@ -176,7 +177,19 @@ def save_ncap_session(storage: Storage, session: NeutralCaptureSession) -> None:
     storage.set_meta(_player_key(session.telegram_id), session.session_id)
 
 
+NCAP_LOCATION_LOCK_PREFIX = "ncap:loclock:"
+
+
+def _ncap_location_lock_key(location_name: str) -> str:
+    return f"{NCAP_LOCATION_LOCK_PREFIX}{location_name}"
+
+
+def _release_ncap_location_lock(storage: Storage, location_name: str) -> None:
+    storage.delete_meta(_ncap_location_lock_key(location_name))
+
+
 def clear_ncap_session(storage: Storage, session: NeutralCaptureSession) -> None:
+    _release_ncap_location_lock(storage, session.location_name)
     storage.delete_meta(_session_key(session.session_id))
     storage.delete_meta(_player_key(session.telegram_id))
     _unregister_active(storage, session.session_id)
@@ -316,7 +329,11 @@ def start_neutral_capture(
         return ActionResult(False, "Локация не найдена."), None
     if loc.get("controlled_by"):
         return ActionResult(False, "Точка уже под контролем."), None
+    lock_key = _ncap_location_lock_key(location_name)
+    if not storage.set_meta_if_absent(lock_key, str(telegram_id)):
+        return ActionResult(False, "Эту нейтральную точку уже захватывают."), None
     if not storage.spend_energy(telegram_id, NCAP_ENERGY_COST):
+        _release_ncap_location_lock(storage, location_name)
         return ActionResult(False, f"Нужно {NCAP_ENERGY_COST} энергии."), None
 
     session_id = uuid.uuid4().hex[:12]
@@ -574,7 +591,7 @@ def ncap_status_caption(session: NeutralCaptureSession, player: Character | None
     if player:
         weapon = str(player.equipment.get("weapon", "Нож"))
         lines.append(f"HP {session.hp} · дальность {weapon_shoot_range(weapon)}")
-    lines.append("🔷 голубой квадрат на карте = вы")
+    lines.append("🔷 синяя клетка на карте = вы")
     if session.log:
         lines.append(session.log[-1][:80])
     return "\n".join(lines)

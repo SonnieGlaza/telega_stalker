@@ -913,7 +913,7 @@ def start_raid_grid(
         f"🪖 Тактический рейд «{location_label}»!\n"
         f"Бойцов: {len(player_ids)}, врагов: {hostile_n}.\n"
         f"Каждый ход — свой ход: ходи и стреляй сам.\n"
-        f"Голубой квадрат на карте = ты."
+        f"Синяя клетка на карте = ты."
     )
     return ActionResult(True, text, payload={"rgrid_started": True, "session_id": session_id}), session
 
@@ -1217,7 +1217,7 @@ def rgrid_status_caption(storage: Storage, session: RaidGridSession, viewer_id: 
         if pid == viewer_id:
             mark += " (ты)"
         lines.append(f"{name}{mark}: HP {hp}")
-    lines.append("🔷 голубой квадрат на карте = вы")
+    lines.append("🔷 синяя клетка на карте = вы")
     if session.log:
         lines.append(session.log[-1][:80])
     return "\n".join(lines)
