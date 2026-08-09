@@ -1585,6 +1585,71 @@ async def reject_if_busy(
     return True
 
 
+def _session_hp_for_player(session: Any, pid: int) -> int | None:
+    hp_attr = getattr(session, "hp", None)
+    if isinstance(hp_attr, dict):
+        if str(pid) not in hp_attr:
+            return None
+        return int(hp_attr[str(pid)])
+    if hasattr(session, "telegram_id") and int(session.telegram_id) == pid:
+        return int(hp_attr) if hp_attr is not None else None
+    return None
+
+
+def _raid_grid_downed(storage: Storage, telegram_id: int) -> bool:
+    session = get_raid_grid_session_by_player(storage, telegram_id)
+    if session is None or getattr(session, "finished", False):
+        return False
+    return int(session.hp.get(str(telegram_id), 0)) <= 0
+
+
+def resolve_dead_player(storage: Storage, telegram_id: int) -> Character | None:
+    """Мёртв для UI: HP=0 в БД (с учётом голода/жажды) или выведен из строя в тактике."""
+    player = storage.get_character(telegram_id, refresh_energy=True)
+    if player is None:
+        return None
+    if player.health <= 0:
+        return player
+
+    from app.tactical_hp import commit_tactical_death
+
+    session_checks: list[tuple[Any, str]] = []
+    coop = get_coop_session_by_player(storage, telegram_id)
+    if coop is not None and not coop.finished:
+        session_checks.append((coop, "coop"))
+    ncap = get_ncap_session(storage, telegram_id)
+    if ncap is not None and not ncap.finished:
+        session_checks.append((ncap, "combat"))
+    cwar = get_cwar_session_by_player(storage, telegram_id)
+    if cwar is not None and not cwar.finished:
+        session_checks.append((cwar, "combat"))
+    duel = get_duel_session_by_player(storage, telegram_id)
+    if duel is not None and not duel.finished:
+        session_checks.append((duel, "duel"))
+    arena = get_arena_session(storage, telegram_id)
+    if arena is not None and not getattr(arena, "finished", False):
+        session_checks.append((arena, "arena"))
+
+    for session, default_cause in session_checks:
+        session_hp = _session_hp_for_player(session, telegram_id)
+        if session_hp is None or session_hp > 0:
+            continue
+        death_causes = getattr(session, "death_causes", {}) or {}
+        death_killers = getattr(session, "death_killers", {}) or {}
+        cause = str(death_causes.get(str(telegram_id)) or default_cause)
+        killer = death_killers.get(str(telegram_id))
+        commit_tactical_death(
+            storage,
+            telegram_id,
+            0,
+            cause=cause,
+            killer_name=str(killer) if killer else None,
+        )
+        return storage.get_character(telegram_id, refresh_energy=False)
+
+    return None
+
+
 async def show_death_screen(
     message_or_callback: Message | CallbackQuery,
     player: Character,
@@ -1613,8 +1678,16 @@ class DeadPlayerMenuMiddleware(BaseMiddleware):
         data: dict[str, Any],
     ) -> Any:
         if isinstance(event, Message) and is_reply_menu_button(event.text):
-            player = get_storage().get_character(event.from_user.id, refresh_energy=False)
-            if player is not None and player.health <= 0:
+            storage = get_storage()
+            telegram_id = event.from_user.id
+            if _raid_grid_downed(storage, telegram_id):
+                await event.answer(
+                    "☠️ Ты без сознания на рейде.\n"
+                    "Жди, пока союзник поднимет аптечкой, или пока рейд не закончится."
+                )
+                return None
+            player = resolve_dead_player(storage, telegram_id)
+            if player is not None:
                 await show_death_screen(event, player)
                 return None
         return await handler(event, data)
@@ -1628,9 +1701,10 @@ async def reject_if_dead(message_or_callback: Message | CallbackQuery, player: C
         if player is None: ...
         if await reject_if_dead(message, player): return
     """
-    if player.health > 0:
+    dead = resolve_dead_player(get_storage(), player.telegram_id)
+    if dead is None:
         return False
-    await show_death_screen(message_or_callback, player)
+    await show_death_screen(message_or_callback, dead)
     return True
 
 
@@ -2772,6 +2846,46 @@ async def _deliver_player_message_or_death(
     await bot.send_message(telegram_id, action_result_text(telegram_id, result_text))
 
 
+async def _push_fresh_tactical_deaths(
+    bot: Bot,
+    storage: Storage,
+    session: Any,
+    player_ids: list[int],
+    *,
+    cause_default: str = "combat",
+) -> None:
+    """Сразу после тактического хода: если HP на поле = 0, а в БД ещё жив — экран смерти."""
+    from app.tactical_hp import commit_tactical_death
+
+    death_causes = getattr(session, "death_causes", {}) or {}
+    death_killers = getattr(session, "death_killers", {}) or {}
+    for pid in player_ids:
+        session_hp = _session_hp_for_player(session, pid)
+        if session_hp is None or session_hp > 0:
+            continue
+        player = storage.get_character(pid, refresh_energy=False)
+        if player is None or player.health <= 0:
+            continue
+        cause = str(death_causes.get(str(pid)) or cause_default)
+        killer = death_killers.get(str(pid))
+        commit_tactical_death(
+            storage,
+            pid,
+            0,
+            cause=cause,
+            killer_name=str(killer) if killer else None,
+        )
+        player = storage.get_character(pid, refresh_energy=False)
+        if player is not None:
+            await _send_battle_death_notice(
+                bot,
+                pid,
+                player,
+                where=player.location,
+                cause=cause,
+            )
+
+
 async def _send_or_edit_quest_mission_frame(
     callback: CallbackQuery,
     *,
@@ -2963,6 +3077,13 @@ async def _broadcast_duel_session(
         )
         session.message_ids[str(pid)] = new_id
     save_duel_session(storage, session)
+    await _push_fresh_tactical_deaths(
+        bot,
+        storage,
+        session,
+        [session.challenger_id, session.target_id],
+        cause_default="duel",
+    )
 
 
 async def _notify_duel_finished(bot: Bot, result: Any) -> None:
@@ -3026,6 +3147,13 @@ async def _broadcast_cwar_session(
         )
         session.message_ids[str(pid)] = new_id
     save_cwar_session(storage, session)
+    await _push_fresh_tactical_deaths(
+        bot,
+        storage,
+        session,
+        list(session.player_ids),
+        cause_default="combat",
+    )
 
 
 async def _notify_cwar_finished(bot: Bot, result: Any) -> None:
@@ -3176,6 +3304,13 @@ async def _broadcast_ncap_session(
         )
         session.message_ids[str(pid)] = new_id
     save_ncap_session(storage, session)
+    await _push_fresh_tactical_deaths(
+        bot,
+        storage,
+        session,
+        list(session.player_ids),
+        cause_default="combat",
+    )
 
 
 async def _show_ncap_lobby_menu(callback: CallbackQuery, telegram_id: int) -> None:
@@ -3240,6 +3375,13 @@ async def _broadcast_arena_session(
     )
     session.message_id = new_id
     save_arena_session(storage, session)
+    await _push_fresh_tactical_deaths(
+        bot,
+        storage,
+        session,
+        [int(session.telegram_id)],
+        cause_default="arena",
+    )
 
 
 async def _handle_arena_action(bot: Bot, callback: CallbackQuery, result: Any) -> None:
@@ -3292,6 +3434,13 @@ async def _broadcast_coop_session(
         )
         session.message_ids[str(pid)] = new_id
     save_coop_session(storage, session)
+    await _push_fresh_tactical_deaths(
+        bot,
+        storage,
+        session,
+        list(session.player_ids),
+        cause_default="coop",
+    )
 
 
 async def _notify_coop_finished(bot: Bot, result: Any) -> None:
@@ -6623,8 +6772,8 @@ async def run_bot() -> None:
     zone_task = asyncio.create_task(periodic_zone_systems())
     travel_eta_task = asyncio.create_task(periodic_travel_live_eta())
     tactical_task = asyncio.create_task(periodic_tactical_turns())
-    router.message.middleware(DeadPlayerMenuMiddleware())
     dp = Dispatcher()
+    dp.message.outer_middleware(DeadPlayerMenuMiddleware())
     dp.include_router(router)
     try:
         await dp.start_polling(bot)

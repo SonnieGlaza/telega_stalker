@@ -51,3 +51,23 @@ def sync_session_hp_to_db(storage: Storage, telegram_id: int, session_hp: int) -
     delta = int(session_hp) - int(player.health)
     if delta != 0:
         storage.change_health(telegram_id, delta, max_health=max_hp)
+
+
+def commit_tactical_death(
+    storage: Storage,
+    telegram_id: int,
+    session_hp: int = 0,
+    *,
+    cause: str | None = None,
+    killer_name: str | None = None,
+) -> None:
+    """Записать тактическое падение (HP=0) в БД — для экрана смерти и респавна."""
+    from app.game_logic import remember_death_cause, remember_death_killer
+
+    sync_session_hp_to_db(storage, telegram_id, int(session_hp))
+    if int(session_hp) > 0:
+        return
+    if cause:
+        remember_death_cause(storage, telegram_id, cause)
+    if killer_name:
+        remember_death_killer(storage, telegram_id, killer_name)

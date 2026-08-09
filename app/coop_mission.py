@@ -731,18 +731,18 @@ def _hostile_attacks(
                 continue
             if manhattan_distance(session.pos(pid), epos) != 1:
                 continue
-                player = storage.get_character(pid, refresh_energy=False)
-                if player is None:
-                    continue
-                dmg = _combat_damage(session.location, player)
-                new_hp = max(0, session.hp.get(str(pid), 0) - dmg)
-                session.hp[str(pid)] = new_hp
-                if new_hp <= 0:
-                    session.death_causes[str(pid)] = cause
-                    session.death_killers[str(pid)] = killer_name
-                    # Если нёс раненого — тело падает, другой может поднять.
-                    session.carrying.pop(str(pid), None)
-                notes.append(f"{killer_name} ранит {h(player.nickname)}: −{dmg} HP.")
+            player = storage.get_character(pid, refresh_energy=False)
+            if player is None:
+                continue
+            dmg = _combat_damage(session.location, player)
+            new_hp = max(0, session.hp.get(str(pid), 0) - dmg)
+            session.hp[str(pid)] = new_hp
+            if new_hp <= 0:
+                session.death_causes[str(pid)] = cause
+                session.death_killers[str(pid)] = killer_name
+                # Если нёс раненого — тело падает, другой может поднять.
+                session.carrying.pop(str(pid), None)
+            notes.append(f"{killer_name} ранит {h(player.nickname)}: −{dmg} HP.")
     return notes
 
 
