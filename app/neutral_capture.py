@@ -13,6 +13,7 @@ from typing import Any
 from PIL import Image, ImageDraw
 
 from app.game_logic import (
+    NCAP_SUCCESS_PAY_RU,
     RATING_REWARD,
     ActionResult,
     _add_rating,
@@ -259,7 +260,7 @@ def _hostile_shoot_turn(storage: Storage, session: NeutralCaptureSession) -> lis
 def _finalize_success(storage: Storage, session: NeutralCaptureSession) -> ActionResult:
     storage.set_location_control(session.location_name, session.faction)
     storage.add_player_stat(session.telegram_id, "wars_won", 1)
-    reward_ru = 1200
+    reward_ru = NCAP_SUCCESS_PAY_RU
     storage.change_money(session.telegram_id, reward_ru)
     storage.add_player_stat(session.telegram_id, "money_earned", reward_ru)
     _add_rating(storage, session.telegram_id, RATING_REWARD["war_success"])

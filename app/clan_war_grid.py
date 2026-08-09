@@ -14,6 +14,8 @@ from PIL import Image, ImageDraw
 
 from app.game_logic import (
     RATING_REWARD,
+    WAR_ALLY_SUCCESS_PAY_RU,
+    WAR_ALLY_SUCCESS_RATING,
     WAR_SUCCESS_PAY_RU,
     ActionResult,
     _add_rating,
@@ -41,8 +43,10 @@ CWAR_GRID_SIZE = 9
 CWAR_TURN_SECONDS = 10
 CWAR_MATCH_SECONDS = 10 * 60
 CWAR_DEFENDER_COUNT = 6
+CWAR_DEFENDER_COUNT_MAX = 12
 CWAR_CAPTURE_TURNS = 3
 CWAR_ENERGY_COST = 24
+CWAR_DEFENSE_BONUS_EXTRA_DEFENDERS = 1
 
 SESSION_PREFIX = "cwar:session:"
 PLAYER_PREFIX = "cwar:player:"
@@ -84,6 +88,7 @@ class ClanWarGridSession:
     location_name: str
     host_faction: str
     player_ids: list[int]
+    defense_bonus: int = 0
     grid: int = CWAR_GRID_SIZE
     cover: list[tuple[int, int]] = field(default_factory=list)
     base_cover: list[tuple[int, int]] = field(default_factory=list)
@@ -129,6 +134,7 @@ class ClanWarGridSession:
             "location_name": self.location_name,
             "host_faction": self.host_faction,
             "player_ids": self.player_ids,
+            "defense_bonus": self.defense_bonus,
             "grid": self.grid,
             "cover": [list(p) for p in self.cover],
             "base_cover": [list(p) for p in self.base_cover],
@@ -160,6 +166,7 @@ class ClanWarGridSession:
             location_name=str(raw.get("location_name") or ""),
             host_faction=str(raw.get("host_faction") or ""),
             player_ids=[int(x) for x in (raw.get("player_ids") or [])],
+            defense_bonus=int(raw.get("defense_bonus") or 0),
             grid=int(raw.get("grid") or CWAR_GRID_SIZE),
             cover=[(int(p[0]), int(p[1])) for p in (raw.get("cover") or [])],
             base_cover=[(int(p[0]), int(p[1])) for p in (raw.get("base_cover") or [])],
@@ -278,7 +285,11 @@ def _build_map(session: ClanWarGridSession) -> None:
         cell = _free_cell(grid, forbidden)
         session.cover.append(cell)
         forbidden.add(cell)
-    for _ in range(CWAR_DEFENDER_COUNT):
+    defender_count = min(
+        CWAR_DEFENDER_COUNT_MAX,
+        CWAR_DEFENDER_COUNT + session.defense_bonus * CWAR_DEFENSE_BONUS_EXTRA_DEFENDERS,
+    )
+    for _ in range(defender_count):
         cell = _free_cell(grid, forbidden | set(session.base_cover))
         session.defenders.append(cell)
         session.defender_weapons.append(random.choice(NPC_WEAPONS))
@@ -309,8 +320,9 @@ def _occupied(session: ClanWarGridSession, *, exclude: int | None = None) -> set
     return blocked
 
 
-def _defender_damage(weapon: str) -> int:
-    return max(4, weapon_shoot_range(weapon) * 3 + random.randint(0, 4))
+def _defender_damage(session: ClanWarGridSession, weapon: str) -> int:
+    bonus = max(0, session.defense_bonus)
+    return max(4, weapon_shoot_range(weapon) * 3 + random.randint(0, 4) + bonus)
 
 
 def _hostile_turn(storage: Storage, session: ClanWarGridSession) -> list[str]:
@@ -349,7 +361,7 @@ def _hostile_turn(storage: Storage, session: ClanWarGridSession) -> list[str]:
         player_characters=player_chars,
         cover=cover_set,
         base_cover=base_set,
-        damage_fn=_defender_damage,
+        damage_fn=lambda weapon: _defender_damage(session, weapon),
     )
 
 
@@ -368,21 +380,49 @@ def _check_capture(session: ClanWarGridSession) -> bool:
 
 
 def _finalize_success(storage: Storage, session: ClanWarGridSession) -> ActionResult:
+    target = storage.get_location(session.location_name) or {}
+    previous_owner = str(target.get("controlled_by") or "")
+    captured_enemy_base = (
+        str(target.get("point_type") or "") == "база"
+        and bool(previous_owner)
+        and previous_owner != session.host_faction
+    )
     storage.set_location_control(session.location_name, session.host_faction)
     storage.finish_war_lobby(session.war_id, "success", f"Тактическая победа: {session.host_faction}")
-    notes: list[str] = []
+    host_paid = 0
+    ally_paid = 0
     for pid in session.player_ids:
-        ch = storage.get_character(pid, refresh_energy=False)
-        if ch is None or str(ch.faction) != session.host_faction:
+        if session.hp.get(str(pid), 0) <= 0:
             continue
-        storage.add_player_stat(pid, "wars_won", 1)
-        storage.change_money(pid, WAR_SUCCESS_PAY_RU)
-        storage.add_player_stat(pid, "money_earned", WAR_SUCCESS_PAY_RU)
-        _add_rating(storage, pid, RATING_REWARD["war_success"])
+        ch = storage.get_character(pid, refresh_energy=False)
+        if ch is None or not ch.faction:
+            continue
+        faction = str(ch.faction)
+        if faction == session.host_faction:
+            storage.add_player_stat(pid, "wars_won", 1)
+            if captured_enemy_base:
+                storage.add_player_stat(pid, "enemy_bases_captured", 1)
+            storage.change_money(pid, WAR_SUCCESS_PAY_RU)
+            storage.add_player_stat(pid, "money_earned", WAR_SUCCESS_PAY_RU)
+            _add_rating(storage, pid, RATING_REWARD["war_success"])
+            host_paid += 1
+        else:
+            storage.change_money(pid, WAR_ALLY_SUCCESS_PAY_RU)
+            storage.add_player_stat(pid, "money_earned", WAR_ALLY_SUCCESS_PAY_RU)
+            _add_rating(storage, pid, WAR_ALLY_SUCCESS_RATING)
+            ally_paid += 1
+    reward_lines = [
+        f"Хост ({session.host_faction}): +{WAR_SUCCESS_PAY_RU} RU, +{RATING_REWARD['war_success']} рейтинга.",
+    ]
+    if ally_paid:
+        reward_lines.append(
+            f"Союзники: +{WAR_ALLY_SUCCESS_PAY_RU} RU, +{WAR_ALLY_SUCCESS_RATING} рейтинга."
+        )
+    base_note = "\nЗахвачена вражеская база!" if captured_enemy_base else ""
     text = (
         f"🏆 Тактический штурм «{session.location_name}» успешен!\n"
-        f"Точка перешла под контроль {session.host_faction}.\n"
-        f"Награда: +{WAR_SUCCESS_PAY_RU} RU, +{RATING_REWARD['war_success']} рейтинга."
+        f"Точка перешла под контроль {session.host_faction}.{base_note}\n"
+        + "\n".join(reward_lines)
     )
     return ActionResult(True, text, payload={"cwar_done": True, "success": True, "member_ids": session.player_ids})
 
@@ -435,6 +475,9 @@ def start_clan_war_grid(
             return ActionResult(False, f"{h(ch.nickname)}: {busy}"), None
         members.append(ch)
 
+    location = storage.get_location(location_name) or {}
+    defense_bonus = max(0, int(location.get("defense_bonus") or 0))
+
     session_id = uuid.uuid4().hex[:12]
     session = ClanWarGridSession(
         session_id=session_id,
@@ -442,6 +485,7 @@ def start_clan_war_grid(
         location_name=location_name,
         host_faction=host_faction,
         player_ids=list(player_ids),
+        defense_bonus=defense_bonus,
         turn_order=list(player_ids),
         turn_deadline=_deadline_iso(CWAR_TURN_SECONDS),
         match_deadline=_deadline_iso(CWAR_MATCH_SECONDS),
@@ -450,9 +494,14 @@ def start_clan_war_grid(
     for ch in members:
         session.hp[str(ch.telegram_id)] = int(ch.health)
         session.medkits_used[str(ch.telegram_id)] = False
+    fortify_note = (
+        f" Укрепление точки: +{defense_bonus} (доп. защитники и урон)."
+        if defense_bonus
+        else ""
+    )
     session.log.append(
         f"Штурм «{location_name}»: поле {CWAR_GRID_SIZE}×{CWAR_GRID_SIZE}, "
-        f"база справа (+{BASE_COVER_ARMOR_BONUS} брони). Таймер {CWAR_MATCH_SECONDS // 60} мин."
+        f"база справа (+{BASE_COVER_ARMOR_BONUS} брони). Таймер {CWAR_MATCH_SECONDS // 60} мин.{fortify_note}"
     )
     save_cwar_session(storage, session)
     _register_active(storage, session_id)
@@ -460,7 +509,8 @@ def start_clan_war_grid(
         f"⚔️ Тактический штурм «{location_name}»!\n"
         f"Бойцов: {len(player_ids)}. Захвати центр ({CWAR_CAPTURE_TURNS} хода на точке).\n"
         f"Укрытия базы справа дают +{BASE_COVER_ARMOR_BONUS} брони защитникам.\n"
-        f"Таймер: {CWAR_MATCH_SECONDS // 60} мин."
+        + (f"Укрепление точки: +{defense_bonus} (больше защитников).\n" if defense_bonus else "")
+        + f"Таймер: {CWAR_MATCH_SECONDS // 60} мин."
     )
     return ActionResult(True, text, payload={"cwar_started": True, "session_id": session_id}), session
 

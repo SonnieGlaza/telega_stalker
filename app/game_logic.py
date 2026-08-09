@@ -826,7 +826,11 @@ TRAVEL_ENERGY_TRUCK = 8
 STARTING_MONEY_RU = 1400
 CONTRACT_CANCEL_PENALTY_RU = 50
 CONTRACT_CANCEL_RATING_PENALTY = 1
-WAR_SUCCESS_PAY_RU = 120
+NCAP_SUCCESS_PAY_RU = 150
+WAR_SUCCESS_PAY_RU = 100
+WAR_ALLY_SUCCESS_PAY_RU = 50
+WAR_ALLY_SUCCESS_RATING = 10
+WAR_LOBBY_ENERGY_COST = 24
 # 1 игровая минута пути = 10 реальных секунд (отсчёт в КПК).
 TRAVEL_REAL_SECONDS_PER_GAME_MINUTE = 10
 ZONE_EVENT_POOL: tuple[tuple[str, int, str], ...] = (
@@ -6632,8 +6636,10 @@ def build_war_lobby_overview(storage: Storage, telegram_id: int) -> str:
     if lobby is None:
         return (
             "Открытых военных лобби нет. Создай лобби на нужную локацию.\n"
-            f"Для захвата занятой точки нужно минимум {WAR_MIN_FACTION_MEMBERS} живых бойцов в лобби.\n"
-            "Нейтральные точки можно захватить и соло («🎯 Захват нейтральных точек»)."
+            f"Для захвата занятой точки нужно минимум {WAR_MIN_FACTION_MEMBERS} живых бойцов в лобби "
+            f"(−{WAR_LOBBY_ENERGY_COST} энергии каждому при запуске).\n"
+            f"Нейтральные точки можно захватить соло («🎯 Захват нейтральных точек»): "
+            f"+{NCAP_SUCCESS_PAY_RU} RU, −18 энергии."
         )
     war_id = int(lobby["id"])
     leader_id = int(lobby["leader_id"])
@@ -6665,7 +6671,10 @@ def build_war_lobby_overview(storage: Storage, telegram_id: int) -> str:
         f"Локация: {lobby['location']}\n"
         f"Хост: {lobby['host_faction']}\n"
         f"Создал: {creator_label}\n"
-        f"Участников: {len(member_ids)} / мин. {WAR_MIN_FACTION_MEMBERS} для запуска\n\n"
+        f"Участников: {len(member_ids)} / мин. {WAR_MIN_FACTION_MEMBERS} для запуска "
+        f"(−{WAR_LOBBY_ENERGY_COST} энергии каждому)\n\n"
+        f"Награды при успехе: хост +{WAR_SUCCESS_PAY_RU} RU, союзники +{WAR_ALLY_SUCCESS_PAY_RU} RU "
+        f"(только выжившим).\n\n"
         f"Бойцы в лобби:\n{roster_block}\n\n"
         f"Распределение сил:\n{shares_block}"
     )
@@ -6707,71 +6716,6 @@ def dissolve_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
     )
 
 
-def _resolve_war_lobby_rng(
-    storage: Storage,
-    *,
-    war_id: int,
-    location_name: str,
-    host_faction: str,
-    target: dict[str, Any],
-    active: list[Character],
-    member_ids: tuple[int, ...],
-    telegram_id: int,
-) -> WarLobbyResult:
-    winner = host_faction
-    enemy_power = int(target["npc_power"]) + max(0, int(target.get("defense_bonus") or 0))
-    total_power = sum(equipment_power(member) for member in active)
-    chance = int(round((total_power / (total_power + enemy_power + 10)) * 100))
-    chance = max(10, min(90, chance))
-    success = random.randint(1, 100) <= chance
-    faction_counts: dict[str, int] = {}
-    for member in active:
-        fname = str(member.faction or "?")
-        faction_counts[fname] = faction_counts.get(fname, 0) + 1
-    if success:
-        previous_owner = str(target.get("controlled_by") or "")
-        captured_enemy_base = (
-            str(target.get("point_type") or "") == "база"
-            and bool(previous_owner)
-            and previous_owner != winner
-        )
-        storage.set_location_control(location_name, winner)
-        storage.finish_war_lobby(war_id, "success", f"Победа: {winner}")
-        achievement_notes: list[str] = []
-        for member in active:
-            if str(member.faction) != winner:
-                continue
-            storage.add_player_stat(member.telegram_id, "wars_won", 1)
-            if captured_enemy_base:
-                storage.add_player_stat(member.telegram_id, "enemy_bases_captured", 1)
-            storage.change_money(member.telegram_id, WAR_SUCCESS_PAY_RU)
-            storage.add_player_stat(member.telegram_id, "money_earned", WAR_SUCCESS_PAY_RU)
-            _add_rating(storage, member.telegram_id, RATING_REWARD["war_success"])
-            note = _progress_and_unlock_achievements(storage, member.telegram_id)
-            if note and member.telegram_id == telegram_id:
-                achievement_notes.append(note)
-        breakdown = ", ".join(f"{f}:{faction_counts[f]}" for f in sorted(faction_counts))
-        base_note = "\nЗахвачена вражеская база!" if captured_enemy_base else ""
-        return WarLobbyResult(
-            True,
-            f"Штурм лобби #{war_id} успешен (шанс {chance}%).\n"
-            f"Локация «{location_name}» перешла под контроль: {winner}.{base_note}\n"
-            f"Награда бойцам: +{WAR_SUCCESS_PAY_RU} RU и +{RATING_REWARD['war_success']} рейтинга.\n"
-            f"Распределение бойцов: {breakdown}."
-            f"{''.join(achievement_notes)}",
-            member_ids,
-        )
-    storage.finish_war_lobby(war_id, "failed", "Поражение штурма")
-    for member in active:
-        _add_rating(storage, member.telegram_id, -RATING_REWARD["war_fail"])
-    return WarLobbyResult(
-        False,
-        f"Штурм лобби #{war_id} провален (шанс {chance}%).\n"
-        f"Потери: −{RATING_REWARD['war_fail']} рейтинга каждому участнику.",
-        member_ids,
-    )
-
-
 def launch_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
     leader = storage.get_character(telegram_id, refresh_energy=False)
     if leader is None:
@@ -6798,18 +6742,18 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
     active: list[Character] = []
     spent_ids: list[int] = []
     for member in members:
-        if storage.spend_energy(member.telegram_id, 24):
+        if storage.spend_energy(member.telegram_id, WAR_LOBBY_ENERGY_COST):
             active.append(member)
             spent_ids.append(member.telegram_id)
     if len(active) < WAR_MIN_FACTION_MEMBERS:
-        _refund_spent_energy(storage, spent_ids, 24)
+        _refund_spent_energy(storage, spent_ids, WAR_LOBBY_ENERGY_COST)
         return WarLobbyResult(False, "Недостаточно энергии у бойцов лобби.")
     target = storage.get_location(location_name)
     if target is None:
-        _refund_spent_energy(storage, spent_ids, 24)
+        _refund_spent_energy(storage, spent_ids, WAR_LOBBY_ENERGY_COST)
         return WarLobbyResult(False, "Локация лобби не найдена.")
     if _location_is_friendly_to_faction(storage, target, host_faction):
-        _refund_spent_energy(storage, spent_ids, 24)
+        _refund_spent_energy(storage, spent_ids, WAR_LOBBY_ENERGY_COST)
         return WarLobbyResult(False, "Нельзя штурмовать свою или союзническую точку.")
     member_id_list = [m.telegram_id for m in active]
     from app.clan_war_grid import start_clan_war_grid
@@ -6832,23 +6776,23 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
         from app.clan_war_grid import clear_cwar_session
 
         clear_cwar_session(storage, cwar_session)
+        _refund_spent_energy(storage, spent_ids, WAR_LOBBY_ENERGY_COST)
+        return WarLobbyResult(
+            False,
+            "Не удалось запустить тактический штурм. Энергия возвращена.",
+        )
     if not tactical_result.ok:
-        _refund_spent_energy(storage, spent_ids, 24)
+        _refund_spent_energy(storage, spent_ids, WAR_LOBBY_ENERGY_COST)
         return WarLobbyResult(False, tactical_result.text)
-    return _resolve_war_lobby_rng(
-        storage,
-        war_id=war_id,
-        location_name=location_name,
-        host_faction=host_faction,
-        target=target,
-        active=active,
-        member_ids=member_ids,
-        telegram_id=telegram_id,
+    _refund_spent_energy(storage, spent_ids, WAR_LOBBY_ENERGY_COST)
+    return WarLobbyResult(
+        False,
+        "Не удалось запустить тактический штурм. Энергия возвращена.",
     )
 
 
 def upgrade_faction_base(storage: Storage, telegram_id: int) -> ActionResult:
-    """Укрепить домашнюю базу группировки за счёт казны: +1 к защите при чужом штурме."""
+    """Укрепить домашнюю базу группировки за счёт казны: +1 защитник и урон в тактическом штурме."""
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction is None:
         return ActionResult(False, "Сначала создай персонажа и выбери группировку.")
@@ -6881,7 +6825,7 @@ def upgrade_faction_base(storage: Storage, telegram_id: int) -> ActionResult:
     return ActionResult(
         True,
         f"База «{base_name}» укреплена (−{BASE_FORTIFY_COST_RU} RU из казны).\n"
-        f"Пассивная защита при штурме другими группировками: +{new_bonus}.",
+        f"Тактическая защита при штурме: +{new_bonus} (доп. защитники и урон).",
     )
 
 
@@ -7536,7 +7480,7 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
         control = "ваша" if owner == player.faction else f"контроль: {owner}"
         base_line = (
             f"Домашняя база: «{home_name}» ({control})\n"
-            f"Укрепление: +{bonus} к пассивной защите при чужом штурме"
+            f"Укрепление: +{bonus} (доп. защитники и урон при тактическом штурме)"
         )
 
     garage_overview = build_faction_garage_overview(storage, player.faction)
@@ -7558,7 +7502,7 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
         f"Любой боец может сдать патроны/аптечки на склад и пополнить казну.\n"
         f"Забирать со склада — с 5 ранга (или лидер). Из казны — только лидер.\n"
         f"Лидер может укрепить базу за {BASE_FORTIFY_COST_RU} RU "
-        f"(+{BASE_FORTIFY_POWER_BONUS} к защите от штурма)."
+        f"(+{BASE_FORTIFY_POWER_BONUS}: доп. защитники и урон в тактическом штурме)."
         f"{leader_hint}"
     )
 
@@ -8562,8 +8506,9 @@ TUTORIAL_PAGES: tuple[tuple[str, str], ...] = (
     (
         "Совместная вылазка",
         "«🏕 Вылазка» → «👥 Совместная вылазка» — собери команду и вместе зачищайте точку. "
+        "У каждого боеца 1 аптечка из инвентаря на вылазку. "
         "Если напарник упал (0 HP), подойди вплотную и эвакуируй его на точку старта "
-        "(кнопка «🦺 Эвакуация»). В коопе нет поднятия аптечкой — только эвак.",
+        "(кнопка «🦺 Эвакуация»).",
     ),
     (
         "Торговля",
@@ -8583,10 +8528,15 @@ TUTORIAL_PAGES: tuple[tuple[str, str], ...] = (
     (
         "Война и рейды",
         "«🏕 Вылазка» → «⚔️ Война»: нейтральные точки — соло-захват на сетке 6×6 "
-        "(«🎯 Захват нейтральных точек») или через лобби от 5 бойцов; "
-        "занятые точки — только лобби (тактический штурм 9×9). "
+        f"(«🎯 Захват нейтральных точек», +{NCAP_SUCCESS_PAY_RU} RU, −18 энергии) "
+        "или через лобби от 5 бойцов; "
+        "занятые точки — только лобби (тактический штурм 9×9, "
+        f"−{WAR_LOBBY_ENERGY_COST} энергии, хост +{WAR_SUCCESS_PAY_RU} RU, "
+        f"союзники +{WAR_ALLY_SUCCESS_PAY_RU} RU). "
         "«🪖 Рейды» — 2–5 бойцов (своя группировка или союзники) на тактической карте 9×9: "
-        "логово, склад или гараж врага. На соседней клетке можно поднять союзника аптечкой из инвентаря "
+        "логово, склад или гараж врага. Успех рейда на логово: "
+        "1400 + 180×выживших RU в казну фракции. "
+        "На соседней клетке можно поднять союзника аптечкой из инвентаря "
         "(≈40% HP). Сдаться = провал для всего отряда.",
     ),
     (
@@ -8594,9 +8544,10 @@ TUTORIAL_PAGES: tuple[tuple[str, str], ...] = (
         "«🏕 Вылазка» → «⚔️ Арена» — тренировка на домашней базе (поле 8×8). "
         "Бесконечные волны НПС: с каждой волной выдаётся временное снаряжение арены "
         "(не твоё из инвентаря). На поле 3 аптечки арены (+45 HP каждая). "
-        "Поражение не бьёт по HP в БД. Если зачистил ≥1 волну и завершил бой "
-        "(«Покинуть», смерть или таймаут) — награда как за лёгкое задание "
-        "(472–717 RU и рейтинг +4). Между волнами враги не стреляют в тот же ход.",
+        "Поражение не бьёт по HP в БД. Если зачистил ≥1 волну и добровольно покинул арену "
+        "(«Покинуть») — награда как за лёгкое задание "
+        "(472–717 RU и рейтинг +4). При смерти на арене награды нет. "
+        "Между волнами враги не стреляют в тот же ход.",
     ),
     (
         "Экономика и гараж",
