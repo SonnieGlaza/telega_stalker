@@ -24,7 +24,6 @@ from app.game_logic import (
     upgrade_armor,
     armor_defense,
     apply_incoming_damage,
-    search_artifacts,
     travel_to,
     use_medkit,
     accept_quest_contract,
@@ -181,7 +180,6 @@ def run_smoke_check() -> None:
         assert "×10" in bulk.text
         assert not buy_item(storage, 111, "detector_otklik", amount=5).ok
         assert use_medkit(storage, 111).ok is False  # hp full
-        assert search_artifacts(storage, 111).text
 
         # Artifact hunt mini-game (visual field).
         from app.artifact_hunt import (

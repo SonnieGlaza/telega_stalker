@@ -3006,57 +3006,6 @@ def apply_contract_mission_fail(
     )
 
 
-def _execute_quest_roll(
-    storage: Storage,
-    telegram_id: int,
-    quest: QuestType,
-    *,
-    work_location: str,
-    title_override: str | None = None,
-) -> ActionResult:
-    spend_err = _spend_quest_resources(storage, telegram_id, quest)
-    if spend_err is not None:
-        return spend_err
-
-    updated = storage.get_character(telegram_id, refresh_energy=False)
-    if updated is None:
-        return ActionResult(False, "Персонаж не найден.")
-
-    breakdown = calculate_quest_success_for_quest(updated, quest)
-    roll = random.randint(1, 100)
-    success = roll <= breakdown.chance
-    display_title = title_override or quest.title
-
-    if success:
-        result = apply_contract_mission_success(
-            storage,
-            telegram_id,
-            quest=quest,
-            work_location=work_location,
-            title=display_title,
-        )
-        formula_line = (
-            f"Шанс {breakdown.chance}% (бросок {roll}). "
-            f"База {breakdown.base_chance}% (+снар {breakdown.gear_bonus}%) "
-            f"+патр {breakdown.ammo_bonus}% +апт {breakdown.medkit_bonus}% "
-            f"(потолок {quest.max_success}%)."
-        )
-        return ActionResult(
-            True,
-            result.text.replace("!\n", f"!\n{formula_line}\n", 1),
-            payload=result.payload,
-        )
-
-    return apply_contract_mission_fail(
-        storage,
-        telegram_id,
-        quest=quest,
-        work_location=work_location,
-        title=display_title,
-        reason=f"Шанс был {breakdown.chance}% (бросок {roll}).",
-    )
-
-
 def run_contract_work(storage: Storage, telegram_id: int) -> ActionResult:
     character = storage.get_character(telegram_id)
     if character is None:
@@ -3418,57 +3367,6 @@ def open_stash(storage: Storage, telegram_id: int) -> ActionResult:
     return ActionResult(
         True,
         f"Ты открыл тайник и нашёл:\n{loot_text}",
-    )
-
-
-def search_artifacts(storage: Storage, telegram_id: int) -> ActionResult:
-    player = storage.get_character(telegram_id, refresh_energy=False)
-    if player is None:
-        return ActionResult(False, "Сначала создай персонажа через /start.")
-    if _is_dead(player):
-        return ActionResult(False, _dead_block_text())
-    blocked = travel_block_text(player)
-    if blocked:
-        return ActionResult(False, blocked)
-    chosen: tuple[str, str, int] | None = None
-    for detector in reversed(ARTIFACT_DETECTORS):
-        key, _, _ = detector
-        if int(player.inventory.get(key, 0)) > 0:
-            chosen = detector
-            break
-    if chosen is None:
-        return ActionResult(
-            False,
-            "У тебя нет детектора. Купи его у торговца в разделе снаряжения.",
-        )
-    _, detector_name, base_chance = chosen
-    energy_cost = ARTIFACT_SEARCH_ENERGY_COST
-    if not storage.spend_energy(telegram_id, energy_cost):
-        return ActionResult(False, f"Не хватает энергии для поиска артов (нужно {energy_cost}).")
-    location = player.location
-    art_key = roll_location_artifact_drop(location, base_chance)
-    spawn_hint = describe_location_artifact_spawns(location)
-    survival_text = _apply_active_survival(storage, telegram_id)
-    if art_key is None:
-        return ActionResult(
-            False,
-            f"Поиск ({detector_name}) на «{location}»: аномалия пуста.\n"
-            f"Базовые шансы здесь: {spawn_hint}.\n"
-            f"Лучший детектор повышает локальный спавн (не Зону)."
-            f"{survival_text}",
-        )
-    storage.add_item(telegram_id, art_key, 1)
-    storage.add_player_stat(telegram_id, "artifacts_found", 1)
-    label = ITEM_LABELS.get(art_key, art_key)
-    if art_key in ARTIFACT_JUNK_KEYS:
-        kind = "мусорный артефакт (без бонусов)"
-    else:
-        kind = "артефакт"
-    return ActionResult(
-        True,
-        f"Поиск ({detector_name}) на «{location}»!\n"
-        f"Найден {kind}: {label} x1."
-        f"{survival_text}",
     )
 
 
