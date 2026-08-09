@@ -321,7 +321,7 @@ def generate_death_story(
 ) -> str:
     """Случайный сталкерский текст смерти с привязкой к месту и причине."""
     rng = random.Random(seed) if seed is not None else random.Random()
-    spot = where or character.location or "Зоне"
+    spot = h(where or character.location or "Зоне")
     death_cause = infer_death_cause(character, cause=cause)
     atmosphere, fall = _location_bits(spot, rng)
     opener = _pick(CAUSE_OPENERS[death_cause], rng)
