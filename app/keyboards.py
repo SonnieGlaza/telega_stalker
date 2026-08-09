@@ -4,6 +4,8 @@ from typing import Any
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
+from app.game_logic import TOPUP_RATE_RU_PER_STAR, default_trader_sell_catalog_buttons
+
 
 def gender_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -404,7 +406,7 @@ def personal_stash_amount_keyboard(action: str, item_key: str, max_amount: int) 
 def inventory_consumables_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="⚡ Выпить энергетик", callback_data="use:energy_drink")],
+            [InlineKeyboardButton(text="⚡ Выпить энергетик (+35 энергии)", callback_data="use:energy_drink")],
             [InlineKeyboardButton(text="🩹 Использовать аптечку (+25 к здоровью)", callback_data="use:medkit")],
             [InlineKeyboardButton(text="🪖 Армейская аптечка (+50 к здоровью)", callback_data="use:medkit_army")],
             [InlineKeyboardButton(text="🔬 Научная аптечка (+75 к здоровью, −15 рад.)", callback_data="use:medkit_science")],
@@ -628,23 +630,7 @@ def trader_sell_consumables_keyboard(
     page: int = 0,
 ) -> InlineKeyboardMarkup:
     if items is None:
-        items = [
-            ("Продать энергетик (112)", "sell:energy_drink"),
-            ("Продать аптечку (120)", "sell:medkit"),
-            ("Продать армейскую аптечку (180)", "sell:medkit_army"),
-            ("Продать научную аптечку (240)", "sell:medkit_science"),
-            ("Продать патроны (55)", "sell:ammo_pack"),
-            ("Продать водку (50)", "sell:vodka"),
-            ("Продать антирад (130)", "sell:antirad"),
-            ("Продать хлеб (16)", "sell:bread"),
-            ("Продать колбасу (33)", "sell:sausage"),
-            ("Продать тушёнку (83)", "sell:stew"),
-            ("Продать воду (16)", "sell:water_bottle"),
-            ("Продать минералку (33)", "sell:mineral_water"),
-            ("Продать чай Бороды (83)", "sell:beard_tea"),
-            ("Продать дизель +5 (200)", "sell:diesel_can"),
-            ("Продать бензин +5 (100)", "sell:gasoline_can"),
-        ]
+        items = default_trader_sell_catalog_buttons("consumables")
     return _trader_sell_items_keyboard(items, page=page, page_prefix="trade:sell:consumables")
 
 
@@ -654,19 +640,7 @@ def trader_sell_trophies_keyboard(
     page: int = 0,
 ) -> InlineKeyboardMarkup:
     if items is None:
-        items = [
-            ("Продать артефакт Зоны (5000)", "sell:artifact"),
-            ("Продать Арт «Сила» (1100)", "sell:artifact_power"),
-            ("Продать Арт «Живучесть» (1100)", "sell:artifact_vitality"),
-            ("Продать Арт «Антирад» (5000)", "sell:artifact_antirad"),
-            ("Продать Слизь (350)", "sell:artifact_junk_slime"),
-            ("Продать Ржавый болт (300)", "sell:artifact_junk_bolt"),
-            ("Продать Дохлую батарейку (450)", "sell:artifact_junk_battery"),
-            ("Продать Вспышку (500)", "sell:artifact_junk_flash"),
-            ("Продать Аномальный камень (400)", "sell:artifact_junk_stone"),
-            ("Продать Сгусток тумана (550)", "sell:artifact_junk_fog"),
-            ("Продать Осколок (600)", "sell:artifact_junk_splinter"),
-        ]
+        items = default_trader_sell_catalog_buttons("trophies")
     return _trader_sell_items_keyboard(items, page=page, page_prefix="trade:sell:trophies")
 
 
@@ -676,17 +650,7 @@ def trader_sell_gear_keyboard(
     page: int = 0,
 ) -> InlineKeyboardMarkup:
     if items is None:
-        items = [
-            ("Продать детектор «Отклик» (500)", "sell:detector_otklik"),
-            ("Продать детектор «Медведь» (2000)", "sell:detector_medved"),
-            ("Продать детектор «Велес» (5000)", "sell:detector_veles"),
-            ("Продать детектор «Сварог» (15000)", "sell:detector_svarog"),
-            ("Продать спальник (10000)", "sell:sleeping_bag"),
-            ("Продать велосипед (1500)", "sell:bicycle"),
-            ("Продать Ниву (4500)", "sell:niva"),
-            ("Продать грузовик (17500)", "sell:truck"),
-            ("Продать тайник (500)", "sell:stash_case"),
-        ]
+        items = default_trader_sell_catalog_buttons("gear")
     return _trader_sell_items_keyboard(items, page=page, page_prefix="trade:sell:gear")
 
 
@@ -696,17 +660,7 @@ def trader_sell_armor_keyboard(
     page: int = 0,
 ) -> InlineKeyboardMarkup:
     if items is None:
-        items = [
-            ("Продать Кожаную куртку (690)", "sell:armor_leather"),
-            ("Продать Сталкерский бронежилет (1390)", "sell:armor_stalker_vest"),
-            ("Продать Комбинезон «Заря» (1550)", "sell:armor_sunrise"),
-            ("Продать ПСЗ-7 «Долг» (4500)", "sell:armor_psz7d"),
-            ("Продать Научный костюм (4500)", "sell:armor_scientific"),
-            ("Продать Берилл-5М «Булат» (4170)", "sell:armor_berill5m"),
-            ("Продать Костюм СЕВА (4250)", "sell:armor_seva"),
-            ("Продать Экзоскелет (14240)", "sell:armor_exoskeleton"),
-            ("Продать Носорог (45000)", "sell:armor_nosorog"),
-        ]
+        items = default_trader_sell_catalog_buttons("armor")
     return _trader_sell_items_keyboard(items, page=page, page_prefix="trade:sell:armor")
 
 
@@ -716,24 +670,7 @@ def trader_sell_weapons_keyboard(
     page: int = 0,
 ) -> InlineKeyboardMarkup:
     if items is None:
-        items = [
-            ("Продать ПМ (690)", "sell:weapon_pm"),
-            ("Продать Фора-12 (1010)", "sell:weapon_fora12"),
-            ("Продать Обрез (920)", "sell:weapon_sawedoff"),
-            ("Продать Гадюка-5 (1720)", "sell:weapon_mp5"),
-            ("Продать Чейзер-13 (1960)", "sell:weapon_chaser13"),
-            ("Продать АКС-74У (1960)", "sell:weapon_aks74u"),
-            ("Продать АК-74 (2620)", "sell:weapon_ak74"),
-            ("Продать СПАС-12 (3110)", "sell:weapon_spas12"),
-            ("Продать ТРс-301 (3930)", "sell:weapon_lr300"),
-            ("Продать ИЛ86 (4090)", "sell:weapon_il86"),
-            ("Продать АН-94 (4090)", "sell:weapon_an94"),
-            ("Продать ГП37 (6380)", "sell:weapon_gp37"),
-            ("Продать Винтарь ВС (7040)", "sell:weapon_vintar"),
-            ("Продать СВДм-2 (7040)", "sell:weapon_svd"),
-            ("Продать РП-74 (7530)", "sell:weapon_rp74"),
-            ("Продать Гаусс-пушку (45000)", "sell:weapon_gauss"),
-        ]
+        items = default_trader_sell_catalog_buttons("weapons")
     return _trader_sell_items_keyboard(items, page=page, page_prefix="trade:sell:weapons")
 
 
@@ -756,8 +693,7 @@ def locations_keyboard(
 
 
 def topup_keyboard() -> InlineKeyboardMarkup:
-    # Курс должен совпадать с TOPUP_RATE_RU_PER_STAR в app/bot.py (75 RU/звезда).
-    rate = 75
+    rate = TOPUP_RATE_RU_PER_STAR
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=f"⭐ 1 звезда ({rate} RU)", callback_data="topup:1")],

@@ -824,6 +824,7 @@ TRAVEL_ENERGY_BICYCLE = 11
 TRAVEL_ENERGY_NIVA = 12
 TRAVEL_ENERGY_TRUCK = 8
 STARTING_MONEY_RU = 1400
+TOPUP_RATE_RU_PER_STAR = 75
 CONTRACT_CANCEL_PENALTY_RU = 50
 CONTRACT_CANCEL_RATING_PENALTY = 1
 NCAP_SUCCESS_PAY_RU = 150
@@ -3820,19 +3821,15 @@ TRADER_SELL_CATALOG: dict[str, tuple[str, ...]] = {
         "truck",
         "stash_case",
         "armor_upgrade",
-        "gear_upgrade",
     ),
     "armor": (
         "armor_leather",
         "armor_stalker_vest",
         "armor_psz7d",
-        "armor_sunrise",
         "armor_zarya",
         "armor_berill5m",
-        "armor_bulat",
         "armor_seva",
         "armor_scientific",
-        "armor_exoskeleton",
         "armor_exo",
         "armor_nosorog",
     ),
@@ -3927,32 +3924,56 @@ def list_owned_trader_sell_buttons(character: Character, category: str) -> list[
     """Кнопки продажи только для предметов, которые есть у игрока."""
     keys = TRADER_SELL_CATALOG.get(category, ())
     buttons: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for item_key in keys:
+        canon = normalize_shop_item_key(item_key)
+        if canon in seen:
+            continue
         if not player_owns_sellable_item(character, item_key):
             continue
-        item = SHOP_ITEMS[item_key]
+        item = SHOP_ITEMS.get(canon)
+        if item is None or int(item.get("sell_price", 0)) <= 0:
+            continue
+        seen.add(canon)
         title = str(item["name"])
         price = int(item["sell_price"])
-        if item_key == "truck":
+        if canon == "truck":
             label = f"Продать {title} ({price})"
-        elif item_key == "sleeping_bag":
+        elif canon == "sleeping_bag":
             label = f"Продать {title} ({price})"
-        elif item_key == "diesel_can":
+        elif canon == "diesel_can":
             cans = max(1, int(character.diesel) // FUEL_CAN_DIESEL_AMOUNT)
             label = f"Продать {title} ×{cans} ({price})"
-        elif item_key == "gasoline_can":
+        elif canon == "gasoline_can":
             cans = max(1, int(character.gasoline) // FUEL_CAN_GASOLINE_AMOUNT)
             label = f"Продать {title} ×{cans} ({price})"
         else:
-            qty = _inventory_qty_for_sell_key(character, item_key)
+            qty = _inventory_qty_for_sell_key(character, canon)
             if qty <= 0:
-                # Только экипированный экземпляр.
                 label = f"Продать {title} (экип.) ({price})"
             elif qty > 1:
                 label = f"Продать {title} ×{qty} ({price})"
             else:
                 label = f"Продать {title} ({price})"
-        buttons.append((label, f"sell:{item_key}"))
+        buttons.append((label, f"sell:{canon}"))
+    return buttons
+
+
+def default_trader_sell_catalog_buttons(category: str) -> list[tuple[str, str]]:
+    """Подписи кнопок продажи по каталогу (fallback, когда нет персонажа)."""
+    buttons: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for item_key in TRADER_SELL_CATALOG.get(category, ()):
+        canon = normalize_shop_item_key(item_key)
+        if canon in seen:
+            continue
+        item = SHOP_ITEMS.get(canon)
+        if item is None or int(item.get("sell_price", 0)) <= 0:
+            continue
+        seen.add(canon)
+        price = int(item["sell_price"])
+        title = str(item["name"])
+        buttons.append((f"Продать {title} ({price})", f"sell:{canon}"))
     return buttons
 
 

@@ -181,6 +181,28 @@ def run_smoke_check() -> None:
         assert not buy_item(storage, 111, "detector_otklik", amount=5).ok
         assert use_medkit(storage, 111).ok is False  # hp full
 
+        from app.game_logic import (
+            default_trader_sell_catalog_buttons,
+            list_owned_trader_sell_buttons,
+        )
+
+        storage.change_money(111, 50000)
+        assert buy_item(storage, 111, "armor_zarya").ok
+        assert buy_item(storage, 111, "armor_exo").ok
+        player = storage.get_character(111, refresh_energy=False)
+        assert player is not None
+        for category in ("consumables", "trophies", "gear", "armor", "weapons"):
+            owned = list_owned_trader_sell_buttons(player, category)
+            owned_callbacks = [cb for _, cb in owned]
+            assert len(owned_callbacks) == len(set(owned_callbacks)), (
+                f"duplicate owned sell buttons in {category}: {owned_callbacks}"
+            )
+            fallback = default_trader_sell_catalog_buttons(category)
+            fallback_callbacks = [cb for _, cb in fallback]
+            assert len(fallback_callbacks) == len(set(fallback_callbacks)), (
+                f"duplicate catalog sell buttons in {category}: {fallback_callbacks}"
+            )
+
         # Artifact hunt mini-game (visual field).
         from app.artifact_hunt import (
             start_artifact_hunt,
@@ -207,6 +229,11 @@ def run_smoke_check() -> None:
             assert get_hunt_session(storage, 111) is None
         else:
             assert step.payload.get("hunt_done") or step.payload.get("hunt_dead")
+
+        ch = storage.get_character(111, refresh_energy=False)
+        assert ch is not None
+        if ch.health <= 0:
+            storage.change_health(111, ch.max_health - ch.health, max_health=ch.max_health)
 
         travel_result = travel_to(storage, 111, "Янтарь")
         assert travel_result.ok, travel_result.text

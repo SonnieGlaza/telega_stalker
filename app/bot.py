@@ -199,6 +199,7 @@ from app.game_logic import (
     RATING_REWARD,
     ARTIFACT_SEARCH_ENERGY_COST,
     DEPOT_RAID_ENERGY_COST,
+    TOPUP_RATE_RU_PER_STAR,
     process_due_travels,
     process_due_garage_vehicle_rentals,
     collect_travel_eta_notices,
@@ -407,7 +408,7 @@ def _travel_eta_lock(telegram_id: int) -> asyncio.Lock:
         lock = asyncio.Lock()
         _travel_eta_locks[telegram_id] = lock
     return lock
-TOPUP_RATE_RU_PER_STAR = 75
+
 TOPUP_PAYLOAD_PREFIX = "topup_stars:"
 TOPUP_ALLOWED_AMOUNTS = {1, 5, 10, 25}
 TOPUP_MIN_STARS = 1
@@ -942,7 +943,7 @@ def _build_info_text(player: Character) -> str:
         "сначала самые опасные локации, потом остальные; на базе всегда безопасно.\n"
         "• 🚚 Контрабанда: перевозка, ограбление в пути = провал; лут важнее чистого RU.\n"
         "• 🏚 Рейды (тактика 9×9, 2–5 бойцов, 15 мин / ход 12 сек): логово, склад/гараж врага; "
-        "−18 энергии (логово) / −16 (склад/гараж); "
+        f"−18 энергии (логово) / −{DEPOT_RAID_ENERGY_COST} (склад/гараж); "
         "1 аптечка/боец; «🏳 Сдаться» = провал для всех; HP после боя сохраняется в БД.\n"
         "  Успех рейда на логово: 1400 + 180×выживших RU в казну фракции.\n"
         "  Провал логова: −110 RU, −8 рейтинга каждому (включая погибших); "
@@ -1551,6 +1552,24 @@ def ensure_character(message: Message) -> Character | None:
     return player
 
 
+async def reject_if_busy(
+    message_or_callback: Message | CallbackQuery,
+    telegram_id: int,
+    *,
+    skip: str | None = None,
+) -> bool:
+    from app.player_busy import player_busy_reason
+
+    busy = player_busy_reason(get_storage(), telegram_id, skip=skip)
+    if busy is None:
+        return False
+    if isinstance(message_or_callback, CallbackQuery):
+        await safe_callback_answer(message_or_callback, busy, show_alert=True)
+    else:
+        await message_or_callback.answer(busy)
+    return True
+
+
 async def reject_if_dead(message_or_callback: Message | CallbackQuery, player: Character) -> bool:
     """Если персонаж мёртв — показать историю смерти + клавиатуру спасения и вернуть True.
 
@@ -1900,6 +1919,8 @@ async def show_trader(message: Message) -> None:
             build_dead_character_text(player, storage=get_storage()),
             reply_markup=dead_character_keyboard(),
         )
+        return
+    if await reject_if_busy(message, player.telegram_id):
         return
     await message.answer(
         "Торговец на связи. Выбери раздел:",
@@ -2548,6 +2569,8 @@ async def show_quests(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     if await reject_if_dead(message, player):
+        return
+    if await reject_if_busy(message, player.telegram_id):
         return
     if not player_ready(player):
         await message.answer("Сначала выбери группировку.")
@@ -4411,6 +4434,8 @@ async def show_arena(message: Message, bot: Bot) -> None:
         return
     if await reject_if_dead(message, player):
         return
+    if await reject_if_busy(message, player.telegram_id, skip="arena"):
+        return
     storage = get_storage()
     session = get_arena_session(storage, player.telegram_id)
     if session is not None:
@@ -4434,6 +4459,8 @@ async def show_coop_menu(message: Message, bot: Bot) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     if await reject_if_dead(message, player):
+        return
+    if await reject_if_busy(message, player.telegram_id, skip="coop"):
         return
     storage = get_storage()
     session = get_coop_session_by_player(storage, player.telegram_id)
@@ -4601,6 +4628,8 @@ async def show_travel(message: Message) -> None:
         return
     if await reject_if_dead(message, player):
         return
+    if await reject_if_busy(message, player.telegram_id, skip="travel"):
+        return
     db = get_storage()
     locations = db.get_locations()
     traveling = is_traveling(player)
@@ -4735,6 +4764,8 @@ async def show_war(message: Message) -> None:
         return
     if await reject_if_dead(message, player):
         return
+    if await reject_if_busy(message, player.telegram_id):
+        return
     if not player_ready(player):
         await message.answer("Сначала выбери группировку.")
         return
@@ -4772,7 +4803,7 @@ async def war_scenario_section_callback(callback: CallbackQuery) -> None:
         "(«🎁 Передача точки союзнику»).\n"
         "• Рейды на логова — в «🪖 Рейды» (2–5 бойцов); "
         "успех: 1400 + 180×выживших RU в казну, −18 энергии; "
-        "склад/гараж — −16 энергии, только без союза.\n"
+        f"склад/гараж — −{DEPOT_RAID_ENERGY_COST} энергии, только без союза.\n"
         "• В рейде: 1 аптечка, «💊 Поднять» раненого; «🏳 Сдаться» — провал для всех.\n"
         "• Нельзя штурмовать свои и союзнические точки.\n"
         "• При успехе лобби контроль получает группировка-хост.\n"
@@ -5083,6 +5114,8 @@ async def show_raids(message: Message) -> None:
         return
     if await reject_if_dead(message, player):
         return
+    if await reject_if_busy(message, player.telegram_id):
+        return
     if not player_ready(player):
         await message.answer("Сначала выбери группировку.")
         return
@@ -5338,6 +5371,8 @@ async def show_faction_group(message: Message) -> None:
         return
     if await reject_if_dead(message, player):
         return
+    if await reject_if_busy(message, player.telegram_id):
+        return
     if not player_ready(player):
         await message.answer("Сначала выбери группировку.")
         return
@@ -5352,6 +5387,8 @@ async def show_economy(message: Message) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     if await reject_if_dead(message, player):
+        return
+    if await reject_if_busy(message, player.telegram_id):
         return
     if not player_ready(player):
         await message.answer("Сначала выбери группировку.")
