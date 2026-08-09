@@ -925,6 +925,7 @@ async def admin_unstick_player(message: Message, bot: Bot, command: CommandObjec
         return
     if is_dead or player.health <= 0:
         text = build_dead_character_text(player, storage=storage)
+        append_death_log(storage, telegram_id, text)
         try:
             await bot.send_message(
                 telegram_id,
@@ -1720,13 +1721,10 @@ def resolve_dead_player(
     refresh_survival: bool = True,
 ) -> Character | None:
     """Мёртв для UI: HP=0 в БД (с учётом голода/жажды) или выведен из строя в тактике."""
-    from app.player_busy import clear_stale_activity_for_dead_player
-
     player = storage.get_character(telegram_id, refresh_energy=refresh_survival)
     if player is None:
         return None
     if player.health <= 0:
-        clear_stale_activity_for_dead_player(storage, telegram_id)
         return storage.get_character(telegram_id, refresh_energy=False)
 
     from app.tactical_hp import commit_tactical_death
@@ -1763,7 +1761,6 @@ def resolve_dead_player(
             cause=cause,
             killer_name=str(killer) if killer else None,
         )
-        clear_stale_activity_for_dead_player(storage, telegram_id)
         return storage.get_character(telegram_id, refresh_energy=False)
 
     return None
@@ -1771,8 +1768,17 @@ def resolve_dead_player(
 
 DEAD_PLAYER_CALLBACKS = frozenset({"respawn:base", "death:log"})
 
-# Вылазка по контракту / охота — смерть обрабатывает свой хендлер, middleware не перехватывает.
-FIELD_MISSION_CALLBACK_PREFIXES = ("qmission:", "hunt:")
+# Режимы с картой: смерть/урон обрабатывает свой хендлер, middleware не перехватывает.
+DEATH_MIDDLEWARE_BYPASS_PREFIXES = (
+    "qmission:",
+    "hunt:",
+    "dgrid:",
+    "cwar:",
+    "rgrid:",
+    "agrid:",
+    "ncap:",
+    "coop:",
+)
 
 # Команды, которые middleware не перехватывает у мёртвого (обрабатываются хендлерами).
 DEAD_BYPASS_MESSAGE_COMMANDS = frozenset({"/respawn", "/fixme", "/cancel"})
@@ -1783,9 +1789,21 @@ async def show_death_screen(
     player: Character,
     *,
     bot: Bot | None = None,
+    where: str | None = None,
+    cause: str | None = None,
 ) -> None:
-    text = build_dead_character_text(player, storage=get_storage())
+    storage = get_storage()
+    if where is not None or cause is not None:
+        text = build_battle_death_text(
+            player,
+            where=where or player.location,
+            cause=cause or "combat",
+            storage=storage,
+        )
+    else:
+        text = build_dead_character_text(player, storage=storage)
     keyboard = dead_character_keyboard()
+    append_death_log(storage, player.telegram_id, text)
     send_bot = bot
     callback: CallbackQuery | None = None
     if isinstance(message_or_callback, CallbackQuery):
@@ -1797,6 +1815,10 @@ async def show_death_screen(
 
     if send_bot is not None:
         sent = await _send_death_message_safe(send_bot, player.telegram_id, text, keyboard)
+        if sent:
+            from app.player_busy import clear_stale_activity_for_dead_player
+
+            clear_stale_activity_for_dead_player(storage, player.telegram_id)
         if callback is not None and sent:
             await _dismiss_battle_map(callback)
         return
@@ -1853,7 +1875,7 @@ class DeadPlayerCallbackMiddleware(BaseMiddleware):
         callback_data = (event.data or "").strip()
         if callback_data in DEAD_PLAYER_CALLBACKS:
             return await handler(event, data)
-        if callback_data.startswith(FIELD_MISSION_CALLBACK_PREFIXES):
+        if callback_data.startswith(DEATH_MIDDLEWARE_BYPASS_PREFIXES):
             return await handler(event, data)
         storage = get_storage()
         telegram_id = event.from_user.id
@@ -1884,6 +1906,17 @@ async def reject_if_dead(message_or_callback: Message | CallbackQuery, player: C
         return False
     await show_death_screen(message_or_callback, dead)
     return True
+
+
+async def _reject_tactical_callback_if_dead(callback: CallbackQuery) -> bool:
+    """Если HP=0 в БД — экран смерти и True."""
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is not None and player.health <= 0:
+        await show_death_screen(callback, player, bot=callback.bot)
+        return True
+    return False
 
 
 def action_result_text(telegram_id: int, text: str) -> str:
@@ -3043,9 +3076,6 @@ async def _send_battle_death_notice(
     cause: str | None = None,
 ) -> None:
     storage = get_storage()
-    from app.player_busy import clear_stale_activity_for_dead_player
-
-    clear_stale_activity_for_dead_player(storage, user_id)
     text = build_battle_death_text(
         player,
         where=where,
@@ -3054,6 +3084,10 @@ async def _send_battle_death_notice(
     )
     append_death_log(storage, user_id, text)
     sent = await _send_death_message_safe(bot, user_id, text, dead_character_keyboard())
+    if sent:
+        from app.player_busy import clear_stale_activity_for_dead_player
+
+        clear_stale_activity_for_dead_player(storage, user_id)
     if callback is not None and sent:
         await _dismiss_battle_map(callback)
     elif callback is not None and callback.message is not None:
@@ -4674,38 +4708,45 @@ async def duel_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
     telegram_id = callback.from_user.id
     action = (callback.data or "").removeprefix("dgrid:").strip()
 
-    if action == "refresh":
-        session = get_duel_session_by_player(storage, telegram_id)
-        if session is None:
-            await callback.answer("Активной дуэли нет.", show_alert=True)
+    try:
+        if await _reject_tactical_callback_if_dead(callback):
             return
-        await _broadcast_duel_session(bot, storage, session)
-        await safe_callback_answer(callback)
-        return
 
-    if action == "forfeit":
-        result = duel_forfeit(storage, telegram_id)
-        await _handle_duel_action(bot, callback, result)
-        return
+        if action == "refresh":
+            session = get_duel_session_by_player(storage, telegram_id)
+            if session is None:
+                await callback.answer("Активной дуэли нет.", show_alert=True)
+                return
+            await _broadcast_duel_session(bot, storage, session)
+            await safe_callback_answer(callback)
+            return
 
-    if action == "medkit":
-        result = duel_use_medkit(storage, telegram_id)
-        await _handle_duel_action(bot, callback, result)
-        return
+        if action == "forfeit":
+            result = duel_forfeit(storage, telegram_id)
+            await _handle_duel_action(bot, callback, result)
+            return
 
-    if action.startswith("move:"):
-        direction = action.removeprefix("move:")
-        result = duel_move(storage, telegram_id, direction)
-        await _handle_duel_action(bot, callback, result)
-        return
+        if action == "medkit":
+            result = duel_use_medkit(storage, telegram_id)
+            await _handle_duel_action(bot, callback, result)
+            return
 
-    if action.startswith("shoot:"):
-        direction = action.removeprefix("shoot:")
-        result = duel_shoot(storage, telegram_id, direction)
-        await _handle_duel_action(bot, callback, result)
-        return
+        if action.startswith("move:"):
+            direction = action.removeprefix("move:")
+            result = duel_move(storage, telegram_id, direction)
+            await _handle_duel_action(bot, callback, result)
+            return
 
-    await callback.answer("Неизвестное действие.", show_alert=True)
+        if action.startswith("shoot:"):
+            direction = action.removeprefix("shoot:")
+            result = duel_shoot(storage, telegram_id, direction)
+            await _handle_duel_action(bot, callback, result)
+            return
+
+        await callback.answer("Неизвестное действие.", show_alert=True)
+    except Exception:
+        logger.exception("Duel grid callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка дуэли. Попробуй ещё раз или /fixme", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("cwar:"))
@@ -4715,35 +4756,42 @@ async def cwar_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
     telegram_id = callback.from_user.id
     action = (callback.data or "").removeprefix("cwar:").strip()
 
-    if action == "refresh":
-        session = get_cwar_session_by_player(storage, telegram_id)
-        if session is None:
-            await callback.answer("Нет активного штурма.", show_alert=True)
+    try:
+        if await _reject_tactical_callback_if_dead(callback):
             return
-        await _broadcast_cwar_session(bot, storage, session)
-        await safe_callback_answer(callback)
-        return
 
-    if action == "forfeit":
-        await callback.answer("Сдаться нельзя — только захват или поражение.", show_alert=True)
-        return
+        if action == "refresh":
+            session = get_cwar_session_by_player(storage, telegram_id)
+            if session is None:
+                await callback.answer("Нет активного штурма.", show_alert=True)
+                return
+            await _broadcast_cwar_session(bot, storage, session)
+            await safe_callback_answer(callback)
+            return
 
-    if action == "medkit":
-        result = cwar_use_medkit(storage, telegram_id)
-        await _handle_cwar_action(bot, callback, result)
-        return
+        if action == "forfeit":
+            await callback.answer("Сдаться нельзя — только захват или поражение.", show_alert=True)
+            return
 
-    if action.startswith("move:"):
-        result = cwar_move(storage, telegram_id, action.removeprefix("move:"))
-        await _handle_cwar_action(bot, callback, result)
-        return
+        if action == "medkit":
+            result = cwar_use_medkit(storage, telegram_id)
+            await _handle_cwar_action(bot, callback, result)
+            return
 
-    if action.startswith("shoot:"):
-        result = cwar_shoot(storage, telegram_id, action.removeprefix("shoot:"))
-        await _handle_cwar_action(bot, callback, result)
-        return
+        if action.startswith("move:"):
+            result = cwar_move(storage, telegram_id, action.removeprefix("move:"))
+            await _handle_cwar_action(bot, callback, result)
+            return
 
-    await callback.answer("Неизвестное действие.", show_alert=True)
+        if action.startswith("shoot:"):
+            result = cwar_shoot(storage, telegram_id, action.removeprefix("shoot:"))
+            await _handle_cwar_action(bot, callback, result)
+            return
+
+        await callback.answer("Неизвестное действие.", show_alert=True)
+    except Exception:
+        logger.exception("Clan war grid callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка штурма. Попробуй ещё раз или /fixme", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("rgrid:"))
@@ -4753,46 +4801,53 @@ async def rgrid_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
     telegram_id = callback.from_user.id
     action = (callback.data or "").removeprefix("rgrid:").strip()
 
-    if action == "refresh":
-        session = get_raid_grid_session_by_player(storage, telegram_id)
-        if session is None:
-            await callback.answer("Нет активного рейда.", show_alert=True)
+    try:
+        if await _reject_tactical_callback_if_dead(callback):
             return
-        await _broadcast_rgrid_session(bot, storage, session, callback=callback)
-        await safe_callback_answer(callback)
-        return
 
-    if action == "forfeit":
-        result = rgrid_forfeit(storage, telegram_id)
-        await _handle_rgrid_action(bot, callback, result)
-        return
-
-    if action == "medkit":
-        result = rgrid_use_medkit(storage, telegram_id)
-        await _handle_rgrid_action(bot, callback, result)
-        return
-
-    if action.startswith("revive:"):
-        try:
-            target_id = int(action.removeprefix("revive:"))
-        except ValueError:
-            await callback.answer("Некорректный союзник.", show_alert=True)
+        if action == "refresh":
+            session = get_raid_grid_session_by_player(storage, telegram_id)
+            if session is None:
+                await callback.answer("Нет активного рейда.", show_alert=True)
+                return
+            await _broadcast_rgrid_session(bot, storage, session, callback=callback)
+            await safe_callback_answer(callback)
             return
-        result = rgrid_revive_ally(storage, telegram_id, target_id)
-        await _handle_rgrid_action(bot, callback, result)
-        return
 
-    if action.startswith("move:"):
-        result = rgrid_move(storage, telegram_id, action.removeprefix("move:"))
-        await _handle_rgrid_action(bot, callback, result)
-        return
+        if action == "forfeit":
+            result = rgrid_forfeit(storage, telegram_id)
+            await _handle_rgrid_action(bot, callback, result)
+            return
 
-    if action.startswith("shoot:"):
-        result = rgrid_shoot(storage, telegram_id, action.removeprefix("shoot:"))
-        await _handle_rgrid_action(bot, callback, result)
-        return
+        if action == "medkit":
+            result = rgrid_use_medkit(storage, telegram_id)
+            await _handle_rgrid_action(bot, callback, result)
+            return
 
-    await callback.answer("Неизвестное действие.", show_alert=True)
+        if action.startswith("revive:"):
+            try:
+                target_id = int(action.removeprefix("revive:"))
+            except ValueError:
+                await callback.answer("Некорректный союзник.", show_alert=True)
+                return
+            result = rgrid_revive_ally(storage, telegram_id, target_id)
+            await _handle_rgrid_action(bot, callback, result)
+            return
+
+        if action.startswith("move:"):
+            result = rgrid_move(storage, telegram_id, action.removeprefix("move:"))
+            await _handle_rgrid_action(bot, callback, result)
+            return
+
+        if action.startswith("shoot:"):
+            result = rgrid_shoot(storage, telegram_id, action.removeprefix("shoot:"))
+            await _handle_rgrid_action(bot, callback, result)
+            return
+
+        await callback.answer("Неизвестное действие.", show_alert=True)
+    except Exception:
+        logger.exception("Raid grid callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка рейда. Попробуй ещё раз или /fixme", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("agrid:"))
@@ -4802,36 +4857,43 @@ async def arena_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
     telegram_id = callback.from_user.id
     action = (callback.data or "").removeprefix("agrid:").strip()
 
-    if action == "refresh":
-        session = get_arena_session(storage, telegram_id)
-        if session is None:
-            await callback.answer("Нет активной арены.", show_alert=True)
+    try:
+        if await _reject_tactical_callback_if_dead(callback):
             return
-        await _broadcast_arena_session(bot, storage, session, callback=callback)
-        await safe_callback_answer(callback)
-        return
 
-    if action == "forfeit":
-        result = arena_forfeit(storage, telegram_id)
-        await _handle_arena_action(bot, callback, result)
-        return
+        if action == "refresh":
+            session = get_arena_session(storage, telegram_id)
+            if session is None:
+                await callback.answer("Нет активной арены.", show_alert=True)
+                return
+            await _broadcast_arena_session(bot, storage, session, callback=callback)
+            await safe_callback_answer(callback)
+            return
 
-    if action == "medkit":
-        result = arena_use_medkit(storage, telegram_id)
-        await _handle_arena_action(bot, callback, result)
-        return
+        if action == "forfeit":
+            result = arena_forfeit(storage, telegram_id)
+            await _handle_arena_action(bot, callback, result)
+            return
 
-    if action.startswith("move:"):
-        result = arena_move(storage, telegram_id, action.removeprefix("move:"))
-        await _handle_arena_action(bot, callback, result)
-        return
+        if action == "medkit":
+            result = arena_use_medkit(storage, telegram_id)
+            await _handle_arena_action(bot, callback, result)
+            return
 
-    if action.startswith("shoot:"):
-        result = arena_shoot(storage, telegram_id, action.removeprefix("shoot:"))
-        await _handle_arena_action(bot, callback, result)
-        return
+        if action.startswith("move:"):
+            result = arena_move(storage, telegram_id, action.removeprefix("move:"))
+            await _handle_arena_action(bot, callback, result)
+            return
 
-    await callback.answer("Неизвестное действие.", show_alert=True)
+        if action.startswith("shoot:"):
+            result = arena_shoot(storage, telegram_id, action.removeprefix("shoot:"))
+            await _handle_arena_action(bot, callback, result)
+            return
+
+        await callback.answer("Неизвестное действие.", show_alert=True)
+    except Exception:
+        logger.exception("Arena grid callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка арены. Попробуй ещё раз или /fixme", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("ncap:"))
@@ -4841,79 +4903,86 @@ async def ncap_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
     telegram_id = callback.from_user.id
     action = (callback.data or "").removeprefix("ncap:").strip()
 
-    if action in {"menu", "refresh"}:
-        session = get_ncap_session(storage, telegram_id)
-        if session is not None:
-            await _broadcast_ncap_session(bot, storage, session)
+    try:
+        if await _reject_tactical_callback_if_dead(callback):
+            return
+
+        if action in {"menu", "refresh"}:
+            session = get_ncap_session(storage, telegram_id)
+            if session is not None:
+                await _broadcast_ncap_session(bot, storage, session)
+                await safe_callback_answer(callback)
+                return
+            await _show_ncap_lobby_menu(callback, telegram_id)
             await safe_callback_answer(callback)
             return
-        await _show_ncap_lobby_menu(callback, telegram_id)
-        await safe_callback_answer(callback)
-        return
 
-    if action == "leave":
-        result = leave_ncap_lobby(storage, telegram_id)
-        await apply_action_notifies(bot, result)
-        await reply_action_result(callback, result.text)
-        if result.ok:
-            await edit_menu_message(
-                callback,
-                ncap_lobby_menu_text(storage, telegram_id),
-                ncap_lobby_keyboard(in_lobby=False, is_host=False),
-            )
-        return
-
-    if action.startswith("join:"):
-        lobby_id = action.removeprefix("join:")
-        result = join_ncap_lobby(storage, telegram_id, lobby_id)
-        if not result.ok:
+        if action == "leave":
+            result = leave_ncap_lobby(storage, telegram_id)
+            await apply_action_notifies(bot, result)
             await reply_action_result(callback, result.text)
+            if result.ok:
+                await edit_menu_message(
+                    callback,
+                    ncap_lobby_menu_text(storage, telegram_id),
+                    ncap_lobby_keyboard(in_lobby=False, is_host=False),
+                )
             return
-        await apply_action_notifies(bot, result)
-        await _show_ncap_lobby_menu(callback, telegram_id)
-        await safe_callback_answer(callback, "Ты в группе")
-        return
 
-    if action.startswith("start:"):
-        lobby_id = action.removeprefix("start:")
-        lobby = get_ncap_lobby_by_player(storage, telegram_id)
-        if lobby is None or lobby.lobby_id != lobby_id:
-            await callback.answer("Группа не найдена.", show_alert=True)
+        if action.startswith("join:"):
+            lobby_id = action.removeprefix("join:")
+            result = join_ncap_lobby(storage, telegram_id, lobby_id)
+            if not result.ok:
+                await reply_action_result(callback, result.text)
+                return
+            await apply_action_notifies(bot, result)
+            await _show_ncap_lobby_menu(callback, telegram_id)
+            await safe_callback_answer(callback, "Ты в группе")
             return
-        result, session = start_ncap_from_lobby(storage, telegram_id)
-        if not result.ok:
-            await reply_action_result(callback, result.text)
+
+        if action.startswith("start:"):
+            lobby_id = action.removeprefix("start:")
+            lobby = get_ncap_lobby_by_player(storage, telegram_id)
+            if lobby is None or lobby.lobby_id != lobby_id:
+                await callback.answer("Группа не найдена.", show_alert=True)
+                return
+            result, session = start_ncap_from_lobby(storage, telegram_id)
+            if not result.ok:
+                await reply_action_result(callback, result.text)
+                return
+            if session is not None:
+                await _broadcast_ncap_session(bot, storage, session, note=result.text)
+            notify_ids = [int(x) for x in (result.payload or {}).get("notify_all") or []]
+            for pid in notify_ids:
+                if pid != telegram_id:
+                    await bot.send_message(pid, action_result_text(pid, result.text))
+            await safe_callback_answer(callback, "Захват начался!")
             return
-        if session is not None:
-            await _broadcast_ncap_session(bot, storage, session, note=result.text)
-        notify_ids = [int(x) for x in (result.payload or {}).get("notify_all") or []]
-        for pid in notify_ids:
-            if pid != telegram_id:
-                await bot.send_message(pid, action_result_text(pid, result.text))
-        await safe_callback_answer(callback, "Захват начался!")
-        return
 
-    if action == "forfeit":
-        result = ncap_forfeit(storage, telegram_id)
-        await _handle_ncap_action(bot, callback, result)
-        return
+        if action == "forfeit":
+            result = ncap_forfeit(storage, telegram_id)
+            await _handle_ncap_action(bot, callback, result)
+            return
 
-    if action == "medkit":
-        result = ncap_use_medkit(storage, telegram_id)
-        await _handle_ncap_action(bot, callback, result)
-        return
+        if action == "medkit":
+            result = ncap_use_medkit(storage, telegram_id)
+            await _handle_ncap_action(bot, callback, result)
+            return
 
-    if action.startswith("move:"):
-        result = ncap_move(storage, telegram_id, action.removeprefix("move:"))
-        await _handle_ncap_action(bot, callback, result)
-        return
+        if action.startswith("move:"):
+            result = ncap_move(storage, telegram_id, action.removeprefix("move:"))
+            await _handle_ncap_action(bot, callback, result)
+            return
 
-    if action.startswith("shoot:"):
-        result = ncap_shoot(storage, telegram_id, action.removeprefix("shoot:"))
-        await _handle_ncap_action(bot, callback, result)
-        return
+        if action.startswith("shoot:"):
+            result = ncap_shoot(storage, telegram_id, action.removeprefix("shoot:"))
+            await _handle_ncap_action(bot, callback, result)
+            return
 
-    await callback.answer("Неизвестное действие.", show_alert=True)
+        await callback.answer("Неизвестное действие.", show_alert=True)
+    except Exception:
+        logger.exception("Neutral capture callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка захвата. Попробуй ещё раз или /fixme", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("duel:decline:"))
@@ -5034,122 +5103,129 @@ async def coop_callback(callback: CallbackQuery, bot: Bot) -> None:
     telegram_id = callback.from_user.id
     action = (callback.data or "").removeprefix("coop:").strip()
 
-    if action == "menu" or action == "refresh":
-        text = coop_menu_text(storage, telegram_id)
-        lobby = get_coop_lobby_by_player(storage, telegram_id)
-        session = get_coop_session_by_player(storage, telegram_id)
-        if session is not None:
-            await _broadcast_coop_session(bot, storage, session)
-            await safe_callback_answer(callback)
+    try:
+        if await _reject_tactical_callback_if_dead(callback):
             return
-        await edit_menu_message(
-            callback,
-            text,
-            coop_menu_keyboard(
-                in_lobby=lobby is not None,
-                is_host=lobby.host_id == telegram_id if lobby else False,
-                lobby_id=lobby.lobby_id if lobby else None,
-            ),
-        )
-        return
 
-    if action == "create":
-        result = create_coop_lobby(storage, telegram_id)
-        if not result.ok:
-            await reply_action_result(callback, result.text)
+        if action == "menu" or action == "refresh":
+            text = coop_menu_text(storage, telegram_id)
+            lobby = get_coop_lobby_by_player(storage, telegram_id)
+            session = get_coop_session_by_player(storage, telegram_id)
+            if session is not None:
+                await _broadcast_coop_session(bot, storage, session)
+                await safe_callback_answer(callback)
+                return
+            await edit_menu_message(
+                callback,
+                text,
+                coop_menu_keyboard(
+                    in_lobby=lobby is not None,
+                    is_host=lobby.host_id == telegram_id if lobby else False,
+                    lobby_id=lobby.lobby_id if lobby else None,
+                ),
+            )
             return
-        lobby = get_coop_lobby_by_player(storage, telegram_id)
-        await edit_menu_message(
-            callback,
-            coop_menu_text(storage, telegram_id),
-            coop_menu_keyboard(in_lobby=True, is_host=True, lobby_id=lobby.lobby_id if lobby else None),
-        )
-        return
 
-    if action == "list":
-        player = storage.get_character(telegram_id, refresh_energy=False)
-        if player is None:
-            await reply_action_result(callback, "Сначала создай персонажа.")
-            return
-        lobbies = list_open_coop_lobbies(storage, player.location)
-        await edit_menu_message(
-            callback,
-            f"Открытые группы на «{player.location}»:",
-            coop_lobby_list_keyboard(lobbies),
-        )
-        return
-
-    if action == "leave":
-        result = leave_coop_lobby(storage, telegram_id)
-        await apply_action_notifies(bot, result)
-        await reply_action_result(callback, result.text)
-        if result.ok:
+        if action == "create":
+            result = create_coop_lobby(storage, telegram_id)
+            if not result.ok:
+                await reply_action_result(callback, result.text)
+                return
+            lobby = get_coop_lobby_by_player(storage, telegram_id)
             await edit_menu_message(
                 callback,
                 coop_menu_text(storage, telegram_id),
-                coop_menu_keyboard(in_lobby=False, is_host=False),
+                coop_menu_keyboard(in_lobby=True, is_host=True, lobby_id=lobby.lobby_id if lobby else None),
             )
-        return
+            return
 
-    if action.startswith("join:"):
-        lobby_id = action.removeprefix("join:")
-        result = join_coop_lobby(storage, telegram_id, lobby_id)
-        if not result.ok:
+        if action == "list":
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if player is None:
+                await reply_action_result(callback, "Сначала создай персонажа.")
+                return
+            lobbies = list_open_coop_lobbies(storage, player.location)
+            await edit_menu_message(
+                callback,
+                f"Открытые группы на «{player.location}»:",
+                coop_lobby_list_keyboard(lobbies),
+            )
+            return
+
+        if action == "leave":
+            result = leave_coop_lobby(storage, telegram_id)
+            await apply_action_notifies(bot, result)
             await reply_action_result(callback, result.text)
+            if result.ok:
+                await edit_menu_message(
+                    callback,
+                    coop_menu_text(storage, telegram_id),
+                    coop_menu_keyboard(in_lobby=False, is_host=False),
+                )
             return
-        await apply_action_notifies(bot, result)
-        lobby = get_coop_lobby_by_player(storage, telegram_id)
-        await edit_menu_message(
-            callback,
-            coop_menu_text(storage, telegram_id),
-            coop_menu_keyboard(
-                in_lobby=True,
-                is_host=lobby.host_id == telegram_id if lobby else False,
-                lobby_id=lobby.lobby_id if lobby else None,
-            ),
-        )
-        return
 
-    if action.startswith("start:"):
-        lobby_id = action.removeprefix("start:")
-        lobby = get_coop_lobby_by_player(storage, telegram_id)
-        if lobby is None or lobby.lobby_id != lobby_id:
-            await reply_action_result(callback, "Группа не найдена.")
+        if action.startswith("join:"):
+            lobby_id = action.removeprefix("join:")
+            result = join_coop_lobby(storage, telegram_id, lobby_id)
+            if not result.ok:
+                await reply_action_result(callback, result.text)
+                return
+            await apply_action_notifies(bot, result)
+            lobby = get_coop_lobby_by_player(storage, telegram_id)
+            await edit_menu_message(
+                callback,
+                coop_menu_text(storage, telegram_id),
+                coop_menu_keyboard(
+                    in_lobby=True,
+                    is_host=lobby.host_id == telegram_id if lobby else False,
+                    lobby_id=lobby.lobby_id if lobby else None,
+                ),
+            )
             return
-        result = start_coop_mission(storage, telegram_id)
-        if not result.ok:
-            await reply_action_result(callback, result.text)
+
+        if action.startswith("start:"):
+            lobby_id = action.removeprefix("start:")
+            lobby = get_coop_lobby_by_player(storage, telegram_id)
+            if lobby is None or lobby.lobby_id != lobby_id:
+                await reply_action_result(callback, "Группа не найдена.")
+                return
+            result = start_coop_mission(storage, telegram_id)
+            if not result.ok:
+                await reply_action_result(callback, result.text)
+                return
+            session = get_coop_session_by_player(storage, telegram_id)
+            if session is None:
+                await reply_action_result(callback, result.text)
+                return
+            await _broadcast_coop_session(bot, storage, session, note=result.text)
+            await safe_callback_answer(callback, "Вылазка началась!")
             return
-        session = get_coop_session_by_player(storage, telegram_id)
-        if session is None:
-            await reply_action_result(callback, result.text)
+
+        if action == "forfeit":
+            result = coop_forfeit(storage, telegram_id)
+            await _handle_coop_action(bot, callback, result)
             return
-        await _broadcast_coop_session(bot, storage, session, note=result.text)
-        await safe_callback_answer(callback, "Вылазка началась!")
-        return
 
-    if action == "forfeit":
-        result = coop_forfeit(storage, telegram_id)
-        await _handle_coop_action(bot, callback, result)
-        return
+        if action == "medkit":
+            result = coop_use_medkit(storage, telegram_id)
+            await _handle_coop_action(bot, callback, result)
+            return
 
-    if action == "medkit":
-        result = coop_use_medkit(storage, telegram_id)
-        await _handle_coop_action(bot, callback, result)
-        return
+        if action.startswith("move:"):
+            direction = action.removeprefix("move:")
+            result = coop_move(storage, telegram_id, direction)
+            await _handle_coop_action(bot, callback, result)
+            return
 
-    if action.startswith("move:"):
-        direction = action.removeprefix("move:")
-        result = coop_move(storage, telegram_id, direction)
-        await _handle_coop_action(bot, callback, result)
-        return
+        if action == "evac":
+            result = coop_evacuate(storage, telegram_id)
+            await _handle_coop_action(bot, callback, result)
+            return
 
-    if action == "evac":
-        result = coop_evacuate(storage, telegram_id)
-        await _handle_coop_action(bot, callback, result)
-        return
-
-    await callback.answer("Неизвестное действие.", show_alert=True)
+        await callback.answer("Неизвестное действие.", show_alert=True)
+    except Exception:
+        logger.exception("Coop callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка кооп-вылазки. Попробуй ещё раз или /fixme", show_alert=True)
 
 
 @router.message(F.text == "🗺 Переход")

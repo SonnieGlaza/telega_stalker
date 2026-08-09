@@ -5,6 +5,27 @@ from __future__ import annotations
 from app.storage import Storage
 
 
+def _unlink_from_shared_sessions(storage: Storage, telegram_id: int) -> None:
+    """Снять привязку мёртвого игрока к групповому бою, не уничтожая сессию для остальных."""
+    from app.coop_mission import _player_key as coop_player_key
+    from app.coop_mission import get_coop_session_by_player
+    from app.neutral_capture import _player_key as ncap_player_key
+    from app.neutral_capture import get_ncap_session
+    from app.clan_war_grid import _player_key as cwar_player_key
+    from app.clan_war_grid import get_cwar_session_by_player
+    from app.raid_grid import _player_key as rgrid_player_key
+    from app.raid_grid import get_raid_grid_session_by_player
+
+    if get_coop_session_by_player(storage, telegram_id) is not None:
+        storage.delete_meta(coop_player_key(telegram_id))
+    if get_ncap_session(storage, telegram_id) is not None:
+        storage.delete_meta(ncap_player_key(telegram_id))
+    if get_cwar_session_by_player(storage, telegram_id) is not None:
+        storage.delete_meta(cwar_player_key(telegram_id))
+    if get_raid_grid_session_by_player(storage, telegram_id) is not None:
+        storage.delete_meta(rgrid_player_key(telegram_id))
+
+
 def clear_all_activity_sessions(storage: Storage, telegram_id: int) -> None:
     """Снять все активные режимы — после смерти или респавна."""
     from app.quest_mission import clear_mission_session, get_mission_session
@@ -53,7 +74,28 @@ def clear_stale_activity_for_dead_player(storage: Storage, telegram_id: int) -> 
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.health > 0:
         return
-    clear_all_activity_sessions(storage, telegram_id)
+
+    from app.quest_mission import clear_mission_session, get_mission_session
+    from app.artifact_hunt import clear_hunt_session, get_hunt_session
+    from app.duel_grid import clear_duel_session, get_duel_session_by_player
+    from app.arena_grid import clear_arena_session, get_arena_session
+
+    if get_mission_session(storage, telegram_id):
+        clear_mission_session(storage, telegram_id)
+        storage.set_active_contract(telegram_id, None)
+
+    if get_hunt_session(storage, telegram_id):
+        clear_hunt_session(storage, telegram_id)
+
+    duel = get_duel_session_by_player(storage, telegram_id)
+    if duel is not None:
+        clear_duel_session(storage, duel)
+
+    arena = get_arena_session(storage, telegram_id)
+    if arena is not None:
+        clear_arena_session(storage, arena)
+
+    _unlink_from_shared_sessions(storage, telegram_id)
 
 
 def recover_stuck_player(storage: Storage, telegram_id: int, *, force_clear: bool = False) -> tuple[bool, int]:
