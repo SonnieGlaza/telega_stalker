@@ -21,10 +21,10 @@ from app.game_logic import (
     equipment_power,
     h,
 )
-from app.storage import Character, Storage
 from app.tactical_combat import (
     MOVE_DELTAS,
     NPC_WEAPONS,
+    STALE_TURN_MESSAGE,
     cover_blocks_shot,
     random_hostile_shots,
     ray_cast_first_hit,
@@ -32,6 +32,7 @@ from app.tactical_combat import (
 )
 from app.mutant_assets import pick_mutant_kind
 from app.npc_assets import pick_npc_kind
+from app.storage import Character, Storage
 from app.tactical_render import hostile_kind_to_sprite, load_tactical_font, paste_mutant_sprite, paste_npc_sprite, paste_player_avatar
 
 NCAP_GRID_SIZE = 6
@@ -275,7 +276,7 @@ def _finalize_fail(storage: Storage, session: NeutralCaptureSession, reason: str
     _add_rating(storage, session.telegram_id, -RATING_REWARD["war_fail"])
     return ActionResult(
         False,
-        f"💀 Захват «{session.location_name}» провален.\n{reason}",
+        f"💀 Захват «{session.location_name}» провален.\n{reason}\n−{RATING_REWARD['war_fail']} рейтинга.",
         payload={"ncap_done": True, "success": False},
     )
 
@@ -338,7 +339,9 @@ def start_neutral_capture(
     text = (
         f"🎯 Захват нейтральной точки «{location_name}»!\n"
         f"Поле {NCAP_GRID_SIZE}×{NCAP_GRID_SIZE}, враги стреляют наугад.\n"
-        f"Цель: центр карты ({NCAP_CAPTURE_TURNS} хода). Таймер {NCAP_MATCH_SECONDS // 60} мин."
+        f"Цель: удержать центр {NCAP_CAPTURE_TURNS} хода (зачистка не обязательна). "
+        f"Таймер {NCAP_MATCH_SECONDS // 60} мин, ход {NCAP_TURN_SECONDS} сек.\n"
+        f"Награда: +{NCAP_SUCCESS_PAY_RU} RU. Отступление: −{RATING_REWARD['war_fail']} рейтинга, энергия не возвращается."
     )
     return ActionResult(True, text, payload={"ncap_started": True}), session
 
@@ -434,7 +437,7 @@ def ncap_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, "Шаг.", payload={"ncap_active": True})
 
 
@@ -479,7 +482,7 @@ def ncap_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, note, payload={"ncap_active": True})
 
 
@@ -504,7 +507,7 @@ def ncap_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, result.text, payload={"ncap_active": True})
 
 

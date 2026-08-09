@@ -629,7 +629,7 @@ def trader_sell_consumables_keyboard(
 ) -> InlineKeyboardMarkup:
     if items is None:
         items = [
-            ("Продать энергетик (170)", "sell:energy_drink"),
+            ("Продать энергетик (112)", "sell:energy_drink"),
             ("Продать аптечку (120)", "sell:medkit"),
             ("Продать армейскую аптечку (180)", "sell:medkit_army"),
             ("Продать научную аптечку (240)", "sell:medkit_science"),
@@ -1163,7 +1163,7 @@ def rating_page_keyboard(*, mode: str, page: int, total_pages: int) -> InlineKey
 def alliance_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🕊️ Предложить мир", callback_data="alliance:menu:propose")],
+            [InlineKeyboardButton(text="🕊️ Предложить союз", callback_data="alliance:menu:propose")],
             [InlineKeyboardButton(text="✅ Подтвердить входящий договор", callback_data="alliance:menu:confirm")],
             [InlineKeyboardButton(text="⚔️ Объявить войну", callback_data="alliance:menu:declare_war")],
             [InlineKeyboardButton(text="💔 Разорвать союз", callback_data="alliance:menu:break")],
@@ -1184,7 +1184,7 @@ def alliance_target_keyboard(
             continue
         if mode == "propose":
             rows.append(
-                [InlineKeyboardButton(text=f"🕊️ Предложить мир: {name}", callback_data=f"alliance:propose:{name}")]
+                [InlineKeyboardButton(text=f"🕊️ Предложить союз: {name}", callback_data=f"alliance:propose:{name}")]
             )
         elif mode == "declare_war":
             rows.append([InlineKeyboardButton(text=f"⚔️ Объявить войну: {name}", callback_data=f"alliance:war:{name}")])
@@ -1232,14 +1232,17 @@ def _tactical_grid_keyboard(
     *,
     is_active_turn: bool,
     medkit_available: bool,
-    forfeit_label: str = "🏳 Сдаться",
+    forfeit_label: str | None = "🏳 Сдаться",
     medkit_label: str = "💊 Аптечка (1×)",
     revive_targets: list[tuple[int, str]] | None = None,
 ) -> InlineKeyboardMarkup:
-    refresh_row = [
+    refresh_row: list[InlineKeyboardButton] = [
         InlineKeyboardButton(text="🔄 Обновить", callback_data=f"{prefix}:refresh"),
-        InlineKeyboardButton(text=forfeit_label, callback_data=f"{prefix}:forfeit"),
     ]
+    if forfeit_label:
+        refresh_row.append(
+            InlineKeyboardButton(text=forfeit_label, callback_data=f"{prefix}:forfeit"),
+        )
     if not is_active_turn:
         return InlineKeyboardMarkup(inline_keyboard=[refresh_row])
     rows: list[list[InlineKeyboardButton]] = [
@@ -1267,7 +1270,12 @@ def _tactical_grid_keyboard(
 
 
 def cwar_grid_keyboard(*, is_active_turn: bool, medkit_available: bool) -> InlineKeyboardMarkup:
-    return _tactical_grid_keyboard("cwar", is_active_turn=is_active_turn, medkit_available=medkit_available)
+    return _tactical_grid_keyboard(
+        "cwar",
+        is_active_turn=is_active_turn,
+        medkit_available=medkit_available,
+        forfeit_label=None,
+    )
 
 
 def rgrid_keyboard(

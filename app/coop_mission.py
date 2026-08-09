@@ -43,7 +43,7 @@ from app.npc_assets import (
     pick_npc_kind,
 )
 from app.quest_mission import LOCATION_DANGER, MOVE_DELTAS, _draw_enemy_icon
-from app.tactical_combat import best_step_toward, manhattan_distance
+from app.tactical_combat import STALE_TURN_MESSAGE, best_step_toward, manhattan_distance
 from app.storage import Character, Storage
 
 COOP_MAX_PLAYERS = 3
@@ -805,7 +805,7 @@ def _reward_players(storage: Storage, session: CoopMissionSession) -> str:
         storage.change_money(pid, per_player)
         _add_rating(storage, pid, RATING_REWARD.get("quest_success", 12))
         evac_mark = " (эвакуирован напарником)" if pid in session.evacuated else ""
-        lines.append(f"{name}{evac_mark}: +{per_player} RU, рейтинг.")
+        lines.append(f"{name}{evac_mark}: +{per_player} RU, рейтинг +{RATING_REWARD.get('quest_success', 12)}.")
     return "\n".join(lines)
 
 
@@ -1110,7 +1110,7 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         return wipe
 
     if not _save_if_turn_ok(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, "Ход сделан.", payload={"coop_active": True, "notify_all": session.player_ids})
 
 
@@ -1147,7 +1147,7 @@ def coop_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     if wipe:
         return wipe
     if not _save_if_turn_ok(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, result.text, payload={"coop_active": True, "notify_all": session.player_ids})
 
 
@@ -1199,7 +1199,7 @@ def coop_evacuate(storage: Storage, telegram_id: int) -> ActionResult:
     if wipe:
         return wipe
     if not _save_if_turn_ok(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(
         True,
         f"Ты тащишь {downed_name} — доберись до точки старта.",

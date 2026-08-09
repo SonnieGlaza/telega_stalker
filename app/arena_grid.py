@@ -25,6 +25,7 @@ from app.storage import Storage
 from app.tactical_combat import (
     MOVE_DELTAS,
     NPC_MOVE_CHANCE,
+    STALE_TURN_MESSAGE,
     best_step_toward,
     cover_blocks_shot,
     manhattan_distance,
@@ -493,7 +494,7 @@ def arena_move(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, "Шаг.", payload={"arena_active": True})
 
 
@@ -531,7 +532,7 @@ def arena_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionRes
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, note, payload={"arena_active": True})
 
 
@@ -554,7 +555,7 @@ def arena_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(
         True,
         f"Аптечка арены: +{heal} HP.",

@@ -28,6 +28,7 @@ from app.storage import Character, Storage
 from app.tactical_combat import (
     COVER_HIT_CHANCE,
     MOVE_DELTAS,
+    STALE_TURN_MESSAGE,
     best_step_toward,
     cover_blocks_shot,
     manhattan_distance,
@@ -549,7 +550,7 @@ def duel_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
     if done:
         return done
     if not _save_if_turn_ok(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, "Сделал шаг.", payload={"duel_active": True, "duel_id": session.duel_id})
 
 
@@ -587,7 +588,7 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
         if done:
             return done
         if not _save_if_turn_ok(storage, session, turn_seq):
-            return ActionResult(False, "Ход уже выполнен.")
+            return ActionResult(False, STALE_TURN_MESSAGE)
         return ActionResult(True, "Промах — пуля не нашла цель.", payload={"duel_active": True})
 
     if hit_kind == "mutant":
@@ -607,7 +608,7 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
             if done:
                 return done
             if not _save_if_turn_ok(storage, session, turn_seq):
-                return ActionResult(False, "Ход уже выполнен.")
+                return ActionResult(False, STALE_TURN_MESSAGE)
             return ActionResult(True, "Промах — цель за укрытием.", payload={"duel_active": True})
         raw = _duel_damage(attacker)
         dmg = apply_incoming_damage(raw, defender, min_damage=1)
@@ -626,7 +627,7 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     if done:
         return done
     if not _save_if_turn_ok(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, note, payload={"duel_active": True, "duel_id": session.duel_id})
 
 
@@ -654,7 +655,7 @@ def duel_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     if done:
         return done
     if not _save_if_turn_ok(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, result.text, payload={"duel_active": True})
 
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import random
 from typing import Callable
 
+STALE_TURN_MESSAGE = "Ход уже обработан — нажми «Обновить»."
+
 from app.game_logic import _weapon_rating, apply_incoming_damage
 from app.storage import Character
 

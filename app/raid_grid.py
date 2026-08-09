@@ -38,6 +38,7 @@ from app.tactical_combat import (
     BASE_COVER_ARMOR_BONUS,
     MOVE_DELTAS,
     NPC_MOVE_CHANCE,
+    STALE_TURN_MESSAGE,
     best_step_toward,
     cover_blocks_shot,
     manhattan_distance,
@@ -679,7 +680,8 @@ def _finalize_lair_success(storage: Storage, session: RaidGridSession) -> Action
     location = storage.get_location(location_name)
     enemy_power = session.enemy_power or 30
     storage.set_location_control(location_name, session.attacker_faction)
-    treasury_gain = 1400 + len(session.player_ids) * 180
+    survivors = [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
+    treasury_gain = 1400 + len(survivors) * 180
     storage.change_faction_treasury(session.attacker_faction, treasury_gain)
     artifacts_given = 0
     for pid in session.player_ids:
@@ -731,7 +733,11 @@ def _finalize_lair_fail(storage: Storage, session: RaidGridSession, reason: str)
     if location:
         storage.set_location_npc_power(location_name, new_npc_power)
     storage.finish_raid(session.raid_id, status="failed", result_text=f"Тактический рейд провален: {reason}")
-    text = f"💀 Рейд #{session.raid_id} на «{location_name}» провален.\n{reason}\n−110 RU, −{RATING_REWARD['raid_fail']} рейтинга."
+    text = (
+        f"💀 Рейд #{session.raid_id} на «{location_name}» провален.\n{reason}\n"
+        f"−110 RU и −{RATING_REWARD['raid_fail']} рейтинга каждому участнику рейда "
+        f"(включая выведенных из строя)."
+    )
     return ActionResult(
         False,
         text,
@@ -981,7 +987,7 @@ def rgrid_move(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, "Шаг.", payload={"rgrid_active": True})
 
 
@@ -1023,7 +1029,7 @@ def rgrid_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionRes
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, note, payload={"rgrid_active": True})
 
 
@@ -1052,7 +1058,7 @@ def rgrid_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, medkit_text, payload={"rgrid_active": True})
 
 
@@ -1112,7 +1118,7 @@ def rgrid_revive_ally(storage: Storage, telegram_id: int, target_id: int) -> Act
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, note, payload={"rgrid_active": True})
 
 

@@ -30,6 +30,7 @@ from app.tactical_combat import (
     MOVE_DELTAS,
     NPC_MOVE_CHANCE,
     NPC_WEAPONS,
+    STALE_TURN_MESSAGE,
     best_step_toward,
     cover_blocks_shot,
     manhattan_distance,
@@ -509,7 +510,7 @@ def start_clan_war_grid(
         f"⚔️ Тактический штурм «{location_name}»!\n"
         f"Бойцов: {len(player_ids)}. Захвати центр ({CWAR_CAPTURE_TURNS} хода на точке).\n"
         f"Укрытия базы справа дают +{BASE_COVER_ARMOR_BONUS} брони защитникам.\n"
-        + (f"Укрепление точки: +{defense_bonus} (больше защитников).\n" if defense_bonus else "")
+        + (f"Укрепление точки: +{defense_bonus} (доп. защитники и +{defense_bonus} к урону).\n" if defense_bonus else "")
         + f"Таймер: {CWAR_MATCH_SECONDS // 60} мин."
     )
     return ActionResult(True, text, payload={"cwar_started": True, "session_id": session_id}), session
@@ -605,7 +606,7 @@ def cwar_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, "Шаг.", payload={"cwar_active": True})
 
 
@@ -653,7 +654,7 @@ def cwar_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, note, payload={"cwar_active": True})
 
 
@@ -681,7 +682,7 @@ def cwar_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
-        return ActionResult(False, "Ход уже выполнен.")
+        return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, result.text, payload={"cwar_active": True})
 
 
