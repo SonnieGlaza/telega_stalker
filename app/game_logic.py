@@ -1311,7 +1311,10 @@ def append_survival_craving_notice(storage: Storage, telegram_id: int, text: str
 
 
 def _dead_block_text() -> str:
-    return "Персонаж мёртв (HP=0). Используй респавн из инвентаря."
+    return (
+        "Персонаж мёртв (HP=0).\n"
+        "Нажми ♻️ «Спасение на базе» в сообщении о смерти или любую кнопку меню."
+    )
 
 
 def _respawn_debt_key(telegram_id: int) -> str:
@@ -1698,6 +1701,10 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
     storage.set_location(telegram_id, home)
     pop_death_cause(storage, telegram_id)
     pop_death_killer(storage, telegram_id)
+
+    from app.player_busy import clear_all_activity_sessions
+
+    clear_all_activity_sessions(storage, telegram_id)
 
     pay_lines: list[str] = []
     if paid > 0:

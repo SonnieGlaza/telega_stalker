@@ -744,6 +744,10 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject,
                 reply_markup=faction_keyboard(),
             )
             return
+        dead = resolve_dead_player(db, telegram_id)
+        if dead is not None:
+            await show_death_screen(message, dead, bot=bot)
+            return
         hint = maybe_daily_login_hint(db, telegram_id)
         await message.answer(
             f"С возвращением, {h(player.nickname)}! Добро пожаловать в Зону.{hint}",
@@ -1605,11 +1609,14 @@ def _raid_grid_downed(storage: Storage, telegram_id: int) -> bool:
 
 def resolve_dead_player(storage: Storage, telegram_id: int) -> Character | None:
     """Мёртв для UI: HP=0 в БД (с учётом голода/жажды) или выведен из строя в тактике."""
+    from app.player_busy import clear_stale_activity_for_dead_player
+
     player = storage.get_character(telegram_id, refresh_energy=True)
     if player is None:
         return None
     if player.health <= 0:
-        return player
+        clear_stale_activity_for_dead_player(storage, telegram_id)
+        return storage.get_character(telegram_id, refresh_energy=False)
 
     from app.tactical_hp import commit_tactical_death
 
@@ -1645,9 +1652,13 @@ def resolve_dead_player(storage: Storage, telegram_id: int) -> Character | None:
             cause=cause,
             killer_name=str(killer) if killer else None,
         )
+        clear_stale_activity_for_dead_player(storage, telegram_id)
         return storage.get_character(telegram_id, refresh_energy=False)
 
     return None
+
+
+DEAD_PLAYER_CALLBACKS = frozenset({"respawn:base", "death:log"})
 
 
 async def show_death_screen(
@@ -1691,6 +1702,38 @@ class DeadPlayerMenuMiddleware(BaseMiddleware):
                 await show_death_screen(event, player)
                 return None
         return await handler(event, data)
+
+
+class DeadPlayerCallbackMiddleware(BaseMiddleware):
+    """Inline-кнопки при смерти: только респавн/журнал; остальное — экран смерти."""
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        if not isinstance(event, CallbackQuery):
+            return await handler(event, data)
+        callback_data = (event.data or "").strip()
+        if callback_data in DEAD_PLAYER_CALLBACKS:
+            return await handler(event, data)
+        storage = get_storage()
+        telegram_id = event.from_user.id
+        if _raid_grid_downed(storage, telegram_id):
+            await safe_callback_answer(
+                event,
+                "☠️ Ты без сознания на рейде. Жди поднятия или конца боя.",
+                show_alert=True,
+            )
+            return None
+        player = resolve_dead_player(storage, telegram_id)
+        if player is None:
+            return await handler(event, data)
+        if callback_data.startswith(("qmission:", "hunt:")):
+            await _dismiss_battle_map(event)
+        await show_death_screen(event, player, bot=event.bot)
+        return None
 
 
 async def reject_if_dead(message_or_callback: Message | CallbackQuery, player: Character) -> bool:
@@ -2003,11 +2046,17 @@ async def stash_take_qty_callback(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "respawn:base")
 async def respawn_base_callback(callback: CallbackQuery) -> None:
-    result = respawn_character(get_storage(), callback.from_user.id)
+    storage = get_storage()
+    result = respawn_character(storage, callback.from_user.id)
     await reply_action_result(callback, result.text)
     if result.ok:
-        player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+        player = storage.get_character(callback.from_user.id, refresh_energy=False)
         if player is not None:
+            if callback.message is not None:
+                await callback.message.answer(
+                    "С возвращением в Зону.",
+                    reply_markup=main_menu_keyboard(),
+                )
             await send_profile_snapshot(callback.message, player)
 
 
@@ -2807,9 +2856,10 @@ async def _send_battle_death_notice(
     where: str | None = None,
     cause: str | None = None,
 ) -> None:
-    if callback is not None:
-        await _dismiss_battle_map(callback)
     storage = get_storage()
+    from app.player_busy import clear_stale_activity_for_dead_player
+
+    clear_stale_activity_for_dead_player(storage, user_id)
     text = build_battle_death_text(
         player,
         where=where,
@@ -2821,6 +2871,8 @@ async def _send_battle_death_notice(
         await bot.send_message(user_id, text, reply_markup=dead_character_keyboard())
     except Exception:
         logger.exception("Failed battle death notice to %s", user_id)
+    if callback is not None:
+        await _dismiss_battle_map(callback)
 
 
 async def _deliver_player_message_or_death(
@@ -3519,6 +3571,21 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
     if action == "medkit":
         result = use_mission_medkit(storage, telegram_id)
         payload = result.payload or {}
+        if payload.get("mission_dead"):
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if player is not None and player.health <= 0:
+                await _send_battle_death_notice(
+                    callback.bot,
+                    telegram_id,
+                    player,
+                    callback=callback,
+                    where=str(payload.get("death_location") or player.location),
+                    cause=str(payload.get("death_cause") or "combat"),
+                )
+                await safe_callback_answer(callback, "☠️ Откинулся…")
+            else:
+                await reply_action_result(callback, result.text)
+            return
         image = payload.get("mission_image")
         if image and payload.get("mission_active"):
             await _send_or_edit_quest_mission_frame(
@@ -6495,6 +6562,10 @@ async def fallback(message: Message, bot: Bot) -> None:
     ):
         await message.answer(_build_info_text(player))
         return
+    dead = resolve_dead_player(get_storage(), message.from_user.id) if player is not None else None
+    if dead is not None:
+        await show_death_screen(message, dead, bot=bot)
+        return
     if player is not None:
         await message.answer(
             "Команда не распознана. Используй кнопки меню.",
@@ -6773,6 +6844,7 @@ async def run_bot() -> None:
     travel_eta_task = asyncio.create_task(periodic_travel_live_eta())
     tactical_task = asyncio.create_task(periodic_tactical_turns())
     dp = Dispatcher()
+    dp.callback_query.outer_middleware(DeadPlayerCallbackMiddleware())
     dp.message.outer_middleware(DeadPlayerMenuMiddleware())
     dp.include_router(router)
     try:

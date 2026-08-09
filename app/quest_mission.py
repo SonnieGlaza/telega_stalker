@@ -641,6 +641,9 @@ def start_or_resume_quest_mission(
     if player is None:
         return ActionResult(False, "Сначала создай персонажа.")
     if _is_dead(player):
+        if get_mission_session(storage, telegram_id):
+            clear_mission_session(storage, telegram_id)
+            storage.set_active_contract(telegram_id, None)
         return ActionResult(False, _dead_block_text())
 
     existing = get_mission_session(storage, telegram_id)
@@ -785,7 +788,18 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
     if _is_dead(player):
         clear_mission_session(storage, telegram_id)
         storage.set_active_contract(telegram_id, None)
-        return ActionResult(False, _dead_block_text())
+        from app.game_logic import peek_death_cause
+
+        return ActionResult(
+            False,
+            _dead_block_text(),
+            payload={
+                "mission_active": False,
+                "mission_dead": True,
+                "death_location": session.location,
+                "death_cause": peek_death_cause(storage, telegram_id) or "combat",
+            },
+        )
 
     delta = MOVE_DELTAS.get(direction)
     if delta is None:
