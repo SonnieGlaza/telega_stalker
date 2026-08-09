@@ -336,16 +336,10 @@ def _arena_apply_damage(raw: int, armor_level: int) -> int:
     return max(1, int(raw) - max(0, armor_level))
 
 
-def _finalize_arena_reward(
-    storage: Storage,
-    session: ArenaGridSession,
-    *,
-    reason: str,
-    grant_reward: bool = True,
-) -> ActionResult:
+def _finalize_arena_reward(storage: Storage, session: ArenaGridSession, *, reason: str) -> ActionResult:
     quest = QUESTS["easy"]
     rating_gain = QUEST_RATING_BY_DIFFICULTY["easy"][0]
-    if grant_reward and session.waves_cleared >= 1:
+    if session.waves_cleared >= 1:
         reward = random.randint(quest.reward_min, quest.reward_max)
         storage.change_money(session.telegram_id, reward)
         _add_rating(storage, session.telegram_id, rating_gain)
@@ -355,13 +349,6 @@ def _finalize_arena_reward(
             f"{reason}\n"
             f"Пройдено волн: {session.waves_cleared}.\n"
             f"Награда (как лёгкое задание): {reward} RU, рейтинг +{rating_gain}."
-        )
-    elif session.waves_cleared >= 1:
-        text = (
-            f"🏟 Арена «{session.home_base}» завершена.\n"
-            f"{reason}\n"
-            f"Пройдено волн: {session.waves_cleared}.\n"
-            "Награда только при добровольном выходе («Покинуть арену»)."
         )
     else:
         text = (
@@ -410,12 +397,7 @@ def _after_turn(storage: Storage, session: ArenaGridSession) -> ActionResult | N
         return _end_session(
             storage,
             session,
-            _finalize_arena_reward(
-                storage,
-                session,
-                reason=f"{name} выведен из строя.",
-                grant_reward=False,
-            ),
+            _finalize_arena_reward(storage, session, reason=f"{name} выведен из строя."),
         )
     wave_advanced = False
     while _check_wave_clear(session):
@@ -429,12 +411,7 @@ def _after_turn(storage: Storage, session: ArenaGridSession) -> ActionResult | N
         return _end_session(
             storage,
             session,
-            _finalize_arena_reward(
-                storage,
-                session,
-                reason=f"{name} пал на волне {session.wave}.",
-                grant_reward=False,
-            ),
+            _finalize_arena_reward(storage, session, reason=f"{name} пал на волне {session.wave}."),
         )
     return None
 
