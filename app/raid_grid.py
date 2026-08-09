@@ -78,6 +78,12 @@ PLAYER_COLORS = [
 RAID_GRID_RENDER_CELL = 80
 RAID_GRID_SPRITE_DIAMETER = 62
 
+LOOT_ZONE_LABELS: dict[str, str] = {
+    "warehouse": "СКЛАД",
+    "garage": "ГАРАЖ",
+    "lair": "ЦЕЛЬ",
+}
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -200,7 +206,7 @@ class RaidGridSession:
     def from_dict(cls, raw: dict[str, Any]) -> RaidGridSession:
         lz = raw.get("loot_zone")
         cp = raw.get("control_point") or [4, 4]
-        return cls(
+        session = cls(
             session_id=str(raw.get("session_id") or ""),
             raid_id=int(raw.get("raid_id") or 0),
             raid_kind=str(raw.get("raid_kind") or "lair"),
@@ -953,18 +959,20 @@ def rgrid_move(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     if not (0 <= nxt[0] < session.grid and 0 <= nxt[1] < session.grid):
         return ActionResult(False, "Край поля.")
     blocked = _occupied(session, exclude=telegram_id)
-    if nxt in blocked and nxt not in session.cover and nxt not in session.base_cover:
-        return ActionResult(False, "Клетка занята.")
-    session.set_pos(telegram_id, nxt)
-    ch = storage.get_character(telegram_id, refresh_energy=False)
-    if ch and nxt in session.hostiles:
+    if nxt in session.hostiles:
         idx = session.hostiles.index(nxt)
         htype = session.hostile_types[idx] if idx < len(session.hostile_types) else "mutant"
         _remove_hostile_at(session, nxt)
-        dmg = apply_incoming_damage(random.randint(8, 16), ch, min_damage=3)
-        session.hp[str(telegram_id)] = max(0, session.hp.get(str(telegram_id), 0) - dmg)
-        label = "Бот" if htype == "bot" else "Мутант"
-        session.log.append(f"{h(ch.nickname)} схватился с {label.lower()}ом: −{dmg} HP.")
+        ch = storage.get_character(telegram_id, refresh_energy=False)
+        if ch:
+            dmg = apply_incoming_damage(random.randint(8, 16), ch, min_damage=3)
+            session.hp[str(telegram_id)] = max(0, session.hp.get(str(telegram_id), 0) - dmg)
+            label = "Бот" if htype == "bot" else "Мутант"
+            session.log.append(f"{h(ch.nickname)} схватился с {label.lower()}ом: −{dmg} HP.")
+    elif nxt in blocked and nxt not in session.cover and nxt not in session.base_cover:
+        return ActionResult(False, "Клетка занята.")
+    else:
+        session.set_pos(telegram_id, nxt)
     done = _check_squad_wiped(storage, session)
     if done:
         return done
@@ -1163,8 +1171,8 @@ def process_rgrid_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResul
         if done:
             outcomes.append((active, done))
             continue
-        still.append(str(sid))
         if _save_turn(storage, session, turn_seq):
+            still.append(str(sid))
             outcomes.append((active, ActionResult(True, "Ход пропущен.", payload={"rgrid_active": True})))
     storage.set_meta(ACTIVE_IDS_KEY, json.dumps(still, ensure_ascii=False))
     return outcomes

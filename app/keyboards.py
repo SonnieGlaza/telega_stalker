@@ -1475,7 +1475,7 @@ def faction_rank_pick_keyboard(target_id: int, ranks: list[tuple[str, str]]) -> 
 NOTIFY_PREF_TOGGLE_LABELS: dict[str, str] = {
     "emission": "☢️ Выброс",
     "death": "☠️ Смерть",
-    "coop": "👥 Совместные вылазки",
+    "coop": "👥 Совместная вылазка",
     "garage": "🏚 Гараж (аренда)",
 }
 

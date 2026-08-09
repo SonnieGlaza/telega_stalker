@@ -343,7 +343,6 @@ def _finalize_arena_reward(storage: Storage, session: ArenaGridSession, *, reaso
         reward = random.randint(quest.reward_min, quest.reward_max)
         storage.change_money(session.telegram_id, reward)
         _add_rating(storage, session.telegram_id, rating_gain)
-        storage.add_player_stat(session.telegram_id, "quests_completed", 1)
         storage.add_player_stat(session.telegram_id, "money_earned", reward)
         text = (
             f"🏟 Арена «{session.home_base}» завершена.\n"
@@ -400,9 +399,12 @@ def _after_turn(storage: Storage, session: ArenaGridSession) -> ActionResult | N
             session,
             _finalize_arena_reward(storage, session, reason=f"{name} выведен из строя."),
         )
+    wave_advanced = False
     while _check_wave_clear(session):
         _advance_wave(session)
-    session.log.extend(_hostile_turn(storage, session))
+        wave_advanced = True
+    if not wave_advanced:
+        session.log.extend(_hostile_turn(storage, session))
     if session.hp <= 0:
         player = storage.get_character(session.telegram_id, refresh_energy=False)
         name = h(player.nickname) if player else str(session.telegram_id)
@@ -631,7 +633,7 @@ def arena_status_caption(session: ArenaGridSession) -> str:
     weapon, armor, npc_n, npc_w = _wave_loadout(session.wave)
     lines = [
         f"🏟 Арена «{session.home_base}» · волна {session.wave}",
-        f"Снаряжение: {session.player_weapon} · броня ур.{session.player_armor_level + 1}",
+        f"Снаряжение волны: {session.player_weapon} · броня {session.player_armor_level}/3",
         f"HP {session.hp}/{session.max_hp} · аптечки арены: {session.arena_medkits}",
         f"НПС на поле: {len(session.hostiles)} · пройдено волн: {session.waves_cleared}",
     ]

@@ -577,6 +577,10 @@ def run_smoke_check() -> None:
         depot_session = get_raid_grid_session_by_player(storage, 111)
         assert depot_session is not None
         assert depot_session.raid_kind == "warehouse"
+        from app.raid_grid import LOOT_ZONE_LABELS, render_rgrid_frame
+
+        assert LOOT_ZONE_LABELS["warehouse"] == "СКЛАД"
+        render_rgrid_frame(storage, depot_session, 111)
         clear_raid_grid_session(storage, depot_session)
         storage.finish_raid(int(depot_session.raid_id), status="cancelled", result_text="smoke depot cleanup")
 
@@ -628,6 +632,33 @@ def run_smoke_check() -> None:
         assert bot_session.hostiles != [(8, 4)]
         assert bot_session.hostiles[0] not in {(0, 4)}
         assert 0.0 < NPC_MOVE_CHANCE < 1.0
+
+        # Melee from adjacent cell works even when hostile is on open ground.
+        from app.raid_grid import rgrid_move, save_raid_grid_session
+
+        melee_session = RaidGridSession(
+            session_id="meleetest",
+            raid_id=9994,
+            raid_kind="lair",
+            location_label="test",
+            attacker_faction="Долг",
+            player_ids=[111],
+            turn_order=[111],
+        )
+        melee_session.grid = 9
+        melee_session.set_pos(111, (4, 4))
+        melee_session.hp = {"111": 100}
+        melee_session.hostiles = [(5, 4)]
+        melee_session.hostile_types = ["bot"]
+        melee_session.hostile_weapons = ["ПМ"]
+        save_raid_grid_session(storage, melee_session)
+        move_result = rgrid_move(storage, 111, "right")
+        assert move_result.ok, move_result.text
+        after_melee = get_raid_grid_session_by_player(storage, 111)
+        assert after_melee is not None
+        assert after_melee.pos(111) == (4, 4)
+        assert (5, 4) not in after_melee.hostiles
+        clear_raid_grid_session(storage, after_melee)
 
         # Hostiles spawn on cover (mutants) and base_cover (bots), but may move freely later.
         from app.raid_grid import _build_lair_map, _spawn_hostiles
