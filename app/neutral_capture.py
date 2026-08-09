@@ -399,32 +399,6 @@ def _unregister_active(storage: Storage, session_id: str) -> None:
     storage.set_meta(ACTIVE_IDS_KEY, json.dumps(ids, ensure_ascii=False))
 
 
-def list_open_ncap_lobbies(storage: Storage, location_name: str, faction: str) -> list[tuple[str, str, int]]:
-    raw = storage.get_meta(OPEN_LOBBIES_KEY)
-    if not raw:
-        return []
-    try:
-        lobby_ids = json.loads(raw)
-    except json.JSONDecodeError:
-        return []
-    result: list[tuple[str, str, int]] = []
-    stale: list[str] = []
-    for lobby_id in lobby_ids:
-        lobby = get_ncap_lobby(storage, str(lobby_id))
-        if lobby is None:
-            stale.append(str(lobby_id))
-            continue
-        if lobby.location_name != location_name or lobby.faction != faction:
-            continue
-        host = storage.get_character(lobby.host_id, refresh_energy=False)
-        host_name = host.nickname if host else str(lobby.host_id)
-        result.append((lobby.lobby_id, host_name, len(lobby.member_ids)))
-    if stale:
-        ids = [str(x) for x in lobby_ids if str(x) not in stale]
-        storage.set_meta(OPEN_LOBBIES_KEY, json.dumps(ids, ensure_ascii=False))
-    return result
-
-
 def ncap_lobby_menu_text(storage: Storage, telegram_id: int) -> str:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
@@ -545,10 +519,19 @@ def join_ncap_lobby(storage: Storage, telegram_id: int, lobby_id: str) -> Action
         return ActionResult(False, f"В группе уже {NCAP_MAX_MEMBERS} бойцов.")
     lobby.member_ids.append(telegram_id)
     save_ncap_lobby(storage, lobby)
+    notify: list[list[Any]] = []
+    join_note = (
+        f"🎯 {h(player.nickname)} вступил в группу захвата "
+        f"({len(lobby.member_ids)}/{NCAP_MAX_MEMBERS}) на «{lobby.location_name}»."
+    )
+    for pid in lobby.member_ids:
+        if pid == telegram_id:
+            continue
+        notify.append([pid, join_note])
     return ActionResult(
         True,
         f"Ты в группе захвата «{lobby.location_name}». Участников: {len(lobby.member_ids)}.",
-        payload={"ncap_lobby": True},
+        payload={"ncap_lobby": True, "notify": notify} if notify else {"ncap_lobby": True},
     )
 
 
@@ -558,6 +541,8 @@ def leave_ncap_lobby(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Ты не в группе захвата.")
     if telegram_id not in lobby.member_ids:
         return ActionResult(False, "Ты не в этой группе.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    leaving_name = h(player.nickname) if player else str(telegram_id)
     lobby.member_ids = [pid for pid in lobby.member_ids if pid != telegram_id]
     storage.delete_meta(_player_key(telegram_id))
     if not lobby.member_ids:
@@ -566,7 +551,13 @@ def leave_ncap_lobby(storage: Storage, telegram_id: int) -> ActionResult:
     if lobby.host_id == telegram_id:
         lobby.host_id = lobby.member_ids[0]
     save_ncap_lobby(storage, lobby)
-    notify = [pid for pid in lobby.member_ids]
+    notify: list[list[Any]] = []
+    leave_note = (
+        f"🎯 {leaving_name} вышел из группы захвата "
+        f"({len(lobby.member_ids)}/{NCAP_MAX_MEMBERS}) на «{lobby.location_name}»."
+    )
+    for pid in lobby.member_ids:
+        notify.append([pid, leave_note])
     return ActionResult(True, "Ты вышел из группы захвата.", payload={"notify": notify})
 
 
@@ -660,16 +651,6 @@ def start_ncap_from_lobby(storage: Storage, host_id: int) -> tuple[ActionResult,
         text,
         payload={"ncap_started": True, "notify_all": player_ids},
     ), session
-
-
-def start_neutral_capture(
-    storage: Storage,
-    telegram_id: int,
-    location_name: str,
-) -> tuple[ActionResult, NeutralCaptureSession | None]:
-    """Legacy entry: redirects to lobby flow (min 2 fighters)."""
-    result = create_or_join_ncap_lobby(storage, telegram_id, location_name)
-    return result, None
 
 
 def _free_cell(grid: int, forbidden: set[tuple[int, int]]) -> tuple[int, int]:
@@ -826,8 +807,6 @@ def _check_end(storage: Storage, session: NeutralCaptureSession) -> ActionResult
     deadline = _parse_deadline(session.match_deadline)
     if deadline and _utc_now() > deadline:
         return _end_session(storage, session, _finalize_fail(storage, session, "Время вышло."))
-    if not session.hostiles and _check_capture(session):
-        return _end_session(storage, session, _finalize_success(storage, session))
     if _check_capture(session):
         return _end_session(storage, session, _finalize_success(storage, session))
     return None
@@ -894,9 +873,9 @@ def ncap_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         session.hp[str(telegram_id)] = max(0, session.hp.get(str(telegram_id), 0) - dmg)
         label = "Бандит" if kind in ("bandit", "maloy", "mercenary", "soldier") else "Мутант"
         session.log.append(f"{label} в ближнем бою: −{dmg} HP.")
-    done = _check_end(storage, session)
-    if done:
-        return done
+    wipe = _check_team_wipe(storage, session)
+    if wipe:
+        return wipe
     _advance_turn(session)
     done = _after_turn(storage, session)
     if done:
@@ -942,9 +921,9 @@ def ncap_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
             note = "Попал!"
     else:
         session.log.append("Промах.")
-    done = _check_end(storage, session)
-    if done:
-        return done
+    wipe = _check_team_wipe(storage, session)
+    if wipe:
+        return wipe
     _advance_turn(session)
     done = _after_turn(storage, session)
     if done:
@@ -974,9 +953,9 @@ def ncap_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     session.hp[str(telegram_id)] = new_hp
     session.medkits_used[str(telegram_id)] = True
     session.log.append("Аптечка.")
-    done = _check_end(storage, session)
-    if done:
-        return done
+    wipe = _check_team_wipe(storage, session)
+    if wipe:
+        return wipe
     _advance_turn(session)
     done = _after_turn(storage, session)
     if done:

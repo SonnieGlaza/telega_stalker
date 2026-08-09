@@ -82,7 +82,6 @@ from app.neutral_capture import (
     get_ncap_session,
     join_ncap_lobby,
     leave_ncap_lobby,
-    list_open_ncap_lobbies,
     ncap_forfeit,
     ncap_lobby_menu_text,
     ncap_move,
@@ -368,7 +367,6 @@ from app.keyboards import (
     rgrid_keyboard,
     ncap_grid_keyboard,
     ncap_lobby_keyboard,
-    ncap_lobby_list_keyboard,
     arena_grid_keyboard,
     coop_menu_keyboard,
     coop_lobby_list_keyboard,
@@ -4409,6 +4407,7 @@ async def ncap_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
         if not result.ok:
             await reply_action_result(callback, result.text)
             return
+        await apply_action_notifies(bot, result)
         await _show_ncap_lobby_menu(callback, telegram_id)
         await safe_callback_answer(callback, "Ты в группе")
         return
@@ -4425,7 +4424,7 @@ async def ncap_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
             return
         if session is not None:
             await _broadcast_ncap_session(bot, storage, session, note=result.text)
-        notify_ids = [int(x) for x in (result.payload or {}).get("notify_all") or [])]
+        notify_ids = [int(x) for x in (result.payload or {}).get("notify_all") or []]
         for pid in notify_ids:
             if pid != telegram_id:
                 await bot.send_message(pid, action_result_text(pid, result.text))

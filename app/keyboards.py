@@ -5,7 +5,6 @@ from typing import Any
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 from app.game_logic import TOPUP_RATE_RU_PER_STAR, default_trader_sell_catalog_buttons
-from app.neutral_capture import NCAP_MAX_MEMBERS
 
 
 def gender_keyboard() -> InlineKeyboardMarkup:
@@ -1246,23 +1245,6 @@ def ncap_lobby_keyboard(*, in_lobby: bool, is_host: bool, lobby_id: str | None =
         rows.append([InlineKeyboardButton(text="🚪 Выйти из группы", callback_data="ncap:leave")])
     rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="ncap:refresh")])
     rows.append([InlineKeyboardButton(text="⬅️ К войне", callback_data="war:section:root")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def ncap_lobby_list_keyboard(lobbies: list[tuple[str, str, int]]) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for lobby_id, host_name, count in lobbies[:8]:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"🎯 {host_name} ({count}/{NCAP_MAX_MEMBERS})",
-                    callback_data=f"ncap:join:{lobby_id}",
-                )
-            ]
-        )
-    if not rows:
-        rows.append([InlineKeyboardButton(text="Групп нет", callback_data="ncap:refresh")])
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="ncap:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

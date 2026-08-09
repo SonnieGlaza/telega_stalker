@@ -863,8 +863,22 @@ def run_smoke_check() -> None:
                 conn.execute(
                     "UPDATE war_lobbies SET status = 'cancelled', finished_at = datetime('now') WHERE status = 'in_progress'"
                 )
-        solo_assault = attack_location(storage, 111, "Свалка")
-        assert not solo_assault.ok, solo_assault.text
+        neutral_for_lobby = next(
+            loc["name"]
+            for loc in storage.get_locations()
+            if not loc.get("controlled_by") and str(loc.get("point_type") or "") != "база"
+        )
+        lobby_assault = attack_location(storage, 111, str(neutral_for_lobby))
+        assert lobby_assault.ok, lobby_assault.text
+        assert (lobby_assault.payload or {}).get("ncap_lobby")
+        from app.neutral_capture import leave_ncap_lobby
+
+        leave_result = leave_ncap_lobby(storage, 111)
+        assert leave_result.ok, leave_result.text
+        from app.player_busy import player_busy_reason
+
+        assert get_ncap_lobby_by_player(storage, 111) is None
+        assert player_busy_reason(storage, 111) is None
 
         # Smuggling as travel run with arrival resolve.
         from app.game_logic import (
@@ -1237,7 +1251,6 @@ def run_smoke_check() -> None:
             join_ncap_lobby,
             ncap_forfeit,
             start_ncap_from_lobby,
-            start_neutral_capture,
         )
 
         neutral_loc = next(
@@ -1247,8 +1260,8 @@ def run_smoke_check() -> None:
         )
         storage.restore_energy(111, 100)
         storage.restore_energy(222, 100)
-        solo_start, _ = start_neutral_capture(storage, 111, str(neutral_loc))
-        assert solo_start.ok
+        lobby_create = create_or_join_ncap_lobby(storage, 111, str(neutral_loc))
+        assert lobby_create.ok
         assert get_ncap_lobby_by_player(storage, 111) is not None
         too_few, _ = start_ncap_from_lobby(storage, 111)
         assert not too_few.ok
@@ -1257,7 +1270,7 @@ def run_smoke_check() -> None:
         ncap_start, _ = start_ncap_from_lobby(storage, 111)
         assert ncap_start.ok, ncap_start.text
         assert get_ncap_session(storage, 111) is not None
-        ncap_busy, _ = start_neutral_capture(storage, 222, str(neutral_loc))
+        ncap_busy = create_or_join_ncap_lobby(storage, 222, str(neutral_loc))
         assert not ncap_busy.ok
         assert "захват" in ncap_busy.text.lower() or "штурм" in ncap_busy.text.lower()
         ncap_forfeit(storage, 111)
