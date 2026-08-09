@@ -203,9 +203,12 @@ def run_smoke_check() -> None:
         assert location_anomaly_count("Кордон") == 3
         step = move_artifact_hunt(storage, 111, "right")
         assert step.payload is not None
-        left = abandon_artifact_hunt(storage, 111)
-        assert left.ok, left.text
-        assert get_hunt_session(storage, 111) is None
+        if get_hunt_session(storage, 111) is not None:
+            left = abandon_artifact_hunt(storage, 111)
+            assert left.ok, left.text
+            assert get_hunt_session(storage, 111) is None
+        else:
+            assert step.payload.get("hunt_done") or step.payload.get("hunt_dead")
 
         travel_result = travel_to(storage, 111, "Янтарь")
         assert travel_result.ok, travel_result.text

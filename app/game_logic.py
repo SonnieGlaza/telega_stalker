@@ -892,7 +892,6 @@ QUEST_FAIL_PENALTY_RANGE: dict[str, tuple[int, int]] = {
     "impossible": (120, 220),
 }
 
-RAID_ARTIFACT_REWARD_CAP = 1
 RAID_ARTIFACT_MIN_ENEMY_POWER = 35
 RAID_ARTIFACT_DROP_CHANCE = 5  # % шанс арта участнику при успехе (NPC ≥ порога)
 WAR_MIN_FACTION_MEMBERS = 5
@@ -5248,75 +5247,6 @@ def _active_location_event_modifier(storage: Storage, location_name: str) -> int
     return modifier
 
 
-def _simulate_raid_battle(
-    members: list[Character],
-    enemy_power: int,
-) -> dict[str, Any]:
-    squad_hp: dict[int, int] = {}
-    squad_attack_bonus: dict[int, int] = {}
-    squad_armor_bonus: dict[int, int] = {}
-    member_gear_power: dict[int, int] = {}
-    for member in members:
-        weapon_bonus = _weapon_rating(member.equipment.get("weapon", ""))
-        armor_bonus = _armor_rating(member.equipment.get("armor", ""))
-        gear_power = equipment_power(member)
-        member_gear_power[member.telegram_id] = gear_power
-        squad_attack_bonus[member.telegram_id] = weapon_bonus
-        squad_armor_bonus[member.telegram_id] = armor_bonus
-        squad_hp[member.telegram_id] = 75 + gear_power * 4 + armor_bonus * 3
-
-    enemy_hp = max(80, enemy_power * 7)
-    enemy_damage_base = max(8, enemy_power // 2)
-    total_crits = 0
-    wounds: list[int] = []
-
-    for _round in range(1, 8):
-        active_ids = [mid for mid, hp in squad_hp.items() if hp > 0]
-        if not active_ids or enemy_hp <= 0:
-            break
-
-        for member in members:
-            member_hp = squad_hp.get(member.telegram_id, 0)
-            if member_hp <= 0 or enemy_hp <= 0:
-                continue
-            gear_power = member_gear_power.get(member.telegram_id, 1)
-            base_damage = 6 + gear_power * 2 + squad_attack_bonus[member.telegram_id]
-            damage = base_damage + random.randint(0, 8)
-            crit_chance = min(35, 8 + gear_power * 2)
-            if random.randint(1, 100) <= crit_chance:
-                damage = int(damage * 1.7)
-                total_crits += 1
-            enemy_hp -= damage
-
-        if enemy_hp <= 0:
-            break
-
-        target_id = random.choice(active_ids)
-        target_member = next(m for m in members if m.telegram_id == target_id)
-        armor_block = squad_armor_bonus.get(target_id, 0) * 2 + armor_defense(target_member)
-        incoming = max(3, enemy_damage_base + random.randint(0, 7) - armor_block)
-        squad_hp[target_id] = max(0, squad_hp[target_id] - incoming)
-        if squad_hp[target_id] == 0 and target_id not in wounds:
-            wounds.append(target_id)
-
-    survivors = [mid for mid, hp in squad_hp.items() if hp > 0]
-    success = enemy_hp <= 0 and bool(survivors)
-    member_damage_taken: dict[int, int] = {}
-    for member in members:
-        gear_power = member_gear_power.get(member.telegram_id, 1)
-        max_hp = 75 + gear_power * 4 + squad_armor_bonus[member.telegram_id] * 3
-        member_damage_taken[member.telegram_id] = max(0, max_hp - squad_hp[member.telegram_id])
-
-    return {
-        "success": success,
-        "enemy_hp_left": max(0, enemy_hp),
-        "total_crits": total_crits,
-        "wounds": wounds,
-        "member_damage_taken": member_damage_taken,
-        "survivors": survivors,
-    }
-
-
 def _location_is_friendly_to_faction(
     storage: Storage,
     location: dict[str, Any],
@@ -5640,116 +5570,6 @@ def _steal_faction_garage(storage: Storage, target_faction: str, attacker_factio
     _set_faction_garage(storage, target_faction, garage)
     _set_faction_garage(storage, attacker_faction, attacker_garage)
     return lines
-
-
-def _launch_depot_raid(
-    storage: Storage,
-    leader: Character,
-    open_raid: dict[str, Any],
-    raid_id: int,
-    ready_members: list[Character],
-    member_ids: list[int],
-    spent_ids: list[int],
-    raid_kind: str,
-) -> RaidLaunchResult:
-    label = DEPOT_RAID_LABELS.get(raid_kind, "склад")
-    target_faction = str(open_raid.get("target_faction") or "")
-
-    if not target_faction or target_faction == leader.faction:
-        _refund_spent_energy(storage, spent_ids, DEPOT_RAID_ENERGY_COST)
-        storage.finish_raid(raid_id, status="cancelled", result_text="Некорректная цель рейда.")
-        return RaidLaunchResult(False, f"Рейд #{raid_id} отменён: некорректная цель.", tuple(member_ids))
-
-    if target_faction not in list_war_enemy_factions(storage, leader.faction):
-        _refund_spent_energy(storage, spent_ids, DEPOT_RAID_ENERGY_COST)
-        storage.finish_raid(raid_id, status="cancelled", result_text="Цель больше не враждебна.")
-        return RaidLaunchResult(
-            False,
-            f"Рейд #{raid_id} отменён: с «{target_faction}» заключен мир/союз, рейд невозможен.",
-            tuple(member_ids),
-        )
-
-    if not _depot_has_loot(storage, target_faction, raid_kind):
-        _refund_spent_energy(storage, spent_ids, DEPOT_RAID_ENERGY_COST)
-        storage.finish_raid(raid_id, status="failed", result_text=f"{label.capitalize()} цели уже пуст.")
-        return RaidLaunchResult(
-            False,
-            f"Рейд #{raid_id} отменён: {label} группировки «{target_faction}» уже пуст.",
-            tuple(member_ids),
-        )
-
-    home_location_name = FACTION_HOME_BASE.get(target_faction)
-    base_power = 60  # запасное значение силы, если домашняя база цели не найдена
-    if home_location_name:
-        home_location = storage.get_location(home_location_name)
-        if home_location is not None:
-            base_power = int(home_location["npc_power"])
-    depot_power = max(12, int(base_power * DEPOT_RAID_DEFENSE_POWER_RATIO))
-    battle = _simulate_raid_battle(ready_members, depot_power)
-    defender_leader_id = storage.get_faction_leader_id(target_faction)
-
-    if battle["success"]:
-        loot_lines = (
-            _steal_faction_warehouse(storage, target_faction, leader.faction)
-            if raid_kind == "warehouse"
-            else _steal_faction_garage(storage, target_faction, leader.faction)
-        )
-        notes: list[str] = []
-        for member in ready_members:
-            durability_text = _apply_durability_decay(storage, member.telegram_id, weapon_loss=5, armor_loss=4)
-            _add_rating(storage, member.telegram_id, RATING_REWARD["depot_raid_success"])
-            storage.add_player_stat(member.telegram_id, "raids_completed", 1)
-            if member.telegram_id in battle["wounds"]:
-                storage.change_health(member.telegram_id, -10)
-            achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
-            if member.telegram_id == leader.telegram_id:
-                notes.append(durability_text + achievement_text)
-        storage.finish_raid(
-            raid_id,
-            status="success",
-            result_text=f"Рейд на {label} «{target_faction}» успешен. Критов: {battle['total_crits']}.",
-        )
-        loot_text = "\n".join(loot_lines) if loot_lines else "Трофеев не найдено."
-        result_text = (
-            f"🏚 Рейд #{raid_id} отряда «{leader.faction}» на {label} группировки «{target_faction}» "
-            "завершён успешно!\n"
-            f"Бойцов: {len(ready_members)}, критических попаданий: {battle['total_crits']}.\n"
-            f"Добыча:\n{loot_text}\n"
-            f"Раненых: {len(battle['wounds'])}.{''.join(notes)}"
-        )
-        notify_ids = list(dict.fromkeys(member_ids))
-        if defender_leader_id is not None and int(defender_leader_id) not in notify_ids:
-            notify_ids.append(int(defender_leader_id))
-        return RaidLaunchResult(True, result_text, tuple(notify_ids))
-
-    notes = []
-    for member in ready_members:
-        durability_text = _apply_durability_decay(storage, member.telegram_id, weapon_loss=6, armor_loss=5)
-        storage.change_money(member.telegram_id, -DEPOT_RAID_FAIL_MONEY_PENALTY)
-        _add_rating(storage, member.telegram_id, -RATING_REWARD["depot_raid_fail"])
-        storage.add_player_stat(member.telegram_id, "raids_failed", 1)
-        damage_taken = int(battle["member_damage_taken"].get(member.telegram_id, 0))
-        health_penalty = min(24, max(6, damage_taken // 5))
-        storage.change_health(member.telegram_id, -health_penalty)
-        achievement_text = _progress_and_unlock_achievements(storage, member.telegram_id)
-        if member.telegram_id == leader.telegram_id:
-            notes.append(durability_text + achievement_text)
-    if defender_leader_id is not None:
-        _add_rating(storage, int(defender_leader_id), RATING_REWARD["depot_raid_defense"])
-    storage.finish_raid(
-        raid_id,
-        status="failed",
-        result_text=f"Рейд на {label} «{target_faction}» провален. Остаток обороны: {battle['enemy_hp_left']}.",
-    )
-    result_text = (
-        f"🏚 Рейд #{raid_id} отряда «{leader.faction}» на {label} группировки «{target_faction}» провален.\n"
-        f"Оборона выстояла (остаток {battle['enemy_hp_left']}).\n"
-        f"Каждый участник потерял {DEPOT_RAID_FAIL_MONEY_PENALTY} RU и получил ранения.{''.join(notes)}"
-    )
-    notify_ids = list(dict.fromkeys(member_ids))
-    if defender_leader_id is not None and int(defender_leader_id) not in notify_ids:
-        notify_ids.append(int(defender_leader_id))
-    return RaidLaunchResult(False, result_text, tuple(notify_ids))
 
 
 def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
