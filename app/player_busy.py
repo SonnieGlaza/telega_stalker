@@ -56,6 +56,18 @@ def clear_stale_activity_for_dead_player(storage: Storage, telegram_id: int) -> 
     clear_all_activity_sessions(storage, telegram_id)
 
 
+def recover_stuck_player(storage: Storage, telegram_id: int, *, force_clear: bool = False) -> tuple[bool, int]:
+    """Сбросить зависшие режимы. Возвращает (is_dead, health)."""
+    if force_clear:
+        clear_all_activity_sessions(storage, telegram_id)
+    else:
+        clear_stale_activity_for_dead_player(storage, telegram_id)
+    player = storage.get_character(telegram_id, refresh_energy=True)
+    if player is None:
+        return False, 0
+    return player.health <= 0, int(player.health)
+
+
 def player_busy_reason(storage: Storage, telegram_id: int, *, skip: str | None = None) -> str | None:
     """Вернёт текст блокировки или None если свободен. skip: duel|coop|quest|hunt|cwar|ncap|rgrid|arena|travel|smuggle."""
     player = storage.get_character(telegram_id, refresh_energy=False)

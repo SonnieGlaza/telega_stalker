@@ -2720,6 +2720,21 @@ class Storage:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def find_telegram_id_by_nickname(self, nickname: str) -> int | None:
+        normalized = (nickname or "").strip().casefold()
+        if not normalized:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT telegram_id FROM characters
+                WHERE lower(trim(nickname)) = ?
+                LIMIT 1
+                """,
+                (normalized,),
+            ).fetchone()
+        return int(row["telegram_id"]) if row is not None else None
+
     def list_faction_member_ids(self, faction: str) -> list[int]:
         with self._connect() as conn:
             rows = conn.execute(

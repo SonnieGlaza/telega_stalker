@@ -841,7 +841,113 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject,
 
 @router.message(Command("menu"))
 async def cmd_menu(message: Message) -> None:
+    storage = get_storage()
+    dead = resolve_dead_player(storage, message.from_user.id)
+    if dead is not None:
+        await show_death_screen(message, dead)
+        return
     await message.answer("Главное меню открыто.", reply_markup=main_menu_keyboard())
+
+
+@router.message(Command("respawn"))
+@router.message(Command("респавн"))
+async def cmd_respawn(message: Message) -> None:
+    """Принудительный респавн / показ экрана смерти."""
+    storage = get_storage()
+    telegram_id = message.from_user.id
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    from app.player_busy import recover_stuck_player
+
+    is_dead, _hp = recover_stuck_player(storage, telegram_id, force_clear=True)
+    player = storage.get_character(telegram_id, refresh_energy=False) or player
+    if not is_dead and player.health > 0:
+        await message.answer(
+            f"Ты жив ({player.health} HP). Респавн не нужен.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+    result = respawn_character(storage, telegram_id)
+    if result.ok:
+        player = storage.get_character(telegram_id, refresh_energy=False)
+        await message.answer(result.text, reply_markup=main_menu_keyboard())
+        if player is not None:
+            await send_profile_snapshot(message, player)
+        return
+    await show_death_screen(message, player)
+
+
+@router.message(Command("fixme"))
+@router.message(Command("починить"))
+async def cmd_fixme(message: Message) -> None:
+    """Сброс зависших сессий (вылазка, бой) без респавна."""
+    storage = get_storage()
+    telegram_id = message.from_user.id
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    from app.player_busy import recover_stuck_player
+
+    is_dead, hp = recover_stuck_player(storage, telegram_id, force_clear=True)
+    player = storage.get_character(telegram_id, refresh_energy=False) or player
+    if is_dead or player.health <= 0:
+        await show_death_screen(message, player)
+        return
+    await message.answer(
+        f"Зависшие режимы сброшены. HP: {hp}. Можешь играть.",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+@router.message(Command("unstick"))
+async def admin_unstick_player(message: Message, bot: Bot, command: CommandObject) -> None:
+    if not is_admin_user(message.from_user.id):
+        await message.answer("Команда только для администратора.")
+        return
+    nickname = (command.args or "").strip()
+    if not nickname:
+        await message.answer("Использование: /unstick прозвище\nПример: /unstick Сиплый")
+        return
+    storage = get_storage()
+    telegram_id = storage.find_telegram_id_by_nickname(nickname)
+    if telegram_id is None:
+        await message.answer(f"Игрок «{h(nickname)}» не найден.")
+        return
+    from app.player_busy import recover_stuck_player
+
+    is_dead, hp = recover_stuck_player(storage, telegram_id, force_clear=True)
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        await message.answer("Персонаж не найден после сброса.")
+        return
+    if is_dead or player.health <= 0:
+        text = build_dead_character_text(player, storage=storage)
+        try:
+            await bot.send_message(
+                telegram_id,
+                f"🔧 Админ разблокировал аккаунт.\n\n{text}",
+                reply_markup=dead_character_keyboard(),
+            )
+        except Exception:
+            logger.exception("Failed unstick death notify to %s", telegram_id)
+        await message.answer(
+            f"«{h(player.nickname)}» (id {telegram_id}): мёртв (HP {hp}), сессии сброшены, отправлен экран смерти."
+        )
+        return
+    try:
+        await bot.send_message(
+            telegram_id,
+            "🔧 Админ сбросил зависшие режимы. Можешь продолжать игру.",
+            reply_markup=main_menu_keyboard(),
+        )
+    except Exception:
+        logger.exception("Failed unstick notify to %s", telegram_id)
+    await message.answer(
+        f"«{h(player.nickname)}» (id {telegram_id}): жив (HP {hp}), сессии сброшены."
+    )
 
 
 @router.message(F.text == "⭐ Пополнить")
@@ -1660,6 +1766,9 @@ def resolve_dead_player(storage: Storage, telegram_id: int) -> Character | None:
 
 DEAD_PLAYER_CALLBACKS = frozenset({"respawn:base", "death:log"})
 
+# Команды, которые middleware не перехватывает у мёртвого (обрабатываются хендлерами).
+DEAD_BYPASS_MESSAGE_COMMANDS = frozenset({"/respawn", "/fixme", "/cancel"})
+
 
 async def show_death_screen(
     message_or_callback: Message | CallbackQuery,
@@ -1680,7 +1789,7 @@ async def show_death_screen(
 
 
 class DeadPlayerMenuMiddleware(BaseMiddleware):
-    """Любая кнопка reply-меню при HP=0 — показать экран смерти вместо действия."""
+    """Любое сообщение при HP=0 — экран смерти (кроме /respawn и /fixme)."""
 
     async def __call__(
         self,
@@ -1688,19 +1797,25 @@ class DeadPlayerMenuMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        if isinstance(event, Message) and is_reply_menu_button(event.text):
-            storage = get_storage()
-            telegram_id = event.from_user.id
-            if _raid_grid_downed(storage, telegram_id):
-                await event.answer(
-                    "☠️ Ты без сознания на рейде.\n"
-                    "Жди, пока союзник поднимет аптечкой, или пока рейд не закончится."
-                )
-                return None
-            player = resolve_dead_player(storage, telegram_id)
-            if player is not None:
-                await show_death_screen(event, player)
-                return None
+        if not isinstance(event, Message):
+            return await handler(event, data)
+        text = (event.text or "").strip()
+        if text:
+            cmd = text.split(maxsplit=1)[0].casefold()
+            if cmd in DEAD_BYPASS_MESSAGE_COMMANDS:
+                return await handler(event, data)
+        storage = get_storage()
+        telegram_id = event.from_user.id
+        if _raid_grid_downed(storage, telegram_id):
+            await event.answer(
+                "☠️ Ты без сознания на рейде.\n"
+                "Жди, пока союзник поднимет аптечкой, или пока рейд не закончится."
+            )
+            return None
+        player = resolve_dead_player(storage, telegram_id)
+        if player is not None:
+            await show_death_screen(event, player)
+            return None
         return await handler(event, data)
 
 
