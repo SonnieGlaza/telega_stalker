@@ -1266,6 +1266,7 @@ def _apply_durability_decay(storage: Storage, telegram_id: int, weapon_loss: int
 RESPAWN_HEALTH = 60
 RESPAWN_ENERGY = 60
 RESPAWN_COST_RU = 500
+RESPAWN_DEBT_META_PREFIX = "respawn:debt:"
 DEATH_INVENTORY_KEEP_RATIO = 0.2  # 80% лута растаскивают мутанты
 PERSONAL_STASH_PAGE_SIZE = 8
 
@@ -1311,6 +1312,58 @@ def append_survival_craving_notice(storage: Storage, telegram_id: int, text: str
 
 def _dead_block_text() -> str:
     return "Персонаж мёртв (HP=0). Используй респавн из инвентаря."
+
+
+def _respawn_debt_key(telegram_id: int) -> str:
+    return f"{RESPAWN_DEBT_META_PREFIX}{int(telegram_id)}"
+
+
+def get_respawn_debt(storage: Storage, telegram_id: int) -> int:
+    raw = storage.get_meta(_respawn_debt_key(telegram_id))
+    if not raw:
+        return 0
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def add_respawn_debt(storage: Storage, telegram_id: int, amount: int) -> int:
+    if amount <= 0:
+        return get_respawn_debt(storage, telegram_id)
+    total = get_respawn_debt(storage, telegram_id) + int(amount)
+    storage.set_meta(_respawn_debt_key(telegram_id), str(total))
+    return total
+
+
+def clear_respawn_debt(storage: Storage, telegram_id: int) -> None:
+    storage.delete_meta(_respawn_debt_key(telegram_id))
+
+
+def collect_respawn_debt(storage: Storage, telegram_id: int) -> int:
+    """Списать долг за спасение с текущего баланса. Возвращает уплаченную сумму."""
+    debt = get_respawn_debt(storage, telegram_id)
+    if debt <= 0:
+        return 0
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.money <= 0:
+        return 0
+    pay = min(debt, int(player.money))
+    if pay <= 0 or not storage.change_money(telegram_id, -pay, skip_debt_collect=True):
+        return 0
+    remaining = debt - pay
+    if remaining <= 0:
+        clear_respawn_debt(storage, telegram_id)
+    else:
+        storage.set_meta(_respawn_debt_key(telegram_id), str(remaining))
+    return pay
+
+
+def format_respawn_debt_line(storage: Storage, telegram_id: int) -> str:
+    debt = get_respawn_debt(storage, telegram_id)
+    if debt <= 0:
+        return ""
+    return f"📉 Долг за спасение: {debt} RU (спишется с первого заработка).\n"
 
 
 DEATH_CAUSE_META_PREFIX = "death:last_cause:"
@@ -1628,8 +1681,14 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if not _is_dead(player):
         return ActionResult(False, "Респавн доступен только при HP=0.")
-    if not storage.change_money(telegram_id, -RESPAWN_COST_RU):
-        return ActionResult(False, f"Недостаточно денег для спасения ({RESPAWN_COST_RU} RU).")
+
+    cost = RESPAWN_COST_RU
+    paid = min(int(player.money), cost)
+    debt_added = cost - paid
+    if paid > 0 and not storage.change_money(telegram_id, -paid, skip_debt_collect=True):
+        paid = 0
+        debt_added = cost
+
     loot_text = _apply_death_inventory_loot(storage, telegram_id)
     current_health = player.health
     current_energy = player.energy
@@ -1639,11 +1698,24 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
     storage.set_location(telegram_id, home)
     pop_death_cause(storage, telegram_id)
     pop_death_killer(storage, telegram_id)
+
+    pay_lines: list[str] = []
+    if paid > 0:
+        pay_lines.append(f"Списано {paid} RU за спасение.")
+    if debt_added > 0:
+        total_debt = add_respawn_debt(storage, telegram_id, debt_added)
+        pay_lines.append(
+            f"В долг: {debt_added} RU (всего долг {total_debt} RU — спишется, когда появятся деньги)."
+        )
+    if not pay_lines:
+        pay_lines.append(f"Спасение оплачено: {cost} RU.")
+
     return ActionResult(
         True,
         f"Сталкеры нашли тебя без сознания и доставили на «{home}».\n"
-        f"За спасение жизни потребовали {RESPAWN_COST_RU} RU.\n"
-        f"HP восстановлено до {RESPAWN_HEALTH}, энергия до {RESPAWN_ENERGY}.\n\n"
+        f"{pay_lines[0]}\n"
+        + (f"{pay_lines[1]}\n" if len(pay_lines) > 1 else "")
+        + f"HP восстановлено до {RESPAWN_HEALTH}, энергия до {RESPAWN_ENERGY}.\n\n"
         f"{loot_text}",
     )
 
@@ -4684,6 +4756,7 @@ def format_inventory(
         f"Сила снаряги: {current_gear_power}\n"
         f"{skin_progress}"
         f"Баланс: {character.money} RU\n"
+        f"{format_respawn_debt_line(storage, character.telegram_id) if storage is not None else ''}"
         f"Транспорт: {vehicle}\n"
         f"Спальник: {sleeping_bag}\n"
         f"Дизель: {character.diesel} | Бензин: {character.gasoline}\n"
@@ -8547,8 +8620,9 @@ TUTORIAL_PAGES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Смерть и респавн",
-        "HP=0 — не конец. За RU персонаж восстанавливается на домашней базе, но часть "
-        "рюкзака теряется при гибели. Журнал последних смертей смотри в КПК → «☠️ Смерти».",
+        "HP=0 — не конец. Спасение на базе — 500 RU; если денег нет, медики оформят долг "
+        "(спишется автоматически с заработка). Часть рюкзака теряется при гибели. "
+        "Журнал последних смертей смотри в КПК → «☠️ Смерти».",
     ),
     (
         "Война и рейды",

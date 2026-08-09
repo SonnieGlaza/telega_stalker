@@ -2049,7 +2049,7 @@ class Storage:
                 )
         self.save_snapshot()
 
-    def change_money(self, telegram_id: int, delta: int) -> bool:
+    def change_money(self, telegram_id: int, delta: int, *, skip_debt_collect: bool = False) -> bool:
         with self._connect() as conn:
             if delta >= 0:
                 cur = conn.execute(
@@ -2068,6 +2068,10 @@ class Storage:
             ok = int(cur.rowcount or 0) > 0
         if ok:
             self.save_snapshot()
+            if delta > 0 and not skip_debt_collect:
+                from app.game_logic import collect_respawn_debt
+
+                collect_respawn_debt(self, telegram_id)
         return ok
 
     def change_gear_power(self, telegram_id: int, delta: int) -> None:

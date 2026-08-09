@@ -426,7 +426,7 @@ def inventory_consumables_keyboard() -> InlineKeyboardMarkup:
 def dead_character_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="♻️ Спасение на базе (500 RU)", callback_data="respawn:base")],
+            [InlineKeyboardButton(text="♻️ Спасение на базе (500 RU / в долг)", callback_data="respawn:base")],
             [InlineKeyboardButton(text="☠️ Журнал смертей", callback_data="death:log")],
         ]
     )

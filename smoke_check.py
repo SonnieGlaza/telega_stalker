@@ -871,7 +871,7 @@ def run_smoke_check() -> None:
         lobby_assault = attack_location(storage, 111, str(neutral_for_lobby))
         assert lobby_assault.ok, lobby_assault.text
         assert (lobby_assault.payload or {}).get("ncap_lobby")
-        from app.neutral_capture import leave_ncap_lobby
+        from app.neutral_capture import get_ncap_lobby_by_player, leave_ncap_lobby
 
         leave_result = leave_ncap_lobby(storage, 111)
         assert leave_result.ok, leave_result.text
@@ -1067,6 +1067,22 @@ def run_smoke_check() -> None:
         assert storage.get_personal_stash(111).get("medkit") == 3
         take = withdraw_from_personal_stash(storage, 111, "medkit", 1)
         assert take.ok, take.text
+
+        # Respawn on credit when broke; debt auto-collected from earnings.
+        from app.game_logic import get_respawn_debt
+
+        broke = int(storage.get_character(111, refresh_energy=False).money)
+        if broke > 0:
+            storage.change_money(111, -broke, skip_debt_collect=True)
+        storage.change_health(111, -10_000)
+        debt_revive = respawn_character(storage, 111)
+        assert debt_revive.ok, debt_revive.text
+        assert "долг" in debt_revive.text.lower()
+        assert get_respawn_debt(storage, 111) == RESPAWN_COST_RU
+        assert storage.get_character(111, refresh_energy=False).money == 0
+        storage.change_money(111, 700)
+        assert get_respawn_debt(storage, 111) == 0
+        assert storage.get_character(111, refresh_energy=False).money == 200
 
         # Rating top achievements: top-10 / top-3 / top-1.
         from app.game_logic import (
