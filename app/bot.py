@@ -1814,13 +1814,25 @@ async def show_death_screen(
         send_bot = send_bot or message_or_callback.bot  # type: ignore[attr-defined]
 
     if send_bot is not None:
-        sent = await _send_death_message_safe(send_bot, player.telegram_id, text, keyboard)
+        sent, dismiss_map = await _deliver_death_screen(
+            send_bot,
+            player.telegram_id,
+            text,
+            keyboard,
+            callback=callback,
+        )
         if sent:
             from app.player_busy import clear_stale_activity_for_dead_player
 
             clear_stale_activity_for_dead_player(storage, player.telegram_id)
-        if callback is not None and sent:
+        if callback is not None and sent and dismiss_map:
             await _dismiss_battle_map(callback)
+        elif callback is not None and callback.message is not None and not sent:
+            await safe_callback_answer(
+                callback,
+                "☠️ Не удалось показать экран смерти. Отправь /respawn",
+                show_alert=True,
+            )
         return
 
     if isinstance(message_or_callback, CallbackQuery):
@@ -2989,13 +3001,24 @@ async def _dismiss_battle_map(callback: CallbackQuery) -> None:
             pass
 
 
+_DEATH_FALLBACK_TEXT = (
+    "☠️ Ты погиб.\n"
+    "Нажми ♻️ «Спасение на базе» ниже или отправь /respawn."
+)
+
+_DEATH_MAP_CAPTION = (
+    "☠️ Ты погиб на вылазке.\n"
+    "Нажми ♻️ «Спасение на базе» ниже или отправь /respawn."
+)
+
+
 async def _send_death_message_safe(
     bot: Bot,
     chat_id: int,
     text: str,
     keyboard: InlineKeyboardMarkup,
 ) -> bool:
-    """Отправить экран смерти; при ошибке HTML — короткий fallback."""
+    """Отправить экран смерти в личку; при ошибке HTML — короткий fallback."""
     try:
         await bot.send_message(chat_id, text, reply_markup=keyboard)
         return True
@@ -3006,8 +3029,7 @@ async def _send_death_message_safe(
     try:
         await bot.send_message(
             chat_id,
-            "☠️ Ты погиб.\n"
-            "Нажми ♻️ «Спасение на базе» ниже или отправь /respawn.",
+            _DEATH_FALLBACK_TEXT,
             reply_markup=keyboard,
             parse_mode=None,
         )
@@ -3015,6 +3037,70 @@ async def _send_death_message_safe(
     except Exception:
         logger.exception("Death fallback message failed for %s", chat_id)
     return False
+
+
+async def _deliver_death_screen(
+    bot: Bot,
+    user_id: int,
+    text: str,
+    keyboard: InlineKeyboardMarkup,
+    *,
+    callback: CallbackQuery | None = None,
+) -> tuple[bool, bool]:
+    """Доставить экран смерти с кнопкой респавна.
+
+    Returns:
+        (delivered, dismiss_map) — dismiss_map=True только если отправлено новое сообщение,
+        а карту боя можно убрать.
+    """
+    if callback is not None and callback.message is not None:
+        message = callback.message
+        try:
+            await message.answer(text, reply_markup=keyboard)
+            return True, True
+        except TelegramBadRequest:
+            logger.exception("Death reply (HTML) failed for %s", user_id)
+        except Exception:
+            logger.exception("Death reply failed for %s", user_id)
+        try:
+            await message.answer(
+                _DEATH_FALLBACK_TEXT,
+                reply_markup=keyboard,
+                parse_mode=None,
+            )
+            return True, True
+        except Exception:
+            logger.exception("Death reply fallback failed for %s", user_id)
+
+    if await _send_death_message_safe(bot, user_id, text, keyboard):
+        return True, callback is not None
+
+    if callback is not None and callback.message is not None:
+        message = callback.message
+        try:
+            await message.edit_caption(
+                caption=_DEATH_MAP_CAPTION,
+                reply_markup=keyboard,
+            )
+            return True, False
+        except TelegramBadRequest:
+            pass
+        try:
+            await message.edit_reply_markup(reply_markup=keyboard)
+            return True, False
+        except TelegramBadRequest:
+            pass
+        try:
+            await message.answer(
+                _DEATH_FALLBACK_TEXT,
+                reply_markup=keyboard,
+                parse_mode=None,
+            )
+            return True, True
+        except Exception:
+            logger.exception("Death last-resort reply failed for %s", user_id)
+
+    return False, False
 
 
 async def _handle_quest_mission_death_callback(
@@ -3027,8 +3113,9 @@ async def _handle_quest_mission_death_callback(
     if player is None:
         await safe_callback_answer(callback, "Персонаж не найден.", show_alert=True)
         return
+    sent = False
     try:
-        await _send_battle_death_notice(
+        sent = await _send_battle_death_notice(
             callback.bot,
             telegram_id,
             player,
@@ -3037,7 +3124,14 @@ async def _handle_quest_mission_death_callback(
             cause=str(payload.get("death_cause") or "combat"),
         )
     finally:
-        await safe_callback_answer(callback, "☠️ Откинулся…")
+        if sent:
+            await safe_callback_answer(callback)
+        else:
+            await safe_callback_answer(
+                callback,
+                "☠️ Не удалось показать экран смерти. Отправь /respawn",
+                show_alert=True,
+            )
 
 
 SURVIVAL_DEATH_CHECK_EVERY_TICKS = 5  # ~раз в 5 мин при POINTS_INCOME_TICK_SECONDS=60
@@ -3074,7 +3168,7 @@ async def _send_battle_death_notice(
     callback: CallbackQuery | None = None,
     where: str | None = None,
     cause: str | None = None,
-) -> None:
+) -> bool:
     storage = get_storage()
     text = build_battle_death_text(
         player,
@@ -3083,21 +3177,15 @@ async def _send_battle_death_notice(
         storage=storage,
     )
     append_death_log(storage, user_id, text)
-    sent = await _send_death_message_safe(bot, user_id, text, dead_character_keyboard())
+    keyboard = dead_character_keyboard()
+    sent, dismiss_map = await _deliver_death_screen(bot, user_id, text, keyboard, callback=callback)
     if sent:
         from app.player_busy import clear_stale_activity_for_dead_player
 
         clear_stale_activity_for_dead_player(storage, user_id)
-    if callback is not None and sent:
-        await _dismiss_battle_map(callback)
-    elif callback is not None and callback.message is not None:
-        try:
-            await callback.message.edit_caption(
-                caption="☠️ Ты погиб на вылазке. Отправь /respawn или нажми ♻️ в новом сообщении выше.",
-                reply_markup=dead_character_keyboard(),
-            )
-        except TelegramBadRequest:
-            pass
+        if callback is not None and dismiss_map:
+            await _dismiss_battle_map(callback)
+    return sent
 
 
 async def _deliver_player_message_or_death(
