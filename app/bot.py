@@ -1312,7 +1312,7 @@ async def cmd_dbsave(message: Message) -> None:
         return
     db = get_storage()
     ok = db.persist_character_state(message.from_user.id)
-    db.save_snapshot()
+    db.save_snapshot(force=True)
     synced = db.backfill_all_gear_power()
     if not ok:
         await message.answer(
@@ -6263,7 +6263,7 @@ async def run_bot() -> None:
         while True:
             await asyncio.sleep(SNAPSHOT_SYNC_SECONDS)
             try:
-                get_storage().save_snapshot()
+                get_storage().save_snapshot(force=True)
             except Exception:
                 logger.exception("Periodic snapshot sync failed")
 
@@ -6507,7 +6507,7 @@ async def run_bot() -> None:
             except Exception:
                 logger.exception("Background task finished with error")
         try:
-            get_storage().save_snapshot()
+            get_storage().save_snapshot(force=True)
         except Exception:
             logger.exception("Final snapshot save failed during shutdown")
 
