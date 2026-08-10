@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import random
 from dataclasses import dataclass, field
+from functools import lru_cache
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
@@ -48,6 +50,16 @@ from app.quest_mission import (
     _spawn_npcs,
 )
 from app.storage import Character, Storage
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SMUGGLE_ICONS_DIR = PROJECT_ROOT / "assets" / "smuggle"
+
+_TRANSPORT_ICON_FILES: dict[str, str] = {
+    "foot": "walker.png",
+    "bicycle": "bicycle.png",
+    "niva": "niva.png",
+    "truck": "truck.png",
+}
 
 SMUGGLE_MISSION_META_PREFIX = "smuggle_mission:"
 
@@ -348,6 +360,44 @@ def _route_complete(session: SmuggleMissionSession) -> bool:
     return session.route_index >= len(session.route)
 
 
+def _load_smuggle_icon(name: str) -> Image.Image | None:
+    path = SMUGGLE_ICONS_DIR / name
+    if not path.is_file():
+        return None
+    try:
+        return Image.open(path).convert("RGBA")
+    except Exception:
+        return None
+
+
+@lru_cache(maxsize=8)
+def _cached_smuggle_icon(name: str) -> Image.Image | None:
+    return _load_smuggle_icon(name)
+
+
+def _transport_token(
+    transport: str,
+    character: Character | None = None,
+    *,
+    size: int = 160,
+    rating_points: int = 0,
+) -> Image.Image:
+    if transport == "foot" and character is not None:
+        from app.avatar_render import render_avatar
+
+        return render_avatar(character, rating_points=rating_points, width=size, height=size)
+
+    icon_name = _TRANSPORT_ICON_FILES.get(transport, "walker.png")
+    img = _cached_smuggle_icon(icon_name)
+    if img is None:
+        img = _cached_smuggle_icon("walker.png")
+    if img is None:
+        return Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    if img.size != (size, size):
+        return img.resize((size, size), Image.Resampling.LANCZOS)
+    return img.copy()
+
+
 def smuggle_status_caption(session: SmuggleMissionSession, player: Character | None) -> str:
     transport = TRANSPORT_LABELS.get(session.transport, session.transport)
     return (
@@ -355,29 +405,6 @@ def smuggle_status_caption(session: SmuggleMissionSession, player: Character | N
         f"Транспорт: {transport} · маршрут {session.route_index}/{len(session.route)}\n"
         f"Ход {session.moves}/{session.max_moves}"
     )
-
-
-def _vehicle_token(transport: str, *, size: int = 160) -> Image.Image:
-    token = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(token)
-    if transport == "truck":
-        d.rounded_rectangle((18, 58, 142, 118), radius=10, fill=(70, 75, 85), outline=(180, 190, 200), width=3)
-        d.rounded_rectangle((100, 38, 142, 72), radius=6, fill=(90, 95, 105), outline=(200, 210, 220), width=2)
-        d.ellipse((28, 108, 58, 138), fill=(30, 30, 34), outline=(120, 120, 130), width=2)
-        d.ellipse((102, 108, 132, 138), fill=(30, 30, 34), outline=(120, 120, 130), width=2)
-    elif transport == "niva":
-        d.rounded_rectangle((24, 52, 136, 112), radius=12, fill=(60, 90, 70), outline=(140, 210, 150), width=3)
-        d.rounded_rectangle((70, 34, 128, 68), radius=8, fill=(75, 105, 82), outline=(160, 220, 170), width=2)
-        d.ellipse((32, 104, 62, 134), fill=(25, 25, 28), outline=(110, 110, 120), width=2)
-        d.ellipse((98, 104, 128, 134), fill=(25, 25, 28), outline=(110, 110, 120), width=2)
-    elif transport == "bicycle":
-        d.ellipse((48, 48, 112, 112), outline=(220, 180, 60), width=4)
-        d.line((80, 56, 80, 108), fill=(200, 200, 210), width=3)
-        d.line((56, 92, 104, 72), fill=(200, 200, 210), width=3)
-    else:
-        d.ellipse((36, 24, 124, 112), fill=(75, 85, 65), outline=(140, 180, 120), width=3)
-        d.rectangle((52, 108, 108, 140), fill=(95, 75, 50))
-    return token
 
 
 def _draw_route_lines(
@@ -456,7 +483,7 @@ def render_smuggle_frame(session: SmuggleMissionSession, character: Character | 
     px, py = session.player
     pcx = margin + px * cell + cell // 2
     pcy = margin + py * cell + cell // 2
-    token = _vehicle_token(session.transport)
+    token = _transport_token(session.transport, character)
     _paste_circle(canvas, token, pcx, pcy, 72, ring_color=(255, 200, 60), ring_width=5)
 
     pl = margin + grid_px + 20
