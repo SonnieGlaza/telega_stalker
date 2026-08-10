@@ -225,16 +225,3 @@ def build_zone_map_image(
     output = BytesIO()
     canvas.save(output, format="PNG")
     return output.getvalue()
-
-
-def build_zone_map(
-    locations: list[dict[str, str | int | None]],
-    current_location: str | None = None,
-    player_faction: str | None = None,
-) -> bytes:
-    """Backward-compatible alias for older call sites."""
-    return build_zone_map_image(
-        locations,
-        current_location=current_location,
-        player_faction=player_faction,
-    )

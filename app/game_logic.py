@@ -2398,69 +2398,6 @@ def build_rating_menu_text() -> str:
     )
 
 
-def calculate_equipment_bonus(character: Character) -> int:
-    armor_name = character.equipment.get("armor", "")
-    weapon_name = character.equipment.get("weapon", "")
-    artifact_name = str(character.equipment.get("artifact", "Нет"))
-    weapon_durability = _durability_percent(character, "weapon")
-    armor_durability = _durability_percent(character, "armor")
-
-    # Каждый уровень оружия/брони дает +1 к силе снаряжения (начиная с 1-го уровня).
-    armor_bonus = _armor_rating(armor_name)
-    weapon_bonus = _weapon_rating(weapon_name)
-    if artifact_name in ARTIFACT_EQUIP_BONUSES:
-        artifact_bonus = int(ARTIFACT_EQUIP_BONUSES[artifact_name].get("power", 0))
-    elif artifact_name and artifact_name != "Нет":
-        artifact_bonus = 2
-    else:
-        artifact_bonus = 0
-    armor_penalty = _durability_penalty(armor_durability, max_penalty=6)
-    weapon_penalty = _durability_penalty(weapon_durability, max_penalty=6)
-    return max(0, armor_bonus + weapon_bonus + artifact_bonus - armor_penalty - weapon_penalty)
-
-
-def calculate_quest_success(
-    gear_power: int,
-    max_success: int,
-    ammo_stock: int,
-    medkit_stock: int,
-    ammo_required: int,
-    medkit_required: int,
-) -> QuestChanceBreakdown:
-    """Шанс = база 22% + вклад снаряги/пушек + бонусы запасов, потолок по сложности."""
-    gear_contrib = max(0, gear_power) * 3
-    base_chance = 22
-    extra_ammo = max(0, ammo_stock - ammo_required)
-    extra_medkits = max(0, medkit_stock - medkit_required)
-    ammo_bonus = min(18, extra_ammo * 2)
-    medkit_bonus = min(12, extra_medkits * 4)
-    chance = max(10, min(max_success, base_chance + gear_contrib + ammo_bonus + medkit_bonus))
-    return QuestChanceBreakdown(
-        chance=chance,
-        base_chance=base_chance,
-        gear_bonus=gear_contrib,
-        ammo_bonus=ammo_bonus,
-        medkit_bonus=medkit_bonus,
-    )
-
-
-def calculate_quest_success_for_quest(
-    character: Character,
-    quest: QuestType,
-) -> QuestChanceBreakdown:
-    """Шанс успеха по заданию: снаряга и оружие влияют, потолок — max_success сложности."""
-    ammo_stock = int(character.inventory.get("ammo_pack", 0))
-    medkit_stock = _total_medkit_stock(character)
-    return calculate_quest_success(
-        gear_power=compute_total_gear_power(character),
-        max_success=quest.max_success,
-        ammo_stock=ammo_stock,
-        medkit_stock=medkit_stock,
-        ammo_required=quest.ammo_required,
-        medkit_required=quest.medkit_required,
-    )
-
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -2540,10 +2477,6 @@ def collect_travel_eta_notices(storage: Storage) -> list[tuple[int, str]]:
         if status:
             notices.append((tid, status))
     return notices
-
-
-def build_travel_arrival_live_text(destination: str) -> str:
-    return f"🚐 Прибыл в «{destination}»."
 
 
 def process_due_travels(storage: Storage) -> list[tuple[int, str]]:
@@ -7786,12 +7719,6 @@ def build_players_faction_page_text(
         rank_part = f" [{rank}]" if rank else ""
         lines.append(f"• {row['nickname']}{rank_part} — {row['telegram_id']}")
     return ("\n".join(lines), faction_key, safe_page, total_pages, chunk)
-
-
-def build_players_directory(storage: Storage, limit: int = 50) -> str:
-    """Совместимость: текстовый обзор без inline-меню."""
-    text, _items = build_players_root_text(storage)
-    return text
 
 
 def build_faction_broadcast_text(

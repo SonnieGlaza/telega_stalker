@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import random
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,8 @@ from app.storage import Character, Storage
 
 
 MISSION_META_PREFIX = "quest_mission:"
+QUEST_ACTIVE_IDS_META = "quest_mission:active_ids"
+QUEST_IDLE_HOURS = 4
 GRID_SIZE = 6
 MAX_MOVES = 28
 
@@ -131,6 +134,7 @@ class QuestMissionSession:
     objectives_done: bool = False
     resources_spent: bool = False
     turn_seq: int = 0
+    started_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -154,6 +158,7 @@ class QuestMissionSession:
             "objectives_done": self.objectives_done,
             "resources_spent": self.resources_spent,
             "turn_seq": self.turn_seq,
+            "started_at": self.started_at,
         }
 
     @classmethod
@@ -179,6 +184,7 @@ class QuestMissionSession:
             objectives_done=bool(raw.get("objectives_done")),
             resources_spent=bool(raw.get("resources_spent")),
             turn_seq=int(raw.get("turn_seq") or 0),
+            started_at=raw.get("started_at"),
         )
 
 
@@ -233,6 +239,120 @@ def get_mission_session(storage: Storage, telegram_id: int) -> QuestMissionSessi
 
 def save_mission_session(storage: Storage, telegram_id: int, session: QuestMissionSession) -> None:
     storage.set_meta(_meta_key(telegram_id), json.dumps(session.to_dict(), ensure_ascii=False))
+    _register_active_quest(storage, telegram_id)
+
+
+def clear_mission_session(storage: Storage, telegram_id: int) -> None:
+    storage.delete_meta(_meta_key(telegram_id))
+    _unregister_active_quest(storage, telegram_id)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _register_active_quest(storage: Storage, telegram_id: int) -> None:
+    raw = storage.get_meta(QUEST_ACTIVE_IDS_META)
+    ids: list[int] = []
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                ids = [int(x) for x in parsed]
+        except json.JSONDecodeError:
+            ids = []
+    tid = int(telegram_id)
+    if tid not in ids:
+        ids.append(tid)
+    storage.set_meta(QUEST_ACTIVE_IDS_META, json.dumps(ids, ensure_ascii=False))
+
+
+def _unregister_active_quest(storage: Storage, telegram_id: int) -> None:
+    raw = storage.get_meta(QUEST_ACTIVE_IDS_META)
+    if not raw:
+        return
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            return
+        ids = [int(x) for x in parsed if int(x) != int(telegram_id)]
+    except json.JSONDecodeError:
+        return
+    if ids:
+        storage.set_meta(QUEST_ACTIVE_IDS_META, json.dumps(ids, ensure_ascii=False))
+    else:
+        storage.delete_meta(QUEST_ACTIVE_IDS_META)
+
+
+def list_active_quest_player_ids(storage: Storage) -> list[int]:
+    raw = storage.get_meta(QUEST_ACTIVE_IDS_META)
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [int(x) for x in parsed]
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
+def check_quest_session_timeout(storage: Storage, telegram_id: int) -> ActionResult | None:
+    session = get_mission_session(storage, telegram_id)
+    if session is None:
+        _unregister_active_quest(storage, telegram_id)
+        return None
+    if session.moves >= session.max_moves:
+        clear_mission_session(storage, telegram_id)
+        quest = QUESTS.get(session.difficulty) or QUESTS["easy"]
+        fail_result = apply_contract_mission_fail(
+            storage,
+            telegram_id,
+            quest=quest,
+            work_location=session.location,
+            title=session.title,
+            reason="Время вылазки вышло.",
+        )
+        storage.set_active_contract(telegram_id, None)
+        return ActionResult(
+            False,
+            fail_result.text,
+            payload={"mission_active": False, "mission_done": True, "quest_timeout": True},
+        )
+    if session.started_at:
+        try:
+            started = datetime.fromisoformat(str(session.started_at))
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+        except ValueError:
+            started = _utc_now()
+        if _utc_now() > started + timedelta(hours=QUEST_IDLE_HOURS):
+            clear_mission_session(storage, telegram_id)
+            quest = QUESTS.get(session.difficulty) or QUESTS["easy"]
+            fail_result = apply_contract_mission_fail(
+                storage,
+                telegram_id,
+                quest=quest,
+                work_location=session.location,
+                title=session.title,
+                reason="Вылазка заброшена — слишком долго без движения.",
+            )
+            storage.set_active_contract(telegram_id, None)
+            return ActionResult(
+                False,
+                fail_result.text,
+                payload={"mission_active": False, "mission_done": True, "quest_timeout": True},
+            )
+    return None
+
+
+def process_quest_timeouts(storage: Storage) -> list[tuple[int, ActionResult]]:
+    outcomes: list[tuple[int, ActionResult]] = []
+    for telegram_id in list_active_quest_player_ids(storage):
+        result = check_quest_session_timeout(storage, telegram_id)
+        if result is not None:
+            outcomes.append((telegram_id, result))
+    return outcomes
 
 
 def _save_mission_if_turn_ok(
@@ -252,10 +372,6 @@ def _save_mission_if_turn_ok(
         save_fn=lambda st, sess: save_mission_session(st, tid, sess),
         expected_seq=expected_seq,
     )
-
-
-def clear_mission_session(storage: Storage, telegram_id: int) -> None:
-    storage.delete_meta(_meta_key(telegram_id))
 
 
 def _location_danger(location: str, difficulty: str) -> int:
@@ -388,6 +504,7 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
         npc_kinds=npc_kinds,
         max_moves=MAX_MOVES + danger,
         resources_spent=False,
+        started_at=_utc_now().isoformat(),
     )
 
 
@@ -788,13 +905,30 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     expected_seq = session.turn_seq
     notes: list[str] = []
     notes.extend(_maybe_move_hostiles(session))
-    session.turn_seq = expected_seq + 1
-    if not _save_mission_if_turn_ok(storage, telegram_id, session, expected_seq):
-        from app.tactical_combat import STALE_TURN_MESSAGE
+    from app.game_logic import MEDKIT_EFFECTS
 
-        return ActionResult(False, STALE_TURN_MESSAGE, payload={"mission_active": True})
+    effect = MEDKIT_EFFECTS.get(chosen)
+    if effect is None:
+        return ActionResult(False, "Неизвестный тип аптечки.", payload={"mission_active": True})
+    max_hp = effective_max_health(player)
+    needs_heal = player.health < max_hp
+    needs_rad = int(effect.get("radiation", 0)) < 0 and player.radiation > 0
+    if not needs_heal and not needs_rad:
+        if int(effect.get("radiation", 0)) < 0:
+            return ActionResult(
+                False,
+                "Здоровье полное и радиации нет — аптечка не нужна.",
+                payload={"mission_active": True},
+            )
+        return ActionResult(
+            False,
+            "Здоровье уже полное, аптечка не требуется.",
+            payload={"mission_active": True},
+        )
     result = use_medkit_item(storage, telegram_id, chosen, skip_busy="quest")
     notes.insert(0, result.text)
+    if not result.ok:
+        return ActionResult(result.ok, result.text, payload={"mission_active": True})
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return result
@@ -812,10 +946,14 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
             notes.append(note)
         if dead is not None:
             death_result = dead
+    session.turn_seq = expected_seq + 1
+    if not _save_mission_if_turn_ok(storage, telegram_id, session, expected_seq):
+        from app.tactical_combat import STALE_TURN_MESSAGE
+
+        return ActionResult(False, STALE_TURN_MESSAGE, payload={"mission_active": True})
     _apply_quest_mission_damage(storage, telegram_id, pending_damage)
     if death_result is not None:
         return _finalize_quest_death_result(storage, telegram_id, death_result)
-    save_mission_session(storage, telegram_id, session)
     image = _render_for_player(storage, telegram_id, session, player)
     note_text = " ".join(notes)
     return ActionResult(

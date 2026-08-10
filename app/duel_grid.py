@@ -333,7 +333,27 @@ def start_duel_grid(
     return ActionResult(True, text, payload={"duel_id": duel_id}), session
 
 
-def _end_duel(storage: Storage, session: DuelGridSession, winner_id: int, loser_id: int, note: str) -> ActionResult:
+def _end_duel(
+    storage: Storage,
+    session: DuelGridSession,
+    winner_id: int,
+    loser_id: int,
+    note: str,
+    *,
+    expected_seq: int | None = None,
+) -> ActionResult:
+    if session.finished:
+        return ActionResult(
+            True,
+            note,
+            payload={
+                "duel_done": True,
+                "winner_id": session.winner_id,
+                "loser_id": session.loser_id,
+                "duel_id": session.duel_id,
+                "message_ids": {str(k): int(v) for k, v in session.message_ids.items()},
+            },
+        )
     winner_hp = session.hp.get(str(winner_id))
     if winner_hp is not None:
         sync_session_hp_to_db(storage, winner_id, int(winner_hp))
@@ -341,7 +361,30 @@ def _end_duel(storage: Storage, session: DuelGridSession, winner_id: int, loser_
     session.winner_id = winner_id
     session.loser_id = loser_id
     session.log.append(note)
-    save_duel_session(storage, session)
+    seq = int(expected_seq if expected_seq is not None else session.turn_seq)
+    if expected_seq is not None:
+        if not _save_if_turn_ok(storage, session, seq):
+            raw = storage.get_meta(_session_key(session.duel_id))
+            if raw:
+                try:
+                    fresh = DuelGridSession.from_dict(json.loads(raw))
+                    if fresh.finished:
+                        return ActionResult(
+                            True,
+                            note,
+                            payload={
+                                "duel_done": True,
+                                "winner_id": fresh.winner_id,
+                                "loser_id": fresh.loser_id,
+                                "duel_id": fresh.duel_id,
+                                "message_ids": {str(k): int(v) for k, v in fresh.message_ids.items()},
+                            },
+                        )
+                except Exception:
+                    pass
+            return ActionResult(False, STALE_TURN_MESSAGE)
+    else:
+        save_duel_session(storage, session)
     win_text, lose_text = _finalize_duel_rewards(storage, winner_id, loser_id)
     message_ids = {str(k): int(v) for k, v in session.message_ids.items()}
     clear_duel_session(storage, session)
@@ -362,7 +405,7 @@ def _end_duel(storage: Storage, session: DuelGridSession, winner_id: int, loser_
     return ActionResult(True, note, payload=payload)
 
 
-def _end_duel_wave(storage: Storage, session: DuelGridSession, note: str) -> ActionResult:
+def _end_duel_wave(storage: Storage, session: DuelGridSession, note: str, *, expected_seq: int | None = None) -> ActionResult:
     """Оба проиграли волне — победитель с большим HP (или ничья → challenger wins by HP tie)."""
     c_hp = session.hp.get(str(session.challenger_id), 0)
     t_hp = session.hp.get(str(session.target_id), 0)
@@ -372,10 +415,10 @@ def _end_duel_wave(storage: Storage, session: DuelGridSession, note: str) -> Act
         winner_id, loser_id = session.target_id, session.challenger_id
     else:
         winner_id, loser_id = session.challenger_id, session.target_id
-    return _end_duel(storage, session, winner_id, loser_id, note)
+    return _end_duel(storage, session, winner_id, loser_id, note, expected_seq=expected_seq)
 
 
-def _check_hp_end(storage: Storage, session: DuelGridSession) -> ActionResult | None:
+def _check_hp_end(storage: Storage, session: DuelGridSession, expected_seq: int) -> ActionResult | None:
     alive = [pid for pid in (session.challenger_id, session.target_id) if session.hp.get(str(pid), 0) > 0]
     if len(alive) == 1:
         winner_id = alive[0]
@@ -386,10 +429,17 @@ def _check_hp_end(storage: Storage, session: DuelGridSession) -> ActionResult | 
             winner_id,
             loser_id,
             f"{h(storage.get_character(winner_id).nickname if storage.get_character(winner_id) else str(winner_id))} победил — HP противника 0.",
+            expected_seq=expected_seq,
         )
     if len(alive) == 0:
-        return _end_duel_wave(storage, session, "Оба бойца пали.")
+        return _end_duel_wave(storage, session, "Оба бойца пали.", expected_seq=expected_seq)
     return None
+
+
+def _after_turn_mutants(storage: Storage, session: DuelGridSession, expected_seq: int) -> ActionResult | None:
+    _move_mutants(session)
+    session.log.extend(_mutants_attack(session, storage))
+    return _check_hp_end(storage, session, expected_seq)
 
 
 def _occupied(session: DuelGridSession, *, exclude: int | None = None) -> set[tuple[int, int]]:
@@ -482,12 +532,6 @@ def _mutants_attack(session: DuelGridSession, storage: Storage) -> list[str]:
     return notes
 
 
-def _after_turn_mutants(storage: Storage, session: DuelGridSession) -> ActionResult | None:
-    _move_mutants(session)
-    session.log.extend(_mutants_attack(session, storage))
-    return _check_hp_end(storage, session)
-
-
 def _start_wave_mode(session: DuelGridSession) -> None:
     if session.wave_mode:
         return
@@ -498,7 +542,7 @@ def _start_wave_mode(session: DuelGridSession) -> None:
     session.log.append("⏱ Время вышло! Бесконечная волна мутантов — бегите или погибните!")
 
 
-def _check_match_timeout(storage: Storage, session: DuelGridSession) -> ActionResult | None:
+def _check_match_timeout(storage: Storage, session: DuelGridSession, expected_seq: int) -> ActionResult | None:
     if session.wave_mode:
         return None
     deadline = _parse_deadline(session.match_deadline)
@@ -509,7 +553,7 @@ def _check_match_timeout(storage: Storage, session: DuelGridSession) -> ActionRe
     if c_alive and t_alive:
         _start_wave_mode(session)
         session.log.extend(_mutants_attack(session, storage))
-        return _check_hp_end(storage, session)
+        return _check_hp_end(storage, session, expected_seq)
     return None
 
 
@@ -539,15 +583,18 @@ def duel_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         dmg = apply_incoming_damage(random.randint(8, 14), player, min_damage=3)
         session.hp[str(telegram_id)] = max(0, session.hp.get(str(telegram_id), 0) - dmg)
         session.log.append(f"{h(player.nickname)} задел мутанта: −{dmg} HP.")
-    done = _check_hp_end(storage, session)
+    done = _check_hp_end(storage, session, turn_seq)
     if done:
         return done
-    match_done = _check_match_timeout(storage, session)
+    match_done = _check_match_timeout(storage, session, turn_seq)
     if match_done:
         if session.finished:
             return match_done
+        if not _save_if_turn_ok(storage, session, turn_seq):
+            return ActionResult(False, STALE_TURN_MESSAGE)
+        return match_done
     _advance_turn(session)
-    done = _after_turn_mutants(storage, session)
+    done = _after_turn_mutants(storage, session, turn_seq)
     if done:
         return done
     if not _save_if_turn_ok(storage, session, turn_seq):
@@ -585,7 +632,7 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     if hit_cell is None:
         session.log.append(f"{h(attacker.nickname)} промахнулся.")
         _advance_turn(session)
-        done = _after_turn_mutants(storage, session)
+        done = _after_turn_mutants(storage, session, turn_seq)
         if done:
             return done
         if not _save_if_turn_ok(storage, session, turn_seq):
@@ -605,7 +652,7 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
         if cover_blocks_shot(hit_cell, cover_set):
             session.log.append(f"{h(defender.nickname)} укрылся — промах!")
             _advance_turn(session)
-            done = _after_turn_mutants(storage, session)
+            done = _after_turn_mutants(storage, session, turn_seq)
             if done:
                 return done
             if not _save_if_turn_ok(storage, session, turn_seq):
@@ -616,15 +663,19 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
         session.hp[str(defender_id)] = max(0, session.hp.get(str(defender_id), 0) - dmg)
         session.log.append(f"{h(attacker.nickname)} попал в {h(defender.nickname)}: −{dmg} HP.")
         note = f"Попадание: −{dmg} HP."
-        done = _check_hp_end(storage, session)
+        done = _check_hp_end(storage, session, turn_seq)
         if done:
             return done
 
-    match_done = _check_match_timeout(storage, session)
-    if match_done and session.finished:
+    match_done = _check_match_timeout(storage, session, turn_seq)
+    if match_done:
+        if session.finished:
+            return match_done
+        if not _save_if_turn_ok(storage, session, turn_seq):
+            return ActionResult(False, STALE_TURN_MESSAGE)
         return match_done
     _advance_turn(session)
-    done = _after_turn_mutants(storage, session)
+    done = _after_turn_mutants(storage, session, turn_seq)
     if done:
         return done
     if not _save_if_turn_ok(storage, session, turn_seq):
@@ -652,7 +703,7 @@ def duel_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     session.medkits_used[str(telegram_id)] = True
     session.log.append(f"{h(player.nickname)} использовал аптечку.")
     _advance_turn(session)
-    done = _after_turn_mutants(storage, session)
+    done = _after_turn_mutants(storage, session, turn_seq)
     if done:
         if not _save_if_turn_ok(storage, session, turn_seq):
             return ActionResult(False, STALE_TURN_MESSAGE)
@@ -702,14 +753,17 @@ def process_duel_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
         if session.finished:
             continue
 
-        match_done = _check_match_timeout(storage, session)
+        turn_seq = session.turn_seq
+        match_done = _check_match_timeout(storage, session, turn_seq)
         if match_done:
             if session.finished:
                 if str(duel_id) not in finished:
                     finished.add(str(duel_id))
                     outcomes.append((session.challenger_id, match_done))
                 continue
-            save_duel_session(storage, session)
+            if not _save_if_turn_ok(storage, session, turn_seq):
+                still_active.append(str(duel_id))
+                continue
             still_active.append(str(duel_id))
             outcomes.append((session.active_player(), ActionResult(True, "Волна мутантов!", payload={"duel_active": True})))
             continue
@@ -723,7 +777,7 @@ def process_duel_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
         turn_seq = session.turn_seq
         session.log.append(f"Тайм-аут хода {h(player.nickname) if player else active}.")
         _advance_turn(session)
-        done = _after_turn_mutants(storage, session)
+        done = _after_turn_mutants(storage, session, turn_seq)
         if done:
             if str(duel_id) not in finished:
                 finished.add(str(duel_id))

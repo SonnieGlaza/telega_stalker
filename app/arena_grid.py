@@ -389,10 +389,34 @@ def _finalize_arena_reward(storage: Storage, session: ArenaGridSession, *, reaso
     )
 
 
-def _end_session(storage: Storage, session: ArenaGridSession, result: ActionResult) -> ActionResult:
+def _end_session(
+    storage: Storage,
+    session: ArenaGridSession,
+    result: ActionResult,
+    *,
+    expected_seq: int | None = None,
+) -> ActionResult:
+    if session.finished:
+        payload = dict(result.payload or {})
+        payload["message_id"] = session.message_id
+        return ActionResult(result.ok, result.text, payload=payload)
     finalize_solo_tactical_hp(storage, session.telegram_id, session.hp, cause="arena")
     session.finished = True
-    save_arena_session(storage, session)
+    if expected_seq is not None:
+        if not _save_turn(storage, session, expected_seq):
+            raw = storage.get_meta(_session_key(session.session_id))
+            if raw:
+                try:
+                    fresh = ArenaGridSession.from_dict(json.loads(raw))
+                    if fresh.finished:
+                        fp = dict(result.payload or {})
+                        fp["message_id"] = fresh.message_id
+                        return ActionResult(result.ok, result.text, payload=fp)
+                except Exception:
+                    pass
+            return ActionResult(False, STALE_TURN_MESSAGE)
+    else:
+        save_arena_session(storage, session)
     msg_id = session.message_id
     clear_arena_session(storage, session)
     payload = dict(result.payload or {})
@@ -412,7 +436,7 @@ def _check_wave_clear(session: ArenaGridSession) -> bool:
     return len(session.hostiles) == 0
 
 
-def _after_turn(storage: Storage, session: ArenaGridSession) -> ActionResult | None:
+def _after_turn(storage: Storage, session: ArenaGridSession, expected_seq: int) -> ActionResult | None:
     if session.hp <= 0:
         player = storage.get_character(session.telegram_id, refresh_energy=False)
         name = h(player.nickname) if player else str(session.telegram_id)
@@ -420,6 +444,7 @@ def _after_turn(storage: Storage, session: ArenaGridSession) -> ActionResult | N
             storage,
             session,
             _finalize_arena_reward(storage, session, reason=f"{name} выведен из строя."),
+            expected_seq=expected_seq,
         )
     wave_advanced = False
     while _check_wave_clear(session):
@@ -434,6 +459,7 @@ def _after_turn(storage: Storage, session: ArenaGridSession) -> ActionResult | N
             storage,
             session,
             _finalize_arena_reward(storage, session, reason=f"{name} пал на волне {session.wave}."),
+            expected_seq=expected_seq,
         )
     return None
 
@@ -511,7 +537,7 @@ def arena_move(storage: Storage, telegram_id: int, direction: str) -> ActionResu
         session.player_pos = nxt
     session.turn_seq += 1
     session.turn_deadline = _deadline_iso(ARENA_TURN_SECONDS)
-    done = _after_turn(storage, session)
+    done = _after_turn(storage, session, turn_seq)
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
@@ -549,7 +575,7 @@ def arena_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionRes
         session.log.append("Промах.")
     session.turn_seq += 1
     session.turn_deadline = _deadline_iso(ARENA_TURN_SECONDS)
-    done = _after_turn(storage, session)
+    done = _after_turn(storage, session, turn_seq)
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
@@ -572,7 +598,7 @@ def arena_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     session.log.append(f"Аптечка арены: +{heal} HP (осталось {session.arena_medkits}).")
     session.turn_seq += 1
     session.turn_deadline = _deadline_iso(ARENA_TURN_SECONDS)
-    done = _after_turn(storage, session)
+    done = _after_turn(storage, session, turn_seq)
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
@@ -639,7 +665,7 @@ def process_arena_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResul
         session.turn_seq += 1
         session.turn_deadline = _deadline_iso(ARENA_TURN_SECONDS)
         session.log.append("⏱ Время хода истекло — пропуск.")
-        done = _after_turn(storage, session)
+        done = _after_turn(storage, session, turn_seq)
         if done:
             outcomes.append((session.telegram_id, done))
             continue

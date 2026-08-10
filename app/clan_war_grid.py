@@ -456,9 +456,37 @@ def _finalize_fail(storage: Storage, session: ClanWarGridSession, reason: str) -
     return ActionResult(False, text, payload={"cwar_done": True, "success": False, "member_ids": session.player_ids})
 
 
-def _end_session(storage: Storage, session: ClanWarGridSession, result: ActionResult) -> ActionResult:
+def _end_session(
+    storage: Storage,
+    session: ClanWarGridSession,
+    result: ActionResult,
+    *,
+    expected_seq: int | None = None,
+) -> ActionResult:
+    if session.finished:
+        payload = dict(result.payload or {})
+        payload["message_ids"] = dict(session.message_ids)
+        payload["session_id"] = session.session_id
+        return ActionResult(result.ok, result.text, payload=payload)
     payload = dict(result.payload or {})
     commit_deaths = bool(payload.get("success"))
+    session.finished = True
+    if expected_seq is not None:
+        if not _save_turn(storage, session, expected_seq):
+            raw = storage.get_meta(_session_key(session.session_id))
+            if raw:
+                try:
+                    fresh = ClanWarGridSession.from_dict(json.loads(raw))
+                    if fresh.finished:
+                        fp = dict(result.payload or {})
+                        fp["message_ids"] = dict(fresh.message_ids)
+                        fp["session_id"] = fresh.session_id
+                        return ActionResult(result.ok, result.text, payload=fp)
+                except Exception:
+                    pass
+            return ActionResult(False, STALE_TURN_MESSAGE)
+    else:
+        save_cwar_session(storage, session)
     dead_ids, death_causes, death_killers = finalize_group_tactical_hp(
         storage,
         session,
@@ -470,8 +498,6 @@ def _end_session(storage: Storage, session: ClanWarGridSession, result: ActionRe
         payload["death_causes"] = death_causes
         payload["death_killers"] = death_killers
     message_ids = dict(session.message_ids)
-    session.finished = True
-    save_cwar_session(storage, session)
     clear_cwar_session(storage, session)
     _unregister_active(storage, session.session_id)
     payload["message_ids"] = message_ids
@@ -543,22 +569,32 @@ def start_clan_war_grid(
     return ActionResult(True, text, payload={"cwar_started": True, "session_id": session_id}), session
 
 
-def _check_squad_wiped(storage: Storage, session: ClanWarGridSession) -> ActionResult | None:
+def _check_squad_wiped(storage: Storage, session: ClanWarGridSession, expected_seq: int | None = None) -> ActionResult | None:
     alive = [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
     if not alive:
-        return _end_session(storage, session, _finalize_fail(storage, session, "Все бойцы выведены из строя."))
+        return _end_session(
+            storage,
+            session,
+            _finalize_fail(storage, session, "Все бойцы выведены из строя."),
+            expected_seq=expected_seq,
+        )
     return None
 
 
-def _check_end(storage: Storage, session: ClanWarGridSession) -> ActionResult | None:
-    wiped = _check_squad_wiped(storage, session)
+def _check_end(storage: Storage, session: ClanWarGridSession, expected_seq: int | None = None) -> ActionResult | None:
+    wiped = _check_squad_wiped(storage, session, expected_seq)
     if wiped:
         return wiped
     deadline = _parse_deadline(session.match_deadline)
     if deadline and _utc_now() > deadline:
-        return _end_session(storage, session, _finalize_fail(storage, session, "Время штурма истекло."))
+        return _end_session(
+            storage,
+            session,
+            _finalize_fail(storage, session, "Время штурма истекло."),
+            expected_seq=expected_seq,
+        )
     if _check_capture(session):
-        return _end_session(storage, session, _finalize_success(storage, session))
+        return _end_session(storage, session, _finalize_success(storage, session), expected_seq=expected_seq)
     return None
 
 
@@ -588,9 +624,9 @@ def _advance(session: ClanWarGridSession) -> None:
     session.turn_deadline = _deadline_iso(CWAR_TURN_SECONDS)
 
 
-def _after_player_turn(storage: Storage, session: ClanWarGridSession) -> ActionResult | None:
+def _after_player_turn(storage: Storage, session: ClanWarGridSession, expected_seq: int) -> ActionResult | None:
     session.log.extend(_hostile_turn(storage, session))
-    return _check_end(storage, session)
+    return _check_end(storage, session, expected_seq)
 
 
 def cwar_move(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
@@ -622,11 +658,11 @@ def cwar_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         dmg = apply_incoming_damage(random.randint(8, 14), ch, min_damage=3)
         session.hp[str(telegram_id)] = max(0, session.hp.get(str(telegram_id), 0) - dmg)
         session.log.append(f"{h(ch.nickname)} схватился с защитником: −{dmg} HP.")
-    done = _check_squad_wiped(storage, session)
+    done = _check_squad_wiped(storage, session, turn_seq)
     if done:
         return done
     _advance(session)
-    done = _after_player_turn(storage, session)
+    done = _after_player_turn(storage, session, turn_seq)
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
@@ -670,11 +706,11 @@ def cwar_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
                 note = "Попадание!"
     else:
         session.log.append(f"{h(attacker.nickname)} промахнулся.")
-    done = _check_squad_wiped(storage, session)
+    done = _check_squad_wiped(storage, session, turn_seq)
     if done:
         return done
     _advance(session)
-    done = _after_player_turn(storage, session)
+    done = _after_player_turn(storage, session, turn_seq)
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
@@ -702,7 +738,7 @@ def cwar_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     session.medkits_used[str(telegram_id)] = True
     session.log.append(f"{h(player.nickname)} использовал аптечку.")
     _advance(session)
-    done = _after_player_turn(storage, session)
+    done = _after_player_turn(storage, session, turn_seq)
     if done:
         if not _save_turn(storage, session, turn_seq):
             return ActionResult(False, STALE_TURN_MESSAGE)
@@ -761,7 +797,7 @@ def process_cwar_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
         turn_seq = session.turn_seq
         session.log.append("Тайм-аут хода.")
         _advance(session)
-        done = _after_player_turn(storage, session)
+        done = _after_player_turn(storage, session, turn_seq)
         if done:
             outcomes.append((active, done))
             continue

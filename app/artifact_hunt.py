@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import random
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,8 @@ HUNT_ANOMALY_ICON_DIAMETER = round(MISSION_ICON_GRID_DIAMETER * HUNT_GRID_CELL_P
 
 
 HUNT_META_PREFIX = "artifact_hunt:"
+HUNT_ACTIVE_IDS_META = "artifact_hunt:active_ids"
+HUNT_IDLE_HOURS = 4
 HUNT_GRID_SIZE = 6
 HUNT_MAX_MOVES = 24
 HUNT_RAD_EVERY_STEPS = 2
@@ -244,6 +247,8 @@ class HuntSession:
     rad_gained: int
     grid: int = HUNT_GRID_SIZE
     max_moves: int = HUNT_MAX_MOVES
+    turn_seq: int = 0
+    started_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -260,6 +265,8 @@ class HuntSession:
             "rad_gained": self.rad_gained,
             "grid": self.grid,
             "max_moves": self.max_moves,
+            "turn_seq": self.turn_seq,
+            "started_at": self.started_at,
         }
 
     @classmethod
@@ -278,7 +285,13 @@ class HuntSession:
             rad_gained=int(raw.get("rad_gained") or 0),
             grid=int(raw.get("grid") or HUNT_GRID_SIZE),
             max_moves=int(raw.get("max_moves") or HUNT_MAX_MOVES),
+            turn_seq=int(raw.get("turn_seq") or 0),
+            started_at=raw.get("started_at"),
         )
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _hunt_meta_key(telegram_id: int) -> str:
@@ -304,10 +317,117 @@ def get_hunt_session(storage: Storage, telegram_id: int) -> HuntSession | None:
 
 def save_hunt_session(storage: Storage, telegram_id: int, session: HuntSession) -> None:
     storage.set_meta(_hunt_meta_key(telegram_id), json.dumps(session.to_dict(), ensure_ascii=False))
+    _register_active_hunt(storage, telegram_id)
 
 
 def clear_hunt_session(storage: Storage, telegram_id: int) -> None:
     storage.delete_meta(_hunt_meta_key(telegram_id))
+    _unregister_active_hunt(storage, telegram_id)
+
+
+def _register_active_hunt(storage: Storage, telegram_id: int) -> None:
+    raw = storage.get_meta(HUNT_ACTIVE_IDS_META)
+    ids: list[int] = []
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                ids = [int(x) for x in parsed]
+        except json.JSONDecodeError:
+            ids = []
+    tid = int(telegram_id)
+    if tid not in ids:
+        ids.append(tid)
+    storage.set_meta(HUNT_ACTIVE_IDS_META, json.dumps(ids, ensure_ascii=False))
+
+
+def _unregister_active_hunt(storage: Storage, telegram_id: int) -> None:
+    raw = storage.get_meta(HUNT_ACTIVE_IDS_META)
+    if not raw:
+        return
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            return
+        ids = [int(x) for x in parsed if int(x) != int(telegram_id)]
+    except json.JSONDecodeError:
+        return
+    if ids:
+        storage.set_meta(HUNT_ACTIVE_IDS_META, json.dumps(ids, ensure_ascii=False))
+    else:
+        storage.delete_meta(HUNT_ACTIVE_IDS_META)
+
+
+def list_active_hunt_player_ids(storage: Storage) -> list[int]:
+    raw = storage.get_meta(HUNT_ACTIVE_IDS_META)
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [int(x) for x in parsed]
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
+def _save_hunt_if_turn_ok(
+    storage: Storage,
+    telegram_id: int,
+    session: HuntSession,
+    expected_seq: int,
+) -> bool:
+    from app.tactical_turn import save_turn_if_seq_ok
+
+    tid = int(telegram_id)
+    return save_turn_if_seq_ok(
+        storage,
+        meta_key=_hunt_meta_key(tid),
+        session=session,
+        from_dict=HuntSession.from_dict,
+        save_fn=lambda st, sess: save_hunt_session(st, tid, sess),
+        expected_seq=expected_seq,
+    )
+
+
+def check_hunt_session_timeout(storage: Storage, telegram_id: int) -> ActionResult | None:
+    session = get_hunt_session(storage, telegram_id)
+    if session is None:
+        _unregister_active_hunt(storage, telegram_id)
+        return None
+    if session.moves >= session.max_moves:
+        clear_hunt_session(storage, telegram_id)
+        return ActionResult(
+            False,
+            f"Время вылазки вышло на «{session.location}».\n"
+            f"Сигнал {session.circles_filled}/{session.circles_needed}, арт не взят.\n"
+            f"Рад за вылазку +{session.rad_gained}.",
+            payload={"hunt_active": False, "hunt_done": True, "hunt_timeout": True},
+        )
+    if session.started_at:
+        try:
+            started = datetime.fromisoformat(str(session.started_at))
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+        except ValueError:
+            started = _utc_now()
+        if _utc_now() > started + timedelta(hours=HUNT_IDLE_HOURS):
+            clear_hunt_session(storage, telegram_id)
+            return ActionResult(
+                False,
+                f"Поиск артефактов на «{session.location}» заброшен — слишком долго без движения.",
+                payload={"hunt_active": False, "hunt_done": True, "hunt_timeout": True},
+            )
+    return None
+
+
+def process_hunt_timeouts(storage: Storage) -> list[tuple[int, ActionResult]]:
+    outcomes: list[tuple[int, ActionResult]] = []
+    for telegram_id in list_active_hunt_player_ids(storage):
+        result = check_hunt_session_timeout(storage, telegram_id)
+        if result is not None:
+            outcomes.append((telegram_id, result))
+    return outcomes
 
 
 def _pick_best_detector(character: Character) -> tuple[str, str, int] | None:
@@ -382,6 +502,7 @@ def _build_session(character: Character, detector_key: str, detector_name: str) 
         moves=0,
         steps=0,
         rad_gained=0,
+        started_at=_utc_now().isoformat(),
     )
     # Стартовый замер сигнала на месте появления.
     session.circles_filled = min(
@@ -544,17 +665,28 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
     session.moves += 1
     session.steps += 1
 
-    # Радиация: каждые 2 шага +1, каждые 6 ходов +5.
     rad_add = 0
     if session.steps % HUNT_RAD_EVERY_STEPS == 0:
         rad_add += HUNT_RAD_PER_TICK
     if session.moves % HUNT_MINUTE_MOVES == 0:
         rad_add += HUNT_RAD_PER_MINUTE
+
+    gain = _signal_gain(session.player, session.artifact)
+    if gain > 0:
+        session.circles_filled = min(session.circles_needed, session.circles_filled + gain)
+
+    expected_seq = session.turn_seq
+    session.turn_seq = expected_seq + 1
+    if not _save_hunt_if_turn_ok(storage, telegram_id, session, expected_seq):
+        from app.tactical_combat import STALE_TURN_MESSAGE
+
+        return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
+
     if rad_add > 0:
         storage.adjust_survival(telegram_id, radiation_delta=rad_add)
         session.rad_gained += rad_add
+        save_hunt_session(storage, telegram_id, session)
 
-    # Аномалия = смерть.
     if session.player in set(session.anomalies):
         clear_hunt_session(storage, telegram_id)
         storage.change_health(telegram_id, -10_000)
@@ -573,12 +705,7 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             },
         )
 
-    gain = _signal_gain(session.player, session.artifact)
-    if gain > 0:
-        session.circles_filled = min(session.circles_needed, session.circles_filled + gain)
-
     if session.circles_filled >= session.circles_needed:
-        save_hunt_session(storage, telegram_id, session)  # на случай сбоя до clear
         return _finish_success(storage, telegram_id, session)
 
     if session.moves >= session.max_moves:
@@ -591,7 +718,6 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             payload={"hunt_active": False, "hunt_done": True},
         )
 
-    save_hunt_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = _render_for_player(storage, telegram_id, session, player)
     note = f"Сигнал +{gain}." if gain else "Тишина в эфире."

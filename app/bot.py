@@ -33,6 +33,7 @@ from app.artifact_hunt import (
     get_hunt_session,
     hunt_status_caption,
     move_artifact_hunt,
+    process_hunt_timeouts,
     render_hunt_for_player,
     start_artifact_hunt,
 )
@@ -41,6 +42,7 @@ from app.quest_mission import (
     get_mission_session,
     mission_status_caption,
     move_quest_mission,
+    process_quest_timeouts,
     render_mission_for_player,
     use_mission_medkit,
 )
@@ -1850,6 +1852,9 @@ def resolve_dead_player(
     if player.health <= 0:
         if _active_tactical_field_hp(storage, telegram_id) is not None:
             return None
+        from app.player_busy import _clear_solo_activity
+
+        _clear_solo_activity(storage, telegram_id)
         return storage.get_character(telegram_id, refresh_energy=False)
 
     from app.tactical_hp import commit_tactical_death
@@ -4291,7 +4296,8 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
     telegram_id = callback.from_user.id
 
     player = storage.get_character(telegram_id, refresh_energy=False)
-    if player is not None and player.health <= 0:
+    dead = resolve_dead_player(storage, telegram_id, refresh_survival=False)
+    if dead is not None:
         await _ensure_death_keyboard(callback, telegram_id)
         return
 
@@ -4385,7 +4391,8 @@ async def smuggle_mission_callback(callback: CallbackQuery) -> None:
     telegram_id = callback.from_user.id
 
     player = storage.get_character(telegram_id, refresh_energy=False)
-    if player is not None and player.health <= 0:
+    dead = resolve_dead_player(storage, telegram_id, refresh_survival=False)
+    if dead is not None:
         await _ensure_death_keyboard(callback, telegram_id)
         return
 
@@ -5096,7 +5103,8 @@ async def artifact_hunt_callback(callback: CallbackQuery) -> None:
     telegram_id = callback.from_user.id
 
     player = storage.get_character(telegram_id, refresh_energy=False)
-    if player is not None and player.health <= 0:
+    dead = resolve_dead_player(storage, telegram_id, refresh_survival=False)
+    if dead is not None:
         await _ensure_death_keyboard(callback, telegram_id)
         return
 
@@ -7696,6 +7704,22 @@ async def run_bot() -> None:
                             logger.exception("Failed smuggle timeout notify to %s", tid)
                 except Exception:
                     logger.exception("Smuggle timeout tick failed")
+                try:
+                    for tid, result in process_quest_timeouts(storage):
+                        try:
+                            await bot.send_message(tid, action_result_text(tid, result.text))
+                        except Exception:
+                            logger.exception("Failed quest timeout notify to %s", tid)
+                except Exception:
+                    logger.exception("Quest timeout tick failed")
+                try:
+                    for tid, result in process_hunt_timeouts(storage):
+                        try:
+                            await bot.send_message(tid, action_result_text(tid, result.text))
+                        except Exception:
+                            logger.exception("Failed hunt timeout notify to %s", tid)
+                except Exception:
+                    logger.exception("Hunt timeout tick failed")
 
     sync_task = asyncio.create_task(periodic_snapshot_sync())
     zone_task = asyncio.create_task(periodic_zone_systems())
