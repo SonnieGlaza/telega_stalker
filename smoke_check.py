@@ -1680,10 +1680,22 @@ def run_smoke_check() -> None:
         assert idle is not None and idle.ok is False
         assert get_smuggle_session(storage, 111) is None
 
+        from app.game_logic import admin_delete_player_account
+
+        storage.create_character(999888777, "TempDeleteMe", "Мужской")
+        assert storage.character_exists(999888777)
+        storage.set_meta("quest_mission:999888777", '{"test": true}')
+        deleted = admin_delete_player_account(storage, 999888777)
+        assert deleted.ok, deleted.text
+        assert not storage.character_exists(999888777)
+        assert storage.get_meta("quest_mission:999888777") is None
+        assert not storage.is_nickname_taken("TempDeleteMe")
+
         from app.html_utils import nickname_validation_error
 
         assert nickname_validation_error("<bad>") is not None
         assert nickname_validation_error("Stalker") is None
+        assert nickname_validation_error("📋 Задания") is not None
 
         _, _, missing_callbacks = _callback_handler_coverage()
         assert not missing_callbacks, f"Missing callback handlers: {', '.join(missing_callbacks)}"

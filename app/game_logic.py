@@ -2889,6 +2889,42 @@ def _apply_money_penalty(storage: Storage, telegram_id: int, penalty: int) -> in
     return storage.drain_money(telegram_id, penalty)
 
 
+def admin_delete_player_account(storage: Storage, telegram_id: int) -> ActionResult:
+    """Полностью удалить аккаунт игрока (админ): сброс сессий, отмена лобби, удаление из БД."""
+    from app.player_busy import recover_stuck_player
+
+    tid = int(telegram_id)
+    player = storage.get_character(tid, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Персонаж не найден.")
+    nickname = player.nickname
+    faction = player.faction
+
+    recover_stuck_player(storage, tid, force_clear=True)
+    player = storage.get_character(tid, refresh_energy=False)
+    if player is not None and is_traveling(player):
+        storage.clear_travel(tid)
+
+    raids_cancelled = len(storage.cancel_all_open_raids_led_by(tid))
+    lobbies_cancelled = storage.cancel_all_open_war_lobbies_led_by(tid)
+
+    deleted = storage.delete_character_account(tid)
+    if deleted is None:
+        return ActionResult(False, "Не удалось удалить персонажа.")
+
+    parts = [
+        f"Аккаунт «{nickname}» (id {tid}) удалён.",
+        "Игрок может заново пройти /start.",
+    ]
+    if faction:
+        parts.append(f"Группировка была: {faction}.")
+    if raids_cancelled or lobbies_cancelled:
+        parts.append(
+            f"Отменено: рейдов {raids_cancelled}, военных лобби {lobbies_cancelled}."
+        )
+    return ActionResult(True, "\n".join(parts))
+
+
 def cancel_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
     character = storage.get_character(telegram_id, refresh_energy=False)
     if character is None:

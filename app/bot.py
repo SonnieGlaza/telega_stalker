@@ -920,6 +920,41 @@ async def cmd_fixme(message: Message) -> None:
     )
 
 
+@router.message(Command("deleteplayer"))
+async def admin_delete_player(message: Message, bot: Bot, command: CommandObject) -> None:
+    if not is_admin_user(message.from_user.id):
+        await message.answer("Команда только для администратора.")
+        return
+    target = (command.args or "").strip()
+    if not target:
+        await message.answer(
+            "Использование: /deleteplayer [telegram_id|прозвище]\n"
+            "Пример: /deleteplayer 8053436007"
+        )
+        return
+    storage = get_storage()
+    if target.isdigit():
+        telegram_id = int(target)
+    else:
+        telegram_id = storage.find_telegram_id_by_nickname(target)
+        if telegram_id is None:
+            await message.answer(f"Игрок «{h(target)}» не найден.")
+            return
+    from app.game_logic import admin_delete_player_account
+
+    result = admin_delete_player_account(storage, telegram_id)
+    if result.ok:
+        try:
+            await bot.send_message(
+                telegram_id,
+                "Твой аккаунт удалён администратором.\n"
+                "Чтобы начать заново — /start и выбери новое прозвище.",
+            )
+        except Exception:
+            logger.debug("Delete-player notify failed for %s", telegram_id, exc_info=True)
+    await message.answer(result.text)
+
+
 @router.message(Command("unstick"))
 async def admin_unstick_player(message: Message, bot: Bot, command: CommandObject) -> None:
     if not is_admin_user(message.from_user.id):

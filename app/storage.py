@@ -954,6 +954,113 @@ class Storage:
         self.save_snapshot()
         self.sync_gear_power(telegram_id)
 
+    def _purge_player_meta_keys(self, telegram_id: int) -> None:
+        tid = int(telegram_id)
+        exact_keys = [
+            f"quest_mission:{tid}",
+            f"smuggle_mission:{tid}",
+            f"artifact_hunt:{tid}",
+            f"smuggle:active:{tid}",
+            f"duel:grid:player:{tid}",
+            f"rgrid:player:{tid}",
+            f"cwar:player:{tid}",
+            f"arena:player:{tid}",
+            f"ncap:player:{tid}",
+            f"coop:player:{tid}",
+            f"pending_referrer:{tid}",
+            f"last_arrival_transport:{tid}",
+            f"bound_transport:{tid}",
+            f"arrival_notice:{tid}",
+            f"travel_eta_msg:{tid}",
+            f"respawn:debt:{tid}",
+            f"death:last_cause:{tid}",
+            f"death:last_killer:{tid}",
+            f"death_log:{tid}",
+            f"death_notice_sent:{tid}",
+            f"duel:pending_in:{tid}",
+            f"duel:pending_out:{tid}",
+            f"login:streak:{tid}",
+            f"login:hint_shown:{tid}",
+            f"notify:prefs:{tid}",
+            f"tutorial:seen:{tid}",
+        ]
+        like_prefixes = (
+            f"contracts:daily_done:{tid}:",
+            f"contracts:weekly_done:{tid}:",
+            f"daily:claimed:{tid}:",
+            f"clan_quest:claim:%:{tid}",
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS meta_kv (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+            for key in exact_keys:
+                conn.execute("DELETE FROM meta_kv WHERE key = ?", (key,))
+            for prefix in like_prefixes:
+                conn.execute("DELETE FROM meta_kv WHERE key LIKE ?", (f"{prefix}%",))
+            # Снять id из реестров активных сессий.
+            for registry_key in (
+                "quest_mission:active_ids",
+                "smuggle_mission:active_ids",
+                "artifact_hunt:active_ids",
+                "duel:grid:active_ids",
+            ):
+                row = conn.execute("SELECT value FROM meta_kv WHERE key = ?", (registry_key,)).fetchone()
+                if row is None:
+                    continue
+                try:
+                    parsed = json.loads(str(row["value"]))
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(parsed, list):
+                    continue
+                ids = [int(x) for x in parsed if int(x) != tid]
+                if ids:
+                    conn.execute(
+                        "INSERT INTO meta_kv(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        (registry_key, json.dumps(ids, ensure_ascii=False)),
+                    )
+                else:
+                    conn.execute("DELETE FROM meta_kv WHERE key = ?", (registry_key,))
+        self.save_snapshot()
+
+    def delete_character_account(self, telegram_id: int) -> dict[str, Any] | None:
+        """Полностью удалить аккаунт игрока. None — если персонажа не было."""
+        tid = int(telegram_id)
+        player = self.get_character(tid, refresh_energy=False)
+        if player is None:
+            return None
+        snapshot = {
+            "telegram_id": tid,
+            "nickname": player.nickname,
+            "faction": player.faction,
+        }
+        now_iso = utc_now().isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE auctions
+                SET status = 'cancelled', closed_at = ?
+                WHERE seller_id = ? AND status = 'open'
+                """,
+                (now_iso, tid),
+            )
+            conn.execute("DELETE FROM raid_members WHERE telegram_id = ?", (tid,))
+            conn.execute("DELETE FROM war_lobby_members WHERE telegram_id = ?", (tid,))
+            conn.execute("UPDATE factions SET leader_id = NULL WHERE leader_id = ?", (tid,))
+            conn.execute("DELETE FROM player_achievements WHERE telegram_id = ?", (tid,))
+            conn.execute("DELETE FROM player_stats WHERE telegram_id = ?", (tid,))
+            conn.execute("DELETE FROM pending_registrations WHERE telegram_id = ?", (tid,))
+            conn.execute("DELETE FROM characters WHERE telegram_id = ?", (tid,))
+        self._purge_player_meta_keys(tid)
+        self.save_snapshot()
+        return snapshot
+
     def is_nickname_taken(self, nickname: str, exclude_telegram_id: int | None = None) -> bool:
         normalized = (nickname or "").strip().casefold()
         if not normalized:
@@ -3372,6 +3479,22 @@ class Storage:
             done = self.cancel_raid(int(raid["id"]), leader_id)
             if done is not None:
                 cancelled.append(done)
+        return cancelled
+
+    def cancel_all_open_war_lobbies_led_by(self, leader_id: int) -> int:
+        tid = int(leader_id)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id FROM war_lobbies
+                WHERE leader_id = ? AND status = 'open'
+                """,
+                (tid,),
+            ).fetchall()
+        cancelled = 0
+        for row in rows:
+            if self.cancel_war_lobby(int(row["id"]), tid) is not None:
+                cancelled += 1
         return cancelled
 
     def get_faction_warehouse(self, faction: str) -> dict[str, int]:
