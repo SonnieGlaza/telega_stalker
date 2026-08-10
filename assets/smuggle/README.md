@@ -5,8 +5,8 @@
 | Файл | Описание |
 |------|----------|
 | `bicycle.png` | ржавый велосипед (атмосфера Зоны) |
-| `niva.png` | UAZ-452 «Буханка» из S.T.A.L.K.E.R. |
-| `truck.png` | тот же UAZ, другой кадр |
+| `niva.png` | UAZ-469 из S.T.A.L.K.E.R. (внедорожник) |
+| `truck.png` | ZIL-131 из S.T.A.L.K.E.R. (army truck) |
 | `walker.png` | fallback пешком (Tabler Icons) |
 
 Режим «пешком» — аватар персонажа (`render_avatar`).

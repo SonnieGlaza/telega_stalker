@@ -31,8 +31,8 @@ NPC_SOURCES: dict[str, tuple[Path, tuple[float, float]]] = {
 }
 
 SMUGGLE_SOURCES: dict[str, tuple[Path, tuple[float, float]]] = {
-    "niva": (REFS / "uaz452.png", (0.55, 0.55)),
-    "truck": (REFS / "uaz452.png", (0.50, 0.50)),
+    "niva": (REFS / "uaz469.png", (0.55, 0.55)),
+    "truck": (REFS / "zil131.png", (0.50, 0.52)),
     "bicycle": (REFS / "rusty_bicycle.jpg", (0.5, 0.55)),
 }
 
