@@ -1617,6 +1617,33 @@ class Storage:
             )
         self.save_snapshot()
 
+    def set_travel_arrives_at(self, telegram_id: int, arrives_at: datetime) -> bool:
+        """Перезаписать ETA активного перехода."""
+        arrives_iso = arrives_at.isoformat()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT travel_destination
+                FROM characters
+                WHERE telegram_id = ?
+                  AND travel_destination IS NOT NULL
+                  AND TRIM(travel_destination) != ''
+                """,
+                (telegram_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            conn.execute(
+                """
+                UPDATE characters
+                SET travel_arrives_at = ?
+                WHERE telegram_id = ?
+                """,
+                (arrives_iso, telegram_id),
+            )
+        self.save_snapshot()
+        return True
+
     def list_active_travels(self) -> list[tuple[int, str, datetime, str]]:
         """Активные переходы: (telegram_id, destination, arrives_at, transport)."""
         now = utc_now()

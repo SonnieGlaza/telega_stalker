@@ -485,6 +485,29 @@ async def publish_travel_live_eta(bot: Bot, telegram_id: int) -> None:
         await upsert_travel_eta_message(bot, telegram_id, status)
 
 
+def _apply_startup_travel_eta_overrides(storage: Storage) -> None:
+    """Разовые правки ETA при старте бота (если игрок уже в пути)."""
+    from datetime import timedelta
+
+    from app.storage import utc_now
+
+    overrides = {
+        8327561939: 1,
+    }
+    for telegram_id, seconds in overrides.items():
+        player = storage.get_character(telegram_id, refresh_energy=False)
+        if player is None or not is_traveling(player):
+            continue
+        arrives_at = utc_now() + timedelta(seconds=max(0, seconds))
+        if storage.set_travel_arrives_at(telegram_id, arrives_at):
+            logger.info(
+                "Travel ETA override on startup: %s -> %s sec (-> %s)",
+                telegram_id,
+                seconds,
+                player.travel_destination,
+            )
+
+
 def _is_stale_callback_error(exc: TelegramBadRequest) -> bool:
     message = str(exc).lower()
     return "query is too old" in message or "query id is invalid" in message
@@ -1258,6 +1281,56 @@ async def cmd_give(message: Message) -> None:
         f"Выдано {amount} RU игроку {target.nickname} ({target_telegram_id}).\n"
         f"Новый баланс: {updated_balance} RU."
     )
+
+
+@router.message(Command("settravel"))
+async def admin_set_travel_eta(message: Message, bot: Bot) -> None:
+    if not is_admin_user(message.from_user.id):
+        await message.answer("Команда доступна только администратору.")
+        return
+
+    parts = (message.text or "").strip().split()
+    if len(parts) != 3:
+        await message.answer("Использование: /settravel [telegram_id] [seconds]")
+        return
+
+    try:
+        target_telegram_id = int(parts[1])
+        seconds = int(parts[2])
+    except ValueError:
+        await message.answer("Telegram ID и seconds должны быть целыми числами.")
+        return
+
+    if seconds < 0:
+        await message.answer("Секунды не могут быть отрицательными.")
+        return
+
+    storage = get_storage()
+    target = storage.get_character(target_telegram_id, refresh_energy=False)
+    if target is None:
+        await message.answer("Игрок с таким Telegram ID не найден.")
+        return
+    if not is_traveling(target):
+        await message.answer(
+            f"«{target.nickname}» сейчас не в пути "
+            f"(локация: {target.location})."
+        )
+        return
+
+    from datetime import timedelta
+
+    from app.storage import utc_now
+
+    arrives_at = utc_now() + timedelta(seconds=seconds)
+    if not storage.set_travel_arrives_at(target_telegram_id, arrives_at):
+        await message.answer("Не удалось обновить время в пути.")
+        return
+
+    await message.answer(
+        f"Время в пути для {target.nickname} ({target_telegram_id}): {seconds} сек.\n"
+        f"Маршрут → «{target.travel_destination}»."
+    )
+    await publish_travel_live_eta(bot, target_telegram_id)
 
 
 @router.message(Command("leader"))
@@ -7017,6 +7090,8 @@ async def run_bot() -> None:
             logger.info("Backfilled gear_power for %s characters", synced)
     except Exception:
         logger.exception("gear_power backfill failed")
+
+    _apply_startup_travel_eta_overrides(storage)
 
     async def periodic_snapshot_sync() -> None:
         while True:
