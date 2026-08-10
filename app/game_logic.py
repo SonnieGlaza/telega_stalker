@@ -8217,6 +8217,21 @@ def _finalize_smuggling_roll(storage: Storage, telegram_id: int, active: dict[st
     )
 
 
+def _apply_smuggling_arrival(storage: Storage, telegram_id: int, active: dict[str, Any]) -> None:
+    """Перенести игрока на точку сдачи после тактического рейса (без travel_to)."""
+    destination = str(active.get("destination") or "").strip()
+    if not destination:
+        return
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.location == destination:
+        return
+    storage.set_location(telegram_id, destination)
+    storage._set_pending_arrival_notice(telegram_id, destination)
+    transport = str(active.get("transport") or "").strip()
+    if transport:
+        storage.set_last_arrival_transport(telegram_id, transport)
+
+
 def complete_smuggling_delivery(storage: Storage, telegram_id: int) -> str | None:
     """Завершить тактический рейс: бросок на успешную сдачу."""
     from app.smuggle_mission import clear_smuggle_session
@@ -8224,6 +8239,7 @@ def complete_smuggling_delivery(storage: Storage, telegram_id: int) -> str | Non
     active = get_active_smuggling(storage, telegram_id)
     if active is None:
         return None
+    _apply_smuggling_arrival(storage, telegram_id, active)
     clear_smuggle_session(storage, telegram_id)
     clear_active_smuggling(storage, telegram_id)
     return _finalize_smuggling_roll(storage, telegram_id, active)
