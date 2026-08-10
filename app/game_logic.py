@@ -4946,12 +4946,20 @@ def travel_status_with_smuggle(storage: Storage, telegram_id: int) -> str | None
         return None
     base = travel_status_text(player)
     active = get_active_smuggling(storage, telegram_id)
-    if base is None and active is None:
+    from app.smuggle_mission import get_smuggle_session
+
+    grid = get_smuggle_session(storage, telegram_id)
+    if base is None and active is None and grid is None:
         return None
     parts: list[str] = []
     if base:
         parts.append(base)
-    if active and is_traveling(player):
+    if grid is not None:
+        parts.append(
+            f"🚚 Контрабанда → «{grid.destination}» "
+            f"(маршрут {grid.route_index}/{len(grid.route)}, шанс ~{grid.success_chance}%)."
+        )
+    elif active and is_traveling(player):
         chance = int(active.get("success_chance") or 0)
         parts.append(f"🚚 Контрабанда на борту (шанс доставки ~{chance}%).")
     return "\n".join(parts) if parts else None
@@ -8438,14 +8446,18 @@ def start_smuggling_run(
 
 def abandon_smuggling_run(storage: Storage, telegram_id: int) -> ActionResult:
     """Сбросить груз и тактический рейс."""
-    from app.smuggle_mission import clear_smuggle_session
+    from app.smuggle_mission import clear_smuggle_session, get_smuggle_session
 
     active = get_active_smuggling(storage, telegram_id)
-    clear_smuggle_session(storage, telegram_id)
-    if active is None:
+    session = get_smuggle_session(storage, telegram_id)
+    if active is None and session is None:
         return ActionResult(False, "Активного рейса контрабанды нет.")
+    dest = str(
+        (active or {}).get("destination")
+        or (session.destination if session is not None else "?")
+    )
+    clear_smuggle_session(storage, telegram_id)
     clear_active_smuggling(storage, telegram_id)
-    dest = str(active.get("destination") or "?")
     return ActionResult(
         True,
         f"Груз сброшен — рейс на «{dest}» отменён.",

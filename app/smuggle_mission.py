@@ -20,7 +20,6 @@ from app.game_logic import (
     clear_active_smuggling,
     complete_smuggling_delivery,
     fail_smuggling_delivery,
-    get_active_smuggling,
     remember_death_cause,
 )
 from app.mission_icons import ANOMALY_ICON_KEY, MISSION_ICON_GRID_DIAMETER, mission_icon_image
@@ -859,7 +858,6 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
         return dead
 
     if _route_complete(session):
-        clear_smuggle_session(storage, telegram_id)
         delivery = complete_smuggling_delivery(storage, telegram_id) or "Рейс завершён."
         return ActionResult(
             True,
@@ -868,7 +866,6 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
         )
 
     if session.moves >= session.max_moves:
-        clear_smuggle_session(storage, telegram_id)
         fail_text = fail_smuggling_delivery(storage, telegram_id, "Время рейса вышло — ограбили.")
         return ActionResult(False, fail_text, payload={"mission_active": False, "mission_done": True})
 

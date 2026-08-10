@@ -966,6 +966,7 @@ def run_smoke_check() -> None:
         after_smuggle = storage.get_character(111, refresh_energy=False)
         assert after_smuggle is not None
         assert after_smuggle.location == "Болото"
+        assert storage.pop_arrival_notice(111) == "Болото"
         assert abandon_smuggling_run(storage, 111).ok is False
 
         # Character career stats.
