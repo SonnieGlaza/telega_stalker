@@ -1,12 +1,14 @@
 # Иконки транспорта для тактической контрабанды
 
-PNG-иконки сгенерированы из SVG набора [Tabler Icons](https://github.com/tabler/tabler-icons) (MIT License).
+PNG из [game-icons.net](https://game-icons.net/) (CC BY 3.0), цвета под Зону.
 
-| Файл | Источник |
-|------|----------|
-| `walker.svg` / `walker.png` | `icons/outline/walk.svg` — пешком |
-| `bicycle.svg` / `bicycle.png` | `icons/outline/bike.svg` — велосипед |
-| `niva.svg` / `niva.png` | `icons/outline/car-suv.svg` — Нива / SUV |
-| `truck.svg` / `truck.png` | `icons/outline/truck-delivery.svg` — грузовик |
+| Файл | Источник | Цвет |
+|------|----------|------|
+| `bicycle.svg/png` | `delapouite/cycling` | пыльный жёлтый |
+| `niva.svg/png` | `delapouite/jeep` | олива (внедорожник) |
+| `truck.svg/png` | `delapouite/truck` | серо-зелёный |
+| `walker.svg/png` | Tabler Icons (MIT) | пешком, fallback |
 
-Режим «пешком» на карте использует аватар персонажа из `render_avatar` (скины фракции).
+Режим «пешком» — аватар персонажа (`render_avatar`).
+
+Перегенерация: `python3 scripts/import_stalker_icons.py`
