@@ -158,7 +158,7 @@ class NeutralCaptureSession:
             if self.hp.get(str(pid), 0) > 0:
                 return pid
             self.active_index += 1
-        return self.turn_order[0]
+        return 0
 
     def pos(self, player_id: int) -> tuple[int, int]:
         raw = self.positions.get(str(player_id), [0, 0])
@@ -390,6 +390,21 @@ def unlink_player_from_ncap_session(storage: Storage, telegram_id: int) -> None:
         clear_ncap_session(storage, session)
         return
     save_ncap_session(storage, session)
+
+
+def eject_player_from_ncap_lobby(storage: Storage, telegram_id: int) -> None:
+    """Убрать игрока из лобби захвата без UI (смерть / fixme)."""
+    lobby = get_ncap_lobby_by_player(storage, telegram_id)
+    if lobby is None:
+        return
+    lobby.member_ids = [pid for pid in lobby.member_ids if pid != telegram_id]
+    storage.delete_meta(_player_key(telegram_id))
+    if not lobby.member_ids:
+        clear_ncap_lobby(storage, lobby)
+        return
+    if lobby.host_id == telegram_id:
+        lobby.host_id = lobby.member_ids[0]
+    save_ncap_lobby(storage, lobby)
 
 
 def _register_active(storage: Storage, session_id: str) -> None:

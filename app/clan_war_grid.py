@@ -119,7 +119,7 @@ class ClanWarGridSession:
             if self.hp.get(str(pid), 0) > 0:
                 return pid
             self.active_index += 1
-        return self.turn_order[0]
+        return 0
 
     def pos(self, player_id: int) -> tuple[int, int]:
         raw = self.positions.get(str(player_id), [0, 0])

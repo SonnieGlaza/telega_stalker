@@ -745,6 +745,15 @@ def render_smuggle_for_player(
     return render_smuggle_frame(session, player)
 
 
+def _abort_smuggle_combat_death(storage: Storage, telegram_id: int, reason: str) -> str:
+    """Смерть на маршруте: груз потерян, без доп. ограбления (урон уже получен)."""
+    from app.game_logic import _apply_durability_decay
+
+    _clear_smuggle_run(storage, telegram_id)
+    _apply_durability_decay(storage, telegram_id, weapon_loss=5, armor_loss=3)
+    return reason
+
+
 def _fail_smuggle_run(storage: Storage, telegram_id: int, reason: str) -> str:
     """Провал рейса со штрафом (смерть, тайм-аут, срыв)."""
     from app.game_logic import fail_smuggling_delivery, get_active_smuggling
@@ -827,7 +836,9 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
         if note:
             notes.append(note)
         if dead_result is not None:
-            fail_text = _fail_smuggle_run(storage, telegram_id, "Погиб на маршруте — груз потерян.")
+            fail_text = _abort_smuggle_combat_death(
+                storage, telegram_id, "Погиб на маршруте — груз потерян."
+            )
             payload = dead_result.payload or {}
             return ActionResult(
                 False,
@@ -850,7 +861,9 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
         notes.append(f"Аномалия: −{dmg} HP.")
         player = storage.get_character(telegram_id, refresh_energy=False) or player
         if player.health <= 0:
-            fail_text = _fail_smuggle_run(storage, telegram_id, "Аномалия на маршруте. Груз потерян.")
+            fail_text = _abort_smuggle_combat_death(
+                storage, telegram_id, "Аномалия на маршруте. Груз потерян."
+            )
             remember_death_cause(storage, telegram_id, "anomaly")
             return ActionResult(
                 False,

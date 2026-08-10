@@ -2118,9 +2118,11 @@ class Storage:
             if taken <= 0:
                 return 0
             conn.execute(
-                "UPDATE characters SET money = money - ? WHERE telegram_id = ?",
-                (taken, telegram_id),
+                "UPDATE characters SET money = money - ? WHERE telegram_id = ? AND money >= ?",
+                (taken, telegram_id, taken),
             )
+            if int(conn.total_changes or 0) == 0:
+                return 0
         self.save_snapshot()
         return taken
 
@@ -2611,6 +2613,17 @@ class Storage:
         return self.change_diesel(telegram_id, delta)
 
     def change_health(self, telegram_id: int, delta: int, *, max_health: int | None = None) -> bool:
+        cap = 100 if max_health is None else max(1, int(max_health))
+        if max_health is None:
+            character = self.get_character(telegram_id, refresh_energy=False)
+            if character is None:
+                return False
+            try:
+                from app.game_logic import effective_max_health
+
+                cap = max(cap, int(effective_max_health(character)))
+            except Exception:
+                cap = 100
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT health FROM characters WHERE telegram_id = ?",
@@ -2619,16 +2632,6 @@ class Storage:
             if row is None:
                 return False
             old_health = int(row["health"])
-            cap = 100 if max_health is None else max(1, int(max_health))
-            if max_health is None:
-                try:
-                    character = self.get_character(telegram_id, refresh_energy=False)
-                    if character is not None:
-                        from app.game_logic import effective_max_health
-
-                        cap = max(cap, int(effective_max_health(character)))
-                except Exception:
-                    cap = 100
             new_health = max(0, min(cap, old_health + int(delta)))
             conn.execute(
                 "UPDATE characters SET health = ? WHERE telegram_id = ?",

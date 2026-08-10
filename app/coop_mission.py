@@ -201,7 +201,7 @@ class CoopMissionSession:
             if self.hp.get(str(pid), 0) > 0 and pid not in self.evacuated:
                 return pid
             self.active_index += 1
-        return self.turn_order[0]
+        return 0
 
     def pos(self, player_id: int) -> tuple[int, int]:
         raw = self.positions.get(str(player_id), [0, 0])
@@ -398,6 +398,22 @@ def unlink_player_from_coop_session(storage: Storage, telegram_id: int) -> None:
         clear_coop_session(storage, session)
         return
     save_coop_session(storage, session)
+
+
+def eject_player_from_coop_lobby(storage: Storage, telegram_id: int) -> None:
+    """Убрать игрока из кооп-лобби без UI-уведомлений (смерть / fixme)."""
+    lobby = get_coop_lobby_by_player(storage, telegram_id)
+    if lobby is None:
+        return
+    if telegram_id in lobby.member_ids:
+        lobby.member_ids = [x for x in lobby.member_ids if x != telegram_id]
+    storage.delete_meta(_player_key(telegram_id))
+    if not lobby.member_ids:
+        clear_coop_lobby(storage, lobby)
+        return
+    if lobby.host_id == telegram_id:
+        lobby.host_id = lobby.member_ids[0]
+    save_coop_lobby(storage, lobby)
 
 
 def register_active_coop(storage: Storage, session_id: str) -> None:

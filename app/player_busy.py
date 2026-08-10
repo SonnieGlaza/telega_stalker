@@ -26,18 +26,23 @@ def _unlink_from_shared_sessions(storage: Storage, telegram_id: int) -> None:
     unlink_player_from_raid_grid_session(storage, telegram_id)
 
 
+def _clear_group_lobbies(storage: Storage, telegram_id: int) -> None:
+    from app.coop_mission import eject_player_from_coop_lobby
+    from app.neutral_capture import eject_player_from_ncap_lobby
+
+    eject_player_from_coop_lobby(storage, telegram_id)
+    eject_player_from_ncap_lobby(storage, telegram_id)
+
+
 def clear_all_activity_sessions(storage: Storage, telegram_id: int) -> None:
     """Снять все активные режимы — после смерти или респавна."""
     from app.quest_mission import clear_mission_session, get_mission_session
     from app.artifact_hunt import clear_hunt_session, get_hunt_session
-    from app.coop_mission import clear_coop_session, get_coop_session_by_player
-    from app.neutral_capture import clear_ncap_session, get_ncap_session
-    from app.clan_war_grid import clear_cwar_session, get_cwar_session_by_player
     from app.duel_grid import clear_duel_session, get_duel_session_by_player
-    from app.raid_grid import clear_raid_grid_session, get_raid_grid_session_by_player
     from app.arena_grid import clear_arena_session, get_arena_session
 
     clear_smuggling_state(storage, telegram_id)
+    _clear_group_lobbies(storage, telegram_id)
 
     if get_mission_session(storage, telegram_id):
         clear_mission_session(storage, telegram_id)
@@ -46,25 +51,11 @@ def clear_all_activity_sessions(storage: Storage, telegram_id: int) -> None:
     if get_hunt_session(storage, telegram_id):
         clear_hunt_session(storage, telegram_id)
 
-    coop = get_coop_session_by_player(storage, telegram_id)
-    if coop is not None:
-        clear_coop_session(storage, coop)
-
-    ncap = get_ncap_session(storage, telegram_id)
-    if ncap is not None:
-        clear_ncap_session(storage, ncap)
-
-    cwar = get_cwar_session_by_player(storage, telegram_id)
-    if cwar is not None:
-        clear_cwar_session(storage, cwar)
+    _unlink_from_shared_sessions(storage, telegram_id)
 
     duel = get_duel_session_by_player(storage, telegram_id)
     if duel is not None:
         clear_duel_session(storage, duel)
-
-    rgrid = get_raid_grid_session_by_player(storage, telegram_id)
-    if rgrid is not None:
-        clear_raid_grid_session(storage, rgrid)
 
     arena = get_arena_session(storage, telegram_id)
     if arena is not None:
@@ -84,6 +75,7 @@ def clear_stale_activity_for_dead_player(storage: Storage, telegram_id: int) -> 
     from app.raid_grid import clear_stale_raid_grid_session
 
     clear_smuggling_state(storage, telegram_id)
+    _clear_group_lobbies(storage, telegram_id)
 
     if get_mission_session(storage, telegram_id):
         clear_mission_session(storage, telegram_id)

@@ -150,7 +150,7 @@ class RaidGridSession:
             if self.hp.get(str(pid), 0) > 0:
                 return pid
             self.active_index += 1
-        return self.turn_order[0]
+        return 0
 
     def pos(self, player_id: int) -> tuple[int, int]:
         raw = self.positions.get(str(player_id), [0, 0])
@@ -739,7 +739,7 @@ def _finalize_lair_fail(storage: Storage, session: RaidGridSession, reason: str)
     enemy_power = session.enemy_power or 30
     for pid in session.player_ids:
         _apply_durability_decay(storage, pid, weapon_loss=7, armor_loss=6)
-        storage.change_money(pid, -110)
+        storage.drain_money(pid, 110)
         _add_rating(storage, pid, -RATING_REWARD["raid_fail"])
         storage.add_player_stat(pid, "raids_failed", 1)
         _progress_and_unlock_achievements(storage, pid)
@@ -803,7 +803,7 @@ def _finalize_depot_fail(storage: Storage, session: RaidGridSession, reason: str
     defender_leader_id = storage.get_faction_leader_id(target)
     for pid in session.player_ids:
         _apply_durability_decay(storage, pid, weapon_loss=6, armor_loss=5)
-        storage.change_money(pid, -DEPOT_RAID_FAIL_MONEY_PENALTY)
+        storage.drain_money(pid, DEPOT_RAID_FAIL_MONEY_PENALTY)
         _add_rating(storage, pid, -RATING_REWARD["depot_raid_fail"])
         storage.add_player_stat(pid, "raids_failed", 1)
         _progress_and_unlock_achievements(storage, pid)

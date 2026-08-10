@@ -3740,13 +3740,6 @@ async def _broadcast_cwar_session(
         )
         session.message_ids[str(pid)] = new_id
     save_cwar_session(storage, session)
-    await _push_fresh_tactical_deaths(
-        bot,
-        storage,
-        session,
-        list(session.player_ids),
-        cause_default="combat",
-    )
 
 
 async def _notify_cwar_finished(bot: Bot, result: Any) -> None:
@@ -3897,13 +3890,6 @@ async def _broadcast_ncap_session(
         )
         session.message_ids[str(pid)] = new_id
     save_ncap_session(storage, session)
-    await _push_fresh_tactical_deaths(
-        bot,
-        storage,
-        session,
-        list(session.player_ids),
-        cause_default="combat",
-    )
 
 
 async def _show_ncap_lobby_menu(callback: CallbackQuery, telegram_id: int) -> None:
@@ -4027,13 +4013,6 @@ async def _broadcast_coop_session(
         )
         session.message_ids[str(pid)] = new_id
     save_coop_session(storage, session)
-    await _push_fresh_tactical_deaths(
-        bot,
-        storage,
-        session,
-        list(session.player_ids),
-        cause_default="coop",
-    )
 
 
 async def _notify_coop_finished(bot: Bot, result: Any) -> None:
