@@ -3216,21 +3216,42 @@ async def _handle_quest_mission_death_callback(
     callback: CallbackQuery,
     telegram_id: int,
     payload: dict[str, Any],
+    *,
+    fallback_text: str | None = None,
 ) -> None:
     storage = get_storage()
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         await safe_callback_answer(callback, "Персонаж не найден.", show_alert=True)
         return
-    await safe_callback_answer(callback)
-    await _send_battle_death_notice(
-        callback.bot,
-        telegram_id,
-        player,
-        callback=callback,
-        where=str(payload.get("death_location") or player.location),
-        cause=str(payload.get("death_cause") or "combat"),
-    )
+    try:
+        sent = await _send_battle_death_notice(
+            callback.bot,
+            telegram_id,
+            player,
+            callback=callback,
+            where=str(payload.get("death_location") or player.location),
+            cause=str(payload.get("death_cause") or "combat"),
+        )
+        if not sent and fallback_text and callback.message is not None:
+            await callback.message.answer(
+                _plain_death_text(fallback_text),
+                parse_mode=None,
+            )
+    except Exception:
+        logger.exception("Quest mission death delivery failed for %s", telegram_id)
+        if fallback_text and callback.message is not None:
+            try:
+                await callback.message.answer(
+                    _plain_death_text(fallback_text),
+                    parse_mode=None,
+                )
+            except Exception:
+                logger.exception("Quest mission death fallback failed for %s", telegram_id)
+    finally:
+        await safe_callback_answer(callback, "☠️ Погиб на вылазке")
+        if callback.message is not None and callback.message.photo:
+            await _dismiss_battle_map(callback)
 
 
 SURVIVAL_DEATH_CHECK_EVERY_TICKS = 5  # ~раз в 5 мин при POINTS_INCOME_TICK_SECONDS=60
@@ -4044,7 +4065,9 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
             result = use_mission_medkit(storage, telegram_id)
             payload = result.payload or {}
             if payload.get("mission_dead"):
-                await _handle_quest_mission_death_callback(callback, telegram_id, payload)
+                await _handle_quest_mission_death_callback(
+                    callback, telegram_id, payload, fallback_text=result.text
+                )
                 return
             image = payload.get("mission_image")
             if image and payload.get("mission_active"):
@@ -4080,7 +4103,9 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
         payload = result.payload or {}
 
         if payload.get("mission_dead"):
-            await _handle_quest_mission_death_callback(callback, telegram_id, payload)
+            await _handle_quest_mission_death_callback(
+                callback, telegram_id, payload, fallback_text=result.text
+            )
             return
 
         if payload.get("mission_done") or not payload.get("mission_active"):
@@ -4799,7 +4824,9 @@ async def artifact_hunt_callback(callback: CallbackQuery) -> None:
         payload = result.payload or {}
 
         if payload.get("hunt_dead"):
-            await _handle_quest_mission_death_callback(callback, telegram_id, payload)
+            await _handle_quest_mission_death_callback(
+                callback, telegram_id, payload, fallback_text=result.text
+            )
             return
 
         if payload.get("hunt_done") or not payload.get("hunt_active"):

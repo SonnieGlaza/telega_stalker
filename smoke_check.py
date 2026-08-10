@@ -411,6 +411,25 @@ def run_smoke_check() -> None:
         assert active_after is not None  # stage return
         assert str(active_after.get("stage")) == "return"
 
+        # Death story generator must not crash (regression: tuple in generate_death_story lines).
+        from app.game_logic import build_battle_death_text, remember_death_cause, effective_max_health
+
+        live = storage.get_character(111, refresh_energy=False)
+        assert live is not None
+        remember_death_cause(storage, 111, "anomaly")
+        storage.change_health(111, -live.health)
+        dead = storage.get_character(111, refresh_energy=False)
+        assert dead is not None and dead.health <= 0
+        story = build_battle_death_text(
+            dead,
+            where="Болото",
+            cause="anomaly",
+            storage=storage,
+        )
+        assert "аномал" in story.lower(), story[:200]
+        max_hp = int(effective_max_health(dead))
+        storage.change_health(111, max_hp - dead.health, max_health=max_hp)
+
         # Turn-in: return home → auto-complete report.
         from app.game_logic import turn_in_quest_contract, try_auto_turn_in_contract
 

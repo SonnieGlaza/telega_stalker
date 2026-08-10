@@ -359,14 +359,12 @@ def generate_death_story(
         "",
         f"HP: {hp}/{cap} · ☢ {int(character.radiation)} · 🍗 {int(character.hunger)} · 💧 {int(character.thirst)}",
         loot,
-        (
-            f"Спасение на базе — {respawn_cost} RU"
-            + (
-                f" (у тебя {int(character.money)} RU — медики оформят долг, спишут с заработка)."
-                if int(character.money) < respawn_cost
-                else "."
-            )
-            + " Личный схрон не трогают.",
-        ),
+        f"Спасение на базе — {respawn_cost} RU"
+        + (
+            f" (у тебя {int(character.money)} RU — медики оформят долг, спишут с заработка)."
+            if int(character.money) < respawn_cost
+            else "."
+        )
+        + " Личный схрон не трогают.",
     ]
     return "\n".join(lines)
