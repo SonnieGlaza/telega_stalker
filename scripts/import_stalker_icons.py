@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
-"""Импорт иконок НПС и транспорта (game-icons.net, CC BY 3.0) в assets/."""
+"""Реалистичные ассеты из S.T.A.L.K.E.R. и Wikimedia для НПС и транспорта."""
 
 from __future__ import annotations
 
-import re
 import sys
-from io import BytesIO
 from pathlib import Path
 
-import cairosvg
-from PIL import Image, ImageOps
+from PIL import Image, ImageEnhance, ImageOps
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -22,61 +19,49 @@ from app.npc_assets import (  # noqa: E402
     NPCS_SOURCE_DIR,
 )
 
+REFS = ROOT / "assets" / "stalker_refs"
 SMUGGLE_DIR = ROOT / "assets" / "smuggle"
-GAME_ICONS_BASE = "https://game-icons.net/icons/ffffff/transparent/1x1"
+AVATARS = ROOT / "assets" / "avatars"
 
-# author/path, цвет под сталкер
-NPC_ICON_SPECS: dict[str, tuple[str, tuple[int, int, int]]] = {
-    "bandit": ("delapouite/bandit", (210, 165, 110)),       # бандит — ржаво-коричневый
-    "mercenary": ("delapouite/spy", (150, 175, 215)),        # наёмник — синеватый плащ
-    "soldier": ("delapouite/flamethrower-soldier", (135, 165, 95)),  # военный — олива
+# (путь, центр кропа)
+NPC_SOURCES: dict[str, tuple[Path, tuple[float, float]]] = {
+    "bandit": (REFS / "bandit_wiki.png", (0.52, 0.52)),
+    "mercenary": (AVATARS / "скины" / "Нейтралы" / "нейтралы2.jpg", (0.5, 0.45)),
+    "soldier": (REFS / "military_swamps.jpg", (0.28, 0.55)),
 }
 
-SMUGGLE_ICON_SPECS: dict[str, tuple[str, tuple[int, int, int]]] = {
-    "bicycle": ("delapouite/cycling", (230, 210, 150)),
-    "niva": ("delapouite/jeep", (125, 155, 90)),
-    "truck": ("delapouite/truck", (175, 185, 170)),
+SMUGGLE_SOURCES: dict[str, tuple[Path, tuple[float, float]]] = {
+    "niva": (REFS / "uaz452.png", (0.55, 0.55)),
+    "truck": (REFS / "uaz452.png", (0.50, 0.50)),
+    "bicycle": (REFS / "rusty_bicycle.jpg", (0.5, 0.55)),
 }
 
 
-def _fetch_svg(path: str) -> str:
-    import urllib.request
-
-    url = f"{GAME_ICONS_BASE}/{path}.svg"
-    with urllib.request.urlopen(url, timeout=30) as resp:
-        return resp.read().decode("utf-8")
-
-
-def _svg_with_color(svg_text: str, rgb: tuple[int, int, int]) -> str:
-    color = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
-    text = svg_text.replace('fill="#fff"', f'fill="{color}"')
-    text = text.replace('fill="#ffffff"', f'fill="{color}"')
-    text = text.replace('fill="#FFFFFF"', f'fill="{color}"')
-    text = re.sub(r'stroke="#fff(?:fff)?"', f'stroke="{color}"', text, flags=re.I)
-    if 'fill="' not in text and "<path" in text:
-        text = text.replace("<path ", f'<path fill="{color}" ', 1)
-    return text
-
-
-def _render_png(svg_text: str, size: int) -> Image.Image:
-    raw = cairosvg.svg2png(bytestring=svg_text.encode("utf-8"), output_width=size, output_height=size)
-    return Image.open(BytesIO(raw)).convert("RGBA")
-
-
-def _fit_icon(img: Image.Image, size: int, *, pad: float = 0.12) -> Image.Image:
-    """Вписать иконку с полями — без квадратной заливки фона."""
+def _center_square(img: Image.Image, *, center: tuple[float, float] = (0.5, 0.5)) -> Image.Image:
     img = img.convert("RGBA")
-    bbox = img.getbbox()
-    if bbox is None:
-        return Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    cropped = img.crop(bbox)
-    inner = max(1, int(size * (1 - pad * 2)))
-    fitted = ImageOps.contain(cropped, (inner, inner), method=Image.Resampling.LANCZOS)
-    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    ox = (size - fitted.width) // 2
-    oy = (size - fitted.height) // 2
-    out.paste(fitted, (ox, oy), fitted)
+    w, h = img.size
+    side = min(w, h)
+    cx = int(w * center[0])
+    cy = int(h * center[1])
+    left = max(0, min(w - side, cx - side // 2))
+    top = max(0, min(h - side, cy - side // 2))
+    return img.crop((left, top, left + side, top + side))
+
+
+def _enhance_zone_photo(img: Image.Image) -> Image.Image:
+    img = img.convert("RGBA")
+    rgb = img.convert("RGB")
+    rgb = ImageEnhance.Contrast(rgb).enhance(1.1)
+    rgb = ImageEnhance.Brightness(rgb).enhance(1.1)
+    rgb = ImageEnhance.Color(rgb).enhance(0.92)
+    out = rgb.convert("RGBA")
+    out.putalpha(img.split()[-1])
     return out
+
+
+def _fit_photo(img: Image.Image, size: int, *, center: tuple[float, float]) -> Image.Image:
+    sq = _center_square(_enhance_zone_photo(img), center=center)
+    return ImageOps.fit(sq, (size, size), method=Image.Resampling.LANCZOS, centering=center)
 
 
 def _write_png(path: Path, img: Image.Image) -> None:
@@ -84,40 +69,43 @@ def _write_png(path: Path, img: Image.Image) -> None:
     img.save(path, format="PNG", optimize=True)
 
 
-def import_npc_icons() -> None:
-    NPCS_SOURCE_DIR.mkdir(parents=True, exist_ok=True)
-    for key, (icon_path, rgb) in NPC_ICON_SPECS.items():
-        svg_raw = _fetch_svg(icon_path)
-        svg_colored = _svg_with_color(svg_raw, rgb)
-        (NPCS_SOURCE_DIR / f"{key}.svg").write_text(svg_colored, encoding="utf-8")
-        base = _render_png(svg_colored, 512)
-        grid = _fit_icon(base, MISSION_NPC_GRID_SIZE)
-        card = _fit_icon(base, MISSION_NPC_CARD_SIZE)
-        _write_png(NPCS_GRID_DIR / f"{key}.png", grid)
-        _write_png(NPCS_CARD_DIR / f"{key}.png", card)
-        print(f"  npc {key}: {icon_path} -> grid+card")
+def prepare_npc_realistic() -> None:
+    for key, (src, center) in NPC_SOURCES.items():
+        if not src.is_file():
+            print(f"  skip {key}: нет {src}")
+            continue
+        img = Image.open(src)
+        _write_png(NPCS_SOURCE_DIR / f"{key}.png", _fit_photo(img, 512, center=center))
+        _write_png(NPCS_GRID_DIR / f"{key}.png", _fit_photo(img, MISSION_NPC_GRID_SIZE, center=center))
+        _write_png(NPCS_CARD_DIR / f"{key}.png", _fit_photo(img, MISSION_NPC_CARD_SIZE, center=center))
+        print(f"  npc {key} <- {src.name}")
 
 
-def import_smuggle_icons() -> None:
-    SMUGGLE_DIR.mkdir(parents=True, exist_ok=True)
-    for key, (icon_path, rgb) in SMUGGLE_ICON_SPECS.items():
-        svg_raw = _fetch_svg(icon_path)
-        svg_colored = _svg_with_color(svg_raw, rgb)
-        (SMUGGLE_DIR / f"{key}.svg").write_text(svg_colored, encoding="utf-8")
-        base = _render_png(svg_colored, 512)
-        png = _fit_icon(base, 256)
-        _write_png(SMUGGLE_DIR / f"{key}.png", png)
-        print(f"  smuggle {key}: {icon_path} -> png")
+def prepare_smuggle_realistic() -> None:
+    for key, (src, center) in SMUGGLE_SOURCES.items():
+        if not src.is_file():
+            print(f"  skip {key}: нет {src}")
+            continue
+        img = Image.open(src)
+        _write_png(SMUGGLE_DIR / f"{key}.png", _fit_photo(img, 256, center=center))
+        print(f"  smuggle {key} <- {src.name}")
 
 
 def main() -> None:
-    print("NPC icons:")
-    import_npc_icons()
-    print("Smuggle transport icons:")
-    import_smuggle_icons()
-    # Сброс кэша иконок в рантайме (если процесс уже импортировал модуль).
+    missing = [p for p, _ in list(NPC_SOURCES.values()) + list(SMUGGLE_SOURCES.values()) if not p.is_file()]
+    if missing:
+        print("Не хватает файлов:")
+        for p in missing:
+            print(f"  - {p}")
+        sys.exit(1)
+    print("NPC:")
+    prepare_npc_realistic()
+    print("Transport:")
+    prepare_smuggle_realistic()
+    from app.npc_assets import load_npc_grid_sprite
     from app.smuggle_mission import _cached_smuggle_icon
 
+    load_npc_grid_sprite.cache_clear()
     _cached_smuggle_icon.cache_clear()
     print("Done.")
 

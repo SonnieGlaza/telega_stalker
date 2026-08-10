@@ -1,13 +1,13 @@
 # Иконки транспорта для тактической контрабанды
 
-PNG из [game-icons.net](https://game-icons.net/) (CC BY 3.0), цвета под Зону.
+Фотореалистичные PNG из референсов Зоны (`assets/stalker_refs/`).
 
-| Файл | Источник | Цвет |
-|------|----------|------|
-| `bicycle.svg/png` | `delapouite/cycling` | пыльный жёлтый |
-| `niva.svg/png` | `delapouite/jeep` | олива (внедорожник) |
-| `truck.svg/png` | `delapouite/truck` | серо-зелёный |
-| `walker.svg/png` | Tabler Icons (MIT) | пешком, fallback |
+| Файл | Описание |
+|------|----------|
+| `bicycle.png` | ржавый велосипед (атмосфера Зоны) |
+| `niva.png` | UAZ-452 «Буханка» из S.T.A.L.K.E.R. |
+| `truck.png` | тот же UAZ, другой кадр |
+| `walker.png` | fallback пешком (Tabler Icons) |
 
 Режим «пешком» — аватар персонажа (`render_avatar`).
 

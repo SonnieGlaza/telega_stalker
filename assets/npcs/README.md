@@ -1,11 +1,11 @@
 # Спрайты НПС на тактической карте
 
-| Ключ | Источник (game-icons.net, CC BY 3.0) | Стиль |
-|------|----------------------------------------|-------|
-| `maloy` | исходник `source/maloy.png` | мародёр из игры |
-| `bandit` | `delapouite/bandit` | бандит с повязкой |
-| `mercenary` | `delapouite/spy` | наёмник в плаще |
-| `soldier` | `delapouite/flamethrower-soldier` | военный в шлеме |
+| Ключ | Источник | Стиль |
+|------|----------|-------|
+| `maloy` | `source/maloy.png` | мародёр (игровой кадр) |
+| `bandit` | Wikimedia / диздок GSC «Бандит» | кадр из S.T.A.L.K.E.R. |
+| `mercenary` | скин «Нейтралы» (SEVA) | кадр из игры |
+| `soldier` | скриншот «Болота / военные» | военные из S.T.A.L.K.E.R. |
 
-Перегенерация иконок bandit/mercenary/soldier: `python3 scripts/import_stalker_icons.py`  
-Полная подготовка из растров: `python3 scripts/prepare_npc_assets.py`
+Перегенерация: `python3 scripts/import_stalker_icons.py`  
+Полная подготовка maloy из растра: `python3 scripts/prepare_npc_assets.py`

@@ -409,10 +409,9 @@ def _transport_token(
         img = _cached_smuggle_icon("walker.png")
     if img is None:
         return Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    tinted = _lighten_icon(img)
-    if tinted.size != (size, size):
-        tinted = tinted.resize((size, size), Image.Resampling.LANCZOS)
-    return tinted
+    if img.size != (size, size):
+        return img.resize((size, size), Image.Resampling.LANCZOS)
+    return img.copy()
 
 
 def _paste_transport_token(
@@ -532,7 +531,8 @@ def render_smuggle_frame(session: SmuggleMissionSession, character: Character | 
         pcx,
         pcy,
         72,
-        is_photo=session.transport == "foot" and character is not None,
+        is_photo=session.transport in {"foot", "bicycle", "niva", "truck"}
+        and (session.transport != "foot" or character is not None),
     )
 
     pl = margin + grid_px + 20
@@ -667,7 +667,7 @@ def render_smuggle_showcase_frame(character: Character | None = None) -> bytes:
             cx,
             cy,
             68,
-            is_photo=mode == "foot" and character is not None,
+            is_photo=True,
         )
         small = _load_font(11)
         tw = draw.textlength(label, font=small)
