@@ -1783,6 +1783,34 @@ def _session_hp_for_player(session: Any, pid: int) -> int | None:
     return None
 
 
+def _active_tactical_field_hp(storage: Storage, telegram_id: int) -> int | None:
+    """HP на тактическом поле, если игрок в незавершённой сессии."""
+    session_refs: list[Any] = []
+    coop = get_coop_session_by_player(storage, telegram_id)
+    if coop is not None and not coop.finished:
+        session_refs.append(coop)
+    raid = get_raid_grid_session_by_player(storage, telegram_id)
+    if raid is not None and not raid.finished:
+        session_refs.append(raid)
+    ncap = get_ncap_session(storage, telegram_id)
+    if ncap is not None and not ncap.finished:
+        session_refs.append(ncap)
+    cwar = get_cwar_session_by_player(storage, telegram_id)
+    if cwar is not None and not cwar.finished:
+        session_refs.append(cwar)
+    duel = get_duel_session_by_player(storage, telegram_id)
+    if duel is not None and not duel.finished:
+        session_refs.append(duel)
+    arena = get_arena_session(storage, telegram_id)
+    if arena is not None and not getattr(arena, "finished", False):
+        session_refs.append(arena)
+    for session in session_refs:
+        field_hp = _session_hp_for_player(session, telegram_id)
+        if field_hp is not None and field_hp > 0:
+            return field_hp
+    return None
+
+
 def _raid_grid_downed(storage: Storage, telegram_id: int) -> bool:
     session = get_raid_grid_session_by_player(storage, telegram_id)
     if session is None or getattr(session, "finished", False):
@@ -1833,11 +1861,16 @@ def resolve_dead_player(
     if player is None:
         return None
     if player.health <= 0:
+        if _active_tactical_field_hp(storage, telegram_id) is not None:
+            return None
         return storage.get_character(telegram_id, refresh_energy=False)
 
     from app.tactical_hp import commit_tactical_death
 
     session_checks: list[tuple[Any, str]] = []
+    raid = get_raid_grid_session_by_player(storage, telegram_id)
+    if raid is not None and not raid.finished:
+        session_checks.append((raid, "raid"))
     coop = get_coop_session_by_player(storage, telegram_id)
     if coop is not None and not coop.finished:
         session_checks.append((coop, "coop"))
@@ -4065,10 +4098,14 @@ async def _notify_coop_finished(bot: Bot, result: Any) -> None:
         str(k): str(v) for k, v in (payload.get("death_killers") or {}).items()
     }
     default_cause = str(payload.get("death_cause") or "coop")
+    dead_player_ids = {int(x) for x in (payload.get("dead_players") or [])}
     for pid in notify_ids:
         player = storage.get_character(pid, refresh_energy=False)
         try:
-            if player is not None and player.health <= 0:
+            is_dead = player is not None and (
+                player.health <= 0 or pid in dead_player_ids
+            )
+            if is_dead and player is not None:
                 cause = death_causes.get(str(pid), default_cause)
                 killer_name = death_killers.get(str(pid))
                 await _send_battle_death_notice(

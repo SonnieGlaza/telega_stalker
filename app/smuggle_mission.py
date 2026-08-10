@@ -15,7 +15,6 @@ from PIL import Image, ImageDraw, ImageFont
 from app.artifact_hunt import FONT_CANDIDATES, _load_location_thumb, _paste_circle, _paste_rounded
 from app.game_logic import (
     ActionResult,
-    _dead_block_text,
     _is_dead,
     clear_active_smuggling,
     complete_smuggling_delivery,
@@ -53,7 +52,6 @@ from app.quest_mission import (
     _load_font,
     _maybe_move_hostiles,
     _paste_token_circle,
-    _spawn_npcs,
 )
 from app.storage import Character, Storage
 
@@ -737,7 +735,7 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
         )
 
     if session.moves >= session.max_moves:
-        fail_text = fail_smuggling_delivery(storage, telegram_id, "Время рейса вышло — ограбили.")
+        fail_text = _fail_smuggle_run(storage, telegram_id, "Время рейса вышло — ограбили.")
         return ActionResult(False, fail_text, payload={"mission_active": False, "mission_done": True})
 
     save_smuggle_session(storage, telegram_id, session)

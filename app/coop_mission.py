@@ -801,11 +801,44 @@ def _objectives_complete(session: CoopMissionSession) -> bool:
     return len(session.collected) >= len(session.objectives) and len(session.objectives) > 0
 
 
-def _sync_coop_hp_to_characters(storage: Storage, session: CoopMissionSession) -> None:
+def _sync_coop_hp_to_characters(
+    storage: Storage,
+    session: CoopMissionSession,
+    *,
+    finalize: bool = False,
+) -> None:
     for pid in session.player_ids:
         hp_val = session.hp.get(str(pid))
         if hp_val is not None:
-            sync_session_hp_to_db(storage, pid, int(hp_val))
+            sync_session_hp_to_db(storage, pid, int(hp_val), force=finalize)
+
+
+def _commit_coop_session_deaths(
+    storage: Storage,
+    session: CoopMissionSession,
+) -> tuple[list[int], dict[str, str], dict[str, str]]:
+    from app.tactical_hp import commit_tactical_death
+
+    dead_ids: list[int] = []
+    death_causes_payload: dict[str, str] = {}
+    death_killers_payload: dict[str, str] = {}
+    for pid in session.player_ids:
+        if session.hp.get(str(pid), 0) > 0:
+            continue
+        cause = _map_death_cause(session.death_causes.get(str(pid)))
+        killer_name = session.death_killers.get(str(pid))
+        commit_tactical_death(
+            storage,
+            pid,
+            0,
+            cause=cause,
+            killer_name=str(killer_name) if killer_name else None,
+        )
+        dead_ids.append(pid)
+        death_causes_payload[str(pid)] = cause
+        if killer_name:
+            death_killers_payload[str(pid)] = killer_name
+    return dead_ids, death_causes_payload, death_killers_payload
 
 
 def _refund_coop_energy(storage: Storage, player_ids: list[int]) -> None:
@@ -843,29 +876,20 @@ def _reward_players(storage: Storage, session: CoopMissionSession) -> str:
 
 
 def _finish_success(storage: Storage, session: CoopMissionSession) -> ActionResult:
-    _sync_coop_hp_to_characters(storage, session)
+    for pid in session.player_ids:
+        hp_val = session.hp.get(str(pid))
+        if hp_val is not None and int(hp_val) > 0:
+            sync_session_hp_to_db(storage, pid, int(hp_val), force=True)
+    dead_ids, death_causes_payload, death_killers_payload = _commit_coop_session_deaths(
+        storage, session
+    )
     message_ids = {str(k): int(v) for k, v in session.message_ids.items()}
     session.finished = True
     session.success = True
-    from app.game_logic import remember_death_cause, remember_death_killer
-
-    dead_ids: list[int] = []
-    death_causes_payload: dict[str, str] = {}
-    death_killers_payload: dict[str, str] = {}
-    for pid in session.player_ids:
-        if session.hp.get(str(pid), 0) <= 0:
-            cause = _map_death_cause(session.death_causes.get(str(pid)))
-            remember_death_cause(storage, pid, cause)
-            dead_ids.append(pid)
-            death_causes_payload[str(pid)] = cause
-            killer_name = session.death_killers.get(str(pid))
-            if killer_name:
-                remember_death_killer(storage, pid, killer_name)
-                death_killers_payload[str(pid)] = killer_name
     text = _reward_players(storage, session)
     session.log.append("Миссия выполнена!")
-    save_coop_session(storage, session)
     player_ids = list(session.player_ids)
+    save_coop_session(storage, session)
     clear_coop_session(storage, session)
     return ActionResult(
         True,
@@ -900,19 +924,6 @@ def _finish_fail(
     session.log.append(reason)
     save_coop_session(storage, session)
     player_ids = list(session.player_ids)
-    from app.game_logic import remember_death_cause, remember_death_killer
-
-    death_causes_payload: dict[str, str] = {}
-    death_killers_payload: dict[str, str] = {}
-    for pid in player_ids:
-        if session.hp.get(str(pid), 0) <= 0:
-            cause = _map_death_cause(session.death_causes.get(str(pid)))
-            remember_death_cause(storage, pid, cause)
-            death_causes_payload[str(pid)] = cause
-            killer_name = session.death_killers.get(str(pid))
-            if killer_name:
-                remember_death_killer(storage, pid, killer_name)
-                death_killers_payload[str(pid)] = killer_name
     clear_coop_session(storage, session)
     return ActionResult(
         False,
@@ -925,8 +936,6 @@ def _finish_fail(
             "session_id": session.session_id,
             "death_location": session.location,
             "death_cause": "coop",
-            "death_causes": death_causes_payload,
-            "death_killers": death_killers_payload,
         },
     )
 

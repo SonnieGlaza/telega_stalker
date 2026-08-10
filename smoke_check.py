@@ -1383,6 +1383,68 @@ def run_smoke_check() -> None:
         player_still = storage.get_character(111, refresh_energy=False)
         assert player_still is not None and player_still.health > 0
 
+        from app.coop_mission import _finish_success as coop_finish_success
+        from app.duel_grid import DuelGridSession
+        from app.smuggle_mission import (
+            SmuggleMissionSession,
+            _fail_smuggle_run,
+            save_smuggle_session,
+        )
+        from app.tactical_hp import sync_session_hp_to_db
+
+        storage.change_health(111, 80)
+        storage.change_health(222, 80)
+        coop_win = CoopMissionSession(
+            session_id="win-dead",
+            lobby_id="lw",
+            location="Кордон",
+            player_ids=[111, 222],
+            hp={"111": 0, "222": 40},
+            objectives=[(2, 2)],
+            collected=[(2, 2)],
+            death_causes={"111": "mutant"},
+        )
+        win_result = coop_finish_success(storage, coop_win)
+        assert win_result.ok
+        assert 111 in (win_result.payload or {}).get("dead_players", [])
+        dead_char = storage.get_character(111, refresh_energy=False)
+        assert dead_char is not None and dead_char.health <= 0
+
+        duel_sess = DuelGridSession(
+            duel_id="d1",
+            challenger_id=111,
+            target_id=222,
+            turn_order=[111, 222],
+            hp={"111": 0, "222": 10},
+        )
+        assert not is_downed_in_group_session(duel_sess, 111)
+
+        storage.change_health(111, 50)
+        sync_session_hp_to_db(storage, 111, 0, force=False)
+        assert storage.get_character(111, refresh_energy=False).health > 0
+        sync_session_hp_to_db(storage, 111, 0, force=True)
+        assert storage.get_character(111, refresh_energy=False).health <= 0
+
+        storage.change_health(111, 0)
+        save_smuggle_session(
+            storage,
+            111,
+            SmuggleMissionSession(
+                destination="Болото",
+                origin="Росток",
+                transport="foot",
+                success_chance=50,
+                player=(0, 5),
+                route=[(0, 5), (5, 5), (2, 2)],
+                moves=99,
+                max_moves=10,
+            ),
+        )
+        money_before = storage.get_character(111, refresh_energy=False).money
+        timeout_text = _fail_smuggle_run(storage, 111, "timeout test")
+        assert "timeout" in timeout_text
+        assert storage.get_character(111, refresh_energy=False).money == money_before
+
         from app.html_utils import nickname_validation_error
 
         assert nickname_validation_error("<bad>") is not None

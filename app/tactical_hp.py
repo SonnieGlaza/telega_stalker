@@ -43,13 +43,19 @@ def use_tactical_medkit(storage: Storage, telegram_id: int, current_hp: int) -> 
     return ActionResult(False, "Нет аптечки в инвентаре."), current_hp
 
 
-def sync_session_hp_to_db(storage: Storage, telegram_id: int, session_hp: int) -> None:
+def sync_session_hp_to_db(
+    storage: Storage,
+    telegram_id: int,
+    session_hp: int,
+    *,
+    force: bool = False,
+) -> None:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return
     session_hp = int(session_hp)
     # Респавн / отвязка: не затирать живого игрока старым HP=0 из JSON сессии.
-    if session_hp <= 0 and player.health > 0:
+    if not force and session_hp <= 0 and player.health > 0:
         return
     max_hp = effective_max_health(player)
     delta = session_hp - int(player.health)
@@ -68,7 +74,7 @@ def commit_tactical_death(
     """Записать тактическое падение (HP=0) в БД — для экрана смерти и респавна."""
     from app.game_logic import remember_death_cause, remember_death_killer
 
-    sync_session_hp_to_db(storage, telegram_id, int(session_hp))
+    sync_session_hp_to_db(storage, telegram_id, int(session_hp), force=True)
     if int(session_hp) > 0:
         return
     if cause:

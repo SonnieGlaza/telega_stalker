@@ -39,13 +39,18 @@ def resolve_active_player(
 
 
 def is_downed_in_group_session(session: Any, telegram_id: int) -> bool:
-    """HP=0 на поле, сессия ещё идёт — смерть в БД откладывается до конца боя."""
+    """HP=0 на поле в group-режиме — смерть в БД откладывается до конца боя."""
     if getattr(session, "finished", False):
         return False
-    hp_map = getattr(session, "hp", None)
-    if not isinstance(hp_map, dict):
+    # Дуэль / арена: HP=0 фиксируется сразу, не откладывается.
+    if getattr(session, "duel_id", None):
         return False
-    if int(hp_map.get(str(telegram_id), 0)) > 0:
+    field_hp = getattr(session, "hp", None)
+    if isinstance(field_hp, int):
+        return False
+    if not isinstance(field_hp, dict):
+        return False
+    if int(field_hp.get(str(telegram_id), 0)) > 0:
         return False
     evacuated = getattr(session, "evacuated", None)
     if isinstance(evacuated, list) and int(telegram_id) in evacuated:
