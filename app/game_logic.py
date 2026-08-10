@@ -2875,20 +2875,6 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
     return "\n".join(lines)
 
 
-def quest_ammo_requirements(quest_key: str) -> dict[str, int]:
-    quest = QUESTS.get(quest_key)
-    if quest is None:
-        return {"ammo_pack": 0, "medkit": 0}
-    return {"ammo_pack": quest.ammo_required, "medkit": quest.medkit_required}
-
-
-def calculate_quest_success_by_key(character: Character, quest_key: str) -> int:
-    quest = QUESTS.get(quest_key)
-    if quest is None:
-        return 0
-    return calculate_quest_success_for_quest(character, quest).chance
-
-
 def _location_contract_ru_mult(storage: Storage, location_name: str, faction: str | None) -> float:
     location = storage.get_location(location_name)
     if location is None:
@@ -3210,15 +3196,6 @@ def try_auto_turn_in_contract(storage: Storage, telegram_id: int) -> str | None:
         return None
     result = turn_in_quest_contract(storage, telegram_id)
     return result.text if result.ok else None
-
-
-def run_quest(storage: Storage, telegram_id: int, quest_key: str) -> ActionResult:
-    """Legacy: мгновенные задания заменены контрактами с переходами."""
-    _ = quest_key
-    return ActionResult(
-        False,
-        "Задания теперь контракты с переходами: открой «📋 Задания», прими контракт на базе и доберись до точки.",
-    )
 
 
 def use_energy_drink(storage: Storage, telegram_id: int) -> ActionResult:
@@ -4881,11 +4858,6 @@ def _resolve_travel_transport(
     # Автовыбор: самый быстрый (для смоков/фолбэка).
     mode, _label, speed, energy = max(options, key=lambda row: row[2])
     return mode, speed, energy, foot_note
-
-
-def _pick_travel_transport(character: Character) -> tuple[str, float, int, str | None]:
-    """Совместимость: автовыбор самого быстрого доступного транспорта."""
-    return _resolve_travel_transport(character, preferred_mode=None)
 
 
 def _compute_base_travel_minutes(
@@ -8485,14 +8457,6 @@ def resolve_smuggling_if_pending(storage: Storage, telegram_id: int) -> str | No
 
     clear_active_smuggling(storage, telegram_id)
     return _finalize_smuggling_roll(storage, telegram_id, active)
-
-
-def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:
-    """Совместимость: старт рейса на случайную доступную точку."""
-    destinations = list_smuggling_destinations(storage, telegram_id)
-    if not destinations:
-        return ActionResult(False, "Нет доступных точек для перевозки.")
-    return start_smuggling_run(storage, telegram_id, random.choice(destinations))
 
 
 def _schedule_next_zone_event(storage: Storage, now: datetime | None = None) -> datetime:

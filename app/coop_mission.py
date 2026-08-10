@@ -194,14 +194,9 @@ class CoopMissionSession:
     grid: int = COOP_GRID_SIZE
 
     def active_player(self) -> int:
-        if not self.turn_order:
-            return self.player_ids[0] if self.player_ids else 0
-        for _ in range(len(self.turn_order)):
-            pid = self.turn_order[self.active_index % len(self.turn_order)]
-            if self.hp.get(str(pid), 0) > 0 and pid not in self.evacuated:
-                return pid
-            self.active_index += 1
-        return 0
+        from app.tactical_roster import resolve_active_player
+
+        return resolve_active_player(self, check_evacuated=True)
 
     def pos(self, player_id: int) -> tuple[int, int]:
         raw = self.positions.get(str(player_id), [0, 0])

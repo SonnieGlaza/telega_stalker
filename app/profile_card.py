@@ -407,22 +407,6 @@ def _draw_power_bar(
     draw.rounded_rectangle((x, y, x + fill_w, y + bar_h), radius=6, fill=color)
 
 
-def _equipment_lines(character: Character) -> list[str]:
-    key_map = {
-        "weapon": "Оружие",
-        "armor": "Броня",
-        "weapon_durability": "Прочность оружия",
-        "armor_durability": "Прочность брони",
-        "artifact": "Артефакт",
-    }
-    if not character.equipment:
-        return ["Нет данных"]
-    lines = []
-    for key, value in sorted(character.equipment.items()):
-        lines.append(f"{key_map.get(key, key)}: {value}")
-    return lines
-
-
 def _inventory_lines(character: Character) -> list[str]:
     if not character.inventory:
         return ["Пусто"]

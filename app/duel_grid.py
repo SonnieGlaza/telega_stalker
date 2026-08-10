@@ -105,7 +105,9 @@ class DuelGridSession:
     message_ids: dict[str, int] = field(default_factory=dict)
 
     def active_player(self) -> int:
-        return self.turn_order[self.active_index % len(self.turn_order)]
+        from app.tactical_roster import resolve_active_player
+
+        return resolve_active_player(self)
 
     def opponent_of(self, player_id: int) -> int:
         return self.target_id if player_id == self.challenger_id else self.challenger_id

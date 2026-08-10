@@ -1,8 +1,56 @@
-"""Общие операции с рoster игроков в тактических group-сессиях."""
+"""Общие операции с roster игроков в тактических group-сессиях."""
 
 from __future__ import annotations
 
 from typing import Any
+
+
+def resolve_active_player(
+    session: Any,
+    *,
+    check_evacuated: bool = False,
+    empty_fallback: int | None = None,
+) -> int:
+    """Кто ходит сейчас — только чтение, без изменения active_index."""
+    turn_order = list(getattr(session, "turn_order", None) or [])
+    active_index = int(getattr(session, "active_index", 0) or 0)
+    hp_map: dict[str, int] = getattr(session, "hp", None) or {}
+    evacuated = set(getattr(session, "evacuated", None) or [])
+
+    def _alive(pid: int) -> bool:
+        if hp_map.get(str(pid), 0) <= 0:
+            return False
+        return not check_evacuated or pid not in evacuated
+
+    if not turn_order:
+        if empty_fallback is not None and _alive(empty_fallback):
+            return int(empty_fallback)
+        for pid in getattr(session, "player_ids", None) or []:
+            if _alive(int(pid)):
+                return int(pid)
+        return 0
+
+    n = len(turn_order)
+    for offset in range(n):
+        pid = int(turn_order[(active_index + offset) % n])
+        if _alive(pid):
+            return pid
+    return 0
+
+
+def is_downed_in_group_session(session: Any, telegram_id: int) -> bool:
+    """HP=0 на поле, сессия ещё идёт — смерть в БД откладывается до конца боя."""
+    if getattr(session, "finished", False):
+        return False
+    hp_map = getattr(session, "hp", None)
+    if not isinstance(hp_map, dict):
+        return False
+    if int(hp_map.get(str(telegram_id), 0)) > 0:
+        return False
+    evacuated = getattr(session, "evacuated", None)
+    if isinstance(evacuated, list) and int(telegram_id) in evacuated:
+        return False
+    return True
 
 
 def drop_player_from_tactical_roster(session: Any, telegram_id: int) -> None:

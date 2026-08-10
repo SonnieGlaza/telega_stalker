@@ -145,7 +145,6 @@ from app.game_logic import (
     ITEM_LABELS,
     append_survival_craving_notice,
     attack_location,
-    attempt_smuggling,
     start_smuggling_run,
     abandon_smuggling_run,
     resolve_smuggling_if_pending,
@@ -1788,7 +1787,39 @@ def _raid_grid_downed(storage: Storage, telegram_id: int) -> bool:
     session = get_raid_grid_session_by_player(storage, telegram_id)
     if session is None or getattr(session, "finished", False):
         return False
-    return int(session.hp.get(str(telegram_id), 0)) <= 0
+    from app.tactical_roster import is_downed_in_group_session
+
+    return is_downed_in_group_session(session, telegram_id)
+
+
+def _tactical_downed_message(storage: Storage, telegram_id: int) -> str | None:
+    """Сообщение для игрока с HP=0 на поле в активной group-сессии."""
+    from app.tactical_roster import is_downed_in_group_session
+
+    coop = get_coop_session_by_player(storage, telegram_id)
+    if coop is not None and is_downed_in_group_session(coop, telegram_id):
+        return (
+            "☠️ Ты без сознания на вылазке.\n"
+            "Жди эвакуации напарником или конца боя."
+        )
+    ncap = get_ncap_session(storage, telegram_id)
+    if ncap is not None and is_downed_in_group_session(ncap, telegram_id):
+        return (
+            "☠️ Ты выведен из строя на захвате.\n"
+            "Жди, пока союзники закончат бой."
+        )
+    cwar = get_cwar_session_by_player(storage, telegram_id)
+    if cwar is not None and is_downed_in_group_session(cwar, telegram_id):
+        return (
+            "☠️ Ты без сознания на штурме.\n"
+            "Жди, пока отряд закончит бой."
+        )
+    if _raid_grid_downed(storage, telegram_id):
+        return (
+            "☠️ Ты без сознания на рейде.\n"
+            "Жди, пока союзник поднимет аптечкой, или пока рейд не закончится."
+        )
+    return None
 
 
 def resolve_dead_player(
@@ -1826,6 +1857,10 @@ def resolve_dead_player(
     for session, default_cause in session_checks:
         session_hp = _session_hp_for_player(session, telegram_id)
         if session_hp is None or session_hp > 0:
+            continue
+        from app.tactical_roster import is_downed_in_group_session
+
+        if is_downed_in_group_session(session, telegram_id):
             continue
         death_causes = getattr(session, "death_causes", {}) or {}
         death_killers = getattr(session, "death_killers", {}) or {}
@@ -1953,11 +1988,9 @@ class DeadPlayerMenuMiddleware(BaseMiddleware):
                 return await handler(event, data)
         storage = get_storage()
         telegram_id = event.from_user.id
-        if _raid_grid_downed(storage, telegram_id):
-            await event.answer(
-                "☠️ Ты без сознания на рейде.\n"
-                "Жди, пока союзник поднимет аптечкой, или пока рейд не закончится."
-            )
+        downed_msg = _tactical_downed_message(storage, telegram_id)
+        if downed_msg is not None:
+            await event.answer(downed_msg)
             return None
         player = resolve_dead_player(storage, telegram_id)
         if player is not None:
@@ -1989,12 +2022,9 @@ class DeadPlayerCallbackMiddleware(BaseMiddleware):
             return await handler(event, data)
         storage = get_storage()
         telegram_id = event.from_user.id
-        if _raid_grid_downed(storage, telegram_id):
-            await safe_callback_answer(
-                event,
-                "☠️ Ты без сознания на рейде. Жди поднятия или конца боя.",
-                show_alert=True,
-            )
+        downed_msg = _tactical_downed_message(storage, telegram_id)
+        if downed_msg is not None:
+            await safe_callback_answer(event, downed_msg, show_alert=True)
             return None
         player = resolve_dead_player(storage, telegram_id, refresh_survival=False)
         if player is None:
@@ -3649,15 +3679,16 @@ async def _broadcast_duel_session(
     note: str | None = None,
     notes: dict[int, str] | None = None,
 ) -> None:
+    active_pid = session.active_player()
     for pid in (session.challenger_id, session.target_id):
         ch = storage.get_character(pid, refresh_energy=False)
-        is_active = session.active_player() == pid
+        is_active = active_pid == pid
         medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(ch)
         markup = duel_grid_keyboard(is_active_turn=is_active, medkit_available=medkit)
         caption = _duel_status_caption(storage, session, pid)
         action_note = (notes or {}).get(pid) or note
         if action_note:
-            caption = f"{caption}\n\n{action_note}" if pid == session.active_player() else f"{caption}\n\n↪ {action_note}"
+            caption = f"{caption}\n\n{action_note}" if pid == active_pid else f"{caption}\n\n↪ {action_note}"
         frame = render_duel_frame(storage, session, pid)
         msg_id = session.message_ids.get(str(pid))
         new_id = await _upsert_tactical_photo(
@@ -3720,14 +3751,15 @@ async def _broadcast_cwar_session(
     *,
     note: str | None = None,
 ) -> None:
+    active_pid = session.active_player()
     for pid in session.player_ids:
         ch = storage.get_character(pid, refresh_energy=False)
-        is_active = session.active_player() == pid
+        is_active = active_pid == pid
         medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(ch)
         markup = cwar_grid_keyboard(is_active_turn=is_active, medkit_available=medkit)
         caption = cwar_status_caption(storage, session, pid)
         if note:
-            caption = f"{caption}\n\n{note}" if pid == session.active_player() else f"{caption}\n\n↪ {note}"
+            caption = f"{caption}\n\n{note}" if pid == active_pid else f"{caption}\n\n↪ {note}"
         frame = render_cwar_frame(storage, session, pid)
         msg_id = session.message_ids.get(str(pid))
         new_id = await _upsert_tactical_photo(
@@ -3786,9 +3818,10 @@ async def _broadcast_rgrid_session(
     note: str | None = None,
     callback: CallbackQuery | None = None,
 ) -> None:
+    active_pid = session.active_player()
     for pid in session.participant_ids():
         ch = storage.get_character(pid, refresh_energy=False)
-        is_active = session.active_player() == pid
+        is_active = active_pid == pid
         medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(ch)
         revive_targets: list[tuple[int, str]] = []
         if is_active:
@@ -3805,7 +3838,7 @@ async def _broadcast_rgrid_session(
         )
         caption = rgrid_status_caption(storage, session, pid)
         if note:
-            caption = f"{caption}\n\n{note}" if pid == session.active_player() else f"{caption}\n\n↪ {note}"
+            caption = f"{caption}\n\n{note}" if pid == active_pid else f"{caption}\n\n↪ {note}"
         frame = render_rgrid_frame(storage, session, pid)
         msg_id = session.message_ids.get(str(pid))
         callback_message = callback.message if callback is not None and pid == callback.from_user.id else None
@@ -3870,14 +3903,15 @@ async def _broadcast_ncap_session(
     *,
     note: str | None = None,
 ) -> None:
+    active_pid = session.active_player()
     for pid in session.player_ids:
         player = storage.get_character(pid, refresh_energy=False)
-        is_active = session.active_player() == pid
+        is_active = active_pid == pid
         medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(player)
         markup = ncap_grid_keyboard(is_active_turn=is_active, medkit_available=medkit)
         caption = ncap_status_caption(session, player, pid)
         if note:
-            caption = f"{caption}\n\n{note}" if pid == session.active_player() else f"{caption}\n\n↪ {note}"
+            caption = f"{caption}\n\n{note}" if pid == active_pid else f"{caption}\n\n↪ {note}"
         frame = render_ncap_frame(storage, session, pid)
         msg_id = session.message_ids.get(str(pid))
         new_id = await _upsert_tactical_photo(
@@ -3992,15 +4026,16 @@ async def _broadcast_coop_session(
     *,
     note: str | None = None,
 ) -> None:
+    active_pid = session.active_player()
     for pid in session.player_ids:
         ch = storage.get_character(pid, refresh_energy=False)
-        is_active = session.active_player() == pid
+        is_active = active_pid == pid
         medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(ch)
         evac = can_evacuate(session, pid)
         markup = coop_mission_keyboard(is_active_turn=is_active, medkit_available=medkit, evac_available=evac)
         caption = coop_status_caption(session, storage, pid)
         if note:
-            caption = f"{caption}\n\n{note}" if pid == session.active_player() else f"{caption}\n\n↪ {note}"
+            caption = f"{caption}\n\n{note}" if pid == active_pid else f"{caption}\n\n↪ {note}"
         frame = render_coop_frame(storage, session, pid)
         msg_id = session.message_ids.get(str(pid))
         new_id = await _upsert_tactical_photo(

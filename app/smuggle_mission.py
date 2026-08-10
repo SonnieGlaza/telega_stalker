@@ -367,15 +367,6 @@ def _route_complete(session: SmuggleMissionSession) -> bool:
     return session.route_index >= len(session.route)
 
 
-def _lighten_icon(img: Image.Image, *, rgb: tuple[int, int, int] = (245, 240, 220)) -> Image.Image:
-    """Перекрасить тёмные пиксели иконки в светлый цвет (читаемость на тёмной сетке)."""
-    src = img.convert("RGBA")
-    _r, _g, _b, alpha = src.split()
-    light = Image.new("RGBA", src.size, (*rgb, 0))
-    light.putalpha(alpha)
-    return light
-
-
 def _load_smuggle_icon(name: str) -> Image.Image | None:
     path = SMUGGLE_ICONS_DIR / name
     if not path.is_file():
@@ -443,7 +434,7 @@ def smuggle_status_caption(session: SmuggleMissionSession, player: Character | N
     return (
         f"🚚 Контрабанда → «{session.destination}»\n"
         f"Транспорт: {transport} · маршрут {session.route_index}/{len(session.route)}\n"
-        f"Ход {session.moves}/{session.max_moves}"
+        f"Ход {session.moves + 1}/{session.max_moves}"
     )
 
 
@@ -558,164 +549,9 @@ def render_smuggle_frame(session: SmuggleMissionSession, character: Character | 
     )
     y = pt + 190
     draw.text((pl + 18, y), f"Маршрут: {session.route_index}/{len(session.route)}", fill=(150, 230, 170), font=body)
-    draw.text((pl + 18, y + 26), f"Ход {session.moves}/{session.max_moves}", fill=(200, 200, 200), font=small)
+    draw.text((pl + 18, y + 26), f"Ход {session.moves + 1}/{session.max_moves}", fill=(200, 200, 200), font=small)
     draw.text((pl + 18, y + 48), "Жёлтые — точки, линия — путь", fill=(170, 170, 170), font=small)
     draw.text((pl + 18, y + 72), f"Шанс сдачи ~{session.success_chance}%", fill=(200, 180, 140), font=small)
-
-    buf = BytesIO()
-    canvas.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def render_smuggle_showcase_frame(character: Character | None = None) -> bytes:
-    """Демо-карта: все виды транспорта, по одному NPC/мутанту, аномалия."""
-    session = SmuggleMissionSession(
-        destination="Болото",
-        origin="Росток",
-        transport="foot",
-        success_chance=55,
-        player=(1, 4),
-        route=[(0, 5), (5, 5), (2, 2)],
-        route_index=1,
-        hazards=[(5, 0)],
-        enemies=[(x, 0) for x in range(len(MUTANT_SPRITE_KEYS))],
-        enemy_kinds=list(MUTANT_SPRITE_KEYS),
-        npcs=[(x, 1) for x in range(len(NPC_SPRITE_KEYS))],
-        npc_kinds=list(NPC_SPRITE_KEYS),
-        moves=4,
-        max_moves=20,
-        location="Росток",
-    )
-    demo_transports: list[tuple[str, int, int, str]] = [
-        ("foot", 1, 4, "Пешком"),
-        ("bicycle", 2, 4, "Велосипед"),
-        ("niva", 3, 4, "Нива"),
-        ("truck", 4, 4, "Грузовик"),
-    ]
-
-    cell = 108
-    grid = session.grid
-    grid_px = grid * cell
-    margin = 24
-    panel_w = 340
-    width = margin + grid_px + 20 + panel_w + margin
-    height = max(margin + grid_px + margin, 820)
-    canvas = Image.new("RGBA", (width, height), (16, 18, 20, 255))
-    draw = ImageDraw.Draw(canvas)
-
-    field = (margin - 8, margin - 8, margin + grid_px + 8, margin + grid_px + 8)
-    draw.rounded_rectangle(field, radius=14, fill=(34, 36, 40, 255), outline=(70, 74, 80), width=2)
-
-    for gy in range(grid):
-        for gx in range(grid):
-            _draw_cell(canvas, margin + gx * cell, margin + gy * cell, cell)
-
-    _draw_route_lines(draw, margin, cell, session.route, session.route_index)
-
-    for i, (rx, ry) in enumerate(session.route):
-        cx = margin + rx * cell + cell // 2
-        cy = margin + ry * cell + cell // 2
-        done = i < session.route_index
-        ring = (100, 180, 110) if done else (255, 210, 70)
-        _paste_circle(canvas, _checkpoint_icon(i + 1, done), cx, cy, 56, ring_color=ring, ring_width=4)
-
-    for hx, hy in session.hazards:
-        cx = margin + hx * cell + cell // 2
-        cy = margin + hy * cell + cell // 2
-        sprite = mission_icon_image(ANOMALY_ICON_KEY)
-        if sprite is not None:
-            _paste_token_circle(canvas, sprite, cx, cy, MISSION_ICON_GRID_DIAMETER)
-        else:
-            _glow(canvas, cx, cy, (255, 120, 40), 24)
-
-    enemy_ring = (210, 55, 45)
-    for i, (ex, ey) in enumerate(session.enemies):
-        cx = margin + ex * cell + cell // 2
-        cy = margin + ey * cell + cell // 2
-        kind = session.enemy_kinds[i]
-        sprite = mutant_sprite_image(kind)
-        if sprite is not None:
-            _paste_circle(canvas, sprite, cx, cy, MISSION_MUTANT_GRID_DIAMETER, ring_color=enemy_ring, ring_width=3)
-        else:
-            _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=False)
-        label = MUTANT_SPRITES.get(kind, kind)
-        small = _load_font(11)
-        tw = draw.textlength(label, font=small)
-        draw.text((cx - tw / 2, cy + 42), label, fill=(210, 180, 170), font=small)
-
-    for i, (nx_, ny_) in enumerate(session.npcs):
-        cx = margin + nx_ * cell + cell // 2
-        cy = margin + ny_ * cell + cell // 2
-        kind = session.npc_kinds[i]
-        sprite = npc_sprite_image(kind)
-        if sprite is not None:
-            _paste_circle(canvas, sprite, cx, cy, MISSION_NPC_GRID_DIAMETER, ring_color=enemy_ring, ring_width=3)
-        else:
-            _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=True)
-        label = NPC_SPRITES.get(kind, kind)
-        small = _load_font(11)
-        tw = draw.textlength(label, font=small)
-        draw.text((cx - tw / 2, cy + 42), label, fill=(210, 180, 170), font=small)
-
-    for mode, tx, ty, label in demo_transports:
-        cx = margin + tx * cell + cell // 2
-        cy = margin + ty * cell + cell // 2
-        token = _transport_token(mode, character)
-        _paste_transport_token(
-            canvas,
-            token,
-            cx,
-            cy,
-            68,
-            is_photo=True,
-        )
-        small = _load_font(11)
-        tw = draw.textlength(label, font=small)
-        draw.text((cx - tw / 2, cy + 40), label, fill=(255, 220, 130), font=small)
-
-    for hx, hy in session.hazards:
-        cx = margin + hx * cell + cell // 2
-        cy = margin + hy * cell + cell // 2
-        small = _load_font(11)
-        label = "Аномалия"
-        tw = draw.textlength(label, font=small)
-        draw.text((cx - tw / 2, cy + 42), label, fill=(255, 170, 90), font=small)
-
-    pl = margin + grid_px + 20
-    pr = width - margin
-    pt = margin - 8
-    pb = height - margin + 8
-    draw.rounded_rectangle((pl, pt, pr, pb), radius=16, fill=(48, 50, 54, 255), outline=(100, 104, 110), width=2)
-    thumb = (pl + 16, pt + 14, pr - 16, pt + 120)
-    loc_img = _load_location_thumb(session.origin)
-    if loc_img is not None:
-        _paste_rounded(canvas, loc_img, thumb, radius=10)
-        ImageDraw.Draw(canvas).rounded_rectangle(thumb, radius=10, outline=(110, 120, 100), width=2)
-
-    body = _load_font(17)
-    small = _load_font(14)
-    tiny = _load_font(12)
-    draw.text((pl + 18, pt + 128), "Пример карты контрабанды", fill=(245, 245, 245), font=body)
-    draw.text((pl + 18, pt + 158), f"→ {session.destination}", fill=(255, 210, 120), font=body)
-    y = pt + 190
-    draw.text((pl + 18, y), "Маршрут: 3 точки (жёлтые)", fill=(150, 230, 170), font=small)
-    draw.text((pl + 18, y + 24), "Ряд 5: старт слева, финиш справа", fill=(170, 170, 170), font=tiny)
-    draw.text((pl + 18, y + 44), "Транспорт (ряд 4):", fill=(255, 220, 130), font=small)
-    for i, line in enumerate(
-        [
-            "• Пешком — фото персонажа",
-            "• Велосипед / Нива / грузовик — иконки",
-        ]
-    ):
-        draw.text((pl + 26, y + 64 + i * 18), line, fill=(200, 200, 200), font=tiny)
-    y2 = y + 110
-    draw.text((pl + 18, y2), "Мутанты (верхний ряд):", fill=(220, 140, 130), font=small)
-    for i, (_key, name) in enumerate(MUTANT_SPRITES.items()):
-        draw.text((pl + 26, y2 + 22 + i * 16), f"• {name}", fill=(190, 190, 190), font=tiny)
-    y3 = y2 + 22 + len(MUTANT_SPRITES) * 16 + 8
-    draw.text((pl + 18, y3), "НПС (2-й ряд):", fill=(220, 140, 130), font=small)
-    for i, (_key, name) in enumerate(NPC_SPRITES.items()):
-        draw.text((pl + 26, y3 + 22 + i * 16), f"• {name}", fill=(190, 190, 190), font=tiny)
 
     buf = BytesIO()
     canvas.save(buf, format="PNG")
@@ -755,9 +591,13 @@ def _abort_smuggle_combat_death(storage: Storage, telegram_id: int, reason: str)
 
 
 def _fail_smuggle_run(storage: Storage, telegram_id: int, reason: str) -> str:
-    """Провал рейса со штрафом (смерть, тайм-аут, срыв)."""
+    """Провал рейса со штрафом (тайм-аут, срыв). Без штрафа если уже мёртв."""
     from app.game_logic import fail_smuggling_delivery, get_active_smuggling
 
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is not None and player.health <= 0:
+        _clear_smuggle_run(storage, telegram_id)
+        return reason.strip() or "Рейс сорван."
     if get_active_smuggling(storage, telegram_id) is not None or get_smuggle_session(storage, telegram_id):
         return fail_smuggling_delivery(storage, telegram_id, reason)
     _clear_smuggle_run(storage, telegram_id)
@@ -786,11 +626,11 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
     if _is_dead(player):
         from app.game_logic import peek_death_cause
 
-        _fail_smuggle_run(storage, telegram_id, "Рейс контрабанды сорван.")
+        fail_text = _abort_smuggle_combat_death(storage, telegram_id, "Рейс контрабанды сорван.")
         cause = peek_death_cause(storage, telegram_id) or "combat"
         return ActionResult(
             False,
-            _dead_block_text(),
+            fail_text,
             payload={
                 "mission_active": False,
                 "mission_dead": True,

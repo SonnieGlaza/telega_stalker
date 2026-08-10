@@ -151,14 +151,9 @@ class NeutralCaptureSession:
     message_ids: dict[str, int] = field(default_factory=dict)
 
     def active_player(self) -> int:
-        if not self.turn_order:
-            return self.host_id
-        for _ in range(len(self.turn_order)):
-            pid = self.turn_order[self.active_index % len(self.turn_order)]
-            if self.hp.get(str(pid), 0) > 0:
-                return pid
-            self.active_index += 1
-        return 0
+        from app.tactical_roster import resolve_active_player
+
+        return resolve_active_player(self, empty_fallback=self.host_id)
 
     def pos(self, player_id: int) -> tuple[int, int]:
         raw = self.positions.get(str(player_id), [0, 0])

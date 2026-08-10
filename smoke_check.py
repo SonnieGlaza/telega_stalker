@@ -8,7 +8,6 @@ from app.game_logic import (
     ITEM_LABELS,
     SHOP_ITEMS,
     attack_location,
-    attempt_smuggling,
     buy_item,
     build_alliance_overview,
     build_economy_overview,
@@ -1353,6 +1352,36 @@ def run_smoke_check() -> None:
         coop = create_coop_lobby(storage, 111)
         assert coop.ok, coop.text
         assert get_coop_lobby_by_player(storage, 111) is not None
+
+        # active_player() must not mutate active_index; downed defer death.
+        from app.coop_mission import CoopMissionSession
+        from app.tactical_roster import is_downed_in_group_session, resolve_active_player
+
+        coop_sess = CoopMissionSession(
+            session_id="t",
+            lobby_id="l",
+            location="Кордон",
+            player_ids=[111, 222],
+            turn_order=[111, 222],
+            active_index=0,
+            hp={"111": 0, "222": 50},
+        )
+        idx_before = coop_sess.active_index
+        assert coop_sess.active_player() == 222
+        assert coop_sess.active_player() == 222
+        assert coop_sess.active_index == idx_before
+        assert is_downed_in_group_session(coop_sess, 111)
+        assert resolve_active_player(coop_sess, check_evacuated=True) == 222
+
+        from app.bot import resolve_dead_player
+
+        storage.change_health(111, 100)
+        player_alive = storage.get_character(111, refresh_energy=False)
+        assert player_alive is not None and player_alive.health > 0
+        dead = resolve_dead_player(storage, 111, refresh_survival=False)
+        assert dead is None
+        player_still = storage.get_character(111, refresh_energy=False)
+        assert player_still is not None and player_still.health > 0
 
         from app.html_utils import nickname_validation_error
 
