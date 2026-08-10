@@ -216,6 +216,8 @@ from app.game_logic import (
     WAR_ALLY_SUCCESS_RATING,
     WAR_LOBBY_ENERGY_COST,
     RATING_REWARD,
+    QUESTS,
+    QUEST_RATING_BY_DIFFICULTY,
     ARTIFACT_SEARCH_ENERGY_COST,
     DEPOT_RAID_ENERGY_COST,
     TOPUP_RATE_RU_PER_STAR,
@@ -1130,8 +1132,9 @@ def _build_info_text(player: Character) -> str:
         f"хост +{WAR_SUCCESS_PAY_RU}/+{RATING_REWARD['war_success']} рейт., "
         f"союзники +{WAR_ALLY_SUCCESS_PAY_RU}/+{WAR_ALLY_SUCCESS_RATING} рейт.).\n"
         "• ⚔️ Арена: на домашней базе, поле 8×8, бесконечные волны; 3 аптечки арены (+45 HP); "
-        "учебный бой — HP в БД не трогается; награда как лёгкое задание (472–717 RU, +4 рейтинга), "
-        "если зачистил ≥1 волну.\n"
+        "тренировка без штрафов смерти (HP/ресурсы как при входе); награда как лёгкое задание "
+        f"({QUESTS['easy'].reward_min}–{QUESTS['easy'].reward_max} RU, +{QUEST_RATING_BY_DIFFICULTY['easy'][0]} рейтинга), "
+        "если зачистил ≥1 волну — даже при падении.\n"
         "• 🎖 Скины по рейтингу: 0 / 500 / 2000 / 5000.\n"
         "• 📅 Сезон рейтинга: раз в 14 дней топ-3 получает эксклюзивную снарягу "
         "(🥇 пушка+броня, 🥈 пушка, 🥉 броня; у торговца не продаётся).\n\n"
@@ -4206,13 +4209,6 @@ async def _broadcast_arena_session(
     from app.arena_grid import patch_arena_message_id
 
     patch_arena_message_id(storage, session.session_id, new_id)
-    await _push_fresh_tactical_deaths(
-        bot,
-        storage,
-        session,
-        [int(session.telegram_id)],
-        cause_default="arena",
-    )
 
 
 async def _handle_arena_action(bot: Bot, callback: CallbackQuery, result: Any) -> None:
@@ -4223,7 +4219,8 @@ async def _handle_arena_action(bot: Bot, callback: CallbackQuery, result: Any) -
         tid = int(payload.get("telegram_id") or callback.from_user.id)
         if msg_id:
             await _clear_tactical_keyboards(bot, {str(tid): int(msg_id)})
-        await _deliver_player_message_or_death(bot, tid, result.text, cause="arena")
+        # Арена — тренировка: без экрана смерти и автореспавна.
+        await bot.send_message(tid, action_result_text(tid, result.text))
         await safe_callback_answer(callback, "Арена завершена")
         return
     if not result.ok:
@@ -7757,7 +7754,7 @@ async def run_bot() -> None:
                         msg_id = payload.get("message_id")
                         if msg_id:
                             await _clear_tactical_keyboards(bot, {str(pid): int(msg_id)})
-                        await _deliver_player_message_or_death(bot, pid, result.text, cause="arena")
+                        await bot.send_message(pid, action_result_text(pid, result.text))
                         continue
                     session = get_arena_session(storage, pid)
                     if session:

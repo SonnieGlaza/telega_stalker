@@ -22,7 +22,7 @@ from app.game_logic import (
     h,
 )
 from app.storage import Storage
-from app.tactical_hp import finalize_solo_tactical_hp
+from app.tactical_hp import sync_session_hp_to_db
 from app.tactical_combat import (
     MOVE_DELTAS,
     NPC_MOVE_CHANCE,
@@ -94,6 +94,7 @@ class ArenaGridSession:
     player_pos: tuple[int, int] = (1, 3)
     hp: int = 100
     max_hp: int = 100
+    entry_hp: int = 100  # HP в БД на входе — восстанавливаем при любом выходе
     arena_medkits: int = ARENA_START_MEDKITS
     player_weapon: str = "ПМ"
     player_armor_level: int = 0
@@ -118,6 +119,7 @@ class ArenaGridSession:
             "player_pos": list(self.player_pos),
             "hp": self.hp,
             "max_hp": self.max_hp,
+            "entry_hp": self.entry_hp,
             "arena_medkits": self.arena_medkits,
             "player_weapon": self.player_weapon,
             "player_armor_level": self.player_armor_level,
@@ -133,6 +135,9 @@ class ArenaGridSession:
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> ArenaGridSession:
         pp = raw.get("player_pos") or [1, 3]
+        max_hp = int(raw.get("max_hp") or 100)
+        entry_raw = raw.get("entry_hp")
+        entry_hp = int(entry_raw) if entry_raw is not None else max_hp
         return cls(
             session_id=str(raw.get("session_id") or ""),
             telegram_id=int(raw.get("telegram_id") or 0),
@@ -144,7 +149,8 @@ class ArenaGridSession:
             hostile_weapons=[str(w) for w in (raw.get("hostile_weapons") or [])],
             player_pos=(int(pp[0]), int(pp[1])),
             hp=int(raw.get("hp") or 0),
-            max_hp=int(raw.get("max_hp") or 100),
+            max_hp=max_hp,
+            entry_hp=max(1, entry_hp),
             arena_medkits=int(raw.get("arena_medkits") or 0),
             player_weapon=str(raw.get("player_weapon") or "ПМ"),
             player_armor_level=int(raw.get("player_armor_level") or 0),
@@ -351,31 +357,30 @@ def _arena_apply_damage(raw: int, armor_level: int) -> int:
 
 
 def _finalize_arena_reward(storage: Storage, session: ArenaGridSession, *, reason: str) -> ActionResult:
+    """Награда за ≥1 волну; смерть на арене не отменяет выплату и не даёт штрафов."""
     quest = QUESTS["easy"]
     rating_gain = QUEST_RATING_BY_DIFFICULTY["easy"][0]
-    if session.hp <= 0:
-        text = (
-            f"🏟 Арена «{session.home_base}» завершена.\n"
-            f"{reason}\n"
-            f"Пройдено волн: {session.waves_cleared}.\n"
-            "Выведен из строя — награды нет."
-        )
-    elif session.waves_cleared >= 1:
+    fell = session.hp <= 0
+    if session.waves_cleared >= 1:
         reward = random.randint(quest.reward_min, quest.reward_max)
         storage.change_money(session.telegram_id, reward)
         _add_rating(storage, session.telegram_id, rating_gain)
         storage.add_player_stat(session.telegram_id, "money_earned", reward)
+        outcome = "Падение на арене." if fell else reason
         text = (
             f"🏟 Арена «{session.home_base}» завершена.\n"
-            f"{reason}\n"
+            f"{outcome}\n"
             f"Пройдено волн: {session.waves_cleared}.\n"
-            f"Награда (как лёгкое задание): {reward} RU, рейтинг +{rating_gain}."
+            f"Награда (как лёгкое задание): {reward} RU, рейтинг +{rating_gain}.\n"
+            "Тренировка: HP и ресурсы как при входе, без штрафов смерти."
         )
     else:
+        outcome = "Падение на арене." if fell else reason
         text = (
             f"🏟 Арена «{session.home_base}» завершена.\n"
-            f"{reason}\n"
-            f"Волны не пройдены — награды нет."
+            f"{outcome}\n"
+            f"Волны не пройдены — награды нет.\n"
+            "Тренировка: HP и ресурсы как при входе, без штрафов смерти."
         )
     return ActionResult(
         True,
@@ -385,8 +390,19 @@ def _finalize_arena_reward(storage: Storage, session: ArenaGridSession, *, reaso
             "telegram_id": session.telegram_id,
             "waves_cleared": session.waves_cleared,
             "message_id": session.message_id,
+            "soft_exit": True,
         },
     )
+
+
+def _restore_arena_entry_hp(storage: Storage, session: ArenaGridSession) -> None:
+    """Вернуть HP персонажа к значению на входе в арену (без смерти/лута)."""
+    player = storage.get_character(session.telegram_id, refresh_energy=False)
+    if player is None:
+        return
+    max_hp = effective_max_health(player)
+    restore_to = max(1, min(max_hp, int(session.entry_hp or player.health or 1)))
+    sync_session_hp_to_db(storage, session.telegram_id, restore_to, force=True)
 
 
 def _end_session(
@@ -400,7 +416,8 @@ def _end_session(
         payload = dict(result.payload or {})
         payload["message_id"] = session.message_id
         return ActionResult(result.ok, result.text, payload=payload)
-    finalize_solo_tactical_hp(storage, session.telegram_id, session.hp, cause="arena")
+    # Арена — тренировка: не пишем полевое HP/смерть в БД, только откат к входу.
+    _restore_arena_entry_hp(storage, session)
     session.finished = True
     if expected_seq is not None:
         if not _save_turn(storage, session, expected_seq):
@@ -421,6 +438,7 @@ def _end_session(
     clear_arena_session(storage, session)
     payload = dict(result.payload or {})
     payload["message_id"] = msg_id
+    payload["soft_exit"] = True
     return ActionResult(result.ok, result.text, payload=payload)
 
 
@@ -484,12 +502,15 @@ def start_arena(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Ты уже на арене.")
 
     session_id = uuid.uuid4().hex[:12]
+    max_hp = effective_max_health(player)
+    entry_hp = max(1, min(max_hp, int(player.health)))
     session = ArenaGridSession(
         session_id=session_id,
         telegram_id=telegram_id,
         home_base=home,
-        max_hp=effective_max_health(player),
-        hp=effective_max_health(player),
+        max_hp=max_hp,
+        hp=max_hp,
+        entry_hp=entry_hp,
         arena_medkits=ARENA_START_MEDKITS,
     )
     _build_arena_map(session)

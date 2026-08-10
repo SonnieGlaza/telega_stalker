@@ -873,13 +873,46 @@ def run_smoke_check() -> None:
 
         storage.set_location(111, faction_home_base("Долг"))
         storage.clear_travel(111)
+        # Soft death: HP/inventory preserved, reward still paid if waves cleared.
+        storage.change_health(111, 80 - storage.get_character(111, refresh_energy=False).health)
+        storage.add_item(111, "medkit", 5)
+        entry_hp = storage.get_character(111, refresh_energy=False).health
+        entry_medkits = int(storage.get_character(111, refresh_energy=False).inventory.get("medkit", 0))
         money_before = storage.get_character(111, refresh_energy=False).money
+        deaths_before = storage.get_player_stats(111)["deaths"]
         arena_start = start_arena(storage, 111)
         assert arena_start.ok, arena_start.text
         arena_session = get_arena_session(storage, 111)
         assert arena_session is not None
         assert arena_session.arena_medkits == 3
+        assert arena_session.entry_hp == entry_hp
         assert arena_session.home_base == faction_home_base("Долг")
+        arena_session.waves_cleared = 1
+        arena_session.hp = 0  # simulate fall
+        save_arena_session(storage, arena_session)
+        from app.arena_grid import _end_session, _finalize_arena_reward
+
+        arena_end = _end_session(
+            storage,
+            arena_session,
+            _finalize_arena_reward(storage, arena_session, reason="пал"),
+        )
+        assert arena_end.ok, arena_end.text
+        assert get_arena_session(storage, 111) is None
+        after = storage.get_character(111, refresh_energy=False)
+        assert after.health == entry_hp
+        assert int(after.inventory.get("medkit", 0)) == entry_medkits
+        assert storage.get_player_stats(111)["deaths"] == deaths_before
+        money_after = after.money
+        assert money_after - money_before >= QUESTS["easy"].reward_min
+        assert money_after - money_before <= QUESTS["easy"].reward_max
+
+        # Forfeit path also soft-restores entry HP.
+        money_before = storage.get_character(111, refresh_energy=False).money
+        arena_start = start_arena(storage, 111)
+        assert arena_start.ok, arena_start.text
+        arena_session = get_arena_session(storage, 111)
+        assert arena_session is not None
         arena_session.waves_cleared = 1
         save_arena_session(storage, arena_session)
         arena_end = arena_forfeit(storage, 111)
@@ -888,6 +921,7 @@ def run_smoke_check() -> None:
         money_after = storage.get_character(111, refresh_energy=False).money
         assert money_after - money_before >= QUESTS["easy"].reward_min
         assert money_after - money_before <= QUESTS["easy"].reward_max
+        assert storage.get_character(111, refresh_energy=False).health == entry_hp
 
         # War lobby.
         war_create = create_or_join_war_lobby(storage, 111, "Свалка")
