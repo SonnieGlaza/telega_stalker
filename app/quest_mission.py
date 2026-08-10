@@ -858,7 +858,11 @@ def start_or_resume_quest_mission(
         "Зелёная обводка — ты и цели (собери их). Красная — враги. Аномалии без обводки.\n"
         "Дойди до целей и вернись на старт (зелёная рамка клетки).\n"
         "Мутанты и НПС с шансом 50% сдвигаются на соседнюю клетку каждый ход."
-        + (" 🔫 НПС можно расстреливать с места — кнопки стрельбы по направлениям." if want_npc else ""),
+        + (
+            " 🔫 Мутантов и НПС можно расстреливать с места — кнопки стрельбы по направлениям."
+            if want_mut or want_npc
+            else ""
+        ),
         payload={
             "mission_image": image,
             "mission_active": True,
@@ -972,8 +976,21 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
 
 
 def mission_shoot_available(session: QuestMissionSession) -> bool:
-    """Стрельба по НПС доступна, пока мародёры на поле."""
-    return len(session.npcs) > 0
+    """Стрельба доступна, пока на поле есть мутанты или НПС."""
+    return len(session.npcs) > 0 or len(session.enemies) > 0
+
+
+def _remove_enemy_at(session: QuestMissionSession, pos: tuple[int, int]) -> str:
+    if pos not in session.enemies:
+        return "мутанта"
+    idx = session.enemies.index(pos)
+    session.enemies.pop(idx)
+    kind = ""
+    if idx < len(session.enemy_kinds):
+        kind = session.enemy_kinds.pop(idx)
+    from app.death_flavor import killer_label_for_kind
+
+    return killer_label_for_kind(kind, npc=False) if kind else "мутанта"
 
 
 def _remove_npc_at(session: QuestMissionSession, pos: tuple[int, int]) -> str:
@@ -1087,7 +1104,7 @@ def shoot_quest_mission(storage: Storage, telegram_id: int, direction: str) -> A
     if session is None:
         return ActionResult(False, "Сначала начни работу по контракту.")
     if not mission_shoot_available(session):
-        return ActionResult(False, "НПС на поле нет — стрелять некого.", payload={"mission_active": True})
+        return ActionResult(False, "Врагов на поле нет — стрелять некого.", payload={"mission_active": True})
     if direction not in MOVE_DELTAS:
         return ActionResult(False, "Некорректное направление.")
     player = storage.get_character(telegram_id, refresh_energy=False)
@@ -1115,14 +1132,16 @@ def shoot_quest_mission(storage: Storage, telegram_id: int, direction: str) -> A
     if shoot_range <= 0:
         return ActionResult(False, "Это оружие не стреляет на дистанции.", payload={"mission_active": True})
 
-    targets = {pos: "npc" for pos in session.npcs}
-    blockers = set(session.enemies)
+    targets: dict[tuple[int, int], str] = {
+        pos: "mutant" for pos in session.enemies
+    }
+    targets.update({pos: "npc" for pos in session.npcs})
     hit_cell, hit_kind = ray_cast_first_hit(
         session.player,
         direction,
         grid=session.grid,
         max_range=shoot_range,
-        blockers=blockers,
+        blockers=set(),
         targets=targets,
     )
 
@@ -1134,6 +1153,11 @@ def shoot_quest_mission(storage: Storage, telegram_id: int, direction: str) -> A
         notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).")
         if session.kind == "clear_marauder" and not session.npcs:
             notes.append("Зона зачищена от мародёров.")
+    elif hit_cell is not None and hit_kind == "mutant":
+        label = _remove_enemy_at(session, hit_cell)
+        notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).")
+        if session.kind == "clear_mutant" and not session.enemies:
+            notes.append("Зона зачищена от мутантов.")
     else:
         notes.append(f"{h(player.nickname)} промахнулся ({weapon}).")
 

@@ -421,6 +421,26 @@ def run_smoke_check() -> None:
         assert len(after_shoot.npcs) == 1
         assert "поразил" in shoot.text.lower()
 
+        # clear_mutant (Зачистка Радара): стрельба по мутантам.
+        radar_tpl = QUEST_CONTRACTS["impossible_radar"]
+        radar_sess = _build_session(radar_tpl, QUESTS["impossible"])
+        assert radar_tpl.mission_kind == "clear_mutant"
+        assert mission_shoot_available(radar_sess)
+        radar_sess.player = (0, 0)
+        radar_sess.start = (5, 5)
+        radar_sess.enemies = [(1, 0), (2, 0)]
+        radar_sess.enemy_kinds = ["blind_dog", "tushkano"]
+        radar_sess.npcs = []
+        radar_sess.npc_kinds = []
+        radar_sess.turn_seq = 0
+        save_mission_session(storage, 111, radar_sess)
+        mutant_shoot = shoot_quest_mission(storage, 111, "right")
+        assert mutant_shoot.ok, mutant_shoot.text
+        after_mutant = get_mission_session(storage, 111)
+        assert after_mutant is not None
+        assert len(after_mutant.enemies) == 1
+        assert "поразил" in mutant_shoot.text.lower()
+
         # Impossible: всё вместе.
         imp_tpl = QUEST_CONTRACTS["impossible_radar"]
         imp_sess = _build_session(imp_tpl, QUESTS["impossible"])
