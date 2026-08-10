@@ -181,7 +181,7 @@ def player_busy_reason(storage: Storage, telegram_id: int, *, skip: str | None =
     """Вернёт текст блокировки или None если свободен. skip: duel|coop|quest|hunt|cwar|ncap|rgrid|arena|travel|smuggle."""
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is not None and player.health <= 0:
-        return None
+        return "Ты без сознания — сначала респавн (/respawn)."
 
     from app.duel_grid import get_duel_session_by_player
     from app.coop_mission import get_coop_session_by_player, get_coop_lobby_by_player

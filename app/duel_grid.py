@@ -654,6 +654,10 @@ def duel_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     _advance_turn(session)
     done = _after_turn_mutants(storage, session)
     if done:
+        if not _save_if_turn_ok(storage, session, turn_seq):
+            return ActionResult(False, STALE_TURN_MESSAGE)
+        if item_key:
+            apply_tactical_medkit_spend(storage, telegram_id, item_key, result)
         return done
     if not _save_if_turn_ok(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)

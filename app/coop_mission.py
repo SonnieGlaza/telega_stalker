@@ -1163,6 +1163,10 @@ def coop_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     _maybe_radio_chatter(session, storage)
     wipe = _check_team_wipe(storage, session)
     if wipe:
+        if not _save_if_turn_ok(storage, session, turn_seq):
+            return ActionResult(False, STALE_TURN_MESSAGE)
+        if item_key:
+            apply_tactical_medkit_spend(storage, telegram_id, item_key, result)
         return wipe
     if not _save_if_turn_ok(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)

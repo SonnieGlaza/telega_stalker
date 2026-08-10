@@ -1807,6 +1807,10 @@ def _tactical_downed_message(storage: Storage, telegram_id: int) -> str | None:
     """Сообщение для игрока с HP=0 на поле в активной group-сессии."""
     from app.tactical_roster import is_downed_in_group_session
 
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is not None and player.health <= 0:
+        return None
+
     coop = get_coop_session_by_player(storage, telegram_id)
     if coop is not None and is_downed_in_group_session(coop, telegram_id):
         return (
@@ -4344,7 +4348,7 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
             )
             return
 
-        if payload.get("mission_done") or not payload.get("mission_active"):
+        if payload.get("mission_done") or payload.get("mission_active") is False:
             await reply_action_result(callback, result.text)
             player = storage.get_character(telegram_id, refresh_energy=False)
             if player is not None and callback.message is not None:
@@ -4418,7 +4422,7 @@ async def smuggle_mission_callback(callback: CallbackQuery) -> None:
             )
             return
 
-        if payload.get("mission_done") or not payload.get("mission_active"):
+        if payload.get("mission_done") or payload.get("mission_active") is False:
             await reply_action_result(callback, result.text)
             return
 
@@ -5129,7 +5133,7 @@ async def artifact_hunt_callback(callback: CallbackQuery) -> None:
             )
             return
 
-        if payload.get("hunt_done") or not payload.get("hunt_active"):
+        if payload.get("hunt_done") or payload.get("hunt_active") is False:
             await reply_action_result(callback, result.text)
             return
 
@@ -5635,7 +5639,7 @@ async def show_coop_menu(message: Message, bot: Bot) -> None:
             markup=markup,
         )
         session.message_ids[str(player.telegram_id)] = new_id
-        save_coop_session(storage, session)
+        _patch_coop_message_ids(storage, session)
         return
     lobby = get_coop_lobby_by_player(storage, player.telegram_id)
     text = coop_menu_text(storage, player.telegram_id)

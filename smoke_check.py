@@ -359,6 +359,21 @@ def run_smoke_check() -> None:
 
         session = get_mission_session(storage, 111)
         assert session is not None
+        from app.quest_mission import _save_mission_if_turn_ok
+
+        hp_before_stale = storage.get_character(111, refresh_energy=False).health
+        stale_seq = session.turn_seq
+        session.turn_seq = stale_seq + 1
+        save_mission_session(storage, 111, session)
+        session = get_mission_session(storage, 111)
+        assert session is not None
+        session.turn_seq = stale_seq + 2
+        assert not _save_mission_if_turn_ok(storage, 111, session, stale_seq)
+        assert storage.get_character(111, refresh_energy=False).health == hp_before_stale
+        assert get_mission_session(storage, 111) is not None
+
+        session = get_mission_session(storage, 111)
+        assert session is not None
         assert session.kind == "collect"
         assert len(session.objectives) >= 1
         # Easy: только аномалии, без мутантов/НПС.
@@ -1346,7 +1361,7 @@ def run_smoke_check() -> None:
         assert get_ncap_session(storage, 111) is None
 
         # Coop lobby creation.
-        from app.coop_mission import create_coop_lobby, get_coop_lobby_by_player
+        from app.coop_mission import create_coop_lobby, get_coop_lobby_by_player, save_coop_session
 
         storage.restore_energy(111, 100)
         coop = create_coop_lobby(storage, 111)
@@ -1372,6 +1387,28 @@ def run_smoke_check() -> None:
         assert coop_sess.active_index == idx_before
         assert is_downed_in_group_session(coop_sess, 111)
         assert resolve_active_player(coop_sess, check_evacuated=True) == 222
+
+        from app.bot import _tactical_downed_message
+
+        save_coop_session(
+            storage,
+            CoopMissionSession(
+                session_id="downed-dead",
+                lobby_id="ld",
+                location="Кордон",
+                player_ids=[111, 222],
+                turn_order=[111, 222],
+                hp={"111": 0, "222": 50},
+            ),
+        )
+        storage.change_health(111, -storage.get_character(111, refresh_energy=False).health)
+        assert _tactical_downed_message(storage, 111) is None
+        from app.coop_mission import clear_coop_session, get_coop_session_by_player
+
+        dead_coop = get_coop_session_by_player(storage, 111)
+        if dead_coop is not None:
+            clear_coop_session(storage, dead_coop)
+        storage.change_health(111, 100)
 
         from app.bot import resolve_dead_player
 
@@ -1532,7 +1569,7 @@ def run_smoke_check() -> None:
         assert reloaded.message_ids.get("111") == 200
         clear_coop_session(storage, reloaded)
 
-        from app.game_logic import respawn_character, RESPAWN_HEALTH
+        from app.game_logic import respawn_character, RESPAWN_HEALTH, is_traveling
 
         save_coop_session(
             storage,
@@ -1553,6 +1590,18 @@ def run_smoke_check() -> None:
         after = storage.get_character(111, refresh_energy=False)
         assert after is not None and after.health == RESPAWN_HEALTH
         assert get_coop_session_by_player(storage, 111) is None
+
+        storage.set_location(111, faction_home_base("Долг"))
+        travel = travel_to(storage, 111, "Болото")
+        assert travel.ok, travel.text
+        assert is_traveling(storage.get_character(111, refresh_energy=False))
+        storage.change_health(111, -10_000)
+        travel_respawn = respawn_character(storage, 111)
+        assert travel_respawn.ok, travel_respawn.text
+        after_travel = storage.get_character(111, refresh_energy=False)
+        assert after_travel is not None
+        assert not is_traveling(after_travel)
+        assert after_travel.travel_destination is None
 
         save_smuggle_session(
             storage,

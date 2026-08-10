@@ -1715,6 +1715,7 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
     storage.restore_energy(telegram_id, RESPAWN_ENERGY - current_energy)
     home = faction_home_base(player.faction)
     storage.set_location(telegram_id, home)
+    storage.clear_travel(telegram_id)
     pop_death_cause(storage, telegram_id)
     pop_death_killer(storage, telegram_id)
     clear_death_notice_sent(storage, telegram_id)
