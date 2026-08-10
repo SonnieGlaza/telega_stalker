@@ -425,15 +425,15 @@ def _resolve_smuggle_hostile(
     *,
     kinds_attr: str | None = None,
     npc: bool = False,
-) -> tuple[Character, str | None, ActionResult | None]:
+) -> tuple[Character, str | None, ActionResult | None, int]:
+    """Вернуть (player, note, dead_result, damage) без записи урона в БД."""
     from app.death_flavor import encounter_phrase_for_kind, killer_label_for_kind
 
     compat = _as_quest_compat(session)
     units: list[tuple[int, int]] = getattr(compat, unit_attr)
     if session.player not in units:
-        return player, None, None
+        return player, None, None, 0
     dmg = _combat_damage(session.location, session.difficulty, player)
-    storage.change_health(telegram_id, -dmg)
     kinds: list[str] | None = getattr(compat, kinds_attr) if kinds_attr else None
     kind = ""
     if kinds is not None and len(kinds) == len(units):
@@ -447,8 +447,8 @@ def _resolve_smuggle_hostile(
         setattr(compat, unit_attr, [e for e in units if e != session.player])
     phrase = encounter_phrase_for_kind(kind, npc=npc) if kind else f"с {label}"
     note = f"Бой {phrase}: −{dmg} HP."
-    player = storage.get_character(telegram_id, refresh_energy=False) or player
-    if player.health <= 0:
+    projected_hp = int(player.health) - dmg
+    if projected_hp <= 0:
         remember_death_cause(storage, telegram_id, "npc" if npc else "mutant")
         killer_name = killer_label_for_kind(kind, npc=npc) if kind else label
         from app.game_logic import remember_death_killer
@@ -467,8 +467,9 @@ def _resolve_smuggle_hostile(
                     "death_cause": "npc" if npc else "mutant",
                 },
             ),
+            dmg,
         )
-    return player, note, None
+    return player, note, None, dmg
 
 
 def _visit_route_checkpoint(session: SmuggleMissionSession) -> str | None:
@@ -784,10 +785,12 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
     session.moves += 1
     notes: list[str] = []
     compat = _as_quest_compat(session)
+    pending_damage = 0
+    death_result: ActionResult | None = None
 
-    def _fight(label: str, unit_attr: str, *, kinds_attr: str | None = None, npc: bool = False) -> ActionResult | None:
-        nonlocal player, notes
-        player, note, dead_result = _resolve_smuggle_hostile(
+    def _fight(label: str, unit_attr: str, *, kinds_attr: str | None = None, npc: bool = False) -> None:
+        nonlocal player, notes, pending_damage, death_result
+        player, note, dead, dmg = _resolve_smuggle_hostile(
             storage,
             telegram_id,
             session,
@@ -797,41 +800,25 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
             kinds_attr=kinds_attr,
             npc=npc,
         )
+        pending_damage += dmg
         if note:
             notes.append(note)
-        if dead_result is not None:
-            fail_text = _abort_smuggle_combat_death(
-                storage, telegram_id, "Погиб на маршруте — груз потерян."
-            )
-            payload = dead_result.payload or {}
-            return ActionResult(
-                False,
-                fail_text,
-                payload=payload,
-            )
-        return None
+        if dead is not None:
+            death_result = dead
 
-    dead = _fight("мутантом", "enemies", kinds_attr="enemy_kinds")
-    if dead:
-        return dead
-    dead = _fight("НПС", "npcs", kinds_attr="npc_kinds", npc=True)
-    if dead:
-        return dead
+    _fight("мутантом", "enemies", kinds_attr="enemy_kinds")
+    _fight("НПС", "npcs", kinds_attr="npc_kinds", npc=True)
 
     if session.player in session.hazards:
         dmg = _hazard_damage("scout", player)
-        storage.change_health(telegram_id, -dmg)
+        pending_damage += dmg
         session.hazards = [h for h in session.hazards if h != session.player]
         notes.append(f"Аномалия: −{dmg} HP.")
-        player = storage.get_character(telegram_id, refresh_energy=False) or player
-        if player.health <= 0:
-            fail_text = _abort_smuggle_combat_death(
-                storage, telegram_id, "Аномалия на маршруте. Груз потерян."
-            )
+        if int(player.health) - pending_damage <= 0:
             remember_death_cause(storage, telegram_id, "anomaly")
-            return ActionResult(
+            death_result = ActionResult(
                 False,
-                fail_text,
+                "Аномалия на маршруте. Груз потерян.",
                 payload={
                     "mission_active": False,
                     "mission_dead": True,
@@ -845,14 +832,23 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
         notes.append(route_note)
 
     notes.extend(_maybe_move_hostiles(compat))
-    dead = _fight("мутанта", "enemies", kinds_attr="enemy_kinds")
-    if dead:
-        return dead
-    dead = _fight("НПС", "npcs", kinds_attr="npc_kinds", npc=True)
-    if dead:
-        return dead
+    _fight("мутанта", "enemies", kinds_attr="enemy_kinds")
+    _fight("НПС", "npcs", kinds_attr="npc_kinds", npc=True)
 
     if _route_complete(session):
+        session.turn_seq = expected_seq + 1
+        if not _save_smuggle_if_turn_ok(storage, telegram_id, session, expected_seq):
+            from app.tactical_combat import STALE_TURN_MESSAGE
+
+            return ActionResult(False, STALE_TURN_MESSAGE)
+        if pending_damage:
+            storage.change_health(telegram_id, -pending_damage)
+        if death_result is not None:
+            fail_text = _abort_smuggle_combat_death(
+                storage, telegram_id, "Погиб на маршруте — груз потерян."
+            )
+            payload = death_result.payload or {}
+            return ActionResult(False, fail_text, payload=payload)
         delivery = complete_smuggling_delivery(storage, telegram_id) or "Рейс завершён."
         return ActionResult(
             True,
@@ -861,6 +857,19 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
         )
 
     if session.moves >= session.max_moves:
+        session.turn_seq = expected_seq + 1
+        if not _save_smuggle_if_turn_ok(storage, telegram_id, session, expected_seq):
+            from app.tactical_combat import STALE_TURN_MESSAGE
+
+            return ActionResult(False, STALE_TURN_MESSAGE)
+        if pending_damage:
+            storage.change_health(telegram_id, -pending_damage)
+        if death_result is not None:
+            fail_text = _abort_smuggle_combat_death(
+                storage, telegram_id, "Погиб на маршруте — груз потерян."
+            )
+            payload = death_result.payload or {}
+            return ActionResult(False, fail_text, payload=payload)
         return check_smuggle_session_timeout(storage, telegram_id) or ActionResult(
             False,
             _fail_smuggle_run(storage, telegram_id, "Время рейса вышло — ограбили."),
@@ -872,6 +881,14 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
         from app.tactical_combat import STALE_TURN_MESSAGE
 
         return ActionResult(False, STALE_TURN_MESSAGE)
+    if pending_damage:
+        storage.change_health(telegram_id, -pending_damage)
+    if death_result is not None:
+        fail_text = _abort_smuggle_combat_death(
+            storage, telegram_id, "Погиб на маршруте — груз потерян."
+        )
+        payload = death_result.payload or {}
+        return ActionResult(False, fail_text, payload=payload)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = render_smuggle_for_player(storage, telegram_id, session, player)
     note = " ".join(notes) if notes else "Дорога чистая."

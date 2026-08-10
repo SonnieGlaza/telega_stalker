@@ -130,6 +130,7 @@ class QuestMissionSession:
     grid: int = GRID_SIZE
     objectives_done: bool = False
     resources_spent: bool = False
+    turn_seq: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -152,6 +153,7 @@ class QuestMissionSession:
             "grid": self.grid,
             "objectives_done": self.objectives_done,
             "resources_spent": self.resources_spent,
+            "turn_seq": self.turn_seq,
         }
 
     @classmethod
@@ -176,6 +178,7 @@ class QuestMissionSession:
             grid=int(raw.get("grid") or GRID_SIZE),
             objectives_done=bool(raw.get("objectives_done")),
             resources_spent=bool(raw.get("resources_spent")),
+            turn_seq=int(raw.get("turn_seq") or 0),
         )
 
 
@@ -230,6 +233,25 @@ def get_mission_session(storage: Storage, telegram_id: int) -> QuestMissionSessi
 
 def save_mission_session(storage: Storage, telegram_id: int, session: QuestMissionSession) -> None:
     storage.set_meta(_meta_key(telegram_id), json.dumps(session.to_dict(), ensure_ascii=False))
+
+
+def _save_mission_if_turn_ok(
+    storage: Storage,
+    telegram_id: int,
+    session: QuestMissionSession,
+    expected_seq: int,
+) -> bool:
+    from app.tactical_turn import save_turn_if_seq_ok
+
+    tid = int(telegram_id)
+    return save_turn_if_seq_ok(
+        storage,
+        meta_key=_meta_key(tid),
+        session=session,
+        from_dict=QuestMissionSession.from_dict,
+        save_fn=lambda st, sess: save_mission_session(st, tid, sess),
+        expected_seq=expected_seq,
+    )
 
 
 def clear_mission_session(storage: Storage, telegram_id: int) -> None:
@@ -818,6 +840,7 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
             },
         )
 
+    expected_seq = session.turn_seq
     session.player = (nx, ny)
     session.moves += 1
     notes: list[str] = []
@@ -906,7 +929,11 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
 
     # Победа: цели/враги закрыты и игрок на старте.
     if session.objectives_done and session.player == session.start:
-        save_mission_session(storage, telegram_id, session)
+        session.turn_seq = expected_seq + 1
+        if not _save_mission_if_turn_ok(storage, telegram_id, session, expected_seq):
+            from app.tactical_combat import STALE_TURN_MESSAGE
+
+            return ActionResult(False, STALE_TURN_MESSAGE)
         return _finish_success(storage, telegram_id, session)
 
     if session.moves >= session.max_moves:
@@ -927,7 +954,11 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
             payload={"mission_active": False, "mission_done": True},
         )
 
-    save_mission_session(storage, telegram_id, session)
+    session.turn_seq = expected_seq + 1
+    if not _save_mission_if_turn_ok(storage, telegram_id, session, expected_seq):
+        from app.tactical_combat import STALE_TURN_MESSAGE
+
+        return ActionResult(False, STALE_TURN_MESSAGE)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = _render_for_player(storage, telegram_id, session, player)
     note = " ".join(notes) if notes else "Тихо."

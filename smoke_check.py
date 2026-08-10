@@ -1532,6 +1532,28 @@ def run_smoke_check() -> None:
         assert reloaded.message_ids.get("111") == 200
         clear_coop_session(storage, reloaded)
 
+        from app.game_logic import respawn_character, RESPAWN_HEALTH
+
+        save_coop_session(
+            storage,
+            CoopMissionSession(
+                session_id="respawn-coop",
+                lobby_id="lr",
+                location="Кордон",
+                player_ids=[111],
+                hp={"111": 0},
+                turn_order=[111],
+            ),
+        )
+        dead_ch = storage.get_character(111, refresh_energy=False)
+        assert dead_ch is not None
+        storage.change_health(111, -dead_ch.health - 1)
+        result = respawn_character(storage, 111)
+        assert result.ok, result.text
+        after = storage.get_character(111, refresh_energy=False)
+        assert after is not None and after.health == RESPAWN_HEALTH
+        assert get_coop_session_by_player(storage, 111) is None
+
         save_smuggle_session(
             storage,
             111,

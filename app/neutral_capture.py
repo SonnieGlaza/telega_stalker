@@ -34,7 +34,7 @@ from app.tactical_combat import (
 from app.mutant_assets import pick_mutant_kind
 from app.npc_assets import pick_npc_kind
 from app.storage import Character, Storage
-from app.tactical_hp import finalize_group_tactical_hp, use_tactical_medkit
+from app.tactical_hp import apply_tactical_medkit_spend, finalize_group_tactical_hp, plan_tactical_medkit
 from app.tactical_render import hostile_kind_to_sprite, load_tactical_font, paste_mutant_sprite, paste_npc_sprite, paste_player_avatar
 
 NCAP_GRID_SIZE = 6
@@ -994,7 +994,7 @@ def ncap_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     if player is None:
         return ActionResult(False, "Персонаж не найден.")
     current_hp = session.hp.get(str(telegram_id), 0)
-    result, new_hp = use_tactical_medkit(storage, telegram_id, current_hp)
+    result, new_hp, item_key = plan_tactical_medkit(storage, telegram_id, current_hp)
     if not result.ok:
         return result
     session.hp[str(telegram_id)] = new_hp
@@ -1009,6 +1009,8 @@ def ncap_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
         return done
     if not _save_turn(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)
+    if item_key:
+        apply_tactical_medkit_spend(storage, telegram_id, item_key, result)
     return ActionResult(True, result.text, payload={"ncap_active": True, "notify_all": session.player_ids})
 
 

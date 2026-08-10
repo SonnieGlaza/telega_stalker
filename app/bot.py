@@ -2382,6 +2382,9 @@ async def stash_take_qty_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "respawn:base")
 async def respawn_base_callback(callback: CallbackQuery) -> None:
     storage = get_storage()
+    from app.player_busy import recover_stuck_player
+
+    recover_stuck_player(storage, callback.from_user.id, force_clear=True)
     result = respawn_character(storage, callback.from_user.id)
     await reply_action_result(callback, result.text)
     if result.ok:

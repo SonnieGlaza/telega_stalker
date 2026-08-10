@@ -38,7 +38,7 @@ from app.tactical_combat import (
     weapon_shoot_range,
 )
 from app.mutant_assets import pick_mutant_kind
-from app.tactical_hp import sync_session_hp_to_db, use_tactical_medkit
+from app.tactical_hp import apply_tactical_medkit_spend, plan_tactical_medkit, sync_session_hp_to_db
 from app.tactical_render import load_tactical_font, paste_mutant_sprite, paste_player_avatar
 
 DUEL_GRID_SIZE = 8
@@ -645,7 +645,7 @@ def duel_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     if player is None:
         return ActionResult(False, "Персонаж не найден.")
     current_hp = session.hp.get(str(telegram_id), int(player.health))
-    result, new_hp = use_tactical_medkit(storage, telegram_id, int(current_hp))
+    result, new_hp, item_key = plan_tactical_medkit(storage, telegram_id, int(current_hp))
     if not result.ok:
         return result
     session.hp[str(telegram_id)] = new_hp
@@ -657,6 +657,8 @@ def duel_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
         return done
     if not _save_if_turn_ok(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)
+    if item_key:
+        apply_tactical_medkit_spend(storage, telegram_id, item_key, result)
     return ActionResult(True, result.text, payload={"duel_active": True})
 
 

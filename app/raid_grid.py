@@ -46,7 +46,7 @@ from app.tactical_combat import (
     ray_cast_first_hit,
     weapon_shoot_range,
 )
-from app.tactical_hp import finalize_group_tactical_hp, use_tactical_medkit
+from app.tactical_hp import apply_tactical_medkit_spend, finalize_group_tactical_hp, plan_tactical_medkit
 from app.tactical_render import (
     load_tactical_font,
     paste_mutant_sprite,
@@ -1075,7 +1075,7 @@ def rgrid_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     if player is None:
         return ActionResult(False, "Персонаж не найден.")
     current_hp = session.hp.get(str(telegram_id), int(player.health))
-    result, new_hp = use_tactical_medkit(storage, telegram_id, int(current_hp))
+    result, new_hp, item_key = plan_tactical_medkit(storage, telegram_id, int(current_hp))
     if not result.ok:
         return result
     session.hp[str(telegram_id)] = new_hp
@@ -1088,6 +1088,8 @@ def rgrid_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
         return done
     if not _save_turn(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)
+    if item_key:
+        apply_tactical_medkit_spend(storage, telegram_id, item_key, result)
     return ActionResult(True, medkit_text, payload={"rgrid_active": True})
 
 
@@ -1104,16 +1106,21 @@ def _adjacent_down_allies(session: RaidGridSession, telegram_id: int) -> list[in
     return down
 
 
-def _spend_inventory_medkit(storage: Storage, telegram_id: int) -> str | None:
-    player = storage.get_character(telegram_id, refresh_energy=False)
-    if player is None:
-        return None
+def _peek_inventory_medkit(player) -> tuple[str, str] | None:
+    """(label, item_key) или None."""
+    from app.game_logic import ITEM_LABELS
+
     for key in ("medkit_science", "medkit_army", "medkit"):
         if int(player.inventory.get(key, 0) or 0) > 0:
-            if storage.remove_item(telegram_id, key, 1):
-                from app.game_logic import ITEM_LABELS
+            return ITEM_LABELS.get(key, key), key
+    return None
 
-                return ITEM_LABELS.get(key, key)
+
+def _spend_inventory_medkit(storage: Storage, telegram_id: int, item_key: str) -> str | None:
+    from app.game_logic import ITEM_LABELS
+
+    if storage.remove_item(telegram_id, item_key, 1):
+        return ITEM_LABELS.get(item_key, item_key)
     return None
 
 
@@ -1134,9 +1141,10 @@ def rgrid_revive_ally(storage: Storage, telegram_id: int, target_id: int) -> Act
     target = storage.get_character(target_id, refresh_energy=False)
     if actor is None or target is None:
         return ActionResult(False, "Персонаж не найден.")
-    med_label = _spend_inventory_medkit(storage, telegram_id)
-    if med_label is None:
+    med = _peek_inventory_medkit(actor)
+    if med is None:
         return ActionResult(False, "Нужна аптечка в инвентаре.")
+    med_label, med_key = med
     max_hp = effective_max_health(target)
     revived_hp = max(1, int(max_hp * 0.4))
     session.hp[str(target_id)] = revived_hp
@@ -1148,6 +1156,8 @@ def rgrid_revive_ally(storage: Storage, telegram_id: int, target_id: int) -> Act
         return done
     if not _save_turn(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)
+    if _spend_inventory_medkit(storage, telegram_id, med_key) is None:
+        return ActionResult(False, "Не удалось списать аптечку.")
     return ActionResult(True, note, payload={"rgrid_active": True})
 
 

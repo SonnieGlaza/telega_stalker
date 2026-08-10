@@ -190,16 +190,15 @@ def save_arena_session(storage: Storage, session: ArenaGridSession) -> None:
 
 
 def patch_arena_message_id(storage: Storage, session_id: str, message_id: int | None) -> None:
-    """Обновить только message_id на свежей арена-сессии."""
-    raw = storage.get_meta(_session_key(session_id))
-    if not raw:
-        return
-    try:
-        fresh = ArenaGridSession.from_dict(json.loads(raw))
-    except Exception:
-        return
-    fresh.message_id = message_id
-    save_arena_session(storage, fresh)
+    """Обновить только message_id в JSON meta арены."""
+    from app.tactical_turn import patch_session_json_field
+
+    patch_session_json_field(
+        storage,
+        meta_key=_session_key(session_id),
+        field="message_id",
+        value=message_id,
+    )
 
 
 def clear_arena_session(storage: Storage, session: ArenaGridSession) -> None:

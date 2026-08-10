@@ -38,9 +38,10 @@ def _sync_field_hp_before_unlink(storage: Storage, telegram_id: int) -> None:
             sync_session_hp_to_db(storage, pid, int(hp_map[key]), force=True)
 
 
-def _unlink_from_shared_sessions(storage: Storage, telegram_id: int) -> None:
+def _unlink_from_shared_sessions(storage: Storage, telegram_id: int, *, sync_hp: bool = True) -> None:
     """Снять привязку игрока к групповому бою, оставив сессию для остальных."""
-    _sync_field_hp_before_unlink(storage, telegram_id)
+    if sync_hp:
+        _sync_field_hp_before_unlink(storage, telegram_id)
     from app.clan_war_grid import unlink_player_from_cwar_session
     from app.coop_mission import unlink_player_from_coop_session
     from app.neutral_capture import unlink_player_from_ncap_session
@@ -75,8 +76,8 @@ def _clear_solo_activity(storage: Storage, telegram_id: int) -> None:
         clear_hunt_session(storage, telegram_id)
 
 
-def _forfeit_tactical_sessions(storage: Storage, telegram_id: int) -> None:
-    """Завершить тактические режимы штатно (forfeit), не silent-drop."""
+def _forfeit_tactical_sessions(storage: Storage, telegram_id: int) -> bool:
+    """Завершить тактические режимы штатно. False — если игрок всё ещё привязан."""
     from app.duel_grid import duel_forfeit, get_duel_session_by_player
     from app.arena_grid import arena_forfeit, get_arena_session
     from app.coop_mission import coop_forfeit, get_coop_session_by_player
@@ -97,14 +98,16 @@ def _forfeit_tactical_sessions(storage: Storage, telegram_id: int) -> None:
     if get_arena_session(storage, telegram_id):
         arena_forfeit(storage, telegram_id)
 
+    return player_busy_reason(storage, telegram_id) is None
+
 
 def clear_all_activity_sessions(storage: Storage, telegram_id: int) -> None:
-    """Снять все активные режимы — после респавна (без forfeit групповых боёв)."""
+    """Снять все активные режимы после респавна (не затирать восстановленное HP)."""
     from app.duel_grid import duel_forfeit, get_duel_session_by_player
     from app.arena_grid import arena_forfeit, get_arena_session
 
     _clear_solo_activity(storage, telegram_id)
-    _unlink_from_shared_sessions(storage, telegram_id)
+    _unlink_from_shared_sessions(storage, telegram_id, sync_hp=False)
 
     duel = get_duel_session_by_player(storage, telegram_id)
     if duel is not None:
@@ -136,13 +139,23 @@ def clear_stale_activity_for_dead_player(storage: Storage, telegram_id: int) -> 
         arena_forfeit(storage, telegram_id)
 
     clear_stale_raid_grid_session(storage, telegram_id)
-    _unlink_from_shared_sessions(storage, telegram_id)
+    _unlink_from_shared_sessions(storage, telegram_id, sync_hp=True)
 
 
 def force_clear_live_player_sessions(storage: Storage, telegram_id: int) -> None:
     """Сброс зависших режимов для живого игрока (/fixme) — с финализацией боёв."""
     _clear_solo_activity(storage, telegram_id)
-    _forfeit_tactical_sessions(storage, telegram_id)
+    if not _forfeit_tactical_sessions(storage, telegram_id):
+        _unlink_from_shared_sessions(storage, telegram_id, sync_hp=True)
+        from app.duel_grid import clear_duel_session, get_duel_session_by_player
+        from app.arena_grid import clear_arena_session, get_arena_session
+
+        duel = get_duel_session_by_player(storage, telegram_id)
+        if duel is not None:
+            clear_duel_session(storage, duel)
+        arena = get_arena_session(storage, telegram_id)
+        if arena is not None:
+            clear_arena_session(storage, arena)
 
 
 def recover_stuck_player(storage: Storage, telegram_id: int, *, force_clear: bool = False) -> tuple[bool, int]:
@@ -168,7 +181,6 @@ def player_busy_reason(storage: Storage, telegram_id: int, *, skip: str | None =
     """Вернёт текст блокировки или None если свободен. skip: duel|coop|quest|hunt|cwar|ncap|rgrid|arena|travel|smuggle."""
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is not None and player.health <= 0:
-        clear_stale_activity_for_dead_player(storage, telegram_id)
         return None
 
     from app.duel_grid import get_duel_session_by_player

@@ -38,7 +38,7 @@ from app.tactical_combat import (
     ray_cast_first_hit,
     weapon_shoot_range,
 )
-from app.tactical_hp import finalize_group_tactical_hp, use_tactical_medkit
+from app.tactical_hp import apply_tactical_medkit_spend, finalize_group_tactical_hp, plan_tactical_medkit
 
 CWAR_GRID_SIZE = 9
 CWAR_TURN_SECONDS = 10
@@ -695,7 +695,7 @@ def cwar_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     if player is None:
         return ActionResult(False, "Персонаж не найден.")
     current_hp = session.hp.get(str(telegram_id), int(player.health))
-    result, new_hp = use_tactical_medkit(storage, telegram_id, int(current_hp))
+    result, new_hp, item_key = plan_tactical_medkit(storage, telegram_id, int(current_hp))
     if not result.ok:
         return result
     session.hp[str(telegram_id)] = new_hp
@@ -707,6 +707,8 @@ def cwar_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
         return done
     if not _save_turn(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)
+    if item_key:
+        apply_tactical_medkit_spend(storage, telegram_id, item_key, result)
     return ActionResult(True, result.text, payload={"cwar_active": True})
 
 

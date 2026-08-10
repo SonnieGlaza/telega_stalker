@@ -15,12 +15,25 @@ from app.storage import Storage
 
 def use_tactical_medkit(storage: Storage, telegram_id: int, current_hp: int) -> tuple[ActionResult, int]:
     """Потратить аптечку и вернуть новое HP на поле (не трогая БД до конца боя)."""
+    result, new_hp, item_key = plan_tactical_medkit(storage, telegram_id, current_hp)
+    if not result.ok or item_key is None:
+        return result, new_hp
+    apply_tactical_medkit_spend(storage, telegram_id, item_key, result)
+    return result, new_hp
+
+
+def plan_tactical_medkit(
+    storage: Storage,
+    telegram_id: int,
+    current_hp: int,
+) -> tuple[ActionResult, int, str | None]:
+    """Подобрать аптечку и новое HP без списания предмета (списать после save)."""
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
-        return ActionResult(False, "Персонаж не найден."), current_hp
+        return ActionResult(False, "Персонаж не найден."), current_hp, None
     max_hp = effective_max_health(player)
     if current_hp >= max_hp:
-        return ActionResult(False, "Здоровье на поле уже полное."), current_hp
+        return ActionResult(False, "Здоровье на поле уже полное."), current_hp, None
     for key in ("medkit_science", "medkit_army", "medkit"):
         if int(player.inventory.get(key, 0)) <= 0:
             continue
@@ -31,18 +44,39 @@ def use_tactical_medkit(storage: Storage, telegram_id: int, current_hp: int) -> 
         heal_cap = int(effect["heal"])
         heal_amount = min(heal_cap, max_hp - current_hp)
         if heal_amount <= 0:
-            return ActionResult(False, "Здоровье на поле уже полное."), current_hp
-        if not storage.remove_item(telegram_id, key, 1):
-            continue
+            return ActionResult(False, "Здоровье на поле уже полное."), current_hp, None
         new_hp = min(max_hp, current_hp + heal_amount)
         rad_delta = int(effect.get("radiation", 0))
         if rad_delta < 0 and player.radiation > 0:
-            storage.adjust_survival(telegram_id, radiation_delta=rad_delta)
             rad_note = f", {rad_delta} рад"
         else:
             rad_note = ""
-        return ActionResult(True, f"Ты использовал {label}: +{heal_amount} HP{rad_note}."), new_hp
-    return ActionResult(False, "Нет аптечки в инвентаре."), current_hp
+        return (
+            ActionResult(True, f"Ты использовал {label}: +{heal_amount} HP{rad_note}."),
+            new_hp,
+            key,
+        )
+    return ActionResult(False, "Нет аптечки в инвентаре."), current_hp, None
+
+
+def apply_tactical_medkit_spend(
+    storage: Storage,
+    telegram_id: int,
+    item_key: str,
+    result: ActionResult,
+) -> None:
+    """Списать аптечку после успешного save хода."""
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return
+    if not storage.remove_item(telegram_id, item_key, 1):
+        return
+    effect = MEDKIT_EFFECTS.get(item_key)
+    if effect is None:
+        return
+    rad_delta = int(effect.get("radiation", 0))
+    if rad_delta < 0 and player.radiation > 0:
+        storage.adjust_survival(telegram_id, radiation_delta=rad_delta)
 
 
 def sync_session_hp_to_db(
