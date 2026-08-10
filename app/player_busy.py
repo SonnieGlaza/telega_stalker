@@ -13,8 +13,34 @@ def clear_smuggling_state(storage: Storage, telegram_id: int) -> None:
     clear_active_smuggling(storage, telegram_id)
 
 
+def _sync_field_hp_before_unlink(storage: Storage, telegram_id: int) -> None:
+    from app.tactical_hp import sync_session_hp_to_db
+
+    pid = int(telegram_id)
+    key = str(pid)
+
+    from app.coop_mission import get_coop_session_by_player
+    from app.neutral_capture import get_ncap_session
+    from app.clan_war_grid import get_cwar_session_by_player
+    from app.raid_grid import get_raid_grid_session_by_player
+
+    for getter in (
+        get_coop_session_by_player,
+        get_ncap_session,
+        get_cwar_session_by_player,
+        get_raid_grid_session_by_player,
+    ):
+        session = getter(storage, pid)
+        if session is None or getattr(session, "finished", False):
+            continue
+        hp_map = getattr(session, "hp", None)
+        if isinstance(hp_map, dict) and key in hp_map:
+            sync_session_hp_to_db(storage, pid, int(hp_map[key]), force=True)
+
+
 def _unlink_from_shared_sessions(storage: Storage, telegram_id: int) -> None:
     """Снять привязку игрока к групповому бою, оставив сессию для остальных."""
+    _sync_field_hp_before_unlink(storage, telegram_id)
     from app.clan_war_grid import unlink_player_from_cwar_session
     from app.coop_mission import unlink_player_from_coop_session
     from app.neutral_capture import unlink_player_from_ncap_session
@@ -34,12 +60,9 @@ def _clear_group_lobbies(storage: Storage, telegram_id: int) -> None:
     eject_player_from_ncap_lobby(storage, telegram_id)
 
 
-def clear_all_activity_sessions(storage: Storage, telegram_id: int) -> None:
-    """Снять все активные режимы — после смерти или респавна."""
+def _clear_solo_activity(storage: Storage, telegram_id: int) -> None:
     from app.quest_mission import clear_mission_session, get_mission_session
     from app.artifact_hunt import clear_hunt_session, get_hunt_session
-    from app.duel_grid import clear_duel_session, get_duel_session_by_player
-    from app.arena_grid import clear_arena_session, get_arena_session
 
     clear_smuggling_state(storage, telegram_id)
     _clear_group_lobbies(storage, telegram_id)
@@ -51,15 +74,45 @@ def clear_all_activity_sessions(storage: Storage, telegram_id: int) -> None:
     if get_hunt_session(storage, telegram_id):
         clear_hunt_session(storage, telegram_id)
 
+
+def _forfeit_tactical_sessions(storage: Storage, telegram_id: int) -> None:
+    """Завершить тактические режимы штатно (forfeit), не silent-drop."""
+    from app.duel_grid import duel_forfeit, get_duel_session_by_player
+    from app.arena_grid import arena_forfeit, get_arena_session
+    from app.coop_mission import coop_forfeit, get_coop_session_by_player
+    from app.raid_grid import get_raid_grid_session_by_player, rgrid_forfeit
+    from app.neutral_capture import get_ncap_session, ncap_forfeit
+    from app.clan_war_grid import cwar_forfeit, get_cwar_session_by_player
+
+    if get_coop_session_by_player(storage, telegram_id):
+        coop_forfeit(storage, telegram_id)
+    if get_raid_grid_session_by_player(storage, telegram_id):
+        rgrid_forfeit(storage, telegram_id)
+    if get_ncap_session(storage, telegram_id):
+        ncap_forfeit(storage, telegram_id)
+    if get_cwar_session_by_player(storage, telegram_id):
+        cwar_forfeit(storage, telegram_id)
+    if get_duel_session_by_player(storage, telegram_id):
+        duel_forfeit(storage, telegram_id)
+    if get_arena_session(storage, telegram_id):
+        arena_forfeit(storage, telegram_id)
+
+
+def clear_all_activity_sessions(storage: Storage, telegram_id: int) -> None:
+    """Снять все активные режимы — после респавна (без forfeit групповых боёв)."""
+    from app.duel_grid import duel_forfeit, get_duel_session_by_player
+    from app.arena_grid import arena_forfeit, get_arena_session
+
+    _clear_solo_activity(storage, telegram_id)
     _unlink_from_shared_sessions(storage, telegram_id)
 
     duel = get_duel_session_by_player(storage, telegram_id)
     if duel is not None:
-        clear_duel_session(storage, duel)
+        duel_forfeit(storage, telegram_id)
 
     arena = get_arena_session(storage, telegram_id)
     if arena is not None:
-        clear_arena_session(storage, arena)
+        arena_forfeit(storage, telegram_id)
 
 
 def clear_stale_activity_for_dead_player(storage: Storage, telegram_id: int) -> None:
@@ -68,40 +121,43 @@ def clear_stale_activity_for_dead_player(storage: Storage, telegram_id: int) -> 
     if player is None or player.health > 0:
         return
 
-    from app.quest_mission import clear_mission_session, get_mission_session
-    from app.artifact_hunt import clear_hunt_session, get_hunt_session
-    from app.duel_grid import clear_duel_session, get_duel_session_by_player
-    from app.arena_grid import clear_arena_session, get_arena_session
+    from app.duel_grid import duel_forfeit, get_duel_session_by_player
+    from app.arena_grid import arena_forfeit, get_arena_session
     from app.raid_grid import clear_stale_raid_grid_session
 
-    clear_smuggling_state(storage, telegram_id)
-    _clear_group_lobbies(storage, telegram_id)
-
-    if get_mission_session(storage, telegram_id):
-        clear_mission_session(storage, telegram_id)
-        storage.set_active_contract(telegram_id, None)
-
-    if get_hunt_session(storage, telegram_id):
-        clear_hunt_session(storage, telegram_id)
+    _clear_solo_activity(storage, telegram_id)
 
     duel = get_duel_session_by_player(storage, telegram_id)
     if duel is not None:
-        clear_duel_session(storage, duel)
+        duel_forfeit(storage, telegram_id)
 
     arena = get_arena_session(storage, telegram_id)
     if arena is not None:
-        clear_arena_session(storage, arena)
+        arena_forfeit(storage, telegram_id)
 
     clear_stale_raid_grid_session(storage, telegram_id)
     _unlink_from_shared_sessions(storage, telegram_id)
 
 
+def force_clear_live_player_sessions(storage: Storage, telegram_id: int) -> None:
+    """Сброс зависших режимов для живого игрока (/fixme) — с финализацией боёв."""
+    _clear_solo_activity(storage, telegram_id)
+    _forfeit_tactical_sessions(storage, telegram_id)
+
+
 def recover_stuck_player(storage: Storage, telegram_id: int, *, force_clear: bool = False) -> tuple[bool, int]:
     """Сбросить зависшие режимы. Возвращает (is_dead, health)."""
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    is_dead = player is not None and player.health <= 0
+
     if force_clear:
-        clear_all_activity_sessions(storage, telegram_id)
+        if is_dead:
+            clear_stale_activity_for_dead_player(storage, telegram_id)
+        else:
+            force_clear_live_player_sessions(storage, telegram_id)
     else:
         clear_stale_activity_for_dead_player(storage, telegram_id)
+
     player = storage.get_character(telegram_id, refresh_energy=True)
     if player is None:
         return False, 0

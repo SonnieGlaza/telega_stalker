@@ -800,18 +800,6 @@ def _objectives_complete(session: CoopMissionSession) -> bool:
     return len(session.collected) >= len(session.objectives) and len(session.objectives) > 0
 
 
-def _sync_coop_hp_to_characters(
-    storage: Storage,
-    session: CoopMissionSession,
-    *,
-    finalize: bool = False,
-) -> None:
-    for pid in session.player_ids:
-        hp_val = session.hp.get(str(pid))
-        if hp_val is not None:
-            sync_session_hp_to_db(storage, pid, int(hp_val), force=finalize)
-
-
 def _commit_coop_session_deaths(
     storage: Storage,
     session: CoopMissionSession,

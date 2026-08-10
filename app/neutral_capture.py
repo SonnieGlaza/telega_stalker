@@ -34,7 +34,7 @@ from app.tactical_combat import (
 from app.mutant_assets import pick_mutant_kind
 from app.npc_assets import pick_npc_kind
 from app.storage import Character, Storage
-from app.tactical_hp import finalize_group_tactical_hp, sync_session_hp_to_db, use_tactical_medkit
+from app.tactical_hp import finalize_group_tactical_hp, use_tactical_medkit
 from app.tactical_render import hostile_kind_to_sprite, load_tactical_font, paste_mutant_sprite, paste_npc_sprite, paste_player_avatar
 
 NCAP_GRID_SIZE = 6
@@ -149,6 +149,8 @@ class NeutralCaptureSession:
     success: bool = False
     log: list[str] = field(default_factory=list)
     message_ids: dict[str, int] = field(default_factory=dict)
+    death_causes: dict[str, str] = field(default_factory=dict)
+    death_killers: dict[str, str] = field(default_factory=dict)
 
     def active_player(self) -> int:
         from app.tactical_roster import resolve_active_player
@@ -185,6 +187,8 @@ class NeutralCaptureSession:
             "success": self.success,
             "log": self.log[-12:],
             "message_ids": {str(k): int(v) for k, v in self.message_ids.items()},
+            "death_causes": dict(self.death_causes),
+            "death_killers": dict(self.death_killers),
         }
 
     @classmethod
@@ -216,6 +220,8 @@ class NeutralCaptureSession:
                 success=bool(raw.get("success")),
                 log=[str(x) for x in (raw.get("log") or [])],
                 message_ids={str(k): int(v) for k, v in (raw.get("message_ids") or {}).items()},
+                death_causes={str(k): str(v) for k, v in (raw.get("death_causes") or {}).items()},
+                death_killers={str(k): str(v) for k, v in (raw.get("death_killers") or {}).items()},
             )
         legacy_id = int(raw.get("telegram_id") or 0)
         pp = raw.get("player_pos") or [0, 0]
@@ -726,8 +732,11 @@ def _hostile_damage(weapon: str) -> int:
 
 
 def _hostile_shoot_turn(storage: Storage, session: NeutralCaptureSession) -> list[str]:
+    from app.tactical_roster import mark_new_field_deaths
+
     cover_set = set(session.cover)
     alive = _alive_players(session)
+    alive_before = list(alive)
     if not alive:
         return []
     player_pos = {pid: session.pos(pid) for pid in alive}
@@ -750,6 +759,7 @@ def _hostile_shoot_turn(storage: Storage, session: NeutralCaptureSession) -> lis
     )
     for key, val in hp_snapshot.items():
         session.hp[key] = val
+    mark_new_field_deaths(session, alive_before, cause="npc")
     return notes
 
 

@@ -114,3 +114,32 @@ def drop_player_from_tactical_roster(session: Any, telegram_id: int) -> None:
             session.active_index %= len(order)
         else:
             session.active_index = 0
+
+
+def mark_new_field_deaths(
+    session: Any,
+    alive_before: list[int],
+    *,
+    cause: str,
+    killer: str | None = None,
+) -> None:
+    """Записать причину смерти для игроков, упавших до 0 HP на поле."""
+    hp_map: dict[str, int] = getattr(session, "hp", None) or {}
+    if not isinstance(hp_map, dict):
+        return
+    death_causes = getattr(session, "death_causes", None)
+    if not isinstance(death_causes, dict):
+        session.death_causes = {}
+        death_causes = session.death_causes
+    death_killers = getattr(session, "death_killers", None)
+    if not isinstance(death_killers, dict):
+        session.death_killers = {}
+        death_killers = session.death_killers
+    for pid in alive_before:
+        key = str(pid)
+        if int(hp_map.get(key, 0)) > 0:
+            continue
+        if key not in death_causes:
+            death_causes[key] = cause
+        if killer and key not in death_killers:
+            death_killers[key] = killer

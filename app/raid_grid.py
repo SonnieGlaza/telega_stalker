@@ -46,7 +46,7 @@ from app.tactical_combat import (
     ray_cast_first_hit,
     weapon_shoot_range,
 )
-from app.tactical_hp import finalize_group_tactical_hp, sync_session_hp_to_db, use_tactical_medkit
+from app.tactical_hp import finalize_group_tactical_hp, use_tactical_medkit
 from app.tactical_render import (
     load_tactical_font,
     paste_mutant_sprite,
@@ -141,6 +141,8 @@ class RaidGridSession:
     success: bool = False
     log: list[str] = field(default_factory=list)
     message_ids: dict[str, int] = field(default_factory=dict)
+    death_causes: dict[str, str] = field(default_factory=dict)
+    death_killers: dict[str, str] = field(default_factory=dict)
 
     def active_player(self) -> int:
         from app.tactical_roster import resolve_active_player
@@ -196,6 +198,8 @@ class RaidGridSession:
             "success": self.success,
             "log": list(self.log),
             "message_ids": {str(k): int(v) for k, v in self.message_ids.items()},
+            "death_causes": dict(self.death_causes),
+            "death_killers": dict(self.death_killers),
         }
 
     @classmethod
@@ -236,6 +240,8 @@ class RaidGridSession:
             success=bool(raw.get("success")),
             log=[str(x) for x in (raw.get("log") or [])],
             message_ids={str(k): int(v) for k, v in (raw.get("message_ids") or {}).items()},
+            death_causes={str(k): str(v) for k, v in (raw.get("death_causes") or {}).items()},
+            death_killers={str(k): str(v) for k, v in (raw.get("death_killers") or {}).items()},
         )
         if not session.player_ids:
             if session.turn_order:
@@ -530,10 +536,13 @@ def _mutant_melee_hit(
 
 
 def _hostile_turn(storage: Storage, session: RaidGridSession) -> list[str]:
+    from app.tactical_roster import mark_new_field_deaths
+
     notes: list[str] = []
     cover_set = set(session.cover)
     base_set = set(session.base_cover)
     alive_ids = [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
+    alive_before_shots = list(alive_ids)
     player_pos = {pid: session.pos(pid) for pid in alive_ids}
     player_chars = {pid: storage.get_character(pid, refresh_energy=False) for pid in alive_ids}
     player_cells = set(player_pos.values())
@@ -574,7 +583,11 @@ def _hostile_turn(storage: Storage, session: RaidGridSession) -> list[str]:
                 damage_fn=_hostile_damage,
             )
         )
+    mark_new_field_deaths(session, alive_before_shots, cause="npc")
 
+    alive_before_mutants = [
+        pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0
+    ]
     occupied = _hostile_move_occupied(session)
     new_hostiles: list[tuple[int, int]] = []
     for i, pos in enumerate(session.hostiles):
@@ -626,6 +639,7 @@ def _hostile_turn(storage: Storage, session: RaidGridSession) -> list[str]:
         new_hostiles.append(origin)
         occupied.add(origin)
     session.hostiles = new_hostiles
+    mark_new_field_deaths(session, alive_before_mutants, cause="mutant")
     return notes
 
 
@@ -1192,8 +1206,8 @@ def process_rgrid_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResul
         if done:
             outcomes.append((active, done))
             continue
+        still.append(str(sid))
         if _save_turn(storage, session, turn_seq):
-            still.append(str(sid))
             outcomes.append((active, ActionResult(True, "Ход пропущен.", payload={"rgrid_active": True})))
     storage.set_meta(ACTIVE_IDS_KEY, json.dumps(still, ensure_ascii=False))
     return outcomes

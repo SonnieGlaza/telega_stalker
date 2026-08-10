@@ -1491,6 +1491,47 @@ def run_smoke_check() -> None:
         assert format_player_name(storage, 0) == "—"
         assert format_player_name(storage, 111) != "—"
 
+        from app.game_logic import append_death_log_once, clear_death_notice_sent, build_death_log_text
+
+        append_death_log_once(storage, 111, "Первая смерть в журнале.")
+        append_death_log_once(storage, 111, "Повтор не должен попасть.")
+        log_text = build_death_log_text(storage, 111)
+        assert log_text.count("Первая смерть") == 1
+        assert "Повтор не должен" not in log_text
+        clear_death_notice_sent(storage, 111)
+
+        from app.tactical_turn import patch_session_message_ids
+        from app.coop_mission import (
+            CoopMissionSession,
+            _session_key,
+            clear_coop_session,
+            get_coop_session_by_player,
+            save_coop_session,
+        )
+
+        patch_sess = CoopMissionSession(
+            session_id="patch-seq",
+            lobby_id="pl",
+            location="Кордон",
+            player_ids=[111],
+            hp={"111": 80},
+            turn_seq=7,
+            message_ids={"111": 100},
+        )
+        save_coop_session(storage, patch_sess)
+        patch_session_message_ids(
+            storage,
+            meta_key=_session_key("patch-seq"),
+            message_ids={"111": 200},
+            from_dict=CoopMissionSession.from_dict,
+            save_fn=save_coop_session,
+        )
+        reloaded = get_coop_session_by_player(storage, 111)
+        assert reloaded is not None
+        assert reloaded.turn_seq == 7
+        assert reloaded.message_ids.get("111") == 200
+        clear_coop_session(storage, reloaded)
+
         save_smuggle_session(
             storage,
             111,

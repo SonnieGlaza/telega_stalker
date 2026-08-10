@@ -98,6 +98,7 @@ class SmuggleMissionSession:
     difficulty: str = "hard"
     location: str = ""
     started_at: str | None = None
+    turn_seq: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -119,6 +120,7 @@ class SmuggleMissionSession:
             "difficulty": self.difficulty,
             "location": self.location,
             "started_at": self.started_at,
+            "turn_seq": self.turn_seq,
         }
 
     @classmethod
@@ -142,6 +144,7 @@ class SmuggleMissionSession:
             difficulty=str(raw.get("difficulty") or "hard"),
             location=str(raw.get("location") or raw.get("origin") or ""),
             started_at=raw.get("started_at"),
+            turn_seq=int(raw.get("turn_seq") or 0),
         )
 
 
@@ -261,6 +264,25 @@ def get_smuggle_session(storage: Storage, telegram_id: int) -> SmuggleMissionSes
 def save_smuggle_session(storage: Storage, telegram_id: int, session: SmuggleMissionSession) -> None:
     storage.set_meta(_meta_key(telegram_id), json.dumps(session.to_dict(), ensure_ascii=False))
     _register_active_smuggle(storage, telegram_id)
+
+
+def _save_smuggle_if_turn_ok(
+    storage: Storage,
+    telegram_id: int,
+    session: SmuggleMissionSession,
+    expected_seq: int,
+) -> bool:
+    from app.tactical_turn import save_turn_if_seq_ok
+
+    tid = int(telegram_id)
+    return save_turn_if_seq_ok(
+        storage,
+        meta_key=_meta_key(tid),
+        session=session,
+        from_dict=SmuggleMissionSession.from_dict,
+        save_fn=lambda st, sess: save_smuggle_session(st, tid, sess),
+        expected_seq=expected_seq,
+    )
 
 
 def clear_smuggle_session(storage: Storage, telegram_id: int) -> None:
@@ -757,6 +779,7 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
             },
         )
 
+    expected_seq = session.turn_seq
     session.player = (nx, ny)
     session.moves += 1
     notes: list[str] = []
@@ -844,7 +867,11 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
             payload={"mission_active": False, "mission_done": True},
         )
 
-    save_smuggle_session(storage, telegram_id, session)
+    session.turn_seq = expected_seq + 1
+    if not _save_smuggle_if_turn_ok(storage, telegram_id, session, expected_seq):
+        from app.tactical_combat import STALE_TURN_MESSAGE
+
+        return ActionResult(False, STALE_TURN_MESSAGE)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = render_smuggle_for_player(storage, telegram_id, session, player)
     note = " ".join(notes) if notes else "Дорога чистая."

@@ -189,6 +189,19 @@ def save_arena_session(storage: Storage, session: ArenaGridSession) -> None:
     storage.set_meta(_player_key(session.telegram_id), session.session_id)
 
 
+def patch_arena_message_id(storage: Storage, session_id: str, message_id: int | None) -> None:
+    """Обновить только message_id на свежей арена-сессии."""
+    raw = storage.get_meta(_session_key(session_id))
+    if not raw:
+        return
+    try:
+        fresh = ArenaGridSession.from_dict(json.loads(raw))
+    except Exception:
+        return
+    fresh.message_id = message_id
+    save_arena_session(storage, fresh)
+
+
 def clear_arena_session(storage: Storage, session: ArenaGridSession) -> None:
     storage.delete_meta(_session_key(session.session_id))
     storage.delete_meta(_player_key(session.telegram_id))
@@ -631,8 +644,14 @@ def process_arena_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResul
         if done:
             outcomes.append((session.telegram_id, done))
             continue
+        still.append(str(sid))
         if _save_turn(storage, session, turn_seq):
-            still.append(str(sid))
+            outcomes.append(
+                (
+                    session.telegram_id,
+                    ActionResult(True, "Ход пропущен.", payload={"arena_active": True}),
+                )
+            )
     storage.set_meta(ACTIVE_IDS_KEY, json.dumps(still, ensure_ascii=False))
     return outcomes
 

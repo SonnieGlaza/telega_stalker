@@ -1487,6 +1487,22 @@ def append_death_log(storage: Storage, telegram_id: int, story_text: str) -> Non
     storage.set_meta(key, json.dumps(entries, ensure_ascii=False))
 
 
+def _death_notice_sent_key(telegram_id: int) -> str:
+    return f"death_notice_sent:{int(telegram_id)}"
+
+
+def append_death_log_once(storage: Storage, telegram_id: int, story_text: str) -> None:
+    """Записать в журнал смертей один раз за текущую смерть."""
+    if storage.get_meta(_death_notice_sent_key(telegram_id)):
+        return
+    append_death_log(storage, telegram_id, story_text)
+    storage.set_meta(_death_notice_sent_key(telegram_id), "1")
+
+
+def clear_death_notice_sent(storage: Storage, telegram_id: int) -> None:
+    storage.delete_meta(_death_notice_sent_key(telegram_id))
+
+
 def _format_death_log_when(raw_at: str) -> str:
     try:
         parsed = datetime.fromisoformat(raw_at)
@@ -1701,6 +1717,7 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
     storage.set_location(telegram_id, home)
     pop_death_cause(storage, telegram_id)
     pop_death_killer(storage, telegram_id)
+    clear_death_notice_sent(storage, telegram_id)
 
     from app.player_busy import clear_all_activity_sessions
 

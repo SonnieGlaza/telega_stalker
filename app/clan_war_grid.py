@@ -38,7 +38,7 @@ from app.tactical_combat import (
     ray_cast_first_hit,
     weapon_shoot_range,
 )
-from app.tactical_hp import finalize_group_tactical_hp, sync_session_hp_to_db, use_tactical_medkit
+from app.tactical_hp import finalize_group_tactical_hp, use_tactical_medkit
 
 CWAR_GRID_SIZE = 9
 CWAR_TURN_SECONDS = 10
@@ -110,6 +110,8 @@ class ClanWarGridSession:
     success: bool = False
     log: list[str] = field(default_factory=list)
     message_ids: dict[str, int] = field(default_factory=dict)
+    death_causes: dict[str, str] = field(default_factory=dict)
+    death_killers: dict[str, str] = field(default_factory=dict)
 
     def active_player(self) -> int:
         from app.tactical_roster import resolve_active_player
@@ -151,6 +153,8 @@ class ClanWarGridSession:
             "success": self.success,
             "log": self.log[-14:],
             "message_ids": {str(k): int(v) for k, v in self.message_ids.items()},
+            "death_causes": dict(self.death_causes),
+            "death_killers": dict(self.death_killers),
         }
 
     @classmethod
@@ -183,6 +187,8 @@ class ClanWarGridSession:
             success=bool(raw.get("success")),
             log=[str(x) for x in (raw.get("log") or [])],
             message_ids={str(k): int(v) for k, v in (raw.get("message_ids") or {}).items()},
+            death_causes={str(k): str(v) for k, v in (raw.get("death_causes") or {}).items()},
+            death_killers={str(k): str(v) for k, v in (raw.get("death_killers") or {}).items()},
         )
 
 
@@ -336,9 +342,12 @@ def _defender_damage(session: ClanWarGridSession, weapon: str) -> int:
 
 
 def _hostile_turn(storage: Storage, session: ClanWarGridSession) -> list[str]:
+    from app.tactical_roster import mark_new_field_deaths
+
     cover_set = set(session.cover)
     base_set = set(session.base_cover)
     alive_ids = [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
+    alive_before = list(alive_ids)
     player_pos = {pid: session.pos(pid) for pid in alive_ids}
     player_chars = {pid: storage.get_character(pid, refresh_energy=False) for pid in alive_ids}
     player_cells = set(player_pos.values())
@@ -362,7 +371,7 @@ def _hostile_turn(storage: Storage, session: ClanWarGridSession) -> list[str]:
         occupied.add(current)
     session.defenders = new_defenders
 
-    return random_hostile_shots(
+    notes = random_hostile_shots(
         session.defenders,
         session.defender_weapons,
         grid=session.grid,
@@ -373,6 +382,8 @@ def _hostile_turn(storage: Storage, session: ClanWarGridSession) -> list[str]:
         base_cover=base_set,
         damage_fn=lambda weapon: _defender_damage(session, weapon),
     )
+    mark_new_field_deaths(session, alive_before, cause="npc")
+    return notes
 
 
 def _check_capture(session: ClanWarGridSession) -> bool:
@@ -697,6 +708,15 @@ def cwar_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     if not _save_turn(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, result.text, payload={"cwar_active": True})
+
+
+def cwar_forfeit(storage: Storage, telegram_id: int) -> ActionResult:
+    session = get_cwar_session_by_player(storage, telegram_id)
+    if session is None:
+        return ActionResult(False, "Нет активного штурма.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    note = f"{h(player.nickname) if player else telegram_id} покинул штурм."
+    return _end_session(storage, session, _finalize_fail(storage, session, note))
 
 
 def process_cwar_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult]]:

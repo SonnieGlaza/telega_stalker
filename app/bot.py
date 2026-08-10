@@ -291,7 +291,7 @@ from app.game_logic import (
     character_rank_title,
     build_dead_character_text,
     build_battle_death_text,
-    append_death_log,
+    append_death_log_once,
     build_death_log_text,
     respawn_character,
     format_personal_stash,
@@ -426,6 +426,10 @@ def _travel_eta_lock(telegram_id: int) -> asyncio.Lock:
         _travel_eta_locks[telegram_id] = lock
     return lock
 
+
+def _release_travel_eta_lock(telegram_id: int) -> None:
+    _travel_eta_locks.pop(int(telegram_id), None)
+
 TOPUP_PAYLOAD_PREFIX = "topup_stars:"
 TOPUP_ALLOWED_AMOUNTS = {1, 5, 10, 25}
 TOPUP_MIN_STARS = 1
@@ -454,6 +458,7 @@ def set_travel_eta_message_id(storage: Storage, telegram_id: int, message_id: in
 
 def clear_travel_eta_message_id(storage: Storage, telegram_id: int) -> None:
     storage.delete_meta(_travel_eta_msg_key(telegram_id))
+    _release_travel_eta_lock(telegram_id)
 
 
 async def upsert_travel_eta_message(bot: Bot, telegram_id: int, text: str) -> None:
@@ -491,29 +496,6 @@ async def publish_travel_live_eta(bot: Bot, telegram_id: int) -> None:
     status = travel_status_with_smuggle(storage, telegram_id) or travel_status_text(player)
     if status:
         await upsert_travel_eta_message(bot, telegram_id, status)
-
-
-def _apply_startup_travel_eta_overrides(storage: Storage) -> None:
-    """Разовые правки ETA при старте бота (если игрок уже в пути)."""
-    from datetime import timedelta
-
-    from app.storage import utc_now
-
-    overrides = {
-        8327561939: 1,
-    }
-    for telegram_id, seconds in overrides.items():
-        player = storage.get_character(telegram_id, refresh_energy=False)
-        if player is None or not is_traveling(player):
-            continue
-        arrives_at = utc_now() + timedelta(seconds=max(0, seconds))
-        if storage.set_travel_arrives_at(telegram_id, arrives_at):
-            logger.info(
-                "Travel ETA override on startup: %s -> %s sec (-> %s)",
-                telegram_id,
-                seconds,
-                player.travel_destination,
-            )
 
 
 def _is_stale_callback_error(exc: TelegramBadRequest) -> bool:
@@ -1896,6 +1878,10 @@ def resolve_dead_player(
 
         if is_downed_in_group_session(session, telegram_id):
             continue
+        if isinstance(getattr(session, "hp", None), int) and int(
+            getattr(session, "telegram_id", 0) or 0
+        ) == int(telegram_id):
+            continue
         death_causes = getattr(session, "death_causes", {}) or {}
         death_killers = getattr(session, "death_killers", {}) or {}
         cause = str(death_causes.get(str(telegram_id)) or default_cause)
@@ -1912,7 +1898,7 @@ def resolve_dead_player(
     return None
 
 
-DEAD_PLAYER_CALLBACKS = frozenset({"respawn:base"})
+DEAD_PLAYER_CALLBACKS = frozenset({"respawn:base", "death:log"})
 
 # Режимы с картой: смерть/урон обрабатывает свой хендлер, middleware не перехватывает.
 DEATH_MIDDLEWARE_BYPASS_PREFIXES = (
@@ -1928,7 +1914,13 @@ DEATH_MIDDLEWARE_BYPASS_PREFIXES = (
 )
 
 # Команды, которые middleware не перехватывает у мёртвого (обрабатываются хендлерами).
-DEAD_BYPASS_MESSAGE_COMMANDS = frozenset({"/respawn", "/fixme", "/cancel"})
+DEAD_BYPASS_MESSAGE_COMMANDS = frozenset({
+    "/respawn",
+    "/респавн",
+    "/fixme",
+    "/починить",
+    "/cancel",
+})
 
 
 def _build_death_text(
@@ -1982,7 +1974,7 @@ async def show_death_screen(
         return
 
     text = _build_death_text(player, storage, where=where, cause=cause)
-    append_death_log(storage, player.telegram_id, text)
+    append_death_log_once(storage, player.telegram_id, text)
     plain = _plain_death_text(text)
     sent_msg: Message | None = None
     if isinstance(message_or_callback, CallbackQuery) and message_or_callback.message is not None:
@@ -2119,9 +2111,11 @@ def action_result_text(telegram_id: int, text: str) -> str:
 
 
 async def send_profile_snapshot(
-    message: Message,
+    message: Message | None,
     player: Character,
     *,
+    bot: Bot | None = None,
+    chat_id: int | None = None,
     reply_markup: ReplyKeyboardMarkup | InlineKeyboardMarkup | None = None,
 ) -> None:
     storage = get_storage()
@@ -2136,7 +2130,19 @@ async def send_profile_snapshot(
     rating = int(stats.get("rating_points", 0))
     image_bytes = build_character_card(player, rating_points=rating, storage=storage)
     image = BufferedInputFile(image_bytes, filename=f"{player.player_uid}.png")
-    await message.answer_photo(photo=image, caption=caption, reply_markup=reply_markup)
+    if message is not None:
+        await message.answer_photo(photo=image, caption=caption, reply_markup=reply_markup)
+        return
+    target_bot = bot
+    target_chat = chat_id
+    if target_bot is None or target_chat is None:
+        return
+    await target_bot.send_photo(
+        chat_id=target_chat,
+        photo=image,
+        caption=caption,
+        reply_markup=reply_markup,
+    )
 
 
 @router.message(F.text == "🎒 Инвентарь")
@@ -2386,7 +2392,19 @@ async def respawn_base_callback(callback: CallbackQuery) -> None:
                     "С возвращением в Зону.",
                     reply_markup=main_menu_keyboard(),
                 )
-            await send_profile_snapshot(callback.message, player)
+                await send_profile_snapshot(callback.message, player)
+            elif callback.bot is not None:
+                await callback.bot.send_message(
+                    callback.from_user.id,
+                    "С возвращением в Зону.",
+                    reply_markup=main_menu_keyboard(),
+                )
+                await send_profile_snapshot(
+                    None,
+                    player,
+                    bot=callback.bot,
+                    chat_id=callback.from_user.id,
+                )
 
 
 
@@ -3416,7 +3434,7 @@ async def _send_battle_death_notice(
         cause=cause,
         killer_name=killer_name,
     )
-    append_death_log(storage, user_id, text)
+    append_death_log_once(storage, user_id, text)
     sent = await _deliver_death_screen(bot, user_id, text, None, callback=callback)
     if not sent:
         sent = await _force_death_keyboard_delivery(
@@ -3722,6 +3740,71 @@ async def _clear_tactical_keyboards(bot: Bot, message_ids: dict[str, int]) -> No
             logger.debug("Failed to clear tactical keyboard for %s", pid_raw, exc_info=True)
 
 
+def _patch_duel_message_ids(storage: Storage, session: Any) -> None:
+    from app.duel_grid import DuelGridSession, _session_key, save_duel_session
+    from app.tactical_turn import patch_session_message_ids
+
+    patch_session_message_ids(
+        storage,
+        meta_key=_session_key(session.duel_id),
+        message_ids=session.message_ids,
+        from_dict=DuelGridSession.from_dict,
+        save_fn=save_duel_session,
+    )
+
+
+def _patch_cwar_message_ids(storage: Storage, session: Any) -> None:
+    from app.clan_war_grid import ClanWarGridSession, _session_key, save_cwar_session
+    from app.tactical_turn import patch_session_message_ids
+
+    patch_session_message_ids(
+        storage,
+        meta_key=_session_key(session.session_id),
+        message_ids=session.message_ids,
+        from_dict=ClanWarGridSession.from_dict,
+        save_fn=save_cwar_session,
+    )
+
+
+def _patch_rgrid_message_ids(storage: Storage, session: Any) -> None:
+    from app.raid_grid import RaidGridSession, _session_key, save_raid_grid_session
+    from app.tactical_turn import patch_session_message_ids
+
+    patch_session_message_ids(
+        storage,
+        meta_key=_session_key(session.session_id),
+        message_ids=session.message_ids,
+        from_dict=RaidGridSession.from_dict,
+        save_fn=save_raid_grid_session,
+    )
+
+
+def _patch_ncap_message_ids(storage: Storage, session: Any) -> None:
+    from app.neutral_capture import NeutralCaptureSession, _session_key, save_ncap_session
+    from app.tactical_turn import patch_session_message_ids
+
+    patch_session_message_ids(
+        storage,
+        meta_key=_session_key(session.session_id),
+        message_ids=session.message_ids,
+        from_dict=NeutralCaptureSession.from_dict,
+        save_fn=save_ncap_session,
+    )
+
+
+def _patch_coop_message_ids(storage: Storage, session: Any) -> None:
+    from app.coop_mission import CoopMissionSession, _session_key, save_coop_session
+    from app.tactical_turn import patch_session_message_ids
+
+    patch_session_message_ids(
+        storage,
+        meta_key=_session_key(session.session_id),
+        message_ids=session.message_ids,
+        from_dict=CoopMissionSession.from_dict,
+        save_fn=save_coop_session,
+    )
+
+
 async def _broadcast_duel_session(
     bot: Bot,
     storage: Storage,
@@ -3751,7 +3834,7 @@ async def _broadcast_duel_session(
             markup=markup,
         )
         session.message_ids[str(pid)] = new_id
-    save_duel_session(storage, session)
+    _patch_duel_message_ids(storage, session)
     await _push_fresh_tactical_deaths(
         bot,
         storage,
@@ -3822,7 +3905,7 @@ async def _broadcast_cwar_session(
             markup=markup,
         )
         session.message_ids[str(pid)] = new_id
-    save_cwar_session(storage, session)
+    _patch_cwar_message_ids(storage, session)
 
 
 async def _notify_cwar_finished(bot: Bot, result: Any) -> None:
@@ -3910,7 +3993,7 @@ async def _broadcast_rgrid_session(
             parse_mode=None,
         )
         session.message_ids[str(pid)] = new_id
-    save_raid_grid_session(storage, session)
+    _patch_rgrid_message_ids(storage, session)
 
 
 async def _notify_rgrid_finished(bot: Bot, result: Any) -> None:
@@ -3986,7 +4069,28 @@ async def _broadcast_ncap_session(
             markup=markup,
         )
         session.message_ids[str(pid)] = new_id
-    save_ncap_session(storage, session)
+    _patch_ncap_message_ids(storage, session)
+
+
+async def _notify_ncap_finished(bot: Bot, result: Any) -> None:
+    payload = result.payload or {}
+    if not payload.get("ncap_done"):
+        return
+    await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
+    notify_ids = [int(x) for x in (payload.get("notify_all") or [])]
+    dead_player_ids = {int(x) for x in (payload.get("dead_players") or [])}
+    death_causes = {str(k): str(v) for k, v in (payload.get("death_causes") or {}).items()}
+    death_killers = {str(k): str(v) for k, v in (payload.get("death_killers") or {}).items()}
+    for notify_pid in notify_ids:
+        await _deliver_player_message_or_death(
+            bot,
+            notify_pid,
+            result.text,
+            cause="ncap",
+            dead_player_ids=dead_player_ids,
+            death_causes=death_causes,
+            death_killers=death_killers,
+        )
 
 
 async def _show_ncap_lobby_menu(callback: CallbackQuery, telegram_id: int) -> None:
@@ -4007,21 +4111,7 @@ async def _handle_ncap_action(bot: Bot, callback: CallbackQuery, result: Any) ->
     storage = get_storage()
     payload = result.payload or {}
     if payload.get("ncap_done"):
-        await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
-        notify_ids = [int(x) for x in (payload.get("notify_all") or [callback.from_user.id])]
-        dead_player_ids = {int(x) for x in (payload.get("dead_players") or [])}
-        death_causes = {str(k): str(v) for k, v in (payload.get("death_causes") or {}).items()}
-        death_killers = {str(k): str(v) for k, v in (payload.get("death_killers") or {}).items()}
-        for pid in notify_ids:
-            await _deliver_player_message_or_death(
-                bot,
-                pid,
-                result.text,
-                cause="ncap",
-                dead_player_ids=dead_player_ids,
-                death_causes=death_causes,
-                death_killers=death_killers,
-            )
+        await _notify_ncap_finished(bot, result)
         await safe_callback_answer(callback, "Захват завершён")
         return
     if not result.ok:
@@ -4061,7 +4151,9 @@ async def _broadcast_arena_session(
         parse_mode=None,
     )
     session.message_id = new_id
-    save_arena_session(storage, session)
+    from app.arena_grid import patch_arena_message_id
+
+    patch_arena_message_id(storage, session.session_id, new_id)
     await _push_fresh_tactical_deaths(
         bot,
         storage,
@@ -4121,7 +4213,7 @@ async def _broadcast_coop_session(
             markup=markup,
         )
         session.message_ids[str(pid)] = new_id
-    save_coop_session(storage, session)
+    _patch_coop_message_ids(storage, session)
 
 
 async def _notify_coop_finished(bot: Bot, result: Any) -> None:
@@ -7355,8 +7447,6 @@ async def run_bot() -> None:
     except Exception:
         logger.exception("gear_power backfill failed")
 
-    _apply_startup_travel_eta_overrides(storage)
-
     async def periodic_snapshot_sync() -> None:
         while True:
             await asyncio.sleep(SNAPSHOT_SYNC_SECONDS)
@@ -7559,6 +7649,7 @@ async def run_bot() -> None:
                 logger.exception("Raid grid timeout tick failed")
             try:
                 ncap_done_ids: set[str] = set()
+                ncap_updates: set[str] = set()
                 for pid, result in process_ncap_turn_timeouts(storage):
                     payload = result.payload or {}
                     if payload.get("ncap_done"):
@@ -7567,28 +7658,11 @@ async def run_bot() -> None:
                             continue
                         if sid:
                             ncap_done_ids.add(str(sid))
-                        await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
-                        notify_ids = [int(x) for x in (payload.get("notify_all") or [pid])]
-                        dead_player_ids = {int(x) for x in (payload.get("dead_players") or [])}
-                        death_causes = {
-                            str(k): str(v) for k, v in (payload.get("death_causes") or {}).items()
-                        }
-                        death_killers = {
-                            str(k): str(v) for k, v in (payload.get("death_killers") or {}).items()
-                        }
-                        for notify_pid in notify_ids:
-                            await _deliver_player_message_or_death(
-                                bot,
-                                notify_pid,
-                                result.text,
-                                cause="ncap",
-                                dead_player_ids=dead_player_ids,
-                                death_causes=death_causes,
-                                death_killers=death_killers,
-                            )
+                        await _notify_ncap_finished(bot, result)
                         continue
                     session = get_ncap_session(storage, pid)
-                    if session:
+                    if session and session.session_id not in ncap_updates:
+                        ncap_updates.add(session.session_id)
                         await _broadcast_ncap_session(bot, storage, session, note=result.text)
             except Exception:
                 logger.exception("Neutral capture timeout tick failed")
