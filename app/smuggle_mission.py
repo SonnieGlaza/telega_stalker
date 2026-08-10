@@ -360,6 +360,25 @@ def _route_complete(session: SmuggleMissionSession) -> bool:
     return session.route_index >= len(session.route)
 
 
+def _lighten_icon(img: Image.Image, *, rgb: tuple[int, int, int] = (245, 240, 220)) -> Image.Image:
+    """Перекрасить тёмные пиксели иконки в светлый цвет (читаемость на тёмной сетке)."""
+    src = img.convert("RGBA")
+    _r, _g, _b, alpha = src.split()
+    light = Image.new("RGBA", src.size, (*rgb, 0))
+    light.putalpha(alpha)
+    return light
+
+
+def _circle_crop(img: Image.Image, size: int) -> Image.Image:
+    """Обрезать спрайт по кругу — без квадратных углов."""
+    src = img.convert("RGBA").resize((size, size), Image.Resampling.LANCZOS)
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).ellipse((1, 1, size - 2, size - 2), fill=255)
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    out.paste(src, (0, 0), mask)
+    return out
+
+
 def _load_smuggle_icon(name: str) -> Image.Image | None:
     path = SMUGGLE_ICONS_DIR / name
     if not path.is_file():
@@ -385,7 +404,8 @@ def _transport_token(
     if transport == "foot" and character is not None:
         from app.avatar_render import render_avatar
 
-        return render_avatar(character, rating_points=rating_points, width=size, height=size)
+        avatar = render_avatar(character, rating_points=rating_points, width=size, height=size)
+        return _circle_crop(avatar, size)
 
     icon_name = _TRANSPORT_ICON_FILES.get(transport, "walker.png")
     img = _cached_smuggle_icon(icon_name)
@@ -393,9 +413,10 @@ def _transport_token(
         img = _cached_smuggle_icon("walker.png")
     if img is None:
         return Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    if img.size != (size, size):
-        return img.resize((size, size), Image.Resampling.LANCZOS)
-    return img.copy()
+    tinted = _lighten_icon(img)
+    if tinted.size != (size, size):
+        tinted = tinted.resize((size, size), Image.Resampling.LANCZOS)
+    return _circle_crop(tinted, size)
 
 
 def smuggle_status_caption(session: SmuggleMissionSession, player: Character | None) -> str:
@@ -484,7 +505,8 @@ def render_smuggle_frame(session: SmuggleMissionSession, character: Character | 
     pcx = margin + px * cell + cell // 2
     pcy = margin + py * cell + cell // 2
     token = _transport_token(session.transport, character)
-    _paste_circle(canvas, token, pcx, pcy, 72, ring_color=(255, 200, 60), ring_width=5)
+    _glow(canvas, pcx, pcy, (255, 210, 90), 28)
+    _paste_token_circle(canvas, token, pcx, pcy, 72)
 
     pl = margin + grid_px + 20
     pr = width - margin
