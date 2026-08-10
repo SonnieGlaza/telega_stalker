@@ -584,17 +584,16 @@ def arena_forfeit(storage: Storage, telegram_id: int) -> ActionResult:
 
 
 def _save_turn(storage: Storage, session: ArenaGridSession, expected_seq: int) -> bool:
-    raw = storage.get_meta(_session_key(session.session_id))
-    if not raw:
-        return False
-    try:
-        fresh = ArenaGridSession.from_dict(json.loads(raw))
-    except Exception:
-        return False
-    if fresh.finished or fresh.turn_seq != expected_seq:
-        return False
-    save_arena_session(storage, session)
-    return True
+    from app.tactical_turn import save_turn_if_seq_ok
+
+    return save_turn_if_seq_ok(
+        storage,
+        meta_key=_session_key(session.session_id),
+        session=session,
+        from_dict=ArenaGridSession.from_dict,
+        save_fn=save_arena_session,
+        expected_seq=expected_seq,
+    )
 
 
 def process_arena_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult]]:

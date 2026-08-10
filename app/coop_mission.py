@@ -621,17 +621,16 @@ def _free_cell(grid: int, forbidden: set[tuple[int, int]]) -> tuple[int, int]:
 
 
 def _save_if_turn_ok(storage: Storage, session: CoopMissionSession, expected_seq: int) -> bool:
-    raw = storage.get_meta(_session_key(session.session_id))
-    if not raw:
-        return False
-    try:
-        fresh = CoopMissionSession.from_dict(json.loads(raw))
-    except Exception:
-        return False
-    if fresh.finished or fresh.turn_seq != expected_seq:
-        return False
-    save_coop_session(storage, session)
-    return True
+    from app.tactical_turn import save_turn_if_seq_ok
+
+    return save_turn_if_seq_ok(
+        storage,
+        meta_key=_session_key(session.session_id),
+        session=session,
+        from_dict=CoopMissionSession.from_dict,
+        save_fn=save_coop_session,
+        expected_seq=expected_seq,
+    )
 
 
 def _build_coop_map(session: CoopMissionSession) -> None:
@@ -1311,8 +1310,10 @@ def process_coop_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
 
 
 def coop_status_caption(session: CoopMissionSession, storage: Storage, viewer_id: int) -> str:
-    active = storage.get_character(session.active_player(), refresh_energy=False)
-    active_name = active.nickname if active else str(session.active_player())
+    from app.tactical_roster import format_player_name
+
+    active_pid = session.active_player()
+    active_name = format_player_name(storage, active_pid, html=True)
     left_obj = len(session.objectives) - len(session.collected)
     lines = [
         f"👥 Кооп · «{session.location}»",
@@ -1329,7 +1330,7 @@ def coop_status_caption(session: CoopMissionSession, storage: Storage, viewer_id
         elif hp <= 0:
             mark = " ☠ ранен, ждёт эвакуации"
         else:
-            mark = " ◀" if pid == session.active_player() else ""
+            mark = " ◀" if pid == active_pid else ""
             if str(pid) in session.carrying:
                 mark += " 🦺 несёт напарника"
         if pid == viewer_id:

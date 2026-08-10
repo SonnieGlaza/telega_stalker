@@ -935,17 +935,16 @@ def start_raid_grid(
 
 
 def _save_turn(storage: Storage, session: RaidGridSession, expected_seq: int) -> bool:
-    raw = storage.get_meta(_session_key(session.session_id))
-    if not raw:
-        return False
-    try:
-        fresh = RaidGridSession.from_dict(json.loads(raw))
-    except Exception:
-        return False
-    if fresh.finished or fresh.turn_seq != expected_seq:
-        return False
-    save_raid_grid_session(storage, session)
-    return True
+    from app.tactical_turn import save_turn_if_seq_ok
+
+    return save_turn_if_seq_ok(
+        storage,
+        meta_key=_session_key(session.session_id),
+        session=session,
+        from_dict=RaidGridSession.from_dict,
+        save_fn=save_raid_grid_session,
+        expected_seq=expected_seq,
+    )
 
 
 def _advance(session: RaidGridSession) -> None:
@@ -1213,8 +1212,10 @@ def find_raid_grid_session_for_faction(storage: Storage, faction: str) -> RaidGr
 
 
 def rgrid_status_caption(storage: Storage, session: RaidGridSession, viewer_id: int) -> str:
-    active = storage.get_character(session.active_player(), refresh_energy=False)
-    active_name = active.nickname if active else str(session.active_player())
+    from app.tactical_roster import format_player_name
+
+    active_pid = session.active_player()
+    active_name = format_player_name(storage, active_pid)
     lines = [f"🪖 Тактический рейд «{session.location_label}» · ход {active_name}"]
     deadline = _parse_deadline(session.match_deadline)
     if deadline:
@@ -1229,7 +1230,7 @@ def rgrid_status_caption(storage: Storage, session: RaidGridSession, viewer_id: 
         ch = storage.get_character(pid, refresh_energy=False)
         name = ch.nickname if ch else str(pid)
         hp = session.hp.get(str(pid), 0)
-        mark = " ◀" if pid == session.active_player() else ""
+        mark = " ◀" if pid == active_pid else ""
         if pid == viewer_id:
             mark += " (ты)"
         lines.append(f"{name}{mark}: HP {hp}")

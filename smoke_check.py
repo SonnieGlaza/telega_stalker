@@ -1483,6 +1483,33 @@ def run_smoke_check() -> None:
         wounded = storage.get_character(111, refresh_energy=False)
         assert wounded is not None and wounded.health == 1
 
+        from app.tactical_roster import format_player_name
+        from app.tactical_turn import save_turn_if_seq_ok
+        from app.smuggle_mission import check_smuggle_session_timeout
+        from datetime import datetime, timedelta, timezone
+
+        assert format_player_name(storage, 0) == "—"
+        assert format_player_name(storage, 111) != "—"
+
+        save_smuggle_session(
+            storage,
+            111,
+            SmuggleMissionSession(
+                destination="Болото",
+                origin="Росток",
+                transport="foot",
+                success_chance=50,
+                player=(0, 5),
+                route=[(0, 5), (5, 5), (2, 2)],
+                moves=0,
+                max_moves=20,
+                started_at=(datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(),
+            ),
+        )
+        idle = check_smuggle_session_timeout(storage, 111)
+        assert idle is not None and idle.ok is False
+        assert get_smuggle_session(storage, 111) is None
+
         from app.html_utils import nickname_validation_error
 
         assert nickname_validation_error("<bad>") is not None

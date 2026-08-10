@@ -4,6 +4,27 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.storage import Storage
+
+
+def format_player_name(
+    storage: Storage,
+    player_id: int,
+    *,
+    html: bool = False,
+) -> str:
+    """Имя игрока для подписи хода; 0 → «—»."""
+    if int(player_id) <= 0:
+        return "—"
+    player = storage.get_character(int(player_id), refresh_energy=False)
+    if player is None:
+        return str(player_id)
+    if html:
+        from app.html_utils import html_safe as h
+
+        return h(player.nickname)
+    return player.nickname
+
 
 def resolve_active_player(
     session: Any,

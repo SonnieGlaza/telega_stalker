@@ -48,6 +48,7 @@ from app.smuggle_mission import (
     abandon_smuggle_mission,
     get_smuggle_session,
     move_smuggle_mission,
+    process_smuggle_timeouts,
     render_smuggle_for_player,
     smuggle_status_caption,
 )
@@ -3608,14 +3609,16 @@ def _player_has_medkit(player: Character | None) -> bool:
 
 
 def _duel_status_caption(storage: Storage, session: Any, viewer_id: int) -> str:
-    active = storage.get_character(session.active_player(), refresh_energy=False)
-    active_name = h(active.nickname) if active else str(session.active_player())
+    from app.tactical_roster import format_player_name
+
+    active_pid = session.active_player()
+    active_name = format_player_name(storage, active_pid, html=True)
     lines = [f"⚔️ Тактическая дуэль · ход {active_name} (10 сек)"]
     for pid in (session.challenger_id, session.target_id):
         ch = storage.get_character(pid, refresh_energy=False)
         name = h(ch.nickname) if ch else str(pid)
         hp = session.hp.get(str(pid), 0)
-        mark = " ◀" if pid == session.active_player() else ""
+        mark = " ◀" if pid == active_pid else ""
         if pid == viewer_id:
             mark += " (ты)"
         weapon = str(ch.equipment.get("weapon", "Нож")) if ch else "Нож"
@@ -7298,18 +7301,9 @@ async def smuggle_go_callback(callback: CallbackQuery, bot: Bot) -> None:
         await safe_callback_answer(callback, "Ошибка старта рейса. /fixme", show_alert=True)
 
 
-@router.callback_query(F.data == "eco:smuggle:coop")
-async def smuggle_coop_callback(callback: CallbackQuery) -> None:
-    """Старый callback: групповой конвой пока не реализован."""
-    await callback.answer(
-        "Конвой с союзниками пока в разработке. Сolo-рейс — через «→ точка».",
-        show_alert=True,
-    )
-
-
-@router.callback_query(F.data == "eco:smuggle:run")
-async def smuggle_callback(callback: CallbackQuery) -> None:
-    # Старый callback: открыть меню выбора точки.
+@router.callback_query(F.data.in_({"eco:smuggle:coop", "eco:smuggle:run"}))
+async def smuggle_legacy_menu_callback(callback: CallbackQuery) -> None:
+    """Старые callback → меню контрабанды."""
     await smuggle_menu_callback(callback)
 
 
@@ -7482,8 +7476,10 @@ async def run_bot() -> None:
 
     async def periodic_tactical_turns() -> None:
         """Таймер ходов тактической дуэли и кооп-вылазки (~10 сек)."""
+        tick = 0
         while True:
             await asyncio.sleep(1)
+            tick += 1
             storage = get_storage()
             try:
                 duel_updates: set[str] = set()
@@ -7610,6 +7606,15 @@ async def run_bot() -> None:
                         await _broadcast_arena_session(bot, storage, session, note=result.text)
             except Exception:
                 logger.exception("Arena timeout tick failed")
+            if tick % 30 == 0:
+                try:
+                    for tid, result in process_smuggle_timeouts(storage):
+                        try:
+                            await bot.send_message(tid, action_result_text(tid, result.text))
+                        except Exception:
+                            logger.exception("Failed smuggle timeout notify to %s", tid)
+                except Exception:
+                    logger.exception("Smuggle timeout tick failed")
 
     sync_task = asyncio.create_task(periodic_snapshot_sync())
     zone_task = asyncio.create_task(periodic_zone_systems())

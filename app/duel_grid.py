@@ -218,17 +218,16 @@ def _free_cell(grid: int, forbidden: set[tuple[int, int]]) -> tuple[int, int]:
 
 
 def _save_if_turn_ok(storage: Storage, session: DuelGridSession, expected_seq: int) -> bool:
-    raw = storage.get_meta(_session_key(session.duel_id))
-    if not raw:
-        return False
-    try:
-        fresh = DuelGridSession.from_dict(json.loads(raw))
-    except Exception:
-        return False
-    if fresh.finished or fresh.turn_seq != expected_seq:
-        return False
-    save_duel_session(storage, session)
-    return True
+    from app.tactical_turn import save_turn_if_seq_ok
+
+    return save_turn_if_seq_ok(
+        storage,
+        meta_key=_session_key(session.duel_id),
+        session=session,
+        from_dict=DuelGridSession.from_dict,
+        save_fn=save_duel_session,
+        expected_seq=expected_seq,
+    )
 
 
 def _build_duel_map(session: DuelGridSession) -> None:

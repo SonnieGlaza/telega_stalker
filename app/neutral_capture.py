@@ -856,17 +856,16 @@ def _after_turn(storage: Storage, session: NeutralCaptureSession) -> ActionResul
 
 
 def _save_turn(storage: Storage, session: NeutralCaptureSession, expected_seq: int) -> bool:
-    raw = storage.get_meta(_session_key(session.session_id))
-    if not raw:
-        return False
-    try:
-        fresh = NeutralCaptureSession.from_dict(json.loads(raw))
-    except Exception:
-        return False
-    if fresh.finished or fresh.turn_seq != expected_seq:
-        return False
-    save_ncap_session(storage, session)
-    return True
+    from app.tactical_turn import save_turn_if_seq_ok
+
+    return save_turn_if_seq_ok(
+        storage,
+        meta_key=_session_key(session.session_id),
+        session=session,
+        from_dict=NeutralCaptureSession.from_dict,
+        save_fn=save_ncap_session,
+        expected_seq=expected_seq,
+    )
 
 
 def _require_active_turn(session: NeutralCaptureSession, telegram_id: int) -> ActionResult | None:
@@ -1066,16 +1065,18 @@ def ncap_status_caption(session: NeutralCaptureSession, player: Character | None
     if deadline:
         secs = max(0, int((deadline - _utc_now()).total_seconds()))
         lines.append(f"⏱ {secs // 60}:{secs % 60:02d}")
-    active = session.active_player()
+    active_pid = session.active_player()
     lines.append(f"Бойцов: {len(_alive_players(session))}/{len(session.player_ids)}")
     lines.append(f"Врагов: {len(session.hostiles)} · захват {session.capture_progress}/{NCAP_CAPTURE_TURNS}")
     if player:
         weapon = str(player.equipment.get("weapon", "Нож"))
         lines.append(f"HP {session.hp.get(str(viewer_id), 0)} · дальность {weapon_shoot_range(weapon)}")
-    if active == viewer_id:
+    if active_pid == viewer_id:
         lines.append("▶️ Твой ход")
+    elif active_pid > 0:
+        lines.append(f"⏳ Ход бойца ID {active_pid}")
     else:
-        lines.append(f"⏳ Ход бойца ID {active}")
+        lines.append("⏳ Ожидание хода")
     lines.append("🔷 синяя клетка на карте = вы")
     if session.log:
         lines.append(session.log[-1][:80])

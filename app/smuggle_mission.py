@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import random
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
@@ -66,6 +67,8 @@ _TRANSPORT_ICON_FILES: dict[str, str] = {
 }
 
 SMUGGLE_MISSION_META_PREFIX = "smuggle_mission:"
+SMUGGLE_ACTIVE_IDS_META = "smuggle_mission:active_ids"
+SMUGGLE_IDLE_HOURS = 4
 
 TRANSPORT_LABELS: dict[str, str] = {
     "foot": "пешком",
@@ -94,6 +97,7 @@ class SmuggleMissionSession:
     grid: int = GRID_SIZE
     difficulty: str = "hard"
     location: str = ""
+    started_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -114,6 +118,7 @@ class SmuggleMissionSession:
             "grid": self.grid,
             "difficulty": self.difficulty,
             "location": self.location,
+            "started_at": self.started_at,
         }
 
     @classmethod
@@ -136,7 +141,99 @@ class SmuggleMissionSession:
             grid=int(raw.get("grid") or GRID_SIZE),
             difficulty=str(raw.get("difficulty") or "hard"),
             location=str(raw.get("location") or raw.get("origin") or ""),
+            started_at=raw.get("started_at"),
         )
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _register_active_smuggle(storage: Storage, telegram_id: int) -> None:
+    raw = storage.get_meta(SMUGGLE_ACTIVE_IDS_META)
+    ids: list[int] = []
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                ids = [int(x) for x in parsed]
+        except json.JSONDecodeError:
+            ids = []
+    tid = int(telegram_id)
+    if tid not in ids:
+        ids.append(tid)
+    storage.set_meta(SMUGGLE_ACTIVE_IDS_META, json.dumps(ids, ensure_ascii=False))
+
+
+def _unregister_active_smuggle(storage: Storage, telegram_id: int) -> None:
+    raw = storage.get_meta(SMUGGLE_ACTIVE_IDS_META)
+    if not raw:
+        return
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            return
+        ids = [int(x) for x in parsed if int(x) != int(telegram_id)]
+    except json.JSONDecodeError:
+        return
+    if ids:
+        storage.set_meta(SMUGGLE_ACTIVE_IDS_META, json.dumps(ids, ensure_ascii=False))
+    else:
+        storage.delete_meta(SMUGGLE_ACTIVE_IDS_META)
+
+
+def list_active_smuggle_player_ids(storage: Storage) -> list[int]:
+    raw = storage.get_meta(SMUGGLE_ACTIVE_IDS_META)
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [int(x) for x in parsed]
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
+def _smuggle_timeout_result(storage: Storage, telegram_id: int, reason: str) -> ActionResult:
+    fail_text = _fail_smuggle_run(storage, telegram_id, reason)
+    return ActionResult(
+        False,
+        fail_text,
+        payload={"mission_active": False, "mission_done": True, "smuggle_timeout": True},
+    )
+
+
+def check_smuggle_session_timeout(storage: Storage, telegram_id: int) -> ActionResult | None:
+    session = get_smuggle_session(storage, telegram_id)
+    if session is None:
+        _unregister_active_smuggle(storage, telegram_id)
+        return None
+    if session.moves >= session.max_moves:
+        return _smuggle_timeout_result(storage, telegram_id, "Время рейса вышло — ограбили.")
+    if session.started_at:
+        try:
+            started = datetime.fromisoformat(str(session.started_at))
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+        except ValueError:
+            started = _utc_now()
+        if _utc_now() > started + timedelta(hours=SMUGGLE_IDLE_HOURS):
+            return _smuggle_timeout_result(
+                storage,
+                telegram_id,
+                "Рейс заброшен — слишком долго без движения.",
+            )
+    return None
+
+
+def process_smuggle_timeouts(storage: Storage) -> list[tuple[int, ActionResult]]:
+    outcomes: list[tuple[int, ActionResult]] = []
+    for telegram_id in list_active_smuggle_player_ids(storage):
+        result = check_smuggle_session_timeout(storage, telegram_id)
+        if result is not None:
+            outcomes.append((telegram_id, result))
+    return outcomes
 
 
 def _meta_key(telegram_id: int) -> str:
@@ -163,10 +260,12 @@ def get_smuggle_session(storage: Storage, telegram_id: int) -> SmuggleMissionSes
 
 def save_smuggle_session(storage: Storage, telegram_id: int, session: SmuggleMissionSession) -> None:
     storage.set_meta(_meta_key(telegram_id), json.dumps(session.to_dict(), ensure_ascii=False))
+    _register_active_smuggle(storage, telegram_id)
 
 
 def clear_smuggle_session(storage: Storage, telegram_id: int) -> None:
     storage.delete_meta(_meta_key(telegram_id))
+    _unregister_active_smuggle(storage, telegram_id)
 
 
 def _build_route(grid: int) -> list[tuple[int, int]]:
@@ -231,6 +330,7 @@ def _build_smuggle_session(
         max_moves=_scaled_max_moves(origin),
         location=origin,
         difficulty="hard",
+        started_at=_utc_now().isoformat(),
     )
 
 
@@ -614,6 +714,9 @@ def abandon_smuggle_mission(storage: Storage, telegram_id: int) -> ActionResult:
 
 
 def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
+    timeout = check_smuggle_session_timeout(storage, telegram_id)
+    if timeout is not None:
+        return timeout
     session = get_smuggle_session(storage, telegram_id)
     if session is None:
         return ActionResult(False, "Активного тактического рейса нет.")
@@ -735,8 +838,11 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
         )
 
     if session.moves >= session.max_moves:
-        fail_text = _fail_smuggle_run(storage, telegram_id, "Время рейса вышло — ограбили.")
-        return ActionResult(False, fail_text, payload={"mission_active": False, "mission_done": True})
+        return check_smuggle_session_timeout(storage, telegram_id) or ActionResult(
+            False,
+            _fail_smuggle_run(storage, telegram_id, "Время рейса вышло — ограбили."),
+            payload={"mission_active": False, "mission_done": True},
+        )
 
     save_smuggle_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
