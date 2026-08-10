@@ -21,7 +21,7 @@ from app.game_logic import (
     equipment_power,
     h,
 )
-from app.tactical_hp import sync_session_hp_to_db, use_tactical_medkit
+from app.tactical_hp import finalize_group_tactical_hp, sync_session_hp_to_db, use_tactical_medkit
 from app.mission_icons import (
     ANOMALY_ICON_KEY,
     MISSION_ICON_GRID_DIAMETER,
@@ -817,28 +817,16 @@ def _commit_coop_session_deaths(
     storage: Storage,
     session: CoopMissionSession,
 ) -> tuple[list[int], dict[str, str], dict[str, str]]:
-    from app.tactical_hp import commit_tactical_death
-
-    dead_ids: list[int] = []
-    death_causes_payload: dict[str, str] = {}
-    death_killers_payload: dict[str, str] = {}
     for pid in session.player_ids:
-        if session.hp.get(str(pid), 0) > 0:
-            continue
-        cause = _map_death_cause(session.death_causes.get(str(pid)))
-        killer_name = session.death_killers.get(str(pid))
-        commit_tactical_death(
-            storage,
-            pid,
-            0,
-            cause=cause,
-            killer_name=str(killer_name) if killer_name else None,
-        )
-        dead_ids.append(pid)
-        death_causes_payload[str(pid)] = cause
-        if killer_name:
-            death_killers_payload[str(pid)] = killer_name
-    return dead_ids, death_causes_payload, death_killers_payload
+        key = str(pid)
+        if key in session.death_causes:
+            session.death_causes[key] = _map_death_cause(session.death_causes.get(key))
+    return finalize_group_tactical_hp(
+        storage,
+        session,
+        cause_default="coop",
+        commit_field_deaths=True,
+    )
 
 
 def _refund_coop_energy(storage: Storage, player_ids: list[int]) -> None:
@@ -876,10 +864,6 @@ def _reward_players(storage: Storage, session: CoopMissionSession) -> str:
 
 
 def _finish_success(storage: Storage, session: CoopMissionSession) -> ActionResult:
-    for pid in session.player_ids:
-        hp_val = session.hp.get(str(pid))
-        if hp_val is not None and int(hp_val) > 0:
-            sync_session_hp_to_db(storage, pid, int(hp_val), force=True)
     dead_ids, death_causes_payload, death_killers_payload = _commit_coop_session_deaths(
         storage, session
     )
@@ -915,7 +899,12 @@ def _finish_fail(
     *,
     refund: bool = False,
 ) -> ActionResult:
-    _sync_coop_hp_to_characters(storage, session)
+    finalize_group_tactical_hp(
+        storage,
+        session,
+        cause_default="coop",
+        commit_field_deaths=False,
+    )
     if refund:
         _refund_coop_energy(storage, session.player_ids)
     message_ids = {str(k): int(v) for k, v in session.message_ids.items()}

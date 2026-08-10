@@ -38,7 +38,7 @@ from app.tactical_combat import (
     ray_cast_first_hit,
     weapon_shoot_range,
 )
-from app.tactical_hp import sync_session_hp_to_db, use_tactical_medkit
+from app.tactical_hp import finalize_group_tactical_hp, sync_session_hp_to_db, use_tactical_medkit
 
 CWAR_GRID_SIZE = 9
 CWAR_TURN_SECONDS = 10
@@ -446,16 +446,23 @@ def _finalize_fail(storage: Storage, session: ClanWarGridSession, reason: str) -
 
 
 def _end_session(storage: Storage, session: ClanWarGridSession, result: ActionResult) -> ActionResult:
-    for pid in session.player_ids:
-        hp_val = session.hp.get(str(pid))
-        if hp_val is not None:
-            sync_session_hp_to_db(storage, pid, int(hp_val))
+    payload = dict(result.payload or {})
+    commit_deaths = bool(payload.get("success"))
+    dead_ids, death_causes, death_killers = finalize_group_tactical_hp(
+        storage,
+        session,
+        cause_default="cwar",
+        commit_field_deaths=commit_deaths,
+    )
+    if dead_ids:
+        payload["dead_players"] = dead_ids
+        payload["death_causes"] = death_causes
+        payload["death_killers"] = death_killers
     message_ids = dict(session.message_ids)
     session.finished = True
     save_cwar_session(storage, session)
     clear_cwar_session(storage, session)
     _unregister_active(storage, session.session_id)
-    payload = dict(result.payload or {})
     payload["message_ids"] = message_ids
     payload["session_id"] = session.session_id
     return ActionResult(result.ok, result.text, payload=payload)
@@ -539,8 +546,6 @@ def _check_end(storage: Storage, session: ClanWarGridSession) -> ActionResult | 
     deadline = _parse_deadline(session.match_deadline)
     if deadline and _utc_now() > deadline:
         return _end_session(storage, session, _finalize_fail(storage, session, "Время штурма истекло."))
-    if not session.defenders and _check_capture(session):
-        return _end_session(storage, session, _finalize_success(storage, session))
     if _check_capture(session):
         return _end_session(storage, session, _finalize_success(storage, session))
     return None

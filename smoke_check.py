@@ -1445,6 +1445,44 @@ def run_smoke_check() -> None:
         assert "timeout" in timeout_text
         assert storage.get_character(111, refresh_energy=False).money == money_before
 
+        from app.game_logic import ActionResult
+        from app.raid_grid import RaidGridSession, _end_session
+
+        storage.change_health(111, 100)
+        storage.change_health(222, 100)
+        raid_sess = RaidGridSession(
+            session_id="r1",
+            raid_id=1,
+            raid_kind="lair",
+            location_label="Завод",
+            attacker_faction="Долг",
+            player_ids=[111, 222],
+            hp={"111": 0, "222": 55},
+            turn_order=[111, 222],
+        )
+        raid_result = ActionResult(
+            True,
+            "ok",
+            payload={"rgrid_done": True, "success": True, "member_ids": [111, 222]},
+        )
+        _end_session(storage, raid_sess, raid_result)
+        assert storage.get_character(111, refresh_energy=False).health <= 0
+        assert storage.get_character(222, refresh_energy=False).health == 55
+
+        storage.change_health(111, 100)
+        coop_fail = CoopMissionSession(
+            session_id="fail-w",
+            lobby_id="lf",
+            location="Кордон",
+            player_ids=[111],
+            hp={"111": 0},
+        )
+        from app.coop_mission import _finish_fail
+
+        _finish_fail(storage, coop_fail, "test fail")
+        wounded = storage.get_character(111, refresh_energy=False)
+        assert wounded is not None and wounded.health == 1
+
         from app.html_utils import nickname_validation_error
 
         assert nickname_validation_error("<bad>") is not None

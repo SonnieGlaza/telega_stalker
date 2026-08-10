@@ -22,6 +22,7 @@ from app.game_logic import (
     h,
 )
 from app.storage import Storage
+from app.tactical_hp import finalize_solo_tactical_hp
 from app.tactical_combat import (
     MOVE_DELTAS,
     NPC_MOVE_CHANCE,
@@ -340,7 +341,14 @@ def _arena_apply_damage(raw: int, armor_level: int) -> int:
 def _finalize_arena_reward(storage: Storage, session: ArenaGridSession, *, reason: str) -> ActionResult:
     quest = QUESTS["easy"]
     rating_gain = QUEST_RATING_BY_DIFFICULTY["easy"][0]
-    if session.waves_cleared >= 1:
+    if session.hp <= 0:
+        text = (
+            f"🏟 Арена «{session.home_base}» завершена.\n"
+            f"{reason}\n"
+            f"Пройдено волн: {session.waves_cleared}.\n"
+            "Выведен из строя — награды нет."
+        )
+    elif session.waves_cleared >= 1:
         reward = random.randint(quest.reward_min, quest.reward_max)
         storage.change_money(session.telegram_id, reward)
         _add_rating(storage, session.telegram_id, rating_gain)
@@ -370,6 +378,7 @@ def _finalize_arena_reward(storage: Storage, session: ArenaGridSession, *, reaso
 
 
 def _end_session(storage: Storage, session: ArenaGridSession, result: ActionResult) -> ActionResult:
+    finalize_solo_tactical_hp(storage, session.telegram_id, session.hp, cause="arena")
     session.finished = True
     save_arena_session(storage, session)
     msg_id = session.message_id

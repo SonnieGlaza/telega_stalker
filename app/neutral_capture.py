@@ -34,7 +34,7 @@ from app.tactical_combat import (
 from app.mutant_assets import pick_mutant_kind
 from app.npc_assets import pick_npc_kind
 from app.storage import Character, Storage
-from app.tactical_hp import sync_session_hp_to_db, use_tactical_medkit
+from app.tactical_hp import finalize_group_tactical_hp, sync_session_hp_to_db, use_tactical_medkit
 from app.tactical_render import hostile_kind_to_sprite, load_tactical_font, paste_mutant_sprite, paste_npc_sprite, paste_player_avatar
 
 NCAP_GRID_SIZE = 6
@@ -784,13 +784,22 @@ def _finalize_fail(storage: Storage, session: NeutralCaptureSession, reason: str
 
 
 def _end_session(storage: Storage, session: NeutralCaptureSession, result: ActionResult) -> ActionResult:
-    for pid in session.player_ids:
-        sync_session_hp_to_db(storage, pid, session.hp.get(str(pid), 0))
+    payload = dict(result.payload or {})
+    commit_deaths = bool(payload.get("success"))
+    dead_ids, death_causes, death_killers = finalize_group_tactical_hp(
+        storage,
+        session,
+        cause_default="ncap",
+        commit_field_deaths=commit_deaths,
+    )
+    if dead_ids:
+        payload["dead_players"] = dead_ids
+        payload["death_causes"] = death_causes
+        payload["death_killers"] = death_killers
     message_ids = dict(session.message_ids)
     session.finished = True
     save_ncap_session(storage, session)
     clear_ncap_session(storage, session)
-    payload = dict(result.payload or {})
     payload["message_ids"] = message_ids
     payload["notify_all"] = list(session.player_ids)
     payload["session_id"] = session.session_id

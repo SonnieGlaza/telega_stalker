@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.game_logic import (
     ITEM_LABELS,
     ActionResult,
@@ -81,3 +83,61 @@ def commit_tactical_death(
         remember_death_cause(storage, telegram_id, cause)
     if killer_name:
         remember_death_killer(storage, telegram_id, killer_name)
+
+
+def finalize_group_tactical_hp(
+    storage: Storage,
+    session: Any,
+    *,
+    cause_default: str = "combat",
+    commit_field_deaths: bool = False,
+) -> tuple[list[int], dict[str, str], dict[str, str]]:
+    """Финализация HP group-сессии: смерть на поле или ранение (1 HP) при провале."""
+    dead_ids: list[int] = []
+    death_causes_payload: dict[str, str] = {}
+    death_killers_payload: dict[str, str] = {}
+    player_ids = list(getattr(session, "player_ids", None) or [])
+    hp_map: dict[str, int] = getattr(session, "hp", None) or {}
+    death_causes = getattr(session, "death_causes", {}) or {}
+    death_killers = getattr(session, "death_killers", {}) or {}
+
+    for pid in player_ids:
+        hp_val = hp_map.get(str(pid))
+        if hp_val is None:
+            continue
+        field_hp = int(hp_val)
+        if field_hp <= 0:
+            if commit_field_deaths:
+                cause = str(death_causes.get(str(pid)) or cause_default)
+                killer_name = death_killers.get(str(pid))
+                commit_tactical_death(
+                    storage,
+                    pid,
+                    0,
+                    cause=cause,
+                    killer_name=str(killer_name) if killer_name else None,
+                )
+                dead_ids.append(pid)
+                death_causes_payload[str(pid)] = cause
+                if killer_name:
+                    death_killers_payload[str(pid)] = str(killer_name)
+            else:
+                sync_session_hp_to_db(storage, pid, 1, force=True)
+        else:
+            sync_session_hp_to_db(storage, pid, field_hp, force=True)
+
+    return dead_ids, death_causes_payload, death_killers_payload
+
+
+def finalize_solo_tactical_hp(
+    storage: Storage,
+    telegram_id: int,
+    field_hp: int,
+    *,
+    cause: str = "arena",
+) -> None:
+    """Финализация HP solo-режима (арена): смерть или синк выжившего."""
+    if int(field_hp) <= 0:
+        commit_tactical_death(storage, telegram_id, 0, cause=cause)
+    else:
+        sync_session_hp_to_db(storage, telegram_id, int(field_hp), force=True)

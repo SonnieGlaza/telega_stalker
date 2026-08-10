@@ -2087,6 +2087,8 @@ async def _reject_tactical_callback_if_dead(callback: CallbackQuery) -> bool:
     telegram_id = callback.from_user.id
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is not None and player.health <= 0:
+        if _active_tactical_field_hp(storage, telegram_id) is not None:
+            return False
         await _ensure_death_keyboard(callback, telegram_id)
         return True
     return False
@@ -3342,6 +3344,8 @@ async def _push_offline_survival_deaths(bot: Bot, storage: Storage) -> None:
             logger.exception("Survival refresh failed for %s", telegram_id)
             continue
         if after is not None and after.health <= 0:
+            if _active_tactical_field_hp(storage, telegram_id) is not None:
+                continue
             try:
                 await _send_battle_death_notice(bot, telegram_id, after)
             except Exception:
@@ -3446,16 +3450,24 @@ async def _deliver_player_message_or_death(
     cause: str | None = None,
     where: str | None = None,
     killer_name: str | None = None,
+    dead_player_ids: set[int] | None = None,
+    death_causes: dict[str, str] | None = None,
+    death_killers: dict[str, str] | None = None,
 ) -> None:
     storage = get_storage()
     player = storage.get_character(telegram_id, refresh_energy=False)
-    if player is not None and player.health <= 0:
+    dead_ids = dead_player_ids or set()
+    causes_map = death_causes or {}
+    killers_map = death_killers or {}
+    is_dead = player is not None and (player.health <= 0 or telegram_id in dead_ids)
+    if is_dead and player is not None:
         await _send_battle_death_notice(
             bot,
             telegram_id,
             player,
             where=where or player.location,
-            cause=cause or "combat",
+            cause=causes_map.get(str(telegram_id)) or cause or "combat",
+            killer_name=killers_map.get(str(telegram_id)) or killer_name,
         )
         return
     await bot.send_message(telegram_id, action_result_text(telegram_id, result_text))
@@ -3471,12 +3483,15 @@ async def _push_fresh_tactical_deaths(
 ) -> None:
     """Сразу после тактического хода: если HP на поле = 0, а в БД ещё жив — экран смерти."""
     from app.tactical_hp import commit_tactical_death
+    from app.tactical_roster import is_downed_in_group_session
 
     death_causes = getattr(session, "death_causes", {}) or {}
     death_killers = getattr(session, "death_killers", {}) or {}
     for pid in player_ids:
         session_hp = _session_hp_for_player(session, pid)
         if session_hp is None or session_hp > 0:
+            continue
+        if is_downed_in_group_session(session, pid):
             continue
         player = storage.get_character(pid, refresh_energy=False)
         if player is None or player.health <= 0:
@@ -3813,6 +3828,9 @@ async def _notify_cwar_finished(bot: Bot, result: Any) -> None:
         return
     await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
     member_ids = payload.get("member_ids") or []
+    dead_player_ids = {int(x) for x in (payload.get("dead_players") or [])}
+    death_causes = {str(k): str(v) for k, v in (payload.get("death_causes") or {}).items()}
+    death_killers = {str(k): str(v) for k, v in (payload.get("death_killers") or {}).items()}
     for pid in member_ids:
         try:
             await _deliver_player_message_or_death(
@@ -3820,6 +3838,9 @@ async def _notify_cwar_finished(bot: Bot, result: Any) -> None:
                 int(pid),
                 result.text,
                 cause="cwar",
+                dead_player_ids=dead_player_ids,
+                death_causes=death_causes,
+                death_killers=death_killers,
             )
         except Exception:
             logger.exception("Failed cwar result notify to %s", pid)
@@ -3896,6 +3917,9 @@ async def _notify_rgrid_finished(bot: Bot, result: Any) -> None:
     await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
     member_ids = payload.get("member_ids") or []
     defender_leader_id = payload.get("defender_leader_id")
+    dead_player_ids = {int(x) for x in (payload.get("dead_players") or [])}
+    death_causes = {str(k): str(v) for k, v in (payload.get("death_causes") or {}).items()}
+    death_killers = {str(k): str(v) for k, v in (payload.get("death_killers") or {}).items()}
     notify_set = set(int(x) for x in member_ids)
     if defender_leader_id is not None:
         notify_set.add(int(defender_leader_id))
@@ -3906,6 +3930,9 @@ async def _notify_rgrid_finished(bot: Bot, result: Any) -> None:
                 int(pid),
                 result.text,
                 cause="raid",
+                dead_player_ids=dead_player_ids,
+                death_causes=death_causes,
+                death_killers=death_killers,
             )
         except Exception:
             logger.exception("Failed rgrid result notify to %s", pid)
@@ -3979,8 +4006,19 @@ async def _handle_ncap_action(bot: Bot, callback: CallbackQuery, result: Any) ->
     if payload.get("ncap_done"):
         await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
         notify_ids = [int(x) for x in (payload.get("notify_all") or [callback.from_user.id])]
+        dead_player_ids = {int(x) for x in (payload.get("dead_players") or [])}
+        death_causes = {str(k): str(v) for k, v in (payload.get("death_causes") or {}).items()}
+        death_killers = {str(k): str(v) for k, v in (payload.get("death_killers") or {}).items()}
         for pid in notify_ids:
-            await _deliver_player_message_or_death(bot, pid, result.text, cause="ncap")
+            await _deliver_player_message_or_death(
+                bot,
+                pid,
+                result.text,
+                cause="ncap",
+                dead_player_ids=dead_player_ids,
+                death_causes=death_causes,
+                death_killers=death_killers,
+            )
         await safe_callback_answer(callback, "Захват завершён")
         return
     if not result.ok:
@@ -7535,12 +7573,22 @@ async def run_bot() -> None:
                             ncap_done_ids.add(str(sid))
                         await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
                         notify_ids = [int(x) for x in (payload.get("notify_all") or [pid])]
+                        dead_player_ids = {int(x) for x in (payload.get("dead_players") or [])}
+                        death_causes = {
+                            str(k): str(v) for k, v in (payload.get("death_causes") or {}).items()
+                        }
+                        death_killers = {
+                            str(k): str(v) for k, v in (payload.get("death_killers") or {}).items()
+                        }
                         for notify_pid in notify_ids:
                             await _deliver_player_message_or_death(
                                 bot,
                                 notify_pid,
                                 result.text,
                                 cause="ncap",
+                                dead_player_ids=dead_player_ids,
+                                death_causes=death_causes,
+                                death_killers=death_killers,
                             )
                         continue
                     session = get_ncap_session(storage, pid)
