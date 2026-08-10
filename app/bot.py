@@ -4441,6 +4441,12 @@ async def smuggle_mission_callback(callback: CallbackQuery) -> None:
             )
             return
 
+        if payload.get("mission_travel_started"):
+            await reply_action_result(callback, result.text, bot=callback.bot)
+            clear_travel_eta_message_id(storage, telegram_id)
+            await publish_travel_live_eta(callback.bot, telegram_id)
+            return
+
         if payload.get("mission_done") or payload.get("mission_active") is False:
             await reply_action_result(callback, result.text)
             return
@@ -7364,19 +7370,35 @@ async def smuggle_to_callback(callback: CallbackQuery, bot: Bot) -> None:
         if not destination:
             await callback.answer("Некорректная точка", show_alert=True)
             return
-        player = get_storage().get_character(callback.from_user.id)
-        if player is None:
-            await callback.answer("Сначала создай персонажа.", show_alert=True)
-            return
-        modes = [
-            (mode, f"{label} (−{energy} эн.)")
-            for mode, label, _speed, energy in list_available_travel_modes(player)
-        ]
-        await edit_menu_message(
-            callback,
-            f"Контрабанда → «{destination}».\nВыбери транспорт:",
-            smuggle_transport_keyboard(destination, modes),
+        result = start_smuggling_run(
+            get_storage(),
+            callback.from_user.id,
+            destination,
+            transport_mode=None,
         )
+        if result.ok:
+            payload = result.payload or {}
+            image = payload.get("mission_image")
+            if image and payload.get("mission_active"):
+                await _send_or_edit_smuggle_frame(
+                    callback,
+                    image_bytes=image,
+                    caption=str(payload.get("caption") or result.text),
+                    note=result.text if payload.get("mission_started") else None,
+                )
+                return
+            await safe_callback_answer(callback, "Рейс начат!")
+            if callback.message is not None:
+                await callback.message.answer(
+                    action_result_text(callback.from_user.id, result.text)
+                )
+            else:
+                await bot.send_message(
+                    callback.from_user.id,
+                    action_result_text(callback.from_user.id, result.text),
+                )
+            return
+        await reply_action_result(callback, result.text, bot=bot)
     except Exception:
         logger.exception("Smuggle destination callback failed for %s", callback.from_user.id)
         await safe_callback_answer(callback, "Ошибка выбора точки.", show_alert=True)

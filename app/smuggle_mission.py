@@ -17,8 +17,8 @@ from app.artifact_hunt import FONT_CANDIDATES, _load_location_thumb, _paste_circ
 from app.game_logic import (
     ActionResult,
     _is_dead,
+    begin_smuggling_travel_after_grid,
     clear_active_smuggling,
-    complete_smuggling_delivery,
     fail_smuggling_delivery,
     remember_death_cause,
 )
@@ -849,11 +849,13 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
             )
             payload = death_result.payload or {}
             return ActionResult(False, fail_text, payload=payload)
-        delivery = complete_smuggling_delivery(storage, telegram_id) or "Рейс завершён."
+        delivery = begin_smuggling_travel_after_grid(storage, telegram_id)
+        if not delivery.ok:
+            return delivery
         return ActionResult(
             True,
-            delivery,
-            payload={"mission_active": False, "mission_done": True},
+            delivery.text,
+            payload=delivery.payload or {"mission_active": False, "mission_travel_started": True},
         )
 
     if session.moves >= session.max_moves:

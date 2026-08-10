@@ -942,7 +942,7 @@ def run_smoke_check() -> None:
             get_active_smuggling,
             abandon_smuggling_run,
             build_smuggling_overview,
-            complete_smuggling_delivery,
+            begin_smuggling_travel_after_grid,
             SMUGGLING_REWARD_MIN,
             SMUGGLING_REWARD_MAX,
             roll_arrival_encounter,
@@ -1002,13 +1002,32 @@ def run_smoke_check() -> None:
         session.player = session.route[-1]
         session.route_index = len(session.route)
         save_smuggle_session(storage, 111, session)
-        delivery = complete_smuggling_delivery(storage, 111)
+        travel_start = begin_smuggling_travel_after_grid(storage, 111)
+        assert travel_start.ok, travel_start.text
+        assert travel_start.payload and travel_start.payload.get("mission_travel_started")
+        assert get_smuggle_session(storage, 111) is None
+        assert get_active_smuggling(storage, 111) is not None
+        traveling = storage.get_character(111, refresh_energy=False)
+        assert traveling is not None
+        assert traveling.location == "Росток"
+        assert traveling.travel_destination == "Болото"
+        assert "прибытие" in travel_start.text.lower()
+
+        from datetime import datetime, timedelta, timezone
+
+        past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        with storage._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET travel_arrives_at = ? WHERE telegram_id = ?",
+                (past, 111),
+            )
+        storage.pop_due_travels()
+        after_travel = storage.get_character(111, refresh_energy=False)
+        assert after_travel is not None
+        assert after_travel.location == "Болото"
+        delivery = resolve_smuggling_if_pending(storage, 111)
         assert delivery
         assert get_active_smuggling(storage, 111) is None
-        assert get_smuggle_session(storage, 111) is None
-        after_smuggle = storage.get_character(111, refresh_energy=False)
-        assert after_smuggle is not None
-        assert after_smuggle.location == "Болото"
         assert storage.pop_arrival_notice(111) == "Болото"
         assert abandon_smuggling_run(storage, 111).ok is False
 

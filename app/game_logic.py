@@ -4877,7 +4877,8 @@ def travel_status_with_smuggle(storage: Storage, telegram_id: int) -> str | None
         )
     elif active and is_traveling(player):
         chance = int(active.get("success_chance") or 0)
-        parts.append(f"🚚 Контрабанда на борту (шанс доставки ~{chance}%).")
+        dest = str(active.get("destination") or player.travel_destination or "?")
+        parts.append(f"🚚 Контрабанда → «{dest}» (шанс сдачи ~{chance}%).")
     return "\n".join(parts) if parts else None
 
 
@@ -8062,7 +8063,7 @@ def build_smuggling_overview(storage: Storage, telegram_id: int) -> str:
 
     lines = [
         "🚚 Перевозка контрабанды",
-        "Тактический рейс на карте: машина, маршрут из 3 точек, патрули.",
+        "1) Выбери точку сдачи → 2) тактическая карта (маршрут из 3 точек) → 3) выезд с таймером прибытия.",
         f"Награда: {SMUGGLING_REWARD_MIN}–{SMUGGLING_REWARD_MAX} RU gross (⅓ в казну) + дроп.",
         "Провал / тайм-аут = ограбление (−RU, −HP).",
         "Бонусы шанса: пешком 0, велосипед +3, Нива +6, грузовик +12.",
@@ -8078,7 +8079,18 @@ def build_smuggling_overview(storage: Storage, telegram_id: int) -> str:
     elif active:
         dest = str(active.get("destination") or "?")
         chance = int(active.get("success_chance") or 0)
-        lines.append(f"Активный рейс на «{dest}» (шанс ~{chance}%).")
+        mode = str(active.get("mode") or "")
+        if mode == "travel" and is_traveling(player):
+            remaining = (
+                format_remaining_travel(player.travel_arrives_at)
+                if player.travel_arrives_at is not None
+                else "скоро"
+            )
+            lines.append(
+                f"Выезд к «{dest}» — прибытие через {remaining} (шанс ~{chance}%)."
+            )
+        else:
+            lines.append(f"Активный рейс на «{dest}» (шанс ~{chance}%).")
     else:
         lines.append("Активного рейса нет — выбери точку сдачи.")
     return "\n".join(lines)
@@ -8154,6 +8166,78 @@ def _apply_smuggling_arrival(storage: Storage, telegram_id: int, active: dict[st
     transport = str(active.get("transport") or "").strip()
     if transport:
         storage.set_last_arrival_transport(telegram_id, transport)
+
+
+def begin_smuggling_travel_after_grid(storage: Storage, telegram_id: int) -> ActionResult:
+    """После тактической карты — выезд к точке сдачи с таймером прибытия."""
+    from app.smuggle_mission import clear_smuggle_session
+
+    active = get_active_smuggling(storage, telegram_id)
+    if active is None:
+        return ActionResult(False, "Активного рейса контрабанды нет.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        clear_smuggle_session(storage, telegram_id)
+        clear_active_smuggling(storage, telegram_id)
+        return ActionResult(False, "Персонаж не найден.")
+    if is_traveling(player):
+        return ActionResult(False, travel_block_text(player) or "Ты уже в пути.")
+
+    destination = str(active.get("destination") or "").strip()
+    origin = str(active.get("origin") or player.location).strip()
+    transport_mode = str(active.get("transport") or "foot")
+    if not destination or destination == player.location:
+        clear_smuggle_session(storage, telegram_id)
+        clear_active_smuggling(storage, telegram_id)
+        return ActionResult(False, "Точка сдачи недоступна.")
+
+    locations = {loc["name"]: loc for loc in storage.get_locations()}
+    base_minutes, _distance = _compute_base_travel_minutes(
+        origin,
+        destination,
+        locations,
+        player.faction,
+    )
+    bound_transport = storage.get_bound_transport(telegram_id)
+    _picked, speed_mult, _energy, _foot_note = _resolve_travel_transport(
+        player,
+        preferred_mode=transport_mode,
+        bound_transport=bound_transport,
+    )
+    travel_minutes = max(1, int(round(base_minutes / speed_mult)))
+    real_seconds = travel_minutes * TRAVEL_REAL_SECONDS_PER_GAME_MINUTE
+    arrives_at = _utc_now() + timedelta(seconds=real_seconds)
+
+    clear_smuggle_session(storage, telegram_id)
+    storage.start_travel(telegram_id, destination, arrives_at, transport_mode)
+    active["mode"] = "travel"
+    active["grid_completed_at"] = _utc_now().isoformat()
+    storage.set_meta(
+        _smuggle_meta_key(telegram_id),
+        json.dumps(active, ensure_ascii=False),
+    )
+
+    player = storage.get_character(telegram_id, refresh_energy=False) or player
+    transport_labels = {
+        "foot": "пешком",
+        "bicycle": "на велосипеде",
+        "niva": "на Ниве",
+        "truck": "на грузовике",
+    }
+    remaining = (
+        format_remaining_travel(player.travel_arrives_at)
+        if player.travel_arrives_at is not None
+        else format_remaining_travel(arrives_at)
+    )
+    chance = int(active.get("success_chance") or 0)
+    return ActionResult(
+        True,
+        f"✅ Маршрут на карте пройден!\n"
+        f"Выезжаешь к точке сдачи «{destination}» "
+        f"({transport_labels.get(transport_mode, transport_mode)}).\n"
+        f"Прибытие через {remaining}. Шанс сдачи ~{chance}%.",
+        payload={"mission_active": False, "mission_travel_started": True},
+    )
 
 
 def complete_smuggling_delivery(storage: Storage, telegram_id: int) -> str | None:
@@ -8351,7 +8435,7 @@ def start_smuggling_run(
         f"Маршрут: левый угол → правый угол → точка сдачи.\n"
         f"Груз: «{origin}» → «{destination}» ({transport_labels.get(transport_mode, transport_mode)}).\n"
         f"Шанс сдачи ~{success_chance}%. Ходов: {session.max_moves} (−⅓ от вылазки).\n"
-        f"Провал = ограбление.{fuel_text}"
+        f"После карты — выезд к точке сдачи (таймер прибытия). Провал = ограбление.{fuel_text}"
         + (f"\n{note}" if note else ""),
         payload={
             "mission_image": image,
@@ -8375,6 +8459,9 @@ def abandon_smuggling_run(storage: Storage, telegram_id: int) -> ActionResult:
         or (session.destination if session is not None else "?")
     )
     clear_smuggle_session(storage, telegram_id)
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is not None and is_traveling(player):
+        storage.clear_travel(telegram_id)
     clear_active_smuggling(storage, telegram_id)
     if active:
         _release_smuggle_vehicle(storage, telegram_id, active)
