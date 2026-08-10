@@ -44,6 +44,13 @@ from app.quest_mission import (
     render_mission_for_player,
     use_mission_medkit,
 )
+from app.smuggle_mission import (
+    abandon_smuggle_mission,
+    get_smuggle_session,
+    move_smuggle_mission,
+    render_smuggle_for_player,
+    smuggle_status_caption,
+)
 from app.duel_grid import (
     duel_forfeit,
     duel_move,
@@ -331,6 +338,7 @@ from app.keyboards import (
     personal_stash_amount_keyboard,
     artifact_hunt_keyboard,
     quest_mission_keyboard,
+    smuggle_mission_keyboard,
     dead_character_keyboard,
     faction_keyboard,
     gender_keyboard,
@@ -1840,6 +1848,7 @@ DEAD_PLAYER_CALLBACKS = frozenset({"respawn:base"})
 # Режимы с картой: смерть/урон обрабатывает свой хендлер, middleware не перехватывает.
 DEATH_MIDDLEWARE_BYPASS_PREFIXES = (
     "qmission:",
+    "smission:",
     "hunt:",
     "dgrid:",
     "cwar:",
@@ -3474,6 +3483,46 @@ async def _send_or_edit_quest_mission_frame(
         await safe_callback_answer(callback)
 
 
+async def _send_or_edit_smuggle_frame(
+    callback: CallbackQuery,
+    *,
+    image_bytes: bytes,
+    caption: str,
+    note: str | None = None,
+) -> None:
+    media = BufferedInputFile(image_bytes, filename="smuggle_mission.png")
+    text = caption if not note else f"{caption}\n\n{note}"
+    markup = smuggle_mission_keyboard()
+    try:
+        if callback.message and callback.message.photo:
+            await callback.message.edit_media(
+                media=InputMediaPhoto(media=media, caption=text),
+                reply_markup=markup,
+            )
+        elif callback.message:
+            await callback.message.answer_photo(photo=media, caption=text, reply_markup=markup)
+            try:
+                await callback.message.delete()
+            except TelegramBadRequest:
+                pass
+        else:
+            await callback.bot.send_photo(
+                callback.from_user.id,
+                photo=media,
+                caption=text,
+                reply_markup=markup,
+            )
+    except TelegramBadRequest:
+        await callback.bot.send_photo(
+            callback.from_user.id,
+            photo=media,
+            caption=text,
+            reply_markup=markup,
+        )
+    finally:
+        await safe_callback_answer(callback)
+
+
 def _player_has_medkit(player: Character | None) -> bool:
     if player is None:
         return False
@@ -4136,6 +4185,70 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
     except Exception:
         logger.exception("Quest mission callback failed for %s action=%s", telegram_id, action)
         await safe_callback_answer(callback, "Ошибка вылазки. Попробуй ещё раз или /fixme", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("smission:"))
+async def smuggle_mission_callback(callback: CallbackQuery) -> None:
+    action = (callback.data or "").removeprefix("smission:").strip()
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is not None and player.health <= 0:
+        await _ensure_death_keyboard(callback, telegram_id)
+        return
+
+    try:
+        if action == "abandon":
+            result = abandon_smuggle_mission(storage, telegram_id)
+            await reply_action_result(callback, result.text)
+            return
+
+        if action == "refresh":
+            session = get_smuggle_session(storage, telegram_id)
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if session is None or player is None:
+                await callback.answer("Активного рейса нет.", show_alert=True)
+                return
+            image = render_smuggle_for_player(storage, telegram_id, session, player)
+            await _send_or_edit_smuggle_frame(
+                callback,
+                image_bytes=image,
+                caption=smuggle_status_caption(session, player),
+            )
+            return
+
+        if action not in {"up", "down", "left", "right"}:
+            await callback.answer("Неизвестное действие.", show_alert=True)
+            return
+
+        result = move_smuggle_mission(storage, telegram_id, action)
+        payload = result.payload or {}
+
+        if payload.get("mission_dead"):
+            await _handle_quest_mission_death_callback(
+                callback, telegram_id, payload, fallback_text=result.text
+            )
+            return
+
+        if payload.get("mission_done") or not payload.get("mission_active"):
+            await reply_action_result(callback, result.text)
+            return
+
+        image = payload.get("mission_image")
+        if not image:
+            await reply_action_result(callback, result.text)
+            return
+        await _send_or_edit_smuggle_frame(
+            callback,
+            image_bytes=image,
+            caption=str(payload.get("caption") or ""),
+            note=str(payload.get("move_note") or result.text),
+        )
+    except Exception:
+        logger.exception("Smuggle mission callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка рейса. Попробуй ещё раз или /fixme", show_alert=True)
+
 
 @router.callback_query(F.data == "contract:go_home")
 async def contract_go_home_callback(callback: CallbackQuery, bot: Bot) -> None:
@@ -6990,13 +7103,17 @@ async def smuggle_menu_callback(callback: CallbackQuery) -> None:
         return
     overview = build_smuggling_overview(storage, callback.from_user.id)
     active = get_active_smuggling(storage, callback.from_user.id)
+    grid_active = get_smuggle_session(storage, callback.from_user.id) is not None
     destinations = list_smuggling_destinations(storage, callback.from_user.id)
     if callback.message is None:
         await callback.answer("Сообщение недоступно.", show_alert=True)
         return
     await callback.message.answer(
         overview,
-        reply_markup=smuggling_keyboard(destinations, has_active=bool(active)),
+        reply_markup=smuggling_keyboard(
+            destinations,
+            has_active=bool(active) or grid_active,
+        ),
     )
     await callback.answer()
 
@@ -7053,15 +7170,44 @@ async def smuggle_go_callback(callback: CallbackQuery, bot: Bot) -> None:
         transport_mode=mode,
     )
     if result.ok:
+        payload = result.payload or {}
+        image = payload.get("mission_image")
+        if image and payload.get("mission_active"):
+            await _send_or_edit_smuggle_frame(
+                callback,
+                image_bytes=image,
+                caption=str(payload.get("caption") or result.text),
+                note=result.text if payload.get("mission_started") else None,
+            )
+            return
         await safe_callback_answer(callback, "Рейс начат!")
         if callback.message is not None:
             await callback.message.answer(action_result_text(callback.from_user.id, result.text))
         else:
             await bot.send_message(callback.from_user.id, action_result_text(callback.from_user.id, result.text))
-        clear_travel_eta_message_id(get_storage(), callback.from_user.id)
-        await publish_travel_live_eta(bot, callback.from_user.id)
         return
     await reply_action_result(callback, result.text, bot=bot)
+
+
+@router.callback_query(F.data == "eco:smuggle:coop")
+async def smuggle_coop_callback(callback: CallbackQuery) -> None:
+    """Контрабандный конвой — кооп-вылазка с союзниками для прикрытия."""
+    from app.coop_mission import create_coop_lobby
+
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    result = create_coop_lobby(storage, telegram_id)
+    text = (
+        "👥 Контрабандный конвой\n"
+        "Союзники прикрывают груз на тактической карте (как кооп-вылазка).\n"
+        "Соло-рейс с машиной и маршрутом — через «→ точка» в меню контрабанды.\n\n"
+        f"{result.text}"
+    )
+    await reply_action_result(callback, text)
 
 
 @router.callback_query(F.data == "eco:smuggle:run")

@@ -902,23 +902,29 @@ def run_smoke_check() -> None:
         assert get_ncap_lobby_by_player(storage, 111) is None
         assert player_busy_reason(storage, 111) is None
 
-        # Smuggling as travel run with arrival resolve.
+        # Smuggling: tactical grid mission with route checkpoints.
         from app.game_logic import (
             start_smuggling_run,
             resolve_smuggling_if_pending,
             get_active_smuggling,
             abandon_smuggling_run,
             build_smuggling_overview,
+            complete_smuggling_delivery,
             SMUGGLING_REWARD_MIN,
             SMUGGLING_REWARD_MAX,
             roll_arrival_encounter,
         )
+        from app.smuggle_mission import (
+            get_smuggle_session,
+            move_smuggle_mission,
+            save_smuggle_session,
+        )
+        from app.quest_mission import GRID_SIZE, MAX_MOVES, LOCATION_DANGER
 
         overview = build_smuggling_overview(storage, 111)
         assert str(SMUGGLING_REWARD_MIN) in overview and str(SMUGGLING_REWARD_MAX) in overview
-        assert "лут" in overview.lower() or "курьер" in overview.lower()
+        assert "маршрут" in overview.lower() or "карте" in overview.lower()
 
-        # Arrival encounter is optional; just ensure it doesn't crash.
         storage.set_location(111, "Росток")
         _ = roll_arrival_encounter(storage, 111, "Росток")
 
@@ -930,21 +936,33 @@ def run_smoke_check() -> None:
         smuggle_start = start_smuggling_run(storage, 111, "Болото", transport_mode="foot")
         assert smuggle_start.ok, smuggle_start.text
         assert get_active_smuggling(storage, 111)
-        assert "ограб" in smuggle_start.text.lower() or "контрабанд" in smuggle_start.text.lower()
-        from app.player_busy import player_busy_reason
+        assert smuggle_start.payload and smuggle_start.payload.get("mission_image")
+        assert "контрабанд" in smuggle_start.text.lower()
+        session = get_smuggle_session(storage, 111)
+        assert session is not None
+        assert len(session.route) == 3
+        assert session.route[0] == (0, GRID_SIZE - 1)
+        assert session.route[1] == (GRID_SIZE - 1, GRID_SIZE - 1)
+        danger = LOCATION_DANGER.get("Росток", 2)
+        expected_moves = max(10, int((MAX_MOVES + danger) * 2 // 3))
+        assert session.max_moves == expected_moves
 
         busy_smuggle = player_busy_reason(storage, 111, skip="travel")
         assert busy_smuggle and "контрабанд" in busy_smuggle.lower()
-        past_smuggle = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
-        with storage._connect() as conn:
-            conn.execute(
-                "UPDATE characters SET travel_arrives_at = ? WHERE telegram_id = ?",
-                (past_smuggle, 111),
-            )
-        storage.resolve_travel_if_due(111)
-        smuggle_result = resolve_smuggling_if_pending(storage, 111)
-        assert smuggle_result
+
+        move_result = move_smuggle_mission(storage, 111, "right")
+        assert move_result.ok or move_result.payload
+        assert resolve_smuggling_if_pending(storage, 111) is None
+
+        session = get_smuggle_session(storage, 111)
+        assert session is not None
+        session.player = session.route[-1]
+        session.route_index = len(session.route)
+        save_smuggle_session(storage, 111, session)
+        delivery = complete_smuggling_delivery(storage, 111)
+        assert delivery
         assert get_active_smuggling(storage, 111) is None
+        assert get_smuggle_session(storage, 111) is None
         assert abandon_smuggling_run(storage, 111).ok is False
 
         # Character career stats.

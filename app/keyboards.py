@@ -318,6 +318,23 @@ def artifact_hunt_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def smuggle_mission_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⬆️ Вперёд", callback_data="smission:up")],
+            [
+                InlineKeyboardButton(text="⬅️ Влево", callback_data="smission:left"),
+                InlineKeyboardButton(text="⬇️ Назад", callback_data="smission:down"),
+                InlineKeyboardButton(text="➡️ Вправо", callback_data="smission:right"),
+            ],
+            [
+                InlineKeyboardButton(text="🔄", callback_data="smission:refresh"),
+                InlineKeyboardButton(text="📦 Сбросить груз", callback_data="smission:abandon"),
+            ],
+        ]
+    )
+
+
 def quest_mission_keyboard(*, medkits: int = 0) -> InlineKeyboardMarkup:
     med_label = f"💊 Аптечка ({medkits})" if medkits > 0 else "💊 Аптечка"
     return InlineKeyboardMarkup(
@@ -940,6 +957,9 @@ def smuggling_keyboard(
             rows.append(
                 [InlineKeyboardButton(text=f"→ {name}", callback_data=f"eco:smuggle:to:{name}")]
             )
+        rows.append(
+            [InlineKeyboardButton(text="👥 Конвой с союзниками", callback_data="eco:smuggle:coop")]
+        )
     rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

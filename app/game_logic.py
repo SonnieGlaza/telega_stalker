@@ -8134,147 +8134,37 @@ def build_smuggling_overview(storage: Storage, telegram_id: int) -> str:
     if player is None:
         return "Сначала создай персонажа."
     active = get_active_smuggling(storage, telegram_id)
+    from app.smuggle_mission import get_smuggle_session
+
     lines = [
         "🚚 Перевозка контрабанды",
-        "Рисковый курьерский рейс: главное — лут и казна фракции, не «фарм RU».",
-        f"Награда за доставку: {SMUGGLING_REWARD_MIN}–{SMUGGLING_REWARD_MAX} RU gross "
-        f"(⅓ в казну из награды) + дроп (еда/аптечки/шмот).",
-        "Провал = ограбили в пути (−RU, −HP).",
-        "Шанс растёт от силы и транспорта; длинный путь повышает риск.",
-        "Бонусы: пешком 0, велосипед +3, Нива +6, грузовик +12.",
+        "Тактический рейс на карте: машина, маршрут из 3 точек, патрули.",
+        f"Награда: {SMUGGLING_REWARD_MIN}–{SMUGGLING_REWARD_MAX} RU gross (⅓ в казну) + дроп.",
+        "Провал / тайм-аут = ограбление (−RU, −HP).",
+        "Бонусы шанса: пешком 0, велосипед +3, Нива +6, грузовик +12.",
         "",
     ]
-    if active:
+    grid = get_smuggle_session(storage, telegram_id)
+    if grid is not None:
+        lines.append(
+            f"Рейс на карте → «{grid.destination}» "
+            f"(точки {grid.route_index}/{len(grid.route)}, ход {grid.moves}/{grid.max_moves}, "
+            f"шанс ~{grid.success_chance}%)."
+        )
+    elif active:
         dest = str(active.get("destination") or "?")
         chance = int(active.get("success_chance") or 0)
-        if is_traveling(player):
-            lines.append(
-                f"Рейс на «{dest}» (шанс доставить ~{chance}%). "
-                f"Отсчёт времени — в отдельном сообщении ниже."
-            )
-        elif player.location == dest:
-            lines.append(
-                f"Груз на «{dest}» ждёт разгрузки (шанс ~{chance}%). "
-                "Итог придёт при следующем действии или фоновом тике."
-            )
-        else:
-            lines.append(f"Активный рейс на «{dest}» (шанс ~{chance}%).")
+        lines.append(f"Активный рейс на «{dest}» (шанс ~{chance}%).")
     else:
         lines.append("Активного рейса нет — выбери точку сдачи.")
     return "\n".join(lines)
 
 
-def start_smuggling_run(
-    storage: Storage,
-    telegram_id: int,
-    destination: str,
-    *,
-    transport_mode: str | None = None,
-) -> ActionResult:
-    """Начать перевозку контрабанды: старт перехода до точки сдачи."""
+def _finalize_smuggling_roll(storage: Storage, telegram_id: int, active: dict[str, Any]) -> str:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
-        return ActionResult(False, "Сначала создай персонажа.")
-    if _is_dead(player):
-        return ActionResult(False, _dead_block_text())
-    if player.faction is None:
-        return ActionResult(False, "Сначала выбери группировку.")
-    if storage.get_active_contract(telegram_id):
-        return ActionResult(False, "Сначала заверши или отмени активный контракт.")
-    if get_active_smuggling(storage, telegram_id):
-        return ActionResult(False, "У тебя уже есть активный рейс контрабанды.")
-    if is_traveling(player):
-        return ActionResult(False, travel_block_text(player) or "Ты уже в пути.")
-    if not destination or destination == player.location:
-        return ActionResult(False, "Выбери другую локацию для сдачи груза.")
-    locations = {loc["name"]: loc for loc in storage.get_locations()}
-    if destination not in locations:
-        return ActionResult(False, "Такой локации нет.")
-
-    preview_mode, _, _, _ = _resolve_travel_transport(player, preferred_mode=transport_mode)
-    base_minutes, _ = _compute_base_travel_minutes(
-        player.location,
-        destination,
-        locations,
-        player.faction,
-    )
-    event_modifier = _active_location_event_modifier(storage, player.location)
-    success_chance = _smuggling_success_chance(
-        player,
-        transport_mode=preview_mode,
-        base_minutes=base_minutes,
-        event_modifier=event_modifier,
-    )
-
-    travel_result = travel_to(
-        storage,
-        telegram_id,
-        destination,
-        transport_mode=transport_mode,
-    )
-    if not travel_result.ok:
-        return travel_result
-
-    after = storage.get_character(telegram_id, refresh_energy=False)
-    used_mode = (after.travel_transport if after else None) or preview_mode
-    success_chance = _smuggling_success_chance(
-        after or player,
-        transport_mode=str(used_mode),
-        base_minutes=base_minutes,
-        event_modifier=event_modifier,
-    )
-    storage.set_meta(
-        _smuggle_meta_key(telegram_id),
-        json.dumps(
-            {
-                "destination": destination,
-                "origin": player.location,
-                "success_chance": success_chance,
-                "transport": used_mode,
-                "started_at": _utc_now().isoformat(),
-            },
-            ensure_ascii=False,
-        ),
-    )
-    return ActionResult(
-        True,
-        f"🚚 Рейс контрабанды начат.\n"
-        f"Груз: «{player.location}» → «{destination}».\n"
-        f"Шанс доставить без ограбления ~{success_chance}% "
-        f"(провал = ограбили в пути).\n\n"
-        f"{travel_result.text}",
-    )
-
-
-def abandon_smuggling_run(storage: Storage, telegram_id: int) -> ActionResult:
-    """Сбросить груз (рейс отменяется, переход если идёт — продолжается порожняком)."""
-    active = get_active_smuggling(storage, telegram_id)
-    if active is None:
-        return ActionResult(False, "Активного рейса контрабанды нет.")
-    clear_active_smuggling(storage, telegram_id)
-    dest = str(active.get("destination") or "?")
-    return ActionResult(
-        True,
-        f"Груз сброшен — рейс на «{dest}» отменён.\n"
-        "Если ты в пути, едешь дальше без контрабанды.",
-    )
-
-
-def resolve_smuggling_if_pending(storage: Storage, telegram_id: int) -> str | None:
-    """По прибытии на точку сдачи: доставка или ограбление в пути."""
-    active = get_active_smuggling(storage, telegram_id)
-    if active is None:
-        return None
-    player = storage.get_character(telegram_id, refresh_energy=False)
-    if player is None:
-        return None
-    if is_traveling(player):
-        return None
-    destination = str(active.get("destination") or "")
-    if not destination or player.location != destination:
-        return None
-
-    clear_active_smuggling(storage, telegram_id)
+        return "Персонаж не найден."
+    destination = str(active.get("destination") or player.location)
     chance = min(90, max(20, int(active.get("success_chance") or 50)))
     roll = random.randint(1, 100)
     success = roll <= chance
@@ -8308,7 +8198,7 @@ def resolve_smuggling_if_pending(storage: Storage, telegram_id: int) -> str | No
         achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
         return (
             f"🚚 Контрабанда доставлена на «{destination}»!\n"
-            f"Шанс {chance}% (бросок {roll}) — путь прошёл без ограбления.\n"
+            f"Шанс {chance}% (бросок {roll}) — маршрут прошёл без ограбления.\n"
             f"{treasury_line}"
             f"{loot_text}{durability_text}{achievements_text}"
         )
@@ -8321,10 +8211,249 @@ def resolve_smuggling_if_pending(storage: Storage, telegram_id: int) -> str | No
     storage.change_health(telegram_id, -hp_loss)
     _add_rating(storage, telegram_id, -RATING_REWARD["smuggle_fail"])
     return (
-        f"💀 Ограбили в пути до «{destination}»!\n"
+        f"💀 Ограбили на маршруте до «{destination}»!\n"
         f"Шанс доставить был {chance}% (бросок {roll}).\n"
         f"Потери: {taken} RU и ранение (−{hp_loss} HP).{durability_text}"
     )
+
+
+def complete_smuggling_delivery(storage: Storage, telegram_id: int) -> str | None:
+    """Завершить тактический рейс: бросок на успешную сдачу."""
+    from app.smuggle_mission import clear_smuggle_session
+
+    active = get_active_smuggling(storage, telegram_id)
+    if active is None:
+        return None
+    clear_smuggle_session(storage, telegram_id)
+    clear_active_smuggling(storage, telegram_id)
+    return _finalize_smuggling_roll(storage, telegram_id, active)
+
+
+def fail_smuggling_delivery(storage: Storage, telegram_id: int, reason: str) -> str:
+    """Провал рейса (тайм-аут / срыв) — штраф как при ограблении."""
+    from app.smuggle_mission import clear_smuggle_session
+
+    active = get_active_smuggling(storage, telegram_id) or {}
+    clear_smuggle_session(storage, telegram_id)
+    clear_active_smuggling(storage, telegram_id)
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    destination = str(active.get("destination") or (player.location if player else "?"))
+    penalty = random.randint(SMUGGLING_FAIL_PENALTY_MIN, SMUGGLING_FAIL_PENALTY_MAX)
+    durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=5, armor_loss=3)
+    taken = _apply_money_penalty(storage, telegram_id, penalty)
+    if player is not None:
+        hp_loss = apply_incoming_damage(10, player, min_damage=1)
+        storage.change_health(telegram_id, -hp_loss)
+    else:
+        hp_loss = 10
+    _add_rating(storage, telegram_id, -RATING_REWARD["smuggle_fail"])
+    head = reason.strip() or "Рейс сорван."
+    return (
+        f"💀 {head}\n"
+        f"Ограбление на подходе к «{destination}».\n"
+        f"Потери: {taken} RU и ранение (−{hp_loss} HP).{durability_text}"
+    )
+
+
+def start_smuggling_run(
+    storage: Storage,
+    telegram_id: int,
+    destination: str,
+    *,
+    transport_mode: str | None = None,
+) -> ActionResult:
+    """Начать тактический рейс контрабанды: карта с маршрутом из 3 точек."""
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if player.faction is None:
+        return ActionResult(False, "Сначала выбери группировку.")
+    if storage.get_active_contract(telegram_id):
+        return ActionResult(False, "Сначала заверши или отмени активный контракт.")
+    if get_active_smuggling(storage, telegram_id):
+        return ActionResult(False, "У тебя уже есть активный рейс контрабанды.")
+    from app.smuggle_mission import get_smuggle_session
+
+    if get_smuggle_session(storage, telegram_id) is not None:
+        return ActionResult(False, "У тебя уже есть активный тактический рейс.")
+    if is_traveling(player):
+        return ActionResult(False, travel_block_text(player) or "Ты уже в пути.")
+    if not destination or destination == player.location:
+        return ActionResult(False, "Выбери другую локацию для сдачи груза.")
+    locations = {loc["name"]: loc for loc in storage.get_locations()}
+    if destination not in locations:
+        return ActionResult(False, "Такой локации нет.")
+
+    from app.player_busy import player_busy_reason
+
+    busy = player_busy_reason(storage, telegram_id, skip="smuggle")
+    if busy:
+        return ActionResult(False, busy)
+
+    bound_transport = storage.get_bound_transport(telegram_id)
+    if bound_transport in ("niva", "truck"):
+        vehicle_label = _vehicle_label_for_key(bound_transport)
+        if transport_mode in ("foot", "bicycle") or (
+            transport_mode is not None and transport_mode != bound_transport
+        ):
+            return ActionResult(
+                False,
+                f"Ты за рулём {vehicle_label} — пешком или на другом транспорте не уйти.",
+            )
+        if transport_mode is None:
+            transport_mode = bound_transport
+
+    if transport_mode is not None:
+        available = {
+            mode for mode, *_rest in list_available_travel_modes(player, bound_transport=bound_transport)
+        }
+        if transport_mode not in available:
+            labels = {
+                "truck": "Недостаточно дизеля или грузовик недоступен.",
+                "niva": "Недостаточно бензина или Нива недоступна.",
+                "bicycle": "У тебя нет велосипеда.",
+                "foot": "Пеший переход недоступен.",
+            }
+            return ActionResult(False, labels.get(transport_mode, "Этот транспорт недоступен."))
+
+    picked_mode, _speed, energy_cost, foot_note = _resolve_travel_transport(
+        player,
+        preferred_mode=transport_mode,
+        bound_transport=bound_transport,
+    )
+    transport_mode = picked_mode
+    if transport_mode == "truck" and not can_travel_by_truck(player):
+        return ActionResult(False, "Недостаточно дизеля для рейса на грузовике.")
+    if transport_mode == "niva" and not can_travel_by_niva(player):
+        return ActionResult(False, "Недостаточно бензина для рейса на Ниве.")
+    if transport_mode == "bicycle" and not can_travel_by_bicycle(player):
+        return ActionResult(False, "У тебя нет велосипеда.")
+
+    if not storage.spend_energy(telegram_id, energy_cost):
+        return ActionResult(False, f"Не хватает энергии для рейса (нужно {energy_cost}).")
+
+    fuel_text = ""
+    if transport_mode == "truck":
+        if not storage.change_diesel(telegram_id, -1):
+            storage.restore_energy(telegram_id, energy_cost)
+            return ActionResult(False, "Не удалось списать дизель.")
+        fuel_text = "\nДизель: −1."
+        storage.apply_truck_wear(telegram_id, 2)
+    elif transport_mode == "niva":
+        if not storage.change_gasoline(telegram_id, -1):
+            storage.restore_energy(telegram_id, energy_cost)
+            return ActionResult(False, "Не удалось списать бензин.")
+        fuel_text = "\nБензин: −1."
+        storage.apply_niva_wear(telegram_id, 2)
+
+    base_minutes, _distance = _compute_base_travel_minutes(
+        player.location,
+        destination,
+        locations,
+        player.faction,
+    )
+    event_modifier = _active_location_event_modifier(storage, player.location)
+    success_chance = _smuggling_success_chance(
+        player,
+        transport_mode=transport_mode,
+        base_minutes=base_minutes,
+        event_modifier=event_modifier,
+    )
+
+    from app.smuggle_mission import (
+        _build_smuggle_session,
+        render_smuggle_for_player,
+        save_smuggle_session,
+        smuggle_status_caption,
+    )
+
+    origin = player.location
+    session = _build_smuggle_session(
+        origin=origin,
+        destination=destination,
+        transport=transport_mode,
+        success_chance=success_chance,
+    )
+    save_smuggle_session(storage, telegram_id, session)
+    storage.set_meta(
+        _smuggle_meta_key(telegram_id),
+        json.dumps(
+            {
+                "destination": destination,
+                "origin": origin,
+                "success_chance": success_chance,
+                "transport": transport_mode,
+                "mode": "grid",
+                "started_at": _utc_now().isoformat(),
+            },
+            ensure_ascii=False,
+        ),
+    )
+    if transport_mode in ("niva", "truck"):
+        storage.set_bound_transport(telegram_id, transport_mode)
+
+    player = storage.get_character(telegram_id, refresh_energy=False) or player
+    image = render_smuggle_for_player(storage, telegram_id, session, player)
+    transport_labels = {
+        "foot": "пешком",
+        "bicycle": "на велосипеде",
+        "niva": "на Ниве",
+        "truck": "на грузовике",
+    }
+    note = foot_note or ""
+    return ActionResult(
+        True,
+        f"🚚 Тактический рейс контрабанды!\n"
+        f"Маршрут: левый угол → правый угол → точка сдачи.\n"
+        f"Груз: «{origin}» → «{destination}» ({transport_labels.get(transport_mode, transport_mode)}).\n"
+        f"Шанс сдачи ~{success_chance}%. Ходов: {session.max_moves} (−⅓ от вылазки).\n"
+        f"Провал = ограбление.{fuel_text}"
+        + (f"\n{note}" if note else ""),
+        payload={
+            "mission_image": image,
+            "mission_active": True,
+            "mission_started": True,
+            "caption": smuggle_status_caption(session, player),
+        },
+    )
+
+
+def abandon_smuggling_run(storage: Storage, telegram_id: int) -> ActionResult:
+    """Сбросить груз и тактический рейс."""
+    from app.smuggle_mission import clear_smuggle_session
+
+    active = get_active_smuggling(storage, telegram_id)
+    clear_smuggle_session(storage, telegram_id)
+    if active is None:
+        return ActionResult(False, "Активного рейса контрабанды нет.")
+    clear_active_smuggling(storage, telegram_id)
+    dest = str(active.get("destination") or "?")
+    return ActionResult(
+        True,
+        f"Груз сброшен — рейс на «{dest}» отменён.",
+    )
+
+
+def resolve_smuggling_if_pending(storage: Storage, telegram_id: int) -> str | None:
+    """Legacy: доставка после старого travel-рейса (если остался в meta)."""
+    active = get_active_smuggling(storage, telegram_id)
+    if active is None:
+        return None
+    if str(active.get("mode") or "") == "grid":
+        return None
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return None
+    if is_traveling(player):
+        return None
+    destination = str(active.get("destination") or "")
+    if not destination or player.location != destination:
+        return None
+
+    clear_active_smuggling(storage, telegram_id)
+    return _finalize_smuggling_roll(storage, telegram_id, active)
 
 
 def attempt_smuggling(storage: Storage, telegram_id: int) -> ActionResult:

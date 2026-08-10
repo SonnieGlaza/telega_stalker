@@ -154,7 +154,10 @@ def player_busy_reason(storage: Storage, telegram_id: int, *, skip: str | None =
         return "Ты на охоте за артефактами — сначала закончи или сваливай."
     if skip != "smuggle":
         from app.game_logic import get_active_smuggling
+        from app.smuggle_mission import get_smuggle_session
 
+        if get_smuggle_session(storage, telegram_id):
+            return "Ты на тактическом рейсе контрабанды — пройди маршрут или сбрось груз."
         if get_active_smuggling(storage, telegram_id):
             return "Ты на рейсе контрабанды — сначала заверши доставку."
     if skip != "travel":
