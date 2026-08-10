@@ -32,9 +32,11 @@ from app.game_logic import (
     effective_max_health,
     equipment_power,
     faction_home_base,
+    h,
     try_auto_turn_in_contract,
     use_medkit_item,
 )
+from app.tactical_combat import ray_cast_first_hit, weapon_shoot_range
 from app.mutant_assets import (
     MISSION_MUTANT_GRID_DIAMETER,
     MUTANT_SPRITE_KEYS,
@@ -855,7 +857,8 @@ def start_or_resume_quest_mission(
         f"Угрозы ({template.difficulty}): {threat_txt}.\n"
         "Зелёная обводка — ты и цели (собери их). Красная — враги. Аномалии без обводки.\n"
         "Дойди до целей и вернись на старт (зелёная рамка клетки).\n"
-        "Мутанты и НПС с шансом 50% сдвигаются на соседнюю клетку каждый ход.",
+        "Мутанты и НПС с шансом 50% сдвигаются на соседнюю клетку каждый ход."
+        + (" 🔫 НПС можно расстреливать с места — кнопки стрельбы по направлениям." if want_npc else ""),
         payload={
             "mission_image": image,
             "mission_active": True,
@@ -965,6 +968,184 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
             "caption": mission_status_caption(session, player),
             "move_note": note_text,
         },
+    )
+
+
+def mission_shoot_available(session: QuestMissionSession) -> bool:
+    """Стрельба по НПС доступна, пока мародёры на поле."""
+    return len(session.npcs) > 0
+
+
+def _remove_npc_at(session: QuestMissionSession, pos: tuple[int, int]) -> str:
+    if pos not in session.npcs:
+        return "НПС"
+    idx = session.npcs.index(pos)
+    session.npcs.pop(idx)
+    kind = ""
+    if idx < len(session.npc_kinds):
+        kind = session.npc_kinds.pop(idx)
+    from app.death_flavor import killer_label_for_kind
+
+    return killer_label_for_kind(kind, npc=True) if kind else "НПС"
+
+
+def _complete_quest_turn_after_action(
+    storage: Storage,
+    telegram_id: int,
+    session: QuestMissionSession,
+    player: Character,
+    expected_seq: int,
+    notes: list[str],
+    pending_damage: int,
+    death_result: ActionResult | None,
+) -> ActionResult:
+    def _fight_on_cell(
+        label: str,
+        unit_attr: str,
+        *,
+        kinds_attr: str | None = None,
+        npc: bool = False,
+    ) -> None:
+        nonlocal player, notes, pending_damage, death_result
+        p, note, dead, dmg = _resolve_hostile_contact(
+            storage, telegram_id, session, player, label, unit_attr, kinds_attr=kinds_attr, npc=npc
+        )
+        player = p
+        pending_damage += dmg
+        if note is not None:
+            notes.append(note)
+        if dead is not None:
+            death_result = dead
+
+    notes.extend(_maybe_move_hostiles(session))
+    _fight_on_cell("мутанта", "enemies", kinds_attr="enemy_kinds")
+    _fight_on_cell("НПС", "npcs", kinds_attr="npc_kinds", npc=True)
+
+    if _objectives_complete(session):
+        session.objectives_done = True
+
+    def _commit_turn_and_damage() -> ActionResult | None:
+        session.turn_seq = expected_seq + 1
+        if not _save_mission_if_turn_ok(storage, telegram_id, session, expected_seq):
+            from app.tactical_combat import STALE_TURN_MESSAGE
+
+            return ActionResult(False, STALE_TURN_MESSAGE, payload={"mission_active": True})
+        _apply_quest_mission_damage(storage, telegram_id, pending_damage)
+        if death_result is not None:
+            return _finalize_quest_death_result(storage, telegram_id, death_result)
+        return None
+
+    if session.objectives_done and session.player == session.start:
+        stale = _commit_turn_and_damage()
+        if stale is not None:
+            return stale
+        return _finish_success(storage, telegram_id, session)
+
+    if session.moves >= session.max_moves:
+        stale = _commit_turn_and_damage()
+        if stale is not None:
+            return stale
+        clear_mission_session(storage, telegram_id)
+        quest = QUESTS.get(session.difficulty) or QUESTS["easy"]
+        fail_result = apply_contract_mission_fail(
+            storage,
+            telegram_id,
+            quest=quest,
+            work_location=session.location,
+            title=session.title,
+            reason="Время вылазки вышло.",
+        )
+        storage.set_active_contract(telegram_id, None)
+        return ActionResult(
+            False,
+            fail_result.text,
+            payload={"mission_active": False, "mission_done": True},
+        )
+
+    stale = _commit_turn_and_damage()
+    if stale is not None:
+        return stale
+    player = storage.get_character(telegram_id, refresh_energy=False) or player
+    image = _render_for_player(storage, telegram_id, session, player)
+    note = " ".join(notes) if notes else "Тихо."
+    if session.objectives_done:
+        note += " Цель есть — на старт!"
+    return ActionResult(
+        True,
+        note,
+        payload={
+            "mission_image": image,
+            "mission_active": True,
+            "caption": mission_status_caption(session, player),
+            "move_note": note,
+        },
+    )
+
+
+def shoot_quest_mission(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
+    session = get_mission_session(storage, telegram_id)
+    if session is None:
+        return ActionResult(False, "Сначала начни работу по контракту.")
+    if not mission_shoot_available(session):
+        return ActionResult(False, "НПС на поле нет — стрелять некого.", payload={"mission_active": True})
+    if direction not in MOVE_DELTAS:
+        return ActionResult(False, "Некорректное направление.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        clear_mission_session(storage, telegram_id)
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        clear_mission_session(storage, telegram_id)
+        storage.set_active_contract(telegram_id, None)
+        from app.game_logic import peek_death_cause
+
+        return ActionResult(
+            False,
+            _dead_block_text(),
+            payload={
+                "mission_active": False,
+                "mission_dead": True,
+                "death_location": session.location,
+                "death_cause": peek_death_cause(storage, telegram_id) or "combat",
+            },
+        )
+
+    weapon = str(player.equipment.get("weapon", "Нож"))
+    shoot_range = weapon_shoot_range(weapon)
+    if shoot_range <= 0:
+        return ActionResult(False, "Это оружие не стреляет на дистанции.", payload={"mission_active": True})
+
+    targets = {pos: "npc" for pos in session.npcs}
+    blockers = set(session.enemies)
+    hit_cell, hit_kind = ray_cast_first_hit(
+        session.player,
+        direction,
+        grid=session.grid,
+        max_range=shoot_range,
+        blockers=blockers,
+        targets=targets,
+    )
+
+    expected_seq = session.turn_seq
+    session.moves += 1
+    notes: list[str] = []
+    if hit_cell is not None and hit_kind == "npc":
+        label = _remove_npc_at(session, hit_cell)
+        notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).")
+        if session.kind == "clear_marauder" and not session.npcs:
+            notes.append("Зона зачищена от мародёров.")
+    else:
+        notes.append(f"{h(player.nickname)} промахнулся ({weapon}).")
+
+    return _complete_quest_turn_after_action(
+        storage,
+        telegram_id,
+        session,
+        player,
+        expected_seq,
+        notes,
+        pending_damage=0,
+        death_result=None,
     )
 
 
@@ -1078,68 +1259,15 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
                     },
                 )
 
-    notes.extend(_maybe_move_hostiles(session))
-    _fight_on_cell("мутанта", "enemies", kinds_attr="enemy_kinds")
-    _fight_on_cell("НПС", "npcs", kinds_attr="npc_kinds")
-
-    if _objectives_complete(session):
-        session.objectives_done = True
-
-    def _commit_turn_and_damage() -> ActionResult | None:
-        session.turn_seq = expected_seq + 1
-        if not _save_mission_if_turn_ok(storage, telegram_id, session, expected_seq):
-            from app.tactical_combat import STALE_TURN_MESSAGE
-
-            return ActionResult(False, STALE_TURN_MESSAGE, payload={"mission_active": True})
-        _apply_quest_mission_damage(storage, telegram_id, pending_damage)
-        if death_result is not None:
-            return _finalize_quest_death_result(storage, telegram_id, death_result)
-        return None
-
-    if session.objectives_done and session.player == session.start:
-        stale = _commit_turn_and_damage()
-        if stale is not None:
-            return stale
-        return _finish_success(storage, telegram_id, session)
-
-    if session.moves >= session.max_moves:
-        stale = _commit_turn_and_damage()
-        if stale is not None:
-            return stale
-        clear_mission_session(storage, telegram_id)
-        quest = QUESTS.get(session.difficulty) or QUESTS["easy"]
-        fail_result = apply_contract_mission_fail(
-            storage,
-            telegram_id,
-            quest=quest,
-            work_location=session.location,
-            title=session.title,
-            reason="Время вылазки вышло.",
-        )
-        storage.set_active_contract(telegram_id, None)
-        return ActionResult(
-            False,
-            fail_result.text,
-            payload={"mission_active": False, "mission_done": True},
-        )
-
-    stale = _commit_turn_and_damage()
-    if stale is not None:
-        return stale
-    player = storage.get_character(telegram_id, refresh_energy=False) or player
-    image = _render_for_player(storage, telegram_id, session, player)
-    note = " ".join(notes) if notes else "Тихо."
-    if session.objectives_done:
-        note += " Цель есть — на старт!"
-    return ActionResult(
-        True,
-        note,
-        payload={
-            "mission_image": image,
-            "mission_active": True,
-            "caption": mission_status_caption(session, player),
-            "move_note": note,
-        },
+    return _complete_quest_turn_after_action(
+        storage,
+        telegram_id,
+        session,
+        player,
+        expected_seq,
+        notes,
+        pending_damage,
+        death_result,
     )
 
 

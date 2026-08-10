@@ -40,10 +40,12 @@ from app.artifact_hunt import (
 from app.quest_mission import (
     abandon_quest_mission,
     get_mission_session,
+    mission_shoot_available,
     mission_status_caption,
     move_quest_mission,
     process_quest_timeouts,
     render_mission_for_player,
+    shoot_quest_mission,
     use_mission_medkit,
 )
 from app.smuggle_mission import (
@@ -3555,13 +3557,16 @@ async def _send_or_edit_quest_mission_frame(
     note: str | None = None,
 ) -> None:
     storage = get_storage()
-    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    telegram_id = callback.from_user.id
+    player = storage.get_character(telegram_id, refresh_energy=False)
     meds = 0
     if player is not None:
         meds = sum(int(player.inventory.get(k, 0)) for k in ("medkit", "medkit_army", "medkit_science"))
+    session = get_mission_session(storage, telegram_id)
+    shoot_available = mission_shoot_available(session) if session is not None else False
     media = BufferedInputFile(image_bytes, filename="quest_mission.png")
     text = caption if not note else f"{caption}\n\n{note}"
-    markup = quest_mission_keyboard(medkits=meds)
+    markup = quest_mission_keyboard(medkits=meds, shoot_available=shoot_available)
     try:
         if callback.message and callback.message.photo:
             await callback.message.edit_media(
@@ -4341,11 +4346,18 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
             )
             return
 
-        if action not in {"up", "down", "left", "right"}:
+        if action.startswith("shoot:"):
+            direction = action.removeprefix("shoot:")
+            if direction not in {"up", "down", "left", "right"}:
+                await callback.answer("Неизвестное действие.", show_alert=True)
+                return
+            result = shoot_quest_mission(storage, telegram_id, direction)
+        elif action in {"up", "down", "left", "right"}:
+            result = move_quest_mission(storage, telegram_id, action)
+        else:
             await callback.answer("Неизвестное действие.", show_alert=True)
             return
 
-        result = move_quest_mission(storage, telegram_id, action)
         payload = result.payload or {}
 
         if payload.get("mission_dead"):

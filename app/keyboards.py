@@ -335,16 +335,29 @@ def smuggle_mission_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def quest_mission_keyboard(*, medkits: int = 0) -> InlineKeyboardMarkup:
+def quest_mission_keyboard(*, medkits: int = 0, shoot_available: bool = False) -> InlineKeyboardMarkup:
     med_label = f"💊 Аптечка ({medkits})" if medkits > 0 else "💊 Аптечка"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="⬆️ Вперёд", callback_data="qmission:up")],
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="⬆️ Вперёд", callback_data="qmission:up")],
+        [
+            InlineKeyboardButton(text="⬅️ Влево", callback_data="qmission:left"),
+            InlineKeyboardButton(text="⬇️ Назад", callback_data="qmission:down"),
+            InlineKeyboardButton(text="➡️ Вправо", callback_data="qmission:right"),
+        ],
+    ]
+    if shoot_available:
+        rows.extend(
             [
-                InlineKeyboardButton(text="⬅️ Влево", callback_data="qmission:left"),
-                InlineKeyboardButton(text="⬇️ Назад", callback_data="qmission:down"),
-                InlineKeyboardButton(text="➡️ Вправо", callback_data="qmission:right"),
-            ],
+                [InlineKeyboardButton(text="🔫 ⬆️", callback_data="qmission:shoot:up")],
+                [
+                    InlineKeyboardButton(text="🔫 ⬅️", callback_data="qmission:shoot:left"),
+                    InlineKeyboardButton(text="🔫 ⬇️", callback_data="qmission:shoot:down"),
+                    InlineKeyboardButton(text="🔫 ➡️", callback_data="qmission:shoot:right"),
+                ],
+            ]
+        )
+    rows.extend(
+        [
             [
                 InlineKeyboardButton(text=med_label, callback_data="qmission:medkit"),
                 InlineKeyboardButton(text="🔄", callback_data="qmission:refresh"),
@@ -352,6 +365,7 @@ def quest_mission_keyboard(*, medkits: int = 0) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🏃 Свалить", callback_data="qmission:leave")],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def personal_stash_menu_keyboard(*, at_home: bool) -> InlineKeyboardMarkup:

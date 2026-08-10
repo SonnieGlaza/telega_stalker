@@ -402,6 +402,25 @@ def run_smoke_check() -> None:
         assert len(heavy_sess.hazards) >= 1
         assert len(heavy_sess.npcs) >= 1
 
+        from app.quest_mission import mission_shoot_available, shoot_quest_mission
+
+        assert mission_shoot_available(heavy_sess)
+        heavy_sess.player = (0, 0)
+        heavy_sess.start = (5, 5)
+        heavy_sess.npcs = [(1, 0), (2, 0)]
+        heavy_sess.npc_kinds = ["marauder", "marauder"]
+        heavy_sess.enemies = []
+        heavy_sess.enemy_kinds = []
+        heavy_sess.turn_seq = 0
+        save_mission_session(storage, 111, heavy_sess)
+        storage.set_equipment_item(111, "weapon", "ПМ")
+        shoot = shoot_quest_mission(storage, 111, "right")
+        assert shoot.ok, shoot.text
+        after_shoot = get_mission_session(storage, 111)
+        assert after_shoot is not None
+        assert len(after_shoot.npcs) == 1
+        assert "поразил" in shoot.text.lower()
+
         # Impossible: всё вместе.
         imp_tpl = QUEST_CONTRACTS["impossible_radar"]
         imp_sess = _build_session(imp_tpl, QUESTS["impossible"])
