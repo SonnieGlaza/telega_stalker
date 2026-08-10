@@ -238,6 +238,20 @@ def clear_cwar_session(storage: Storage, session: ClanWarGridSession) -> None:
     _unregister_active(storage, session.session_id)
 
 
+def unlink_player_from_cwar_session(storage: Storage, telegram_id: int) -> None:
+    from app.tactical_roster import drop_player_from_tactical_roster
+
+    session = get_cwar_session_by_player(storage, telegram_id)
+    if session is None:
+        return
+    drop_player_from_tactical_roster(session, telegram_id)
+    storage.delete_meta(_player_key(telegram_id))
+    if not session.player_ids:
+        clear_cwar_session(storage, session)
+        return
+    save_cwar_session(storage, session)
+
+
 def _register_active(storage: Storage, session_id: str) -> None:
     raw = storage.get_meta(ACTIVE_IDS_KEY)
     ids: list[str] = []

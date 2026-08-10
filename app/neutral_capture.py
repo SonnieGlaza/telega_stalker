@@ -153,7 +153,12 @@ class NeutralCaptureSession:
     def active_player(self) -> int:
         if not self.turn_order:
             return self.host_id
-        return self.turn_order[self.active_index % len(self.turn_order)]
+        for _ in range(len(self.turn_order)):
+            pid = self.turn_order[self.active_index % len(self.turn_order)]
+            if self.hp.get(str(pid), 0) > 0:
+                return pid
+            self.active_index += 1
+        return self.turn_order[0]
 
     def pos(self, player_id: int) -> tuple[int, int]:
         raw = self.positions.get(str(player_id), [0, 0])
@@ -371,6 +376,20 @@ def clear_ncap_session(storage: Storage, session: NeutralCaptureSession) -> None
         if ref and ref[0] == "session" and ref[1] == session.session_id:
             storage.delete_meta(_player_key(pid))
     _unregister_active(storage, session.session_id)
+
+
+def unlink_player_from_ncap_session(storage: Storage, telegram_id: int) -> None:
+    from app.tactical_roster import drop_player_from_tactical_roster
+
+    session = get_ncap_session(storage, telegram_id)
+    if session is None:
+        return
+    drop_player_from_tactical_roster(session, telegram_id)
+    storage.delete_meta(_player_key(telegram_id))
+    if not session.player_ids:
+        clear_ncap_session(storage, session)
+        return
+    save_ncap_session(storage, session)
 
 
 def _register_active(storage: Storage, session_id: str) -> None:

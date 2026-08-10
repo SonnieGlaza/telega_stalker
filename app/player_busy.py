@@ -5,25 +5,25 @@ from __future__ import annotations
 from app.storage import Storage
 
 
-def _unlink_from_shared_sessions(storage: Storage, telegram_id: int) -> None:
-    """Снять привязку мёртвого игрока к групповому бою, не уничтожая сессию для остальных."""
-    from app.coop_mission import _player_key as coop_player_key
-    from app.coop_mission import get_coop_session_by_player
-    from app.neutral_capture import _player_key as ncap_player_key
-    from app.neutral_capture import get_ncap_session
-    from app.clan_war_grid import _player_key as cwar_player_key
-    from app.clan_war_grid import get_cwar_session_by_player
-    from app.raid_grid import _player_key as rgrid_player_key
-    from app.raid_grid import get_raid_grid_session_by_player
+def clear_smuggling_state(storage: Storage, telegram_id: int) -> None:
+    from app.game_logic import clear_active_smuggling
+    from app.smuggle_mission import clear_smuggle_session
 
-    if get_coop_session_by_player(storage, telegram_id) is not None:
-        storage.delete_meta(coop_player_key(telegram_id))
-    if get_ncap_session(storage, telegram_id) is not None:
-        storage.delete_meta(ncap_player_key(telegram_id))
-    if get_cwar_session_by_player(storage, telegram_id) is not None:
-        storage.delete_meta(cwar_player_key(telegram_id))
-    if get_raid_grid_session_by_player(storage, telegram_id) is not None:
-        storage.delete_meta(rgrid_player_key(telegram_id))
+    clear_smuggle_session(storage, telegram_id)
+    clear_active_smuggling(storage, telegram_id)
+
+
+def _unlink_from_shared_sessions(storage: Storage, telegram_id: int) -> None:
+    """Снять привязку игрока к групповому бою, оставив сессию для остальных."""
+    from app.clan_war_grid import unlink_player_from_cwar_session
+    from app.coop_mission import unlink_player_from_coop_session
+    from app.neutral_capture import unlink_player_from_ncap_session
+    from app.raid_grid import unlink_player_from_raid_grid_session
+
+    unlink_player_from_coop_session(storage, telegram_id)
+    unlink_player_from_ncap_session(storage, telegram_id)
+    unlink_player_from_cwar_session(storage, telegram_id)
+    unlink_player_from_raid_grid_session(storage, telegram_id)
 
 
 def clear_all_activity_sessions(storage: Storage, telegram_id: int) -> None:
@@ -36,6 +36,8 @@ def clear_all_activity_sessions(storage: Storage, telegram_id: int) -> None:
     from app.duel_grid import clear_duel_session, get_duel_session_by_player
     from app.raid_grid import clear_raid_grid_session, get_raid_grid_session_by_player
     from app.arena_grid import clear_arena_session, get_arena_session
+
+    clear_smuggling_state(storage, telegram_id)
 
     if get_mission_session(storage, telegram_id):
         clear_mission_session(storage, telegram_id)
@@ -79,6 +81,9 @@ def clear_stale_activity_for_dead_player(storage: Storage, telegram_id: int) -> 
     from app.artifact_hunt import clear_hunt_session, get_hunt_session
     from app.duel_grid import clear_duel_session, get_duel_session_by_player
     from app.arena_grid import clear_arena_session, get_arena_session
+    from app.raid_grid import clear_stale_raid_grid_session
+
+    clear_smuggling_state(storage, telegram_id)
 
     if get_mission_session(storage, telegram_id):
         clear_mission_session(storage, telegram_id)
@@ -95,6 +100,7 @@ def clear_stale_activity_for_dead_player(storage: Storage, telegram_id: int) -> 
     if arena is not None:
         clear_arena_session(storage, arena)
 
+    clear_stale_raid_grid_session(storage, telegram_id)
     _unlink_from_shared_sessions(storage, telegram_id)
 
 

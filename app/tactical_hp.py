@@ -47,8 +47,12 @@ def sync_session_hp_to_db(storage: Storage, telegram_id: int, session_hp: int) -
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return
+    session_hp = int(session_hp)
+    # Респавн / отвязка: не затирать живого игрока старым HP=0 из JSON сессии.
+    if session_hp <= 0 and player.health > 0:
+        return
     max_hp = effective_max_health(player)
-    delta = int(session_hp) - int(player.health)
+    delta = session_hp - int(player.health)
     if delta != 0:
         storage.change_health(telegram_id, delta, max_health=max_hp)
 

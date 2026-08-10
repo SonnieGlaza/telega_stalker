@@ -194,7 +194,14 @@ class CoopMissionSession:
     grid: int = COOP_GRID_SIZE
 
     def active_player(self) -> int:
-        return self.turn_order[self.active_index % len(self.turn_order)]
+        if not self.turn_order:
+            return self.player_ids[0] if self.player_ids else 0
+        for _ in range(len(self.turn_order)):
+            pid = self.turn_order[self.active_index % len(self.turn_order)]
+            if self.hp.get(str(pid), 0) > 0 and pid not in self.evacuated:
+                return pid
+            self.active_index += 1
+        return self.turn_order[0]
 
     def pos(self, player_id: int) -> tuple[int, int]:
         raw = self.positions.get(str(player_id), [0, 0])
@@ -376,6 +383,21 @@ def clear_coop_session(storage: Storage, session: CoopMissionSession) -> None:
         ref = get_player_coop_ref(storage, pid)
         if ref and ref[0] == "session" and ref[1] == session.session_id:
             storage.delete_meta(_player_key(pid))
+
+
+def unlink_player_from_coop_session(storage: Storage, telegram_id: int) -> None:
+    """Отвязать игрока от кооп-сессии без уничтожения боя для остальных."""
+    from app.tactical_roster import drop_player_from_tactical_roster
+
+    session = get_coop_session_by_player(storage, telegram_id)
+    if session is None:
+        return
+    drop_player_from_tactical_roster(session, telegram_id)
+    storage.delete_meta(_player_key(telegram_id))
+    if not session.player_ids:
+        clear_coop_session(storage, session)
+        return
+    save_coop_session(storage, session)
 
 
 def register_active_coop(storage: Storage, session_id: str) -> None:

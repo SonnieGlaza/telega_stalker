@@ -957,9 +957,6 @@ def smuggling_keyboard(
             rows.append(
                 [InlineKeyboardButton(text=f"→ {name}", callback_data=f"eco:smuggle:to:{name}")]
             )
-        rows.append(
-            [InlineKeyboardButton(text="👥 Конвой с союзниками", callback_data="eco:smuggle:coop")]
-        )
     rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

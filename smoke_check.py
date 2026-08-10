@@ -950,6 +950,16 @@ def run_smoke_check() -> None:
         busy_smuggle = player_busy_reason(storage, 111, skip="travel")
         assert busy_smuggle and "контрабанд" in busy_smuggle.lower()
 
+        from app.player_busy import clear_all_activity_sessions, player_busy_reason as pbr
+
+        clear_all_activity_sessions(storage, 111)
+        assert get_smuggle_session(storage, 111) is None
+        assert get_active_smuggling(storage, 111) is None
+        assert pbr(storage, 111) is None
+
+        smuggle_start = start_smuggling_run(storage, 111, "Болото", transport_mode="foot")
+        assert smuggle_start.ok, smuggle_start.text
+
         move_result = move_smuggle_mission(storage, 111, "right")
         assert move_result.ok or move_result.payload
         assert resolve_smuggling_if_pending(storage, 111) is None

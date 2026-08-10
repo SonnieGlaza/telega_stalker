@@ -2101,6 +2101,29 @@ class Storage:
                 collect_respawn_debt(self, telegram_id)
         return ok
 
+    def drain_money(self, telegram_id: int, max_amount: int) -> int:
+        """Атомарно списать до max_amount RU (весь баланс, если не хватает)."""
+        amount = max(0, int(max_amount))
+        if amount <= 0:
+            return 0
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT money FROM characters WHERE telegram_id = ?",
+                (telegram_id,),
+            ).fetchone()
+            if row is None:
+                return 0
+            balance = int(row["money"])
+            taken = min(amount, balance)
+            if taken <= 0:
+                return 0
+            conn.execute(
+                "UPDATE characters SET money = money - ? WHERE telegram_id = ?",
+                (taken, telegram_id),
+            )
+        self.save_snapshot()
+        return taken
+
     def change_gear_power(self, telegram_id: int, delta: int) -> None:
         character = self.get_character(telegram_id, refresh_energy=False)
         if character is None:
@@ -2588,27 +2611,31 @@ class Storage:
         return self.change_diesel(telegram_id, delta)
 
     def change_health(self, telegram_id: int, delta: int, *, max_health: int | None = None) -> bool:
-        character = self.get_character(telegram_id, refresh_energy=False)
-        if character is None:
-            return False
-        cap = 100 if max_health is None else max(1, int(max_health))
-        # Если арт на HP уже экипирован, а max не передали — не режем запас ниже текущего бонуса.
-        if max_health is None:
-            try:
-                from app.game_logic import effective_max_health
-
-                cap = max(cap, int(effective_max_health(character)))
-            except Exception:
-                cap = 100
-        new_health = max(0, min(cap, character.health + delta))
-        died = character.health > 0 and new_health <= 0
         with self._connect() as conn:
+            row = conn.execute(
+                "SELECT health FROM characters WHERE telegram_id = ?",
+                (telegram_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            old_health = int(row["health"])
+            cap = 100 if max_health is None else max(1, int(max_health))
+            if max_health is None:
+                try:
+                    character = self.get_character(telegram_id, refresh_energy=False)
+                    if character is not None:
+                        from app.game_logic import effective_max_health
+
+                        cap = max(cap, int(effective_max_health(character)))
+                except Exception:
+                    cap = 100
+            new_health = max(0, min(cap, old_health + int(delta)))
             conn.execute(
                 "UPDATE characters SET health = ? WHERE telegram_id = ?",
                 (new_health, telegram_id),
             )
         self.save_snapshot()
-        if died:
+        if old_health > 0 and new_health <= 0:
             self.add_player_stat(telegram_id, "deaths", 1)
         return True
 

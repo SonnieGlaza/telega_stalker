@@ -2949,14 +2949,7 @@ def _apply_money_penalty(storage: Storage, telegram_id: int, penalty: int) -> in
     """Списать штраф в RU, не давая уйти от него из-за нехватки денег: минимум — весь баланс."""
     if penalty <= 0:
         return 0
-    if storage.change_money(telegram_id, -penalty):
-        return penalty
-    character = storage.get_character(telegram_id, refresh_energy=False)
-    balance = int(character.money) if character is not None else 0
-    if balance <= 0:
-        return 0
-    storage.change_money(telegram_id, -balance)
-    return balance
+    return storage.drain_money(telegram_id, penalty)
 
 
 def cancel_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
@@ -8106,6 +8099,12 @@ def clear_active_smuggling(storage: Storage, telegram_id: int) -> None:
     storage.delete_meta(_smuggle_meta_key(telegram_id))
 
 
+def _release_smuggle_vehicle(storage: Storage, telegram_id: int, active: dict[str, Any]) -> None:
+    transport = str(active.get("transport") or "").strip()
+    if transport in ("niva", "truck") and storage.get_bound_transport(telegram_id) == transport:
+        storage.clear_bound_transport(telegram_id)
+
+
 def list_smuggling_destinations(storage: Storage, telegram_id: int) -> list[str]:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
@@ -8260,6 +8259,8 @@ def fail_smuggling_delivery(storage: Storage, telegram_id: int, reason: str) -> 
     active = get_active_smuggling(storage, telegram_id) or {}
     clear_smuggle_session(storage, telegram_id)
     clear_active_smuggling(storage, telegram_id)
+    if active:
+        _release_smuggle_vehicle(storage, telegram_id, active)
     player = storage.get_character(telegram_id, refresh_energy=False)
     destination = str(active.get("destination") or (player.location if player else "?"))
     penalty = random.randint(SMUGGLING_FAIL_PENALTY_MIN, SMUGGLING_FAIL_PENALTY_MAX)
@@ -8458,6 +8459,8 @@ def abandon_smuggling_run(storage: Storage, telegram_id: int) -> ActionResult:
     )
     clear_smuggle_session(storage, telegram_id)
     clear_active_smuggling(storage, telegram_id)
+    if active:
+        _release_smuggle_vehicle(storage, telegram_id, active)
     return ActionResult(
         True,
         f"Груз сброшен — рейс на «{dest}» отменён.",

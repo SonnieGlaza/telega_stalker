@@ -7096,118 +7096,126 @@ async def auction_cancel_by_id_callback(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "eco:smuggle:menu")
 async def smuggle_menu_callback(callback: CallbackQuery) -> None:
-    storage = get_storage()
-    player = storage.get_character(callback.from_user.id, refresh_energy=False)
-    if player is None:
-        await callback.answer("Сначала создай персонажа", show_alert=True)
-        return
-    overview = build_smuggling_overview(storage, callback.from_user.id)
-    active = get_active_smuggling(storage, callback.from_user.id)
-    grid_active = get_smuggle_session(storage, callback.from_user.id) is not None
-    destinations = list_smuggling_destinations(storage, callback.from_user.id)
-    if callback.message is None:
-        await callback.answer("Сообщение недоступно.", show_alert=True)
-        return
-    await callback.message.answer(
-        overview,
-        reply_markup=smuggling_keyboard(
-            destinations,
-            has_active=bool(active) or grid_active,
-        ),
-    )
-    await callback.answer()
+    try:
+        storage = get_storage()
+        player = storage.get_character(callback.from_user.id, refresh_energy=False)
+        if player is None:
+            await callback.answer("Сначала создай персонажа", show_alert=True)
+            return
+        overview = build_smuggling_overview(storage, callback.from_user.id)
+        active = get_active_smuggling(storage, callback.from_user.id)
+        grid_active = get_smuggle_session(storage, callback.from_user.id) is not None
+        destinations = list_smuggling_destinations(storage, callback.from_user.id)
+        if callback.message is None:
+            await callback.answer("Сообщение недоступно.", show_alert=True)
+            return
+        await callback.message.answer(
+            overview,
+            reply_markup=smuggling_keyboard(
+                destinations,
+                has_active=bool(active) or grid_active,
+            ),
+        )
+        await callback.answer()
+    except Exception:
+        logger.exception("Smuggle menu callback failed for %s", callback.from_user.id)
+        await safe_callback_answer(callback, "Ошибка меню контрабанды. /fixme", show_alert=True)
 
 
 @router.callback_query(F.data == "eco:smuggle:status")
 async def smuggle_status_callback(callback: CallbackQuery) -> None:
-    overview = build_smuggling_overview(get_storage(), callback.from_user.id)
-    if callback.message is None:
-        await callback.answer(overview[:CALLBACK_ALERT_MAX_LEN], show_alert=True)
-        return
-    await callback.message.answer(overview)
-    await callback.answer()
+    try:
+        overview = build_smuggling_overview(get_storage(), callback.from_user.id)
+        if callback.message is None:
+            await callback.answer(overview[:CALLBACK_ALERT_MAX_LEN], show_alert=True)
+            return
+        await callback.message.answer(overview)
+        await callback.answer()
+    except Exception:
+        logger.exception("Smuggle status callback failed for %s", callback.from_user.id)
+        await safe_callback_answer(callback, "Ошибка статуса рейса.", show_alert=True)
 
 
 @router.callback_query(F.data == "eco:smuggle:abandon")
 async def smuggle_abandon_callback(callback: CallbackQuery, bot: Bot) -> None:
-    result = abandon_smuggling_run(get_storage(), callback.from_user.id)
-    await reply_action_result(callback, result.text, bot=bot)
+    try:
+        result = abandon_smuggling_run(get_storage(), callback.from_user.id)
+        await reply_action_result(callback, result.text, bot=bot)
+    except Exception:
+        logger.exception("Smuggle abandon callback failed for %s", callback.from_user.id)
+        await safe_callback_answer(callback, "Ошибка сброса груза. /fixme", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("eco:smuggle:to:"))
 async def smuggle_to_callback(callback: CallbackQuery, bot: Bot) -> None:
-    destination = (callback.data or "").removeprefix("eco:smuggle:to:").strip()
-    if not destination:
-        await callback.answer("Некорректная точка", show_alert=True)
-        return
-    player = get_storage().get_character(callback.from_user.id)
-    if player is None:
-        await callback.answer("Сначала создай персонажа.", show_alert=True)
-        return
-    modes = [
-        (mode, f"{label} (−{energy} эн.)")
-        for mode, label, _speed, energy in list_available_travel_modes(player)
-    ]
-    await edit_menu_message(
-        callback,
-        f"Контрабанда → «{destination}».\nВыбери транспорт:",
-        smuggle_transport_keyboard(destination, modes),
-    )
+    try:
+        destination = (callback.data or "").removeprefix("eco:smuggle:to:").strip()
+        if not destination:
+            await callback.answer("Некорректная точка", show_alert=True)
+            return
+        player = get_storage().get_character(callback.from_user.id)
+        if player is None:
+            await callback.answer("Сначала создай персонажа.", show_alert=True)
+            return
+        modes = [
+            (mode, f"{label} (−{energy} эн.)")
+            for mode, label, _speed, energy in list_available_travel_modes(player)
+        ]
+        await edit_menu_message(
+            callback,
+            f"Контрабанда → «{destination}».\nВыбери транспорт:",
+            smuggle_transport_keyboard(destination, modes),
+        )
+    except Exception:
+        logger.exception("Smuggle destination callback failed for %s", callback.from_user.id)
+        await safe_callback_answer(callback, "Ошибка выбора точки.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("eco:smuggle:go:"))
 async def smuggle_go_callback(callback: CallbackQuery, bot: Bot) -> None:
-    parts = (callback.data or "").split(":", maxsplit=4)
-    if len(parts) < 5:
-        await callback.answer("Некорректный рейс.", show_alert=True)
-        return
-    mode = parts[3]
-    destination = parts[4]
-    result = start_smuggling_run(
-        get_storage(),
-        callback.from_user.id,
-        destination,
-        transport_mode=mode,
-    )
-    if result.ok:
-        payload = result.payload or {}
-        image = payload.get("mission_image")
-        if image and payload.get("mission_active"):
-            await _send_or_edit_smuggle_frame(
-                callback,
-                image_bytes=image,
-                caption=str(payload.get("caption") or result.text),
-                note=result.text if payload.get("mission_started") else None,
-            )
+    try:
+        parts = (callback.data or "").split(":", maxsplit=4)
+        if len(parts) < 5:
+            await callback.answer("Некорректный рейс.", show_alert=True)
             return
-        await safe_callback_answer(callback, "Рейс начат!")
-        if callback.message is not None:
-            await callback.message.answer(action_result_text(callback.from_user.id, result.text))
-        else:
-            await bot.send_message(callback.from_user.id, action_result_text(callback.from_user.id, result.text))
-        return
-    await reply_action_result(callback, result.text, bot=bot)
+        mode = parts[3]
+        destination = parts[4]
+        result = start_smuggling_run(
+            get_storage(),
+            callback.from_user.id,
+            destination,
+            transport_mode=mode,
+        )
+        if result.ok:
+            payload = result.payload or {}
+            image = payload.get("mission_image")
+            if image and payload.get("mission_active"):
+                await _send_or_edit_smuggle_frame(
+                    callback,
+                    image_bytes=image,
+                    caption=str(payload.get("caption") or result.text),
+                    note=result.text if payload.get("mission_started") else None,
+                )
+                return
+            await safe_callback_answer(callback, "Рейс начат!")
+            if callback.message is not None:
+                await callback.message.answer(action_result_text(callback.from_user.id, result.text))
+            else:
+                await bot.send_message(callback.from_user.id, action_result_text(callback.from_user.id, result.text))
+            return
+        await reply_action_result(callback, result.text, bot=bot)
+    except Exception:
+        logger.exception("Smuggle start callback failed for %s", callback.from_user.id)
+        await safe_callback_answer(callback, "Ошибка старта рейса. /fixme", show_alert=True)
 
 
 @router.callback_query(F.data == "eco:smuggle:coop")
 async def smuggle_coop_callback(callback: CallbackQuery) -> None:
-    """Контрабандный конвой — кооп-вылазка с союзниками для прикрытия."""
-    from app.coop_mission import create_coop_lobby
-
-    storage = get_storage()
-    telegram_id = callback.from_user.id
-    player = storage.get_character(telegram_id, refresh_energy=False)
-    if player is None:
-        await callback.answer("Сначала создай персонажа.", show_alert=True)
-        return
-    result = create_coop_lobby(storage, telegram_id)
-    text = (
-        "👥 Контрабандный конвой\n"
-        "Союзники прикрывают груз на тактической карте (как кооп-вылазка).\n"
-        "Соло-рейс с машиной и маршрутом — через «→ точка» в меню контрабанды.\n\n"
-        f"{result.text}"
+    """Старый callback: групповой конвой пока не реализован."""
+    await callback.answer(
+        "Конвой с союзниками пока в разработке. Сolo-рейс — через «→ точка».",
+        show_alert=True,
     )
-    await reply_action_result(callback, text)
 
 
 @router.callback_query(F.data == "eco:smuggle:run")

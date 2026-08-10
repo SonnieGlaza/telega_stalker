@@ -159,6 +159,7 @@ def get_smuggle_session(storage: Storage, telegram_id: int) -> SmuggleMissionSes
         return SmuggleMissionSession.from_dict(data)
     except Exception:
         storage.delete_meta(_meta_key(telegram_id))
+        clear_active_smuggling(storage, telegram_id)
         return None
 
 
@@ -744,6 +745,16 @@ def render_smuggle_for_player(
     return render_smuggle_frame(session, player)
 
 
+def _fail_smuggle_run(storage: Storage, telegram_id: int, reason: str) -> str:
+    """Провал рейса со штрафом (смерть, тайм-аут, срыв)."""
+    from app.game_logic import fail_smuggling_delivery, get_active_smuggling
+
+    if get_active_smuggling(storage, telegram_id) is not None or get_smuggle_session(storage, telegram_id):
+        return fail_smuggling_delivery(storage, telegram_id, reason)
+    _clear_smuggle_run(storage, telegram_id)
+    return reason
+
+
 def _clear_smuggle_run(storage: Storage, telegram_id: int) -> None:
     clear_smuggle_session(storage, telegram_id)
     clear_active_smuggling(storage, telegram_id)
@@ -764,8 +775,10 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
         clear_smuggle_session(storage, telegram_id)
         return ActionResult(False, "Сначала создай персонажа.")
     if _is_dead(player):
-        _clear_smuggle_run(storage, telegram_id)
-        remember_death_cause(storage, telegram_id, "combat")
+        from app.game_logic import peek_death_cause
+
+        _fail_smuggle_run(storage, telegram_id, "Рейс контрабанды сорван.")
+        cause = peek_death_cause(storage, telegram_id) or "combat"
         return ActionResult(
             False,
             _dead_block_text(),
@@ -773,7 +786,7 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
                 "mission_active": False,
                 "mission_dead": True,
                 "death_location": session.location,
-                "death_cause": "combat",
+                "death_cause": cause,
             },
         )
 
@@ -814,8 +827,13 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
         if note:
             notes.append(note)
         if dead_result is not None:
-            _clear_smuggle_run(storage, telegram_id)
-            return dead_result
+            fail_text = _fail_smuggle_run(storage, telegram_id, "Погиб на маршруте — груз потерян.")
+            payload = dead_result.payload or {}
+            return ActionResult(
+                False,
+                fail_text,
+                payload=payload,
+            )
         return None
 
     dead = _fight("мутантом", "enemies", kinds_attr="enemy_kinds")
@@ -832,11 +850,11 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
         notes.append(f"Аномалия: −{dmg} HP.")
         player = storage.get_character(telegram_id, refresh_energy=False) or player
         if player.health <= 0:
-            _clear_smuggle_run(storage, telegram_id)
+            fail_text = _fail_smuggle_run(storage, telegram_id, "Аномалия на маршруте. Груз потерян.")
             remember_death_cause(storage, telegram_id, "anomaly")
             return ActionResult(
                 False,
-                f"Аномалия на маршруте. Груз потерян.\nКонтракт сорван.",
+                fail_text,
                 payload={
                     "mission_active": False,
                     "mission_dead": True,
