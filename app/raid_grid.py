@@ -12,7 +12,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
-from app.faction_bots import FACTION_BOT_DEFAULT_COUNT, FACTION_BOT_MAX_COUNT, bot_armor_for_tier, get_faction_bots, pick_bot_weapon
+from app.faction_bots import FACTION_BOT_DEFAULT_COUNT, bot_armor_for_tier, get_faction_bots, pick_bot_weapon
 from app.game_logic import (
     ARMOR_RATING_BY_NAME,
     ActionResult,
@@ -146,6 +146,7 @@ class RaidGridSession:
     death_causes: dict[str, str] = field(default_factory=dict)
     death_killers: dict[str, str] = field(default_factory=dict)
     raid_bot_tier: int = 1
+    defense_bonus: int = 0
 
     def active_player(self) -> int:
         from app.tactical_roster import resolve_active_player
@@ -204,6 +205,7 @@ class RaidGridSession:
             "death_causes": dict(self.death_causes),
             "death_killers": dict(self.death_killers),
             "raid_bot_tier": self.raid_bot_tier,
+            "defense_bonus": self.defense_bonus,
         }
 
     @classmethod
@@ -247,6 +249,7 @@ class RaidGridSession:
             death_causes={str(k): str(v) for k, v in (raw.get("death_causes") or {}).items()},
             death_killers={str(k): str(v) for k, v in (raw.get("death_killers") or {}).items()},
             raid_bot_tier=int(raw.get("raid_bot_tier") or 1),
+            defense_bonus=max(0, int(raw.get("defense_bonus") or 0)),
         )
         if not session.player_ids:
             if session.turn_order:
@@ -378,7 +381,8 @@ def _spawn_hostiles(
     bots_only: bool = False,
 ) -> None:
     if bots_only:
-        total = min(FACTION_BOT_MAX_COUNT, max(1, bot_count))
+        # Укрепление базы может добавить защитников сверх лимита найма ботов.
+        total = max(1, bot_count)
         bots = total
         mutants = 0
     else:
@@ -493,6 +497,7 @@ def _build_depot_map_with_storage(session: RaidGridSession, storage: Storage, de
         if home_loc is not None:
             defense_bonus = max(0, int(home_loc.get("defense_bonus") or 0))
     session.raid_bot_tier = bot_tier
+    session.defense_bonus = defense_bonus
     _spawn_hostiles(
         session,
         bot_count=bot_count + defense_bonus,
@@ -534,12 +539,12 @@ def _bot_shooters(session: RaidGridSession) -> tuple[list[tuple[int, int]], list
     return positions, weapons
 
 
-def _hostile_damage(weapon: str, *, bot_tier: int = 1) -> int:
+def _hostile_damage(weapon: str, *, bot_tier: int = 1, defense_bonus: int = 0) -> int:
     tier = max(1, int(bot_tier))
     base = max(4, weapon_shoot_range(weapon) * 3 + random.randint(0, 4))
     armor_name = bot_armor_for_tier(tier)
     armor_bonus = ARMOR_RATING_BY_NAME.get(armor_name, 0) // 3
-    return base + armor_bonus
+    return base + armor_bonus + max(0, int(defense_bonus))
 
 
 def _mutant_melee_hit(
@@ -607,7 +612,11 @@ def _hostile_turn(storage: Storage, session: RaidGridSession) -> list[str]:
                 player_characters=player_chars,
                 cover=cover_set,
                 base_cover=base_set,
-                damage_fn=lambda weapon: _hostile_damage(weapon, bot_tier=session.raid_bot_tier),
+                damage_fn=lambda weapon: _hostile_damage(
+                    weapon,
+                    bot_tier=session.raid_bot_tier,
+                    defense_bonus=session.defense_bonus,
+                ),
             )
         )
     mark_new_field_deaths(session, alive_before_shots, cause="npc")

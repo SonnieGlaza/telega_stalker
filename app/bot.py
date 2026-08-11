@@ -2778,8 +2778,43 @@ async def show_inventory_buy_qty(callback: CallbackQuery) -> None:
             unit_price=unit_price,
             back_callback="inventory:open",
             back_text="⬅️ Назад в инвентарь",
+            buy_prefix="invbuy",
         ),
     )
+
+
+@router.callback_query(F.data.startswith("invbuy:"))
+async def handle_inventory_bulk_buy(callback: CallbackQuery) -> None:
+    raw = (callback.data or "").split(":")
+    # invbuy:<item>:<amount>
+    if len(raw) < 3 or not raw[1]:
+        await reply_action_result(callback, "Некорректная покупка.")
+        return
+    item_key = raw[1]
+    try:
+        amount = max(1, int(raw[2]))
+    except ValueError:
+        await reply_action_result(callback, "Некорректное количество.")
+        return
+    db = get_storage()
+    result = buy_item(db, callback.from_user.id, item_key, amount=amount)
+    await reply_action_result(callback, result.text)
+    if result.ok:
+        player = db.get_character(callback.from_user.id, refresh_energy=False)
+        if player is not None:
+            try:
+                await edit_menu_message(
+                    callback,
+                    format_inventory(
+                        player,
+                        rating_points=int(db.get_player_stats(player.telegram_id).get("rating_points", 0)),
+                        storage=db,
+                    ),
+                    inventory_equipment_keyboard(money=player.money),
+                    answer_callback=False,
+                )
+            except TelegramBadRequest:
+                pass
 
 
 @router.callback_query(F.data.startswith("buy:"))
@@ -2800,22 +2835,6 @@ async def handle_buy(callback: CallbackQuery) -> None:
     db = get_storage()
     result = buy_item(db, callback.from_user.id, item_key, amount=amount)
     await reply_action_result(callback, result.text)
-    if result.ok and item_key == "stash_case":
-        player = db.get_character(callback.from_user.id, refresh_energy=False)
-        if player is not None:
-            try:
-                await edit_menu_message(
-                    callback,
-                    format_inventory(
-                        player,
-                        rating_points=int(db.get_player_stats(player.telegram_id).get("rating_points", 0)),
-                        storage=db,
-                    ),
-                    inventory_equipment_keyboard(money=player.money),
-                    answer_callback=False,
-                )
-            except TelegramBadRequest:
-                pass
     if result.ok and item_key == "truck":
         player = db.get_character(callback.from_user.id, refresh_energy=False)
         if player is not None:

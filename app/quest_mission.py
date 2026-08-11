@@ -37,7 +37,6 @@ from app.game_logic import (
     use_medkit_item,
 )
 from app.tactical_combat import random_hostile_shots, ray_cast_first_hit, weapon_shoot_range
-from app.faction_bots import BOT_T2_WEAPONS
 from app.mutant_assets import (
     MISSION_MUTANT_GRID_DIAMETER,
     MUTANT_SPRITE_KEYS,
@@ -59,6 +58,9 @@ from app.npc_assets import (
     pick_npc_kind,
 )
 from app.storage import Character, Storage
+
+# Тир-2 стволы с дальностью 2 клетки (автоматы), как обещано в меню заданий.
+QUEST_NPC_WEAPONS: tuple[str, ...] = ("АК-74", "ТРс-301", "ИЛ86")
 
 
 MISSION_META_PREFIX = "quest_mission:"
@@ -215,7 +217,7 @@ def _parse_npc_weapons(npcs_raw: list, weapons_raw: Any) -> list[str]:
         return []
     if isinstance(weapons_raw, list) and len(weapons_raw) == n:
         return [str(w) for w in weapons_raw]
-    return [random.choice(BOT_T2_WEAPONS) for _ in range(n)]
+    return [random.choice(QUEST_NPC_WEAPONS) for _ in range(n)]
 
 
 def _parse_npc_kinds(npcs_raw: list, kinds_raw: Any) -> list[str]:
@@ -460,7 +462,7 @@ def _spawn_npcs(
         cell = _free_cell(grid, forbidden)
         npcs.append(cell)
         kinds.append(pick_npc_kind(marauder=marauder))
-        weapons.append(random.choice(BOT_T2_WEAPONS))
+        weapons.append(random.choice(QUEST_NPC_WEAPONS))
         forbidden.add(cell)
 
 
@@ -605,7 +607,7 @@ def _maybe_npc_shots(
         return [], 0
     weapons = session.npc_weapons
     if len(weapons) != len(session.npcs):
-        weapons = [random.choice(BOT_T2_WEAPONS) for _ in session.npcs]
+        weapons = [random.choice(QUEST_NPC_WEAPONS) for _ in session.npcs]
     hp_map = {str(telegram_id): player.health}
     notes = random_hostile_shots(
         list(session.npcs),
@@ -647,6 +649,7 @@ def _resolve_hostile_contact(
     *,
     kinds_attr: str | None = None,
     npc: bool = False,
+    prior_damage: int = 0,
 ) -> tuple[Character, str | None, ActionResult | None, int]:
     """Бой на клетке игрока. Урон в БД не пишется — только (note, dead, dmg)."""
     from app.death_flavor import encounter_phrase_for_kind, killer_label_for_kind
@@ -662,17 +665,30 @@ def _resolve_hostile_contact(
         kind = kinds[idx]
         new_units: list[tuple[int, int]] = []
         new_kinds: list[str] = []
-        for pos, k in zip(units, kinds):
+        new_weapons: list[str] | None = None
+        weapons = list(session.npc_weapons) if npc else None
+        if weapons is not None and len(weapons) == len(units):
+            new_weapons = []
+        for i, (pos, k) in enumerate(zip(units, kinds)):
             if pos != session.player:
                 new_units.append(pos)
                 new_kinds.append(k)
+                if new_weapons is not None and weapons is not None:
+                    new_weapons.append(weapons[i])
         setattr(session, unit_attr, new_units)
         setattr(session, kinds_attr, new_kinds)
+        if new_weapons is not None:
+            session.npc_weapons = new_weapons
     else:
+        if npc and session.npc_weapons and len(session.npc_weapons) == len(units):
+            session.npc_weapons = [
+                w for pos, w in zip(units, session.npc_weapons) if pos != session.player
+            ]
         setattr(session, unit_attr, [e for e in units if e != session.player])
     phrase = encounter_phrase_for_kind(kind, npc=npc) if kind else f"с {label}"
     note = f"Бой {phrase}: −{dmg} HP."
-    if int(player.health) - dmg <= 0:
+    # Учитываем уже накопленный урон хода (выстрелы НПС).
+    if int(player.health) - max(0, int(prior_damage)) - dmg <= 0:
         from app.game_logic import remember_death_cause, remember_death_killer
 
         death_cause = "npc" if npc else "mutant"
@@ -704,6 +720,35 @@ def _apply_quest_mission_damage(
 ) -> None:
     if pending_damage > 0:
         storage.change_health(telegram_id, -pending_damage)
+
+
+def _quest_death_from_pending_damage(
+    storage: Storage,
+    telegram_id: int,
+    session: QuestMissionSession,
+    *,
+    death_result: ActionResult | None,
+) -> ActionResult | None:
+    """Если урон хода убил игрока, а death_result ещё нет (выстрелы НПС) — оформить смерть."""
+    if death_result is not None:
+        return death_result
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or int(player.health) > 0:
+        return None
+    from app.game_logic import remember_death_cause, remember_death_killer
+
+    remember_death_cause(storage, telegram_id, "npc")
+    remember_death_killer(storage, telegram_id, "НПС")
+    return ActionResult(
+        False,
+        f"Ты пал в бою на «{session.location}».\nКонтракт сорван.",
+        payload={
+            "mission_active": False,
+            "mission_dead": True,
+            "death_location": session.location,
+            "death_cause": "npc",
+        },
+    )
 
 
 def _finalize_quest_death_result(
@@ -997,14 +1042,24 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     if player is None:
         return result
     death_result: ActionResult | None = None
+    prior = int(pending_damage)
     for label, unit_attr, kinds_attr, is_npc in (
         ("мутантом", "enemies", "enemy_kinds", False),
         ("НПС", "npcs", "npc_kinds", True),
     ):
         player, note, dead, dmg = _resolve_hostile_contact(
-            storage, telegram_id, session, player, label, unit_attr, kinds_attr=kinds_attr, npc=is_npc
+            storage,
+            telegram_id,
+            session,
+            player,
+            label,
+            unit_attr,
+            kinds_attr=kinds_attr,
+            npc=is_npc,
+            prior_damage=prior,
         )
         pending_damage += dmg
+        prior += dmg
         if note is not None:
             notes.append(note)
         if dead is not None:
@@ -1015,6 +1070,9 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
 
         return ActionResult(False, STALE_TURN_MESSAGE, payload={"mission_active": True})
     _apply_quest_mission_damage(storage, telegram_id, pending_damage)
+    death_result = _quest_death_from_pending_damage(
+        storage, telegram_id, session, death_result=death_result
+    )
     if death_result is not None:
         return _finalize_quest_death_result(storage, telegram_id, death_result)
     image = _render_for_player(storage, telegram_id, session, player)
@@ -1083,7 +1141,15 @@ def _complete_quest_turn_after_action(
     ) -> None:
         nonlocal player, notes, pending_damage, death_result
         p, note, dead, dmg = _resolve_hostile_contact(
-            storage, telegram_id, session, player, label, unit_attr, kinds_attr=kinds_attr, npc=npc
+            storage,
+            telegram_id,
+            session,
+            player,
+            label,
+            unit_attr,
+            kinds_attr=kinds_attr,
+            npc=npc,
+            prior_damage=pending_damage,
         )
         player = p
         pending_damage += dmg
@@ -1103,12 +1169,16 @@ def _complete_quest_turn_after_action(
         session.objectives_done = True
 
     def _commit_turn_and_damage() -> ActionResult | None:
+        nonlocal death_result
         session.turn_seq = expected_seq + 1
         if not _save_mission_if_turn_ok(storage, telegram_id, session, expected_seq):
             from app.tactical_combat import STALE_TURN_MESSAGE
 
             return ActionResult(False, STALE_TURN_MESSAGE, payload={"mission_active": True})
         _apply_quest_mission_damage(storage, telegram_id, pending_damage)
+        death_result = _quest_death_from_pending_damage(
+            storage, telegram_id, session, death_result=death_result
+        )
         if death_result is not None:
             return _finalize_quest_death_result(storage, telegram_id, death_result)
         return None

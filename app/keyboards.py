@@ -250,6 +250,7 @@ def buy_item_qty_keyboard(
     unit_price: int,
     back_callback: str,
     back_text: str,
+    buy_prefix: str = "buy",
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for amount in BUY_CONSUMABLE_AMOUNTS:
@@ -258,7 +259,7 @@ def buy_item_qty_keyboard(
             [
                 InlineKeyboardButton(
                     text=f"×{amount} — {total} RU",
-                    callback_data=f"buy:{item_key}:{amount}",
+                    callback_data=f"{buy_prefix}:{item_key}:{amount}",
                 )
             ]
         )

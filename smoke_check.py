@@ -506,13 +506,19 @@ def run_smoke_check() -> None:
         import json
         from datetime import datetime, timezone
 
-        from app.game_logic import DAILY_CONTRACTS_META_KEY, _daily_key
+        from app.game_logic import (
+            CONTRACT_DAILY_DONE_META_PREFIX,
+            DAILY_CONTRACTS_META_KEY,
+            _daily_key,
+        )
 
         today = _daily_key(datetime.now(timezone.utc))
         storage.set_meta(
             DAILY_CONTRACTS_META_KEY,
             json.dumps({"date": today, "keys": ["easy_boloto", "easy_dump"]}, ensure_ascii=False),
         )
+        # Сброс claim — earlier turn-in of easy_boloto мог уже забрать бонус дня.
+        storage.delete_meta(f"{CONTRACT_DAILY_DONE_META_PREFIX}111:{today}:easy_boloto")
         home_dolg = faction_home_base("Долг")
         storage.set_location(111, home_dolg)
         before_money = storage.get_character(111, refresh_energy=False).money
