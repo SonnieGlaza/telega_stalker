@@ -372,7 +372,7 @@ def _draw_control_overlays(
 
         # Полоска от маркера к плашке — видно, какая подпись к какой точке.
         anchor_x, anchor_y = _label_anchor(x, y, box)
-        line_w = max(2, width // 220)
+        line_w = max(3, width // 160)
         draw.line((x, y, anchor_x, anchor_y), fill=MAP_CONNECTOR_COLOR, width=line_w)
         dot = max(2, line_w)
         draw.ellipse(
