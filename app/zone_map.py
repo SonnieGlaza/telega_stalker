@@ -157,8 +157,8 @@ def _draw_location_labels(
 ) -> None:
     width, height = canvas.size
     draw = ImageDraw.Draw(canvas)
-    label_font = _load_font(max(28, width // 70))
-    r = max(10, width // 80)
+    label_font = _load_font(max(48, width // 42))
+    r = max(14, width // 55)
 
     for name in sorted(MAP_POINTS_NORM, key=lambda key: MAP_POINTS_NORM[key][1]):
         xy = _point_xy(name, width, height)
@@ -177,8 +177,8 @@ def _draw_location_labels(
         tw, th = tb[2] - tb[0], tb[3] - tb[1]
         lx = min(max(8, x - tw // 2), width - tw - 8)
         ly = max(8, min(height - th - 8, y - r - th - 10))
-        pad = 6
-        draw.rounded_rectangle((lx - pad, ly - pad, lx + tw + pad, ly + th + pad), radius=6, fill=(0, 0, 0, 200))
+        pad = 10
+        draw.rounded_rectangle((lx - pad, ly - pad, lx + tw + pad, ly + th + pad), radius=8, fill=(0, 0, 0, 210))
         draw.text((lx, ly), display_name, fill=_label_text_fill(name, marker_color), font=label_font)
 
 
