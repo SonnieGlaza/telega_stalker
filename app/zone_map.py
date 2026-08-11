@@ -124,6 +124,8 @@ FALLBACK_SIZE = MAP_LAYOUT_SIZE
 # Лёгкое затемнение спутникового фона, чтобы плашки и маркеры читались лучше.
 MAP_BACKGROUND_DARKEN_ALPHA = 55
 MAP_CONNECTOR_COLOR = (180, 200, 185, 255)
+# Чуть длиннее полоска между маркером и плашкой.
+MAP_CONNECTOR_EXTRA_PX = 4
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -386,6 +388,26 @@ def _draw_control_overlays(
                 max(name_bbox[2], details_bbox[2]) + pad,
                 max(name_bbox[3], details_bbox[3]) + pad,
             )
+            label_x, label_y, box = _clamp_label_box(
+                label_x=label_x,
+                label_y=label_y,
+                box=box,
+                width=width,
+                height=height,
+            )
+
+        # Чуть отодвигаем плашку от маркера — полоска становится длиннее на N px.
+        box_cx = (box[0] + box[2]) / 2
+        box_cy = (box[1] + box[3]) / 2
+        vec_x = box_cx - x
+        vec_y = box_cy - y
+        vec_len = (vec_x * vec_x + vec_y * vec_y) ** 0.5
+        if vec_len > 1e-6 and MAP_CONNECTOR_EXTRA_PX:
+            shift_x = int(round(vec_x / vec_len * MAP_CONNECTOR_EXTRA_PX))
+            shift_y = int(round(vec_y / vec_len * MAP_CONNECTOR_EXTRA_PX))
+            label_x += shift_x
+            label_y += shift_y
+            box = (box[0] + shift_x, box[1] + shift_y, box[2] + shift_x, box[3] + shift_y)
             label_x, label_y, box = _clamp_label_box(
                 label_x=label_x,
                 label_y=label_y,
