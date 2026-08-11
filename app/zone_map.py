@@ -40,6 +40,20 @@ LOCATION_DISPLAY_NAMES: dict[str, str] = {
     "Радар": "Радар",
 }
 
+# Смещения подписи относительно точки (в долях ширины / высоты карты).
+LABEL_OFFSETS_NORM: dict[str, tuple[float, float]] = {
+    "Болото": (-0.02, 0.022),
+    "Кордон": (0.04, 0.022),
+    "Свалка": (0.05, -0.055),
+    "НИИ Агропром": (-0.28, -0.01),
+    "Темная долина": (-0.02, 0.022),
+    "Янтарь": (0.04, 0.02),
+    "Росток": (-0.28, -0.055),
+    "Армейские склады": (0.04, 0.02),
+    "Рыжий лес": (-0.28, -0.01),
+    "Радар": (0.04, -0.055),
+}
+
 MAP_LABEL_MARKER_COLOR = (0, 210, 255)
 MAP_LABEL_TEXT_COLOR = (255, 255, 255)
 
@@ -149,8 +163,127 @@ def _marker_outline(color: tuple[int, int, int]) -> tuple[int, int, int]:
     return (240, 240, 240) if sum(color) < 280 else (35, 35, 35)
 
 
-def _label_text_fill(_name: str, _marker_color: tuple[int, int, int]) -> tuple[int, int, int]:
-    return MAP_LABEL_TEXT_COLOR
+def _short_point_type(point_type: str) -> str:
+    mapping = {
+        "база": "база",
+        "точка ресурсов": "ресурсы",
+        "точка интереса": "интерес",
+    }
+    return mapping.get(point_type, point_type or "точка")
+
+
+def _draw_control_overlays(
+    canvas: Image.Image,
+    locations: list[dict[str, str | int | None]],
+    *,
+    current_location: str | None = None,
+    player_faction: str | None = None,
+) -> None:
+    """Маркеры контроля + подписи: тип территории, владелец, сила NPC."""
+    width, height = canvas.size
+    draw = ImageDraw.Draw(canvas)
+    name_font = _load_font(max(22, width // 28))
+    details_font = _load_font(max(17, width // 38))
+    r_outer = max(12, width // 48)
+    r_inner = max(7, width // 78)
+    pad = max(6, width // 110)
+
+    by_name = {str(loc.get("name") or ""): loc for loc in locations}
+    ordered = sorted(
+        (name for name in MAP_POINTS_NORM if name in by_name),
+        key=lambda key: MAP_POINTS_NORM[key][1],
+    )
+
+    for name in ordered:
+        location = by_name[name]
+        xy = _point_xy(name, width, height)
+        if xy is None:
+            continue
+        x, y = xy
+        point_type = str(location.get("point_type") or "")
+        controlled_by = location.get("controlled_by")
+        npc_power = int(location.get("npc_power") or 0)
+
+        type_color = POINT_TYPE_COLORS.get(point_type, (210, 210, 210))
+        owner_color = FACTION_COLORS.get(str(controlled_by), (170, 170, 170))
+        owner_outline = _marker_outline(owner_color)
+
+        # Внешнее кольцо — тип точки, заливка — фракция-контролёр.
+        draw.ellipse(
+            (x - r_outer, y - r_outer, x + r_outer, y + r_outer),
+            fill=(20, 24, 22, 230),
+            outline=type_color + (255,),
+            width=max(3, r_outer // 5),
+        )
+        draw.ellipse(
+            (x - r_inner, y - r_inner, x + r_inner, y + r_inner),
+            fill=owner_color + (255,),
+            outline=owner_outline + (255,),
+            width=max(2, r_inner // 4),
+        )
+        if current_location and name == current_location:
+            draw.ellipse(
+                (x - r_outer - 8, y - r_outer - 8, x + r_outer + 8, y + r_outer + 8),
+                outline=(255, 240, 120, 255),
+                width=max(3, r_outer // 4),
+            )
+
+        owner_text = str(controlled_by) if controlled_by else "нейтрал"
+        owner_marker = ""
+        if player_faction and controlled_by == player_faction:
+            owner_marker = " (союз)"
+        display_name = LOCATION_DISPLAY_NAMES.get(name, name)
+        details_text = f"{point_type or 'точка'}; {owner_text}{owner_marker}; NPC {npc_power}"
+
+        ox, oy = LABEL_OFFSETS_NORM.get(name, (0.02, 0.016))
+        label_x = int(x + ox * width)
+        label_y = int(y + oy * height)
+
+        name_bbox = draw.textbbox((label_x, label_y), display_name, font=name_font)
+        details_bbox = draw.textbbox(
+            (label_x, label_y + (name_bbox[3] - name_bbox[1]) + 6),
+            details_text,
+            font=details_font,
+        )
+        box_x1 = min(name_bbox[0], details_bbox[0]) - pad
+        box_y1 = min(name_bbox[1], details_bbox[1]) - pad
+        box_x2 = max(name_bbox[2], details_bbox[2]) + pad
+        box_y2 = max(name_bbox[3], details_bbox[3]) + pad
+
+        # Держим плашку в кадре.
+        shift_x = 0
+        shift_y = 0
+        if box_x1 < 8:
+            shift_x = 8 - box_x1
+        elif box_x2 > width - 8:
+            shift_x = (width - 8) - box_x2
+        if box_y1 < 8:
+            shift_y = 8 - box_y1
+        elif box_y2 > height - 8:
+            shift_y = (height - 8) - box_y2
+        if shift_x or shift_y:
+            label_x += shift_x
+            label_y += shift_y
+            box_x1 += shift_x
+            box_y1 += shift_y
+            box_x2 += shift_x
+            box_y2 += shift_y
+
+        draw.rounded_rectangle(
+            (box_x1, box_y1, box_x2, box_y2),
+            radius=max(6, pad),
+            fill=(10, 14, 12, 220),
+            outline=(70, 90, 80, 255),
+            width=max(2, pad // 4),
+        )
+        name_fill = (255, 245, 170) if current_location and name == current_location else MAP_LABEL_TEXT_COLOR
+        draw.text((label_x, label_y), display_name, fill=name_fill, font=name_font)
+        draw.text(
+            (label_x, label_y + (name_bbox[3] - name_bbox[1]) + 6),
+            details_text,
+            fill=(190, 205, 195),
+            font=details_font,
+        )
 
 
 def _draw_location_labels(
@@ -158,6 +291,7 @@ def _draw_location_labels(
     *,
     current_location: str | None = None,
 ) -> None:
+    """Простые подписи имён (без динамики контроля) — legacy/fallback."""
     width, height = canvas.size
     draw = ImageDraw.Draw(canvas)
     label_font = _load_font(max(48, width // 42))
@@ -190,12 +324,20 @@ def build_zone_map_image(
     current_location: str | None = None,
     player_faction: str | None = None,
     *,
-    show_markers: bool = False,
+    show_markers: bool = True,
 ) -> bytes:
     canvas = _load_background()
 
     if show_markers:
-        _draw_location_labels(canvas, current_location=current_location)
+        if locations:
+            _draw_control_overlays(
+                canvas,
+                locations,
+                current_location=current_location,
+                player_faction=player_faction,
+            )
+        else:
+            _draw_location_labels(canvas, current_location=current_location)
 
     canvas = _fit_for_telegram_photo(canvas)
     output = BytesIO()

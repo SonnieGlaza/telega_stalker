@@ -4962,10 +4962,14 @@ async def show_zone_map(message: Message) -> None:
             locations,
             current_location=player.location,
             player_faction=player.faction,
-            show_markers=False,
+            show_markers=True,
         )
         image = BufferedInputFile(image_bytes, filename="zone_map.jpg")
-        caption = "Карта Зоны."
+        caption = (
+            "Карта Зоны.\n"
+            "Метка: тип территории; контроль; сила NPC.\n"
+            "Кольцо = тип точки, заливка = фракция."
+        )
         keyboard = _pda_keyboard_for(player)
         if len(image_bytes) > TELEGRAM_PHOTO_MAX_BYTES:
             await message.answer_document(
