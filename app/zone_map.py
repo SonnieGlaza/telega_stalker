@@ -1,53 +1,56 @@
 from __future__ import annotations
 
+import logging
 from io import BytesIO
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "NotoSans-Regular.ttf"
+ZONE_BACKGROUND_PATH = PROJECT_ROOT / "assets" / "zone_map" / "zone_background.png"
 
-MAP_POINTS: dict[str, tuple[int, int]] = {
-    "Кордон": (110, 530),
-    "Свалка": (250, 470),
-    "Росток": (395, 410),
-    "Армейские склады": (195, 250),
-    "НИИ Агропром": (340, 320),
-    "Янтарь": (735, 180),
-    "Болото": (115, 365),
-    "Темная долина": (510, 520),
-    "Рыжий лес": (730, 235),
-    "Радар": (740, 125),
+# Нормализованные координаты (x%, y%) на спутниковой карте Зоны.
+MAP_POINTS_NORM: dict[str, tuple[float, float]] = {
+    "Болото": (0.12, 0.84),
+    "Кордон": (0.36, 0.86),
+    "Свалка": (0.43, 0.70),
+    "Темная долина": (0.74, 0.76),
+    "Янтарь": (0.18, 0.56),
+    "Росток": (0.40, 0.50),
+    "Армейские склады": (0.50, 0.38),
+    "НИИ Агропром": (0.62, 0.48),
+    "Рыжий лес": (0.42, 0.24),
+    "Радар": (0.58, 0.12),
 }
 
-LABEL_CANDIDATE_OFFSETS: tuple[tuple[int, int], ...] = (
-    (20, -16),
-    (20, 8),
-    (20, -52),
-    (20, -88),
-    (20, -124),
-    (-240, -16),
-    (-240, 8),
-    (-240, -52),
-    (-240, -88),
-    (-240, -124),
-    (10, -62),
-    (-150, -62),
-)
+# Для расчёта времени перехода (legacy-сетка; синхрон с game_logic.MAP_TRAVEL_POINTS).
+MAP_POINTS: dict[str, tuple[int, int]] = {
+    "Кордон": (324, 1204),
+    "Свалка": (387, 980),
+    "Росток": (360, 700),
+    "Армейские склады": (450, 532),
+    "НИИ Агропром": (558, 672),
+    "Янтарь": (162, 784),
+    "Болото": (108, 1176),
+    "Темная долина": (666, 1064),
+    "Рыжий лес": (378, 336),
+    "Радар": (522, 168),
+}
 
-LABEL_PREFERRED_OFFSETS: dict[str, tuple[int, int]] = {
-    "Кордон": (20, -124),
-    "Свалка": (20, -88),
-    "Росток": (20, -52),
-    "Армейские склады": (20, -16),
-    "Болото": (20, -16),
-    "НИИ Агропром": (20, 8),
-    "Янтарь": (-300, -118),
-    "Темная долина": (-240, -88),
-    "Рыжий лес": (-300, 26),
-    "Радар": (-300, -6),
+LOCATION_MARKER_COLORS: dict[str, tuple[int, int, int]] = {
+    "Болото": (35, 110, 255),
+    "Кордон": (255, 150, 45),
+    "Свалка": (25, 25, 25),
+    "Темная долина": (80, 210, 255),
+    "Янтарь": (150, 95, 55),
+    "Росток": (230, 55, 55),
+    "Армейские склады": (55, 180, 85),
+    "НИИ Агропром": (200, 160, 255),
+    "Рыжий лес": (245, 245, 245),
+    "Радар": (170, 95, 230),
 }
 
 FACTION_COLORS = {
@@ -63,6 +66,9 @@ POINT_TYPE_COLORS = {
     "точка интереса": (186, 130, 255),
 }
 
+TELEGRAM_MAX_DIMENSION = 2048
+FALLBACK_SIZE = (900, 1400)
+
 
 def _load_font(size: int) -> ImageFont.ImageFont:
     try:
@@ -73,8 +79,46 @@ def _load_font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def _rects_intersect(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
-    return not (a[2] < b[0] or a[0] > b[2] or a[3] < b[1] or a[1] > b[3])
+def _load_background() -> Image.Image:
+    if ZONE_BACKGROUND_PATH.exists():
+        try:
+            bg = Image.open(ZONE_BACKGROUND_PATH).convert("RGBA")
+            w, h = bg.size
+            if w <= 0 or h <= 0:
+                raise ValueError("invalid background dimensions")
+            scale = min(1.0, TELEGRAM_MAX_DIMENSION / max(w, h))
+            if scale < 1.0:
+                bg = bg.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+            return bg
+        except Exception:
+            logger.exception("Failed to load zone background from %s", ZONE_BACKGROUND_PATH)
+
+    w, h = FALLBACK_SIZE
+    bg = Image.new("RGBA", (w, h), (48, 52, 46, 255))
+    draw = ImageDraw.Draw(bg)
+    for y in range(0, h, 4):
+        shade = 40 + (y * 30 // h)
+        draw.line((0, y, w, y), fill=(shade, shade + 8, shade - 4, 255))
+    title_font = _load_font(22)
+    draw.rounded_rectangle((16, 16, w - 16, 72), radius=8, fill=(0, 0, 0, 170))
+    draw.text(
+        (28, 26),
+        "Карта Зоны (фон не найден — положите zone_background.png)",
+        fill=(220, 220, 210),
+        font=title_font,
+    )
+    return bg
+
+
+def _point_xy(name: str, width: int, height: int) -> tuple[int, int] | None:
+    norm = MAP_POINTS_NORM.get(name)
+    if norm is None:
+        return None
+    return int(norm[0] * width), int(norm[1] * height)
+
+
+def _marker_outline(color: tuple[int, int, int]) -> tuple[int, int, int]:
+    return (240, 240, 240) if sum(color) < 280 else (35, 35, 35)
 
 
 def build_zone_map_image(
@@ -82,146 +126,86 @@ def build_zone_map_image(
     current_location: str | None = None,
     player_faction: str | None = None,
 ) -> bytes:
-    width, height = 960, 640
-    canvas = Image.new("RGB", (width, height), (22, 28, 26))
+    bg = _load_background()
+    width, height = bg.size
+    canvas = bg.copy()
     draw = ImageDraw.Draw(canvas)
 
-    title_font = _load_font(34)
-    body_font = _load_font(16)
-    small_font = _load_font(14)
-    tiny_font = _load_font(13)
+    title_font = _load_font(max(20, width // 28))
+    body_font = _load_font(max(16, width // 40))
+    tiny_font = _load_font(max(13, width // 52))
 
-    # Stylized "Zone" background mesh.
-    draw.rectangle((24, 24, width - 24, height - 24), outline=(70, 90, 82), width=2)
-    for x in range(80, width - 40, 80):
-        draw.line((x, 80, x, height - 50), fill=(34, 46, 42), width=1)
-    for y in range(80, height - 40, 70):
-        draw.line((48, y, width - 48, y), fill=(34, 46, 42), width=1)
+    draw.rounded_rectangle((12, 12, min(width - 12, 360), 58), radius=8, fill=(0, 0, 0, 175))
+    draw.text((24, 20), "Карта Зоны", fill=(235, 240, 230), font=title_font)
 
-    draw.text((40, 30), "Карта Зоны", fill=(230, 240, 230), font=title_font)
-    draw.text(
-        (40, 70),
-        "Текущие точки войны и контроля",
-        fill=(168, 186, 173),
-        font=small_font,
-    )
+    visible = [
+        loc
+        for loc in locations
+        if str(loc.get("name") or "") in MAP_POINTS_NORM
+    ]
+    visible.sort(key=lambda loc: MAP_POINTS_NORM[str(loc["name"])][1])
 
-    reserved_rects: list[tuple[int, int, int, int]] = []
-    map_right_limit = width - 32
-    map_top_limit = 96
-    map_bottom_limit = height - 44
-
-    visible_locations = [loc for loc in locations if str(loc.get("name") or "") in MAP_POINTS]
-    # Stable top-to-bottom layout reduces label collisions in dense clusters.
-    visible_locations.sort(key=lambda loc: MAP_POINTS[str(loc["name"])][1])
-
-    for location in visible_locations:
+    for location in visible:
         name = str(location.get("name") or "")
-        if name not in MAP_POINTS:
+        xy = _point_xy(name, width, height)
+        if xy is None:
             continue
-        x, y = MAP_POINTS[name]
+        x, y = xy
         point_type = str(location.get("point_type") or "")
         controlled_by = location.get("controlled_by")
         npc_power = int(location.get("npc_power") or 0)
+        defense_bonus = int(location.get("defense_bonus") or 0)
 
-        type_color = POINT_TYPE_COLORS.get(point_type, (210, 210, 210))
+        marker_color = LOCATION_MARKER_COLORS.get(name, (210, 210, 210))
         owner_color = FACTION_COLORS.get(str(controlled_by), (170, 170, 170))
+        type_color = POINT_TYPE_COLORS.get(point_type, (210, 210, 210))
 
-        # Outer type ring.
-        draw.ellipse((x - 15, y - 15, x + 15, y + 15), fill=(26, 31, 30), outline=type_color, width=3)
-        # Inner owner marker.
-        draw.ellipse((x - 8, y - 8, x + 8, y + 8), fill=owner_color, outline=(15, 15, 15), width=1)
-
-        label_color = (232, 232, 232)
-        if current_location and name == current_location:
-            label_color = (255, 245, 170)
-            draw.ellipse((x - 22, y - 22, x + 22, y + 22), outline=(255, 240, 120), width=2)
-        owner_text = str(controlled_by) if controlled_by else "нейтрал"
-        owner_marker = ""
-        if player_faction and controlled_by == player_faction:
-            owner_marker = " (союз)"
-        details_text = f"{point_type}; {owner_text}{owner_marker}; NPC {npc_power}"
-
-        # Keep labels readable: choose first non-overlapping candidate.
-        preferred = LABEL_PREFERRED_OFFSETS.get(name)
-        candidates: list[tuple[int, int]] = []
-        if preferred is not None:
-            candidates.append(preferred)
-        for offset in LABEL_CANDIDATE_OFFSETS:
-            if offset not in candidates:
-                candidates.append(offset)
-
-        selected: tuple[int, int, int, int, int, int] | None = None
-        for offset_x, offset_y in candidates:
-            label_x = x + offset_x
-            label_y = y + offset_y
-            name_bbox = draw.textbbox((label_x, label_y), name, font=body_font)
-            details_bbox = draw.textbbox((label_x, label_y + 20), details_text, font=tiny_font)
-            box_x1 = min(name_bbox[0], details_bbox[0]) - 6
-            box_y1 = min(name_bbox[1], details_bbox[1]) - 4
-            box_x2 = max(name_bbox[2], details_bbox[2]) + 6
-            box_y2 = max(name_bbox[3], details_bbox[3]) + 4
-            rect = (box_x1, box_y1, box_x2, box_y2)
-
-            out_of_bounds = (
-                box_x1 < 28
-                or box_x2 > map_right_limit
-                or box_y1 < map_top_limit
-                or box_y2 > map_bottom_limit
-            )
-            if out_of_bounds:
-                continue
-            if any(_rects_intersect(rect, reserved) for reserved in reserved_rects):
-                continue
-            selected = (label_x, label_y, box_x1, box_y1, box_x2, box_y2)
-            break
-
-        if selected is None:
-            # Fallback if all candidates intersect: clamp near point.
-            label_x = max(30, min(map_right_limit - 240, x + 20))
-            label_y = max(map_top_limit, min(map_bottom_limit - 46, y - 88))
-            name_bbox = draw.textbbox((label_x, label_y), name, font=body_font)
-            details_bbox = draw.textbbox((label_x, label_y + 20), details_text, font=tiny_font)
-            box_x1 = min(name_bbox[0], details_bbox[0]) - 6
-            box_y1 = min(name_bbox[1], details_bbox[1]) - 4
-            box_x2 = max(name_bbox[2], details_bbox[2]) + 6
-            box_y2 = max(name_bbox[3], details_bbox[3]) + 4
-        else:
-            label_x, label_y, box_x1, box_y1, box_x2, box_y2 = selected
-
-        # Tactical callout connector: from point to nearest label edge.
-        if x < box_x1:
-            anchor_x = box_x1
-        elif x > box_x2:
-            anchor_x = box_x2
-        else:
-            anchor_x = x
-        if y < box_y1:
-            anchor_y = box_y1
-        elif y > box_y2:
-            anchor_y = box_y2
-        else:
-            anchor_y = y
-        connector_color = (86, 108, 99)
-        draw.line((x, y, anchor_x, anchor_y), fill=connector_color, width=2)
+        r = max(12, width // 55)
+        outline = _marker_outline(marker_color)
+        draw.ellipse((x - r, y - r, x + r, y + r), fill=marker_color + (255,), outline=outline, width=3)
         draw.ellipse(
-            (anchor_x - 2, anchor_y - 2, anchor_x + 2, anchor_y + 2),
-            fill=connector_color,
-            outline=(16, 20, 19),
+            (x - r // 2, y - r // 2, x + r // 2, y + r // 2),
+            fill=owner_color + (255,),
+            outline=(15, 15, 15, 255),
             width=1,
         )
+        if current_location and name == current_location:
+            draw.ellipse((x - r - 8, y - r - 8, x + r + 8, y + r + 8), outline=(255, 240, 120, 255), width=3)
 
-        draw.rounded_rectangle(
-            (box_x1, box_y1, box_x2, box_y2),
-            radius=6,
-            fill=(18, 23, 22),
-            outline=(58, 74, 67),
+        owner_text = str(controlled_by) if controlled_by else "нейтрал"
+        owner_marker = " (союз)" if player_faction and controlled_by == player_faction else ""
+        defense_part = f"; +{defense_bonus} укр." if defense_bonus > 0 else ""
+        details_text = f"{point_type}; {owner_text}{owner_marker}; NPC {npc_power}{defense_part}"
+
+        short_name = name.replace("Армейские склады", "Арм. склады")
+        tb = draw.textbbox((0, 0), short_name, font=body_font)
+        tw, th = tb[2] - tb[0], tb[3] - tb[1]
+        lx = min(max(8, x - tw // 2), width - tw - 8)
+        ly = max(64, min(height - 120, y - r - th - 12))
+        pad = 4
+        db = draw.textbbox((lx, ly + th + 2), details_text, font=tiny_font)
+        box = (
+            min(lx, db[0]) - pad,
+            ly - pad,
+            max(lx + tw, db[2]) + pad,
+            max(ly + th, db[3]) + pad + 2,
+        )
+        draw.rounded_rectangle(box, radius=5, fill=(0, 0, 0, 190))
+        text_fill = (235, 235, 235) if name == "Свалка" else marker_color
+        draw.text((lx, ly), short_name, fill=text_fill, font=body_font)
+        draw.text((lx, ly + th + 2), details_text, fill=(200, 205, 200), font=tiny_font)
+
+        # Маленькое кольцо типа точки.
+        draw.ellipse(
+            (x + r + 2, y - r - 2, x + r + 10, y - r + 6),
+            fill=type_color + (255,),
+            outline=(20, 20, 20, 255),
             width=1,
         )
-        draw.text((label_x, label_y), name, fill=label_color, font=body_font)
-        draw.text((label_x, label_y + 20), details_text, fill=(185, 196, 190), font=tiny_font)
-        reserved_rects.append((box_x1 - 4, box_y1 - 4, box_x2 + 4, box_y2 + 4))
 
     output = BytesIO()
-    canvas.save(output, format="PNG")
-    return output.getvalue()
+    canvas.convert("RGB").save(output, format="PNG", optimize=True)
+    data = output.getvalue()
+    if not data:
+        raise RuntimeError("zone map PNG is empty")
+    return data

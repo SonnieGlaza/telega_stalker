@@ -27,7 +27,7 @@ from aiogram.types import (
     TelegramObject,
 )
 
-from app.fsm_nav import abort_fsm_if_nav, is_reply_menu_button
+from app.fsm_nav import abort_fsm_if_nav, is_reply_menu_button, nav_button
 from app.artifact_hunt import (
     abandon_artifact_hunt,
     get_hunt_session,
@@ -4774,7 +4774,7 @@ async def show_rating(message: Message) -> None:
     )
 
 
-@router.message(F.text == "🗺 Карта")
+@router.message(nav_button("🗺 Карта"))
 async def show_zone_map(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
@@ -4782,14 +4782,25 @@ async def show_zone_map(message: Message) -> None:
         return
     if await reject_if_dead(message, player):
         return
-    locations = get_storage().get_locations()
-    image_bytes = build_zone_map_image(locations, current_location=player.location, player_faction=player.faction)
-    image = BufferedInputFile(image_bytes, filename="zone_map.png")
-    await message.answer_photo(
-        photo=image,
-        caption="Карта Зоны: точки, типы и текущий контроль.",
-        reply_markup=_pda_keyboard_for(player),
-    )
+    try:
+        locations = get_storage().get_locations()
+        image_bytes = build_zone_map_image(
+            locations,
+            current_location=player.location,
+            player_faction=player.faction,
+        )
+        image = BufferedInputFile(image_bytes, filename="zone_map.png")
+        await message.answer_photo(
+            photo=image,
+            caption="Карта Зоны: точки, типы и текущий контроль.",
+            reply_markup=_pda_keyboard_for(player),
+        )
+    except Exception:
+        logger.exception("Failed to build/send zone map for user %s", message.from_user.id)
+        await message.answer(
+            "Не удалось загрузить карту. Попробуй ещё раз через минуту.",
+            reply_markup=_pda_keyboard_for(player),
+        )
 
 
 @router.message(F.text == "👥 Игроки")
@@ -5843,7 +5854,7 @@ async def coop_callback(callback: CallbackQuery, bot: Bot) -> None:
         await safe_callback_answer(callback, "Ошибка кооп-вылазки. Попробуй ещё раз или /fixme", show_alert=True)
 
 
-@router.message(F.text == "🗺 Переход")
+@router.message(nav_button("🗺 Переход"))
 async def show_travel(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
