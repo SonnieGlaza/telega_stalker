@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "NotoSans-Regular.ttf"
-ZONE_BACKGROUND_PATH = PROJECT_ROOT / "assets" / "zone_map" / "zone_background.png"
+ZONE_BACKGROUND_PATH = PROJECT_ROOT / "assets" / "zone_map" / "zone_background.jpg"
 
 # Нормализованные координаты (x%, y%) на спутниковой карте Зоны (Chernobyl Exclusion Zone).
 MAP_POINTS_NORM: dict[str, tuple[float, float]] = {
@@ -100,7 +100,7 @@ def _load_background() -> Image.Image:
     draw.rounded_rectangle((16, 16, w - 16, 72), radius=8, fill=(0, 0, 0, 170))
     draw.text(
         (28, 26),
-        "Карта Зоны (фон не найден — положите zone_background.png)",
+        "Карта Зоны (фон не найден — положите zone_background.jpg)",
         fill=(220, 220, 210),
         font=title_font,
     )

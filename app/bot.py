@@ -4790,7 +4790,7 @@ async def show_zone_map(message: Message) -> None:
             player_faction=player.faction,
             show_markers=False,
         )
-        image = BufferedInputFile(image_bytes, filename="zone_map.png")
+        image = BufferedInputFile(image_bytes, filename="zone_map.jpg")
         caption = "Карта Зоны."
         keyboard = _pda_keyboard_for(player)
         if len(image_bytes) > TELEGRAM_PHOTO_MAX_BYTES:
