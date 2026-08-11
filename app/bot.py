@@ -227,6 +227,8 @@ from app.game_logic import (
     process_zone_event_cycle,
     build_players_root_text,
     build_players_faction_page_text,
+    trader_screen_text,
+    touch_player_activity,
     build_faction_broadcast_text,
     list_faction_broadcast_targets,
     deposit_to_faction_warehouse,
@@ -1773,10 +1775,16 @@ async def process_faction(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 def ensure_character(message: Message) -> Character | None:
-    player = get_storage().get_character(message.from_user.id)
+    storage = get_storage()
+    player = storage.get_character(message.from_user.id)
     if player is None:
         return None
+    touch_player_activity(storage, message.from_user.id)
     return player
+
+
+def _trader_text(telegram_id: int, body: str) -> str:
+    return trader_screen_text(get_storage(), telegram_id, body)
 
 
 async def reject_if_busy(
@@ -2045,6 +2053,23 @@ async def show_death_screen(
             )
 
 
+class PlayerActivityMiddleware(BaseMiddleware):
+    """Отмечает активность игрока для индикатора «в сети» в списке игроков."""
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        user = getattr(event, "from_user", None)
+        if user is not None:
+            storage = get_storage()
+            if storage.get_character(user.id, refresh_energy=False) is not None:
+                touch_player_activity(storage, user.id)
+        return await handler(event, data)
+
+
 class DeadPlayerMenuMiddleware(BaseMiddleware):
     """Любое сообщение при HP=0 — экран смерти (кроме /respawn и /fixme)."""
 
@@ -2214,7 +2239,7 @@ async def show_inventory(message: Message) -> None:
                 storage=get_storage(),
             ),
         ),
-        reply_markup=inventory_equipment_keyboard(),
+        reply_markup=inventory_equipment_keyboard(money=player.money),
     )
 
 
@@ -2234,7 +2259,7 @@ async def open_inventory_callback(callback: CallbackQuery) -> None:
             rating_points=int(get_storage().get_player_stats(player.telegram_id).get("rating_points", 0)),
             storage=get_storage(),
         ),
-        inventory_equipment_keyboard(),
+        inventory_equipment_keyboard(money=player.money),
     )
 
 
@@ -2484,7 +2509,7 @@ async def show_trader(message: Message) -> None:
     if await reject_if_busy(message, player.telegram_id):
         return
     await message.answer(
-        "Торговец на связи. Выбери раздел:",
+        _trader_text(message.from_user.id, "Торговец на связи. Выбери раздел:"),
         reply_markup=trader_keyboard(),
     )
 
@@ -2493,7 +2518,7 @@ async def show_trader(message: Message) -> None:
 async def show_buy_menu(callback: CallbackQuery) -> None:
     await edit_menu_message(
         callback,
-        "Покупка: выбери категорию.",
+        _trader_text(callback.from_user.id, "Покупка: выбери категорию."),
         trader_buy_categories_keyboard(),
     )
 
@@ -2502,14 +2527,14 @@ async def show_buy_menu(callback: CallbackQuery) -> None:
 async def show_sell_menu(callback: CallbackQuery) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     categories = trader_sell_categories_with_stock(player) if player is not None else []
-    text = (
+    body = (
         "Продажа: выбери категорию.\nПоказаны только вещи, которые у тебя есть."
         if categories
         else "Продажа: нечего продавать торговцу."
     )
     await edit_menu_message(
         callback,
-        text,
+        _trader_text(callback.from_user.id, body),
         trader_sell_categories_keyboard(categories),
     )
 
@@ -2518,7 +2543,7 @@ async def show_sell_menu(callback: CallbackQuery) -> None:
 async def show_trade_root(callback: CallbackQuery) -> None:
     await edit_menu_message(
         callback,
-        "Торговец на связи. Выбери раздел:",
+        _trader_text(callback.from_user.id, "Торговец на связи. Выбери раздел:"),
         trader_keyboard(),
     )
 
@@ -2558,7 +2583,10 @@ async def show_buy_consumables(callback: CallbackQuery) -> None:
     page = _trade_category_page(callback.data, prefix="trade:buy:consumables")
     await edit_menu_message(
         callback,
-        "Покупка расходников:\nВыбери товар, затем количество (×1 / ×5 / ×10 / ×25).",
+        _trader_text(
+            callback.from_user.id,
+            "Покупка расходников:\nВыбери товар, затем количество (×1 / ×5 / ×10 / ×25).",
+        ),
         trader_buy_consumables_keyboard(page=page),
     )
 
@@ -2568,11 +2596,14 @@ async def show_buy_gear(callback: CallbackQuery) -> None:
     page = _trade_category_page(callback.data, prefix="trade:buy:gear")
     await edit_menu_message(
         callback,
-        "Прочее:\n"
-        "• Оружие и броня — в своих разделах.\n"
-        "• После покупки предмет попадает в инвентарь.\n"
-        "• Экипировка — во вкладке «🎒 Инвентарь».\n"
-        "• Ремонт — в разделе «🔧 Ремонт».",
+        _trader_text(
+            callback.from_user.id,
+            "Прочее:\n"
+            "• Оружие и броня — в своих разделах.\n"
+            "• После покупки предмет попадает в инвентарь.\n"
+            "• Экипировка — во вкладке «🎒 Инвентарь».\n"
+            "• Ремонт — в разделе «🔧 Ремонт».",
+        ),
         trader_buy_gear_keyboard(page=page),
     )
 
@@ -2582,8 +2613,10 @@ async def show_buy_armor(callback: CallbackQuery) -> None:
     page = _trade_category_page(callback.data, prefix="trade:buy:armor")
     await edit_menu_message(
         callback,
-        "Покупка брони и костюмов.\n"
-        "После покупки предмет добавляется в инвентарь.",
+        _trader_text(
+            callback.from_user.id,
+            "Покупка брони и костюмов.\nПосле покупки предмет добавляется в инвентарь.",
+        ),
         trader_buy_armor_keyboard(page=page),
     )
 
@@ -2593,8 +2626,10 @@ async def show_buy_weapons(callback: CallbackQuery) -> None:
     page = _trade_category_page(callback.data, prefix="trade:buy:weapons")
     await edit_menu_message(
         callback,
-        "Покупка оружия.\n"
-        "После покупки предмет добавляется в инвентарь.",
+        _trader_text(
+            callback.from_user.id,
+            "Покупка оружия.\nПосле покупки предмет добавляется в инвентарь.",
+        ),
         trader_buy_weapons_keyboard(page=page),
     )
 
@@ -2603,12 +2638,15 @@ async def show_buy_weapons(callback: CallbackQuery) -> None:
 async def show_buy_repair(callback: CallbackQuery) -> None:
     await edit_menu_message(
         callback,
-        "Ремонт снаряжения:\n"
-        "• Оружие и броня — по текущей прочности.\n"
-        "• Улучшение брони — предмет в инвентарь (5000 RU, +1 защита).\n"
-        "  Установи/сними в «Экипировка» на любую броню.\n"
-        "• Грузовик — восстановление прочности кузова.\n"
-        "• Нива — восстановление прочности (дешевле грузовика).",
+        _trader_text(
+            callback.from_user.id,
+            "Ремонт снаряжения:\n"
+            "• Оружие и броня — по текущей прочности.\n"
+            "• Улучшение брони — предмет в инвентарь (5000 RU, +1 защита).\n"
+            "  Установи/сними в «Экипировка» на любую броню.\n"
+            "• Грузовик — восстановление прочности кузова.\n"
+            "• Нива — восстановление прочности (дешевле грузовика).",
+        ),
         trader_buy_repair_keyboard(),
     )
 
@@ -2619,7 +2657,7 @@ async def show_sell_consumables(callback: CallbackQuery) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     await edit_menu_message(
         callback,
-        "Продажа расходников (только то, что есть):",
+        _trader_text(callback.from_user.id, "Продажа расходников (только то, что есть):"),
         _sell_category_keyboard(player, "consumables", page),
     )
 
@@ -2630,7 +2668,7 @@ async def show_sell_trophies(callback: CallbackQuery) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     await edit_menu_message(
         callback,
-        "Продажа трофеев (только то, что есть):",
+        _trader_text(callback.from_user.id, "Продажа трофеев (только то, что есть):"),
         _sell_category_keyboard(player, "trophies", page),
     )
 
@@ -2644,7 +2682,7 @@ async def show_sell_gear(callback: CallbackQuery) -> None:
         player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
         await edit_menu_message(
             callback,
-            "Продажа брони и костюмов (только то, что есть):",
+            _trader_text(callback.from_user.id, "Продажа брони и костюмов (только то, что есть):"),
             _sell_category_keyboard(player, "armor", page),
         )
         return
@@ -2652,7 +2690,7 @@ async def show_sell_gear(callback: CallbackQuery) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     await edit_menu_message(
         callback,
-        "Продажа снаряжения (только то, что есть):",
+        _trader_text(callback.from_user.id, "Продажа снаряжения (только то, что есть):"),
         _sell_category_keyboard(player, "gear", page),
     )
 
@@ -2663,7 +2701,7 @@ async def show_sell_armor_alias_callback(callback: CallbackQuery) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     await edit_menu_message(
         callback,
-        "Продажа брони и костюмов (только то, что есть):",
+        _trader_text(callback.from_user.id, "Продажа брони и костюмов (только то, что есть):"),
         _sell_category_keyboard(player, "armor", page),
     )
 
@@ -2674,7 +2712,7 @@ async def show_sell_weapons(callback: CallbackQuery) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     await edit_menu_message(
         callback,
-        "Продажа оружия (только то, что есть):",
+        _trader_text(callback.from_user.id, "Продажа оружия (только то, что есть):"),
         _sell_category_keyboard(player, "weapons", page),
     )
 
@@ -2690,7 +2728,7 @@ async def show_buy_consumable_qty(callback: CallbackQuery) -> None:
     unit_price = int(item["buy_price"])
     await edit_menu_message(
         callback,
-        f"Покупка: {title}\nЦена за 1 шт.: {unit_price} RU\nВыбери количество:",
+        _trader_text(callback.from_user.id, f"Покупка: {title}\nЦена за 1 шт.: {unit_price} RU\nВыбери количество:"),
         trader_buy_consumable_qty_keyboard(item_key, unit_price=unit_price, title=title),
     )
 
@@ -3068,6 +3106,8 @@ def _quests_menu_payload(storage, player):
 
     contract_buttons: list[tuple[str, str]] = []
     show_work = False
+    show_go_work = False
+    work_location = ""
     show_go_home = False
     show_cancel = bool(active)
 
@@ -3076,6 +3116,9 @@ def _quests_menu_payload(storage, player):
         template = QUEST_CONTRACTS.get(str(active.get("template_key", "")))
         if stage == "work" and template:
             show_work = player.location == template.work_location and not traveling
+            if not show_work and not traveling:
+                show_go_work = True
+                work_location = template.work_location
         if stage == "return":
             show_go_home = player.location != home and not traveling
     elif at_home:
@@ -3104,6 +3147,8 @@ def _quests_menu_payload(storage, player):
     keyboard = quests_keyboard(
         contract_buttons=contract_buttons,
         show_work=show_work,
+        show_go_work=show_go_work,
+        work_location=work_location,
         show_go_home=show_go_home,
         show_cancel=show_cancel,
     )
@@ -3113,6 +3158,7 @@ def _quests_menu_payload(storage, player):
         "Поле 6×6, лимит ходов ~28+ (зависит от локации).\n"
         "Угрозы: легко — аномалии; средне — аномалии+мутанты; "
         "опасно и невозможно — аномалии+мутанты+НПС (сложнее = больше угроз и награда).\n"
+        "НПС с тир-2 стволами могут стрелять на 2 клетки после твоего хода.\n"
         "Мутанты и НПС с шансом 50% сдвигаются на соседнюю клетку.\n"
         "🚚 Контрабанда — отдельная кнопка ниже.\n\n"
     )
@@ -4496,6 +4542,50 @@ async def smuggle_mission_callback(callback: CallbackQuery) -> None:
     except Exception:
         logger.exception("Smuggle mission callback failed for %s action=%s", telegram_id, action)
         await safe_callback_answer(callback, "Ошибка рейса. Попробуй ещё раз или /fixme", show_alert=True)
+
+
+@router.callback_query(F.data == "contract:travel_work")
+async def contract_travel_work_callback(callback: CallbackQuery, bot: Bot) -> None:
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    active = storage.get_active_contract(telegram_id)
+    if not active or str(active.get("stage", "")) != "work":
+        await callback.answer("Сейчас некуда ехать по контракту.", show_alert=True)
+        return
+    template = QUEST_CONTRACTS.get(str(active.get("template_key", "")))
+    if template is None:
+        await callback.answer("Контракт не найден.", show_alert=True)
+        return
+    dest = template.work_location
+    if player.location == dest:
+        await callback.answer("Ты уже на точке задания.", show_alert=True)
+        return
+    bound = storage.get_bound_transport(telegram_id)
+    preferred_mode: str | None = None
+    if bound in ("niva", "truck"):
+        preferred_mode = bound
+    result = travel_to(storage, telegram_id, dest, transport_mode=preferred_mode)
+    if not result.ok:
+        await reply_action_result(callback, result.text)
+        return
+    await safe_callback_answer(callback, "В путь!")
+    if callback.message is not None:
+        await callback.message.answer(action_result_text(telegram_id, result.text))
+    else:
+        await bot.send_message(telegram_id, action_result_text(telegram_id, result.text))
+    clear_travel_eta_message_id(storage, telegram_id)
+    await publish_travel_live_eta(bot, telegram_id)
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is not None:
+        text, keyboard = _quests_menu_payload(storage, player)
+        try:
+            await edit_menu_message(callback, text, keyboard, answer_callback=False)
+        except TelegramBadRequest:
+            pass
 
 
 @router.callback_query(F.data == "contract:go_home")
@@ -7054,6 +7144,24 @@ async def faction_bots_upgrade_callback(callback: CallbackQuery) -> None:
     )
 
 
+@router.callback_query(F.data == "faction:bots:count")
+async def faction_bots_count_callback(callback: CallbackQuery) -> None:
+    from app.faction_bots import upgrade_faction_bot_count
+
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Персонаж не найден.", show_alert=True)
+        return
+    result = upgrade_faction_bot_count(storage, callback.from_user.id)
+    overview = build_faction_group_overview(storage, player.telegram_id)
+    await edit_menu_message(
+        callback,
+        f"{result.text}\n\n{overview}",
+        _faction_group_keyboard_for(player.telegram_id),
+    )
+
+
 @router.callback_query(F.data == "eco:menu:root")
 async def economy_root_callback(callback: CallbackQuery) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
@@ -7824,6 +7932,8 @@ async def run_bot() -> None:
     travel_eta_task = asyncio.create_task(periodic_travel_live_eta())
     tactical_task = asyncio.create_task(periodic_tactical_turns())
     dp = Dispatcher()
+    dp.callback_query.outer_middleware(PlayerActivityMiddleware())
+    dp.message.outer_middleware(PlayerActivityMiddleware())
     dp.callback_query.outer_middleware(DeadPlayerCallbackMiddleware())
     dp.message.outer_middleware(DeadPlayerMenuMiddleware())
     dp.include_router(router)

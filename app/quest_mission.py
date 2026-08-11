@@ -36,7 +36,8 @@ from app.game_logic import (
     try_auto_turn_in_contract,
     use_medkit_item,
 )
-from app.tactical_combat import ray_cast_first_hit, weapon_shoot_range
+from app.tactical_combat import random_hostile_shots, ray_cast_first_hit, weapon_shoot_range
+from app.faction_bots import BOT_T2_WEAPONS
 from app.mutant_assets import (
     MISSION_MUTANT_GRID_DIAMETER,
     MUTANT_SPRITE_KEYS,
@@ -130,6 +131,7 @@ class QuestMissionSession:
     enemy_kinds: list[str] = field(default_factory=list)  # blind_dog, tushkano, …
     npcs: list[tuple[int, int]] = field(default_factory=list)  # мародёры / НПС
     npc_kinds: list[str] = field(default_factory=list)  # maloy, …
+    npc_weapons: list[str] = field(default_factory=list)
     moves: int = 0
     max_moves: int = MAX_MOVES
     grid: int = GRID_SIZE
@@ -154,6 +156,7 @@ class QuestMissionSession:
             "enemy_kinds": list(self.enemy_kinds),
             "npcs": [list(p) for p in self.npcs],
             "npc_kinds": list(self.npc_kinds),
+            "npc_weapons": list(self.npc_weapons),
             "moves": self.moves,
             "max_moves": self.max_moves,
             "grid": self.grid,
@@ -180,6 +183,7 @@ class QuestMissionSession:
             enemy_kinds=_parse_enemy_kinds(raw.get("enemies") or [], raw.get("enemy_kinds")),
             npcs=[(int(p[0]), int(p[1])) for p in (raw.get("npcs") or [])],
             npc_kinds=_parse_npc_kinds(raw.get("npcs") or [], raw.get("npc_kinds")),
+            npc_weapons=_parse_npc_weapons(raw.get("npcs") or [], raw.get("npc_weapons")),
             moves=int(raw.get("moves") or 0),
             max_moves=int(raw.get("max_moves") or MAX_MOVES),
             grid=int(raw.get("grid") or GRID_SIZE),
@@ -203,6 +207,15 @@ def _parse_enemy_kinds(enemies_raw: list, kinds_raw: Any) -> list[str]:
             )
         return parsed
     return [MUTANT_SPRITE_KEYS[i % len(MUTANT_SPRITE_KEYS)] for i in range(n)]
+
+
+def _parse_npc_weapons(npcs_raw: list, weapons_raw: Any) -> list[str]:
+    n = len(npcs_raw)
+    if not n:
+        return []
+    if isinstance(weapons_raw, list) and len(weapons_raw) == n:
+        return [str(w) for w in weapons_raw]
+    return [random.choice(BOT_T2_WEAPONS) for _ in range(n)]
 
 
 def _parse_npc_kinds(npcs_raw: list, kinds_raw: Any) -> list[str]:
@@ -439,11 +452,15 @@ def _spawn_npcs(
     forbidden: set[tuple[int, int]],
     npcs: list[tuple[int, int]],
     kinds: list[str],
+    weapons: list[str],
+    *,
+    marauder: bool = False,
 ) -> None:
     for _ in range(max(0, n)):
         cell = _free_cell(grid, forbidden)
         npcs.append(cell)
-        kinds.append(pick_npc_kind())
+        kinds.append(pick_npc_kind(marauder=marauder))
+        weapons.append(random.choice(BOT_T2_WEAPONS))
         forbidden.add(cell)
 
 
@@ -461,6 +478,7 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
     enemy_kinds: list[str] = []
     npcs: list[tuple[int, int]] = []
     npc_kinds: list[str] = []
+    npc_weapons: list[str] = []
 
     # Цели задания — по типу контракта.
     if kind in {"clear_mutant", "clear_marauder"}:
@@ -488,7 +506,15 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
         _spawn_mutants(mut_n, grid, forbidden, enemies, enemy_kinds)
     if want_npc:
         npc_n = base_n + (1 if kind == "clear_marauder" else 0)
-        _spawn_npcs(npc_n, grid, forbidden, npcs, npc_kinds)
+        _spawn_npcs(
+            npc_n,
+            grid,
+            forbidden,
+            npcs,
+            npc_kinds,
+            npc_weapons,
+            marauder=kind == "clear_marauder" or want_npc,
+        )
 
     return QuestMissionSession(
         contract_key=template.key,
@@ -504,6 +530,7 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
         enemy_kinds=enemy_kinds,
         npcs=npcs,
         npc_kinds=npc_kinds,
+        npc_weapons=npc_weapons,
         max_moves=MAX_MOVES + danger,
         resources_spent=False,
         started_at=_utc_now().isoformat(),
@@ -566,6 +593,33 @@ def _move_hostile_units(
             moved += 1
     out_kinds = result_kinds if kinds is not None else None
     return result, out_kinds, moved
+
+
+def _maybe_npc_shots(
+    storage: Storage,
+    telegram_id: int,
+    session: QuestMissionSession,
+    player: Character,
+) -> tuple[list[str], int]:
+    if not session.npcs:
+        return [], 0
+    weapons = session.npc_weapons
+    if len(weapons) != len(session.npcs):
+        weapons = [random.choice(BOT_T2_WEAPONS) for _ in session.npcs]
+    hp_map = {str(telegram_id): player.health}
+    notes = random_hostile_shots(
+        list(session.npcs),
+        weapons,
+        grid=session.grid,
+        player_positions={telegram_id: session.player},
+        player_hp=hp_map,
+        player_characters={telegram_id: player},
+        cover=set(),
+        base_cover=set(),
+        damage_fn=lambda weapon: max(5, weapon_shoot_range(weapon) * 3 + random.randint(0, 4)),
+    )
+    new_hp = int(hp_map.get(str(telegram_id), player.health))
+    return notes, max(0, player.health - new_hp)
 
 
 def _maybe_move_hostiles(session: QuestMissionSession) -> list[str]:
@@ -912,6 +966,9 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     expected_seq = session.turn_seq
     notes: list[str] = []
     notes.extend(_maybe_move_hostiles(session))
+    shot_notes, shot_damage = _maybe_npc_shots(storage, telegram_id, session, player)
+    notes.extend(shot_notes)
+    pending_damage = shot_damage
     from app.game_logic import MEDKIT_EFFECTS
 
     effect = MEDKIT_EFFECTS.get(chosen)
@@ -939,7 +996,6 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return result
-    pending_damage = 0
     death_result: ActionResult | None = None
     for label, unit_attr, kinds_attr, is_npc in (
         ("мутантом", "enemies", "enemy_kinds", False),
@@ -1001,6 +1057,8 @@ def _remove_npc_at(session: QuestMissionSession, pos: tuple[int, int]) -> str:
     kind = ""
     if idx < len(session.npc_kinds):
         kind = session.npc_kinds.pop(idx)
+    if idx < len(session.npc_weapons):
+        session.npc_weapons.pop(idx)
     from app.death_flavor import killer_label_for_kind
 
     return killer_label_for_kind(kind, npc=True) if kind else "НПС"
@@ -1035,6 +1093,9 @@ def _complete_quest_turn_after_action(
             death_result = dead
 
     notes.extend(_maybe_move_hostiles(session))
+    shot_notes, shot_damage = _maybe_npc_shots(storage, telegram_id, session, player)
+    notes.extend(shot_notes)
+    pending_damage += shot_damage
     _fight_on_cell("мутанта", "enemies", kinds_attr="enemy_kinds")
     _fight_on_cell("НПС", "npcs", kinds_attr="npc_kinds", npc=True)
 
@@ -1419,7 +1480,7 @@ def render_mission_frame(
     for i, (nx_, ny_) in enumerate(session.npcs):
         cx = margin + nx_ * cell + cell // 2
         cy = margin + ny_ * cell + cell // 2
-        sprite = npc_sprite_image("maloy")
+        sprite = npc_sprite_image(session.npc_kinds[i] if i < len(session.npc_kinds) else "maloy")
         if sprite is not None:
             _paste_circle(
                 canvas,

@@ -12,7 +12,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
-from app.faction_bots import FACTION_BOT_DEFAULT_COUNT, bot_armor_for_tier, get_faction_bots, pick_bot_weapon
+from app.faction_bots import FACTION_BOT_DEFAULT_COUNT, FACTION_BOT_MAX_COUNT, bot_armor_for_tier, get_faction_bots, pick_bot_weapon
 from app.game_logic import (
     ARMOR_RATING_BY_NAME,
     ActionResult,
@@ -29,6 +29,7 @@ from app.game_logic import (
     _steal_faction_warehouse,
     apply_incoming_damage,
     effective_max_health,
+    faction_home_base,
     h,
     pick_weighted_raid_artifact_key,
 )
@@ -374,10 +375,16 @@ def _spawn_hostiles(
     *,
     bot_count: int = 0,
     bot_tier: int = 1,
+    bots_only: bool = False,
 ) -> None:
-    total = _hostile_count()
-    bots = min(bot_count, total)
-    mutants = total - bots
+    if bots_only:
+        total = min(FACTION_BOT_MAX_COUNT, max(1, bot_count))
+        bots = total
+        mutants = 0
+    else:
+        total = _hostile_count()
+        bots = min(bot_count, total)
+        mutants = total - bots
     forbidden: set[tuple[int, int]] = {session.control_point}
     if session.loot_zone:
         forbidden.add(session.loot_zone)
@@ -479,8 +486,19 @@ def _build_depot_map_with_storage(session: RaidGridSession, storage: Storage, de
         get_faction_bots(storage, session.target_faction).get("count", 3)
     )
     bot_tier = int(get_faction_bots(storage, session.target_faction or "").get("tier", 1)) if session.target_faction else 1
+    defense_bonus = 0
+    if session.target_faction:
+        home = faction_home_base(session.target_faction)
+        home_loc = storage.get_location(home)
+        if home_loc is not None:
+            defense_bonus = max(0, int(home_loc.get("defense_bonus") or 0))
     session.raid_bot_tier = bot_tier
-    _spawn_hostiles(session, bot_count=bot_count, bot_tier=bot_tier)
+    _spawn_hostiles(
+        session,
+        bot_count=bot_count + defense_bonus,
+        bot_tier=bot_tier,
+        bots_only=True,
+    )
 
 
 def _occupied(session: RaidGridSession, *, exclude: int | None = None) -> set[tuple[int, int]]:

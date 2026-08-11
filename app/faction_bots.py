@@ -11,6 +11,7 @@ from app.storage import Storage
 
 FACTION_BOTS_META_PREFIX = "faction_bots:"
 FACTION_BOT_UPGRADE_COST = 50_000
+FACTION_BOT_COUNT_UPGRADE_COST = 25_000
 FACTION_BOT_DEFAULT_COUNT = 3
 FACTION_BOT_MAX_COUNT = 5
 
@@ -72,6 +73,11 @@ def build_faction_bots_overview(storage: Storage, faction: str) -> str:
         )
     else:
         lines.append("Боты уже на максимальном тире (Т2).")
+    if count < FACTION_BOT_MAX_COUNT:
+        lines.append(
+            f"Набор +1 бот (макс. {FACTION_BOT_MAX_COUNT}): "
+            f"{FACTION_BOT_COUNT_UPGRADE_COST:,} RU из казны."
+        )
     return "\n".join(lines)
 
 
@@ -104,4 +110,36 @@ def upgrade_faction_bots(storage: Storage, telegram_id: int) -> ActionResult:
         f"🤖 Боты «{player.faction}» улучшены до Т2!\n"
         f"Снаряжение: {BOT_T2_ARMOR}, оружие — {', '.join(BOT_T2_WEAPONS)}.\n"
         f"Списано из казны: {FACTION_BOT_UPGRADE_COST:,} RU.",
+    )
+
+
+def upgrade_faction_bot_count(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if not player.faction:
+        return ActionResult(False, "Сначала выбери группировку.")
+    leader_id = storage.get_faction_leader_id(player.faction)
+    if leader_id is None or int(leader_id) != telegram_id:
+        return ActionResult(False, "Набирать ботов может только лидер группировки.")
+
+    bots = get_faction_bots(storage, player.faction)
+    count = int(bots["count"])
+    if count >= FACTION_BOT_MAX_COUNT:
+        return ActionResult(False, f"Уже максимум ботов ({FACTION_BOT_MAX_COUNT}).")
+
+    treasury = storage.get_faction_treasury(player.faction)
+    if treasury < FACTION_BOT_COUNT_UPGRADE_COST:
+        return ActionResult(
+            False,
+            f"В казне недостаточно средств. Нужно {FACTION_BOT_COUNT_UPGRADE_COST:,} RU, сейчас {treasury:,}.",
+        )
+
+    storage.change_faction_treasury(player.faction, -FACTION_BOT_COUNT_UPGRADE_COST)
+    bots["count"] = count + 1
+    storage.set_meta(_meta_key(player.faction), json.dumps(bots, ensure_ascii=False))
+    return ActionResult(
+        True,
+        f"🤖 На базе «{player.faction}» теперь {bots['count']} оборонительных ботов "
+        f"(−{FACTION_BOT_COUNT_UPGRADE_COST:,} RU из казны).",
     )

@@ -7706,6 +7706,46 @@ def group_players_by_faction(storage: Storage) -> list[tuple[str, str, list[dict
     return result
 
 
+PLAYER_LAST_ACTIVE_PREFIX = "player_last_active:"
+PLAYER_ONLINE_WINDOW_SEC = 15 * 60
+
+
+def _player_last_active_key(telegram_id: int) -> str:
+    return f"{PLAYER_LAST_ACTIVE_PREFIX}{int(telegram_id)}"
+
+
+def touch_player_activity(storage: Storage, telegram_id: int) -> None:
+    from datetime import datetime, timezone
+
+    storage.set_meta(_player_last_active_key(telegram_id), datetime.now(timezone.utc).isoformat())
+
+
+def is_player_online(storage: Storage, telegram_id: int) -> bool:
+    from datetime import datetime, timezone
+
+    raw = storage.get_meta(_player_last_active_key(telegram_id))
+    if not raw:
+        return False
+    try:
+        seen = datetime.fromisoformat(raw)
+        if seen.tzinfo is None:
+            seen = seen.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - seen).total_seconds()
+        return age <= PLAYER_ONLINE_WINDOW_SEC
+    except (TypeError, ValueError):
+        return False
+
+
+def trader_balance_line(money: int) -> str:
+    return f"💰 Твой баланс: {money:,} RU"
+
+
+def trader_screen_text(storage: Storage, telegram_id: int, body: str) -> str:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    money = int(player.money) if player is not None else 0
+    return f"{trader_balance_line(money)}\n\n{body}"
+
+
 def build_players_root_text(storage: Storage) -> tuple[str, list[tuple[str, str, int]]]:
     groups = group_players_by_faction(storage)
     total = sum(len(players) for _, _, players in groups)
@@ -7747,14 +7787,16 @@ def build_players_faction_page_text(
     lines = [
         f"👥 {title}",
         f"Страница {safe_page + 1}/{total_pages} • игроков: {total}",
-        "Нажми «⚔️ Вызвать на дуэль» под списком или /дуэль [telegram_id].",
+        "🟢 — в сети (активность за 15 мин). Нажми «⚔️ Вызвать на дуэль» или /дуэль [telegram_id].",
         "",
     ]
     for row in chunk:
-        member = storage.get_character(int(row["telegram_id"]), refresh_energy=False)
+        tid = int(row["telegram_id"])
+        member = storage.get_character(tid, refresh_energy=False)
         rank = character_rank_title(storage, member) if member else None
         rank_part = f" [{rank}]" if rank else ""
-        lines.append(f"• {row['nickname']}{rank_part} — {row['telegram_id']}")
+        online = "🟢" if is_player_online(storage, tid) else "⚫"
+        lines.append(f"• {online} {row['nickname']}{rank_part} — {tid}")
     return ("\n".join(lines), faction_key, safe_page, total_pages, chunk)
 
 

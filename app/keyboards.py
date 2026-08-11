@@ -74,12 +74,19 @@ def quests_keyboard(
     *,
     contract_buttons: list[tuple[str, str]] | None = None,
     show_work: bool = False,
+    show_go_work: bool = False,
+    work_location: str = "",
     show_go_home: bool = False,
     show_cancel: bool = False,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if show_work:
         rows.append([InlineKeyboardButton(text="⚙️ Выполнить вылазку", callback_data="contract:work")])
+    if show_go_work and work_location:
+        short = work_location if len(work_location) <= 22 else f"{work_location[:20]}…"
+        rows.append(
+            [InlineKeyboardButton(text=f"🗺 Ехать: {short}", callback_data="contract:travel_work")]
+        )
     if show_go_home:
         rows.append([InlineKeyboardButton(text="🏠 На базу", callback_data="contract:go_home")])
     for label, callback_data in contract_buttons or []:
@@ -289,16 +296,19 @@ def trader_buy_repair_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def inventory_equipment_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🧰 Расходники", callback_data="inventory:consumables")],
-            [InlineKeyboardButton(text="🗄 Схрон", callback_data="stash:menu")],
-            [InlineKeyboardButton(text="📦 Открыть тайник", callback_data="use:stash_case")],
-            [InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")],
-            [InlineKeyboardButton(text="⚙️ Экипировка", callback_data="equip:root")],
-        ]
-    )
+def inventory_equipment_keyboard(*, money: int | None = None) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="🧰 Расходники", callback_data="inventory:consumables")],
+        [InlineKeyboardButton(text="🗄 Схрон", callback_data="stash:menu")],
+        [
+            InlineKeyboardButton(text="🛒 Купить тайник (2000)", callback_data="buy:stash_case"),
+            InlineKeyboardButton(text="❌", callback_data="inventory:open"),
+        ],
+        [InlineKeyboardButton(text="📦 Открыть тайник", callback_data="use:stash_case")],
+        [InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")],
+        [InlineKeyboardButton(text="⚙️ Экипировка", callback_data="equip:root")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def artifact_hunt_keyboard() -> InlineKeyboardMarkup:
@@ -906,6 +916,14 @@ def faction_group_keyboard(
                 InlineKeyboardButton(
                     text="🤖 Улучшить ботов до 2-го тира (50000 RU)",
                     callback_data="faction:bots:upgrade",
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🤖 +1 оборонительный бот (25000 RU)",
+                    callback_data="faction:bots:count",
                 )
             ]
         )
