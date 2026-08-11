@@ -67,7 +67,7 @@ POINT_TYPE_COLORS = {
 }
 
 TELEGRAM_MAX_DIMENSION = 2048
-FALLBACK_SIZE = (900, 1263)
+FALLBACK_SIZE = (758, 2048)
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -125,83 +125,79 @@ def build_zone_map_image(
     locations: list[dict[str, str | int | None]],
     current_location: str | None = None,
     player_faction: str | None = None,
+    *,
+    show_markers: bool = False,
 ) -> bytes:
-    bg = _load_background()
-    width, height = bg.size
-    canvas = bg.copy()
-    draw = ImageDraw.Draw(canvas)
+    canvas = _load_background()
 
-    title_font = _load_font(max(20, width // 28))
-    body_font = _load_font(max(16, width // 40))
-    tiny_font = _load_font(max(13, width // 52))
+    if show_markers:
+        width, height = canvas.size
+        draw = ImageDraw.Draw(canvas)
+        body_font = _load_font(max(16, width // 40))
+        tiny_font = _load_font(max(13, width // 52))
 
-    draw.rounded_rectangle((12, 12, min(width - 12, 360), 58), radius=8, fill=(0, 0, 0, 175))
-    draw.text((24, 20), "Карта Зоны", fill=(235, 240, 230), font=title_font)
+        visible = [
+            loc
+            for loc in locations
+            if str(loc.get("name") or "") in MAP_POINTS_NORM
+        ]
+        visible.sort(key=lambda loc: MAP_POINTS_NORM[str(loc["name"])][1])
 
-    visible = [
-        loc
-        for loc in locations
-        if str(loc.get("name") or "") in MAP_POINTS_NORM
-    ]
-    visible.sort(key=lambda loc: MAP_POINTS_NORM[str(loc["name"])][1])
+        for location in visible:
+            name = str(location.get("name") or "")
+            xy = _point_xy(name, width, height)
+            if xy is None:
+                continue
+            x, y = xy
+            point_type = str(location.get("point_type") or "")
+            controlled_by = location.get("controlled_by")
+            npc_power = int(location.get("npc_power") or 0)
+            defense_bonus = int(location.get("defense_bonus") or 0)
 
-    for location in visible:
-        name = str(location.get("name") or "")
-        xy = _point_xy(name, width, height)
-        if xy is None:
-            continue
-        x, y = xy
-        point_type = str(location.get("point_type") or "")
-        controlled_by = location.get("controlled_by")
-        npc_power = int(location.get("npc_power") or 0)
-        defense_bonus = int(location.get("defense_bonus") or 0)
+            marker_color = LOCATION_MARKER_COLORS.get(name, (210, 210, 210))
+            owner_color = FACTION_COLORS.get(str(controlled_by), (170, 170, 170))
+            type_color = POINT_TYPE_COLORS.get(point_type, (210, 210, 210))
 
-        marker_color = LOCATION_MARKER_COLORS.get(name, (210, 210, 210))
-        owner_color = FACTION_COLORS.get(str(controlled_by), (170, 170, 170))
-        type_color = POINT_TYPE_COLORS.get(point_type, (210, 210, 210))
+            r = max(12, width // 55)
+            outline = _marker_outline(marker_color)
+            draw.ellipse((x - r, y - r, x + r, y + r), fill=marker_color + (255,), outline=outline, width=3)
+            draw.ellipse(
+                (x - r // 2, y - r // 2, x + r // 2, y + r // 2),
+                fill=owner_color + (255,),
+                outline=(15, 15, 15, 255),
+                width=1,
+            )
+            if current_location and name == current_location:
+                draw.ellipse((x - r - 8, y - r - 8, x + r + 8, y + r + 8), outline=(255, 240, 120, 255), width=3)
 
-        r = max(12, width // 55)
-        outline = _marker_outline(marker_color)
-        draw.ellipse((x - r, y - r, x + r, y + r), fill=marker_color + (255,), outline=outline, width=3)
-        draw.ellipse(
-            (x - r // 2, y - r // 2, x + r // 2, y + r // 2),
-            fill=owner_color + (255,),
-            outline=(15, 15, 15, 255),
-            width=1,
-        )
-        if current_location and name == current_location:
-            draw.ellipse((x - r - 8, y - r - 8, x + r + 8, y + r + 8), outline=(255, 240, 120, 255), width=3)
+            owner_text = str(controlled_by) if controlled_by else "нейтрал"
+            owner_marker = " (союз)" if player_faction and controlled_by == player_faction else ""
+            defense_part = f"; +{defense_bonus} укр." if defense_bonus > 0 else ""
+            details_text = f"{point_type}; {owner_text}{owner_marker}; NPC {npc_power}{defense_part}"
 
-        owner_text = str(controlled_by) if controlled_by else "нейтрал"
-        owner_marker = " (союз)" if player_faction and controlled_by == player_faction else ""
-        defense_part = f"; +{defense_bonus} укр." if defense_bonus > 0 else ""
-        details_text = f"{point_type}; {owner_text}{owner_marker}; NPC {npc_power}{defense_part}"
-
-        short_name = name.replace("Армейские склады", "Арм. склады")
-        tb = draw.textbbox((0, 0), short_name, font=body_font)
-        tw, th = tb[2] - tb[0], tb[3] - tb[1]
-        lx = min(max(8, x - tw // 2), width - tw - 8)
-        ly = max(64, min(height - 120, y - r - th - 12))
-        pad = 4
-        db = draw.textbbox((lx, ly + th + 2), details_text, font=tiny_font)
-        box = (
-            min(lx, db[0]) - pad,
-            ly - pad,
-            max(lx + tw, db[2]) + pad,
-            max(ly + th, db[3]) + pad + 2,
-        )
-        draw.rounded_rectangle(box, radius=5, fill=(0, 0, 0, 190))
-        text_fill = (235, 235, 235) if name == "Свалка" else marker_color
-        draw.text((lx, ly), short_name, fill=text_fill, font=body_font)
-        draw.text((lx, ly + th + 2), details_text, fill=(200, 205, 200), font=tiny_font)
-
-        # Маленькое кольцо типа точки.
-        draw.ellipse(
-            (x + r + 2, y - r - 2, x + r + 10, y - r + 6),
-            fill=type_color + (255,),
-            outline=(20, 20, 20, 255),
-            width=1,
-        )
+            short_name = name.replace("Армейские склады", "Арм. склады")
+            tb = draw.textbbox((0, 0), short_name, font=body_font)
+            tw, th = tb[2] - tb[0], tb[3] - tb[1]
+            lx = min(max(8, x - tw // 2), width - tw - 8)
+            ly = max(8, min(height - 120, y - r - th - 12))
+            pad = 4
+            db = draw.textbbox((lx, ly + th + 2), details_text, font=tiny_font)
+            box = (
+                min(lx, db[0]) - pad,
+                ly - pad,
+                max(lx + tw, db[2]) + pad,
+                max(ly + th, db[3]) + pad + 2,
+            )
+            draw.rounded_rectangle(box, radius=5, fill=(0, 0, 0, 190))
+            text_fill = (235, 235, 235) if name == "Свалка" else marker_color
+            draw.text((lx, ly), short_name, fill=text_fill, font=body_font)
+            draw.text((lx, ly + th + 2), details_text, fill=(200, 205, 200), font=tiny_font)
+            draw.ellipse(
+                (x + r + 2, y - r - 2, x + r + 10, y - r + 6),
+                fill=type_color + (255,),
+                outline=(20, 20, 20, 255),
+                width=1,
+            )
 
     output = BytesIO()
     canvas.convert("RGB").save(output, format="PNG", optimize=True)

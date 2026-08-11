@@ -4788,11 +4788,12 @@ async def show_zone_map(message: Message) -> None:
             locations,
             current_location=player.location,
             player_faction=player.faction,
+            show_markers=False,
         )
         image = BufferedInputFile(image_bytes, filename="zone_map.png")
         await message.answer_photo(
             photo=image,
-            caption="Карта Зоны: точки, типы и текущий контроль.",
+            caption="Карта Зоны.",
             reply_markup=_pda_keyboard_for(player),
         )
     except Exception:
