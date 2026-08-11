@@ -1366,7 +1366,15 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
     ) -> None:
         nonlocal player, notes, pending_damage, death_result
         player, note, dead, dmg = _resolve_hostile_contact(
-            storage, telegram_id, session, player, label, unit_attr, kinds_attr=kinds_attr, npc=npc
+            storage,
+            telegram_id,
+            session,
+            player,
+            label,
+            unit_attr,
+            kinds_attr=kinds_attr,
+            npc=npc,
+            prior_damage=pending_damage,
         )
         pending_damage += dmg
         if note is not None:
