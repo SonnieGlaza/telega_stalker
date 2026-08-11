@@ -42,8 +42,8 @@ LOCATION_DISPLAY_NAMES: dict[str, str] = {
 
 # Смещения подписи относительно точки (в долях ширины / высоты карты).
 LABEL_OFFSETS_NORM: dict[str, tuple[float, float]] = {
-    "Болото": (-0.02, 0.022),
-    "Кордон": (0.04, 0.022),
+    "Болото": (-0.34, 0.022),
+    "Кордон": (0.06, 0.022),
     "Свалка": (0.05, -0.055),
     "НИИ Агропром": (-0.28, -0.01),
     "Темная долина": (-0.02, 0.022),
@@ -53,6 +53,18 @@ LABEL_OFFSETS_NORM: dict[str, tuple[float, float]] = {
     "Рыжий лес": (-0.28, -0.01),
     "Радар": (0.04, -0.055),
 }
+
+# Кандидаты смещения, если preferred пересекается с уже занятой плашкой.
+LABEL_FALLBACK_OFFSETS_NORM: tuple[tuple[float, float], ...] = (
+    (0.04, 0.022),
+    (-0.34, 0.022),
+    (0.04, -0.055),
+    (-0.34, -0.055),
+    (0.04, 0.05),
+    (-0.34, 0.05),
+    (0.12, -0.08),
+    (-0.42, -0.08),
+)
 
 MAP_LABEL_MARKER_COLOR = (0, 210, 255)
 MAP_LABEL_TEXT_COLOR = (255, 255, 255)
@@ -172,6 +184,39 @@ def _short_point_type(point_type: str) -> str:
     return mapping.get(point_type, point_type or "точка")
 
 
+def _rects_intersect(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
+    return not (a[2] < b[0] or a[0] > b[2] or a[3] < b[1] or a[1] > b[3])
+
+
+def _clamp_label_box(
+    *,
+    label_x: int,
+    label_y: int,
+    box: tuple[int, int, int, int],
+    width: int,
+    height: int,
+) -> tuple[int, int, tuple[int, int, int, int]]:
+    box_x1, box_y1, box_x2, box_y2 = box
+    shift_x = 0
+    shift_y = 0
+    if box_x1 < 8:
+        shift_x = 8 - box_x1
+    elif box_x2 > width - 8:
+        shift_x = (width - 8) - box_x2
+    if box_y1 < 8:
+        shift_y = 8 - box_y1
+    elif box_y2 > height - 8:
+        shift_y = (height - 8) - box_y2
+    if shift_x or shift_y:
+        label_x += shift_x
+        label_y += shift_y
+        box_x1 += shift_x
+        box_y1 += shift_y
+        box_x2 += shift_x
+        box_y2 += shift_y
+    return label_x, label_y, (box_x1, box_y1, box_x2, box_y2)
+
+
 def _draw_control_overlays(
     canvas: Image.Image,
     locations: list[dict[str, str | int | None]],
@@ -187,12 +232,14 @@ def _draw_control_overlays(
     r_outer = max(12, width // 48)
     r_inner = max(7, width // 78)
     pad = max(6, width // 110)
+    gap = max(4, pad // 2)
 
     by_name = {str(loc.get("name") or ""): loc for loc in locations}
     ordered = sorted(
         (name for name in MAP_POINTS_NORM if name in by_name),
         key=lambda key: MAP_POINTS_NORM[key][1],
     )
+    reserved_rects: list[tuple[int, int, int, int]] = []
 
     for name in ordered:
         location = by_name[name]
@@ -235,39 +282,71 @@ def _draw_control_overlays(
         display_name = LOCATION_DISPLAY_NAMES.get(name, name)
         details_text = f"{point_type or 'точка'}; {owner_text}{owner_marker}; NPC {npc_power}"
 
-        ox, oy = LABEL_OFFSETS_NORM.get(name, (0.02, 0.016))
-        label_x = int(x + ox * width)
-        label_y = int(y + oy * height)
+        preferred = LABEL_OFFSETS_NORM.get(name, (0.02, 0.016))
+        candidates: list[tuple[float, float]] = [preferred]
+        for offset in LABEL_FALLBACK_OFFSETS_NORM:
+            if offset not in candidates:
+                candidates.append(offset)
 
-        name_bbox = draw.textbbox((label_x, label_y), display_name, font=name_font)
-        details_bbox = draw.textbbox(
-            (label_x, label_y + (name_bbox[3] - name_bbox[1]) + 6),
-            details_text,
-            font=details_font,
-        )
-        box_x1 = min(name_bbox[0], details_bbox[0]) - pad
-        box_y1 = min(name_bbox[1], details_bbox[1]) - pad
-        box_x2 = max(name_bbox[2], details_bbox[2]) + pad
-        box_y2 = max(name_bbox[3], details_bbox[3]) + pad
+        selected: tuple[int, int, tuple[int, int, int, int], int] | None = None
+        for ox, oy in candidates:
+            label_x = int(x + ox * width)
+            label_y = int(y + oy * height)
+            name_bbox = draw.textbbox((label_x, label_y), display_name, font=name_font)
+            line_gap = (name_bbox[3] - name_bbox[1]) + 6
+            details_bbox = draw.textbbox(
+                (label_x, label_y + line_gap),
+                details_text,
+                font=details_font,
+            )
+            box = (
+                min(name_bbox[0], details_bbox[0]) - pad,
+                min(name_bbox[1], details_bbox[1]) - pad,
+                max(name_bbox[2], details_bbox[2]) + pad,
+                max(name_bbox[3], details_bbox[3]) + pad,
+            )
+            label_x, label_y, box = _clamp_label_box(
+                label_x=label_x,
+                label_y=label_y,
+                box=box,
+                width=width,
+                height=height,
+            )
+            padded = (box[0] - gap, box[1] - gap, box[2] + gap, box[3] + gap)
+            if any(_rects_intersect(padded, reserved) for reserved in reserved_rects):
+                continue
+            selected = (label_x, label_y, box, line_gap)
+            break
 
-        # Держим плашку в кадре.
-        shift_x = 0
-        shift_y = 0
-        if box_x1 < 8:
-            shift_x = 8 - box_x1
-        elif box_x2 > width - 8:
-            shift_x = (width - 8) - box_x2
-        if box_y1 < 8:
-            shift_y = 8 - box_y1
-        elif box_y2 > height - 8:
-            shift_y = (height - 8) - box_y2
-        if shift_x or shift_y:
-            label_x += shift_x
-            label_y += shift_y
-            box_x1 += shift_x
-            box_y1 += shift_y
-            box_x2 += shift_x
-            box_y2 += shift_y
+        if selected is None:
+            ox, oy = preferred
+            label_x = int(x + ox * width)
+            label_y = int(y + oy * height)
+            name_bbox = draw.textbbox((label_x, label_y), display_name, font=name_font)
+            line_gap = (name_bbox[3] - name_bbox[1]) + 6
+            details_bbox = draw.textbbox(
+                (label_x, label_y + line_gap),
+                details_text,
+                font=details_font,
+            )
+            box = (
+                min(name_bbox[0], details_bbox[0]) - pad,
+                min(name_bbox[1], details_bbox[1]) - pad,
+                max(name_bbox[2], details_bbox[2]) + pad,
+                max(name_bbox[3], details_bbox[3]) + pad,
+            )
+            label_x, label_y, box = _clamp_label_box(
+                label_x=label_x,
+                label_y=label_y,
+                box=box,
+                width=width,
+                height=height,
+            )
+            selected = (label_x, label_y, box, line_gap)
+
+        label_x, label_y, box, line_gap = selected
+        box_x1, box_y1, box_x2, box_y2 = box
+        reserved_rects.append((box_x1 - gap, box_y1 - gap, box_x2 + gap, box_y2 + gap))
 
         draw.rounded_rectangle(
             (box_x1, box_y1, box_x2, box_y2),
@@ -279,7 +358,7 @@ def _draw_control_overlays(
         name_fill = (255, 245, 170) if current_location and name == current_location else MAP_LABEL_TEXT_COLOR
         draw.text((label_x, label_y), display_name, fill=name_fill, font=name_font)
         draw.text(
-            (label_x, label_y + (name_bbox[3] - name_bbox[1]) + 6),
+            (label_x, label_y + line_gap),
             details_text,
             fill=(190, 205, 195),
             font=details_font,
