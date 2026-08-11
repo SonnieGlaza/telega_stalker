@@ -773,7 +773,8 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject,
             return
         hint = maybe_daily_login_hint(db, telegram_id)
         await message.answer(
-            f"С возвращением, {h(player.nickname)}! Добро пожаловать в Зону.{hint}",
+            f"С возвращением, {h(player.nickname)}! Добро пожаловать в Зону.{hint}\n\n"
+            f"📢 Новости и обновления: {UPDATE_CHANNEL}",
             reply_markup=main_menu_keyboard(),
         )
         return
@@ -1029,12 +1030,15 @@ FACTION_CHATS = {
     "Бандиты": "https://t.me/+cP-Eihx_QFo0MTAy",
 }
 COMMON_CHAT = "https://t.me/+R0mfqDJ_HCUyOTI6"
+UPDATE_CHANNEL = "https://t.me/stalkerGreatWar"
 
 
 def _build_pda_chats_text(player: Character) -> str:
     faction_chat = FACTION_CHATS.get(player.faction or "")
     lines = [
         "📟 КПК — связь",
+        "",
+        f"📢 Канал обновлений бота:\n{UPDATE_CHANNEL}",
         "",
         f"🌐 Общий чат Зоны:\n{COMMON_CHAT}",
     ]
@@ -1075,7 +1079,7 @@ def _build_info_text(player: Character) -> str:
     return (
         "ℹ️ Информация по игре\n\n"
         "Разделы меню:\n"
-        "• 📟 КПК — профиль, чаты, рейтинг (общий + сезонный), карта, игроки, рефералка, "
+        "• 📟 КПК — профиль, чаты (канал обновлений + общий + фракция), рейтинг (общий + сезонный), карта, игроки, рефералка, "
         "☠️ журнал смертей (последние 5).\n"
         "• 🏕 Вылазка — война, переходы, ⚔️ арена (тренировка 8×8 на базе), рейды и 👥 кооп-вылазка.\n"
         "  В коопе: до 3 игроков, −14 энергии, 1 аптечка/боец, «🏃 Свалить» возвращает энергию; "
@@ -1141,7 +1145,8 @@ def _build_info_text(player: Character) -> str:
         "• 🎖 Скины по рейтингу: 0 / 500 / 2000 / 5000.\n"
         "• 📅 Сезон рейтинга: раз в 14 дней топ-3 получает эксклюзивную снарягу "
         "(🥇 пушка+броня, 🥈 пушка, 🥉 броня; у торговца не продаётся).\n\n"
-        "Чаты и рефералка: 📟 КПК."
+        "Чаты и рефералка: 📟 КПК → 💬 Чаты.\n"
+        f"Канал обновлений: {UPDATE_CHANNEL}"
     )
 
 
@@ -1769,6 +1774,8 @@ async def process_faction(callback: CallbackQuery, state: FSMContext) -> None:
         "1) 📋 Задания → 1–2 лёгких контракта на базе\n"
         "2) 🛒 Торговец → «Отклик» (1000) или еда/аптечки\n"
         "3) Накопи на велосипед (3500) — ускорит переходы\n\n"
+        f"📢 Канал обновлений: {UPDATE_CHANNEL}\n"
+        "💬 Чаты группировки и общий — в КПК → 💬 Чаты\n\n"
         "Открываю меню персонажа.",
         reply_markup=main_menu_keyboard(),
     )
