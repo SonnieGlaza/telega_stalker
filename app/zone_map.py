@@ -18,6 +18,7 @@ MAP_POINTS_NORM: dict[str, tuple[float, float]] = {
     "Болото": (0.145, 0.875),
     "Кордон": (0.450, 0.875),
     "Свалка": (0.495, 0.750),
+    "НИИ Агропром": (0.220, 0.720),
     "Темная долина": (0.775, 0.725),
     "Янтарь": (0.180, 0.635),
     "Росток": (0.375, 0.620),
@@ -30,6 +31,7 @@ LOCATION_DISPLAY_NAMES: dict[str, str] = {
     "Болото": "Болото",
     "Кордон": "Кордон",
     "Свалка": "Свалка",
+    "НИИ Агропром": "Агропром",
     "Темная долина": "Темная долина",
     "Янтарь": "Янтарь",
     "Росток": "Росток",
@@ -37,6 +39,9 @@ LOCATION_DISPLAY_NAMES: dict[str, str] = {
     "Рыжий лес": "Рыжий лес",
     "Радар": "Радар",
 }
+
+MAP_LABEL_MARKER_COLOR = (0, 210, 255)
+MAP_LABEL_TEXT_COLOR = (255, 255, 255)
 
 # Для расчёта времени перехода (legacy-сетка; синхрон с game_logic.MAP_TRAVEL_POINTS).
 MAP_POINTS: dict[str, tuple[int, int]] = {
@@ -144,10 +149,8 @@ def _marker_outline(color: tuple[int, int, int]) -> tuple[int, int, int]:
     return (240, 240, 240) if sum(color) < 280 else (35, 35, 35)
 
 
-def _label_text_fill(name: str, marker_color: tuple[int, int, int]) -> tuple[int, int, int]:
-    if name in {"Свалка", "Рыжий лес"}:
-        return (245, 245, 245)
-    return marker_color
+def _label_text_fill(_name: str, _marker_color: tuple[int, int, int]) -> tuple[int, int, int]:
+    return MAP_LABEL_TEXT_COLOR
 
 
 def _draw_location_labels(
@@ -165,8 +168,8 @@ def _draw_location_labels(
         if xy is None:
             continue
         x, y = xy
-        marker_color = LOCATION_MARKER_COLORS.get(name, (210, 210, 210))
-        outline = _marker_outline(marker_color)
+        marker_color = MAP_LABEL_MARKER_COLOR
+        outline = (15, 35, 45)
         display_name = LOCATION_DISPLAY_NAMES.get(name, name)
 
         draw.ellipse((x - r, y - r, x + r, y + r), fill=marker_color + (255,), outline=outline, width=max(2, r // 6))
@@ -179,7 +182,7 @@ def _draw_location_labels(
         ly = max(8, min(height - th - 8, y - r - th - 10))
         pad = 10
         draw.rounded_rectangle((lx - pad, ly - pad, lx + tw + pad, ly + th + pad), radius=8, fill=(0, 0, 0, 210))
-        draw.text((lx, ly), display_name, fill=_label_text_fill(name, marker_color), font=label_font)
+        draw.text((lx, ly), display_name, fill=MAP_LABEL_TEXT_COLOR, font=label_font)
 
 
 def build_zone_map_image(
@@ -189,11 +192,6 @@ def build_zone_map_image(
     *,
     show_markers: bool = False,
 ) -> bytes:
-    if not show_markers and ZONE_BACKGROUND_PATH.exists():
-        data = ZONE_BACKGROUND_PATH.read_bytes()
-        if data:
-            return data
-
     canvas = _load_background()
 
     if show_markers:
