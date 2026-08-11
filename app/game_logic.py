@@ -2925,6 +2925,89 @@ def admin_delete_player_account(storage: Storage, telegram_id: int) -> ActionRes
     return ActionResult(True, "\n".join(parts))
 
 
+VALID_ADMIN_FACTIONS = ("Долг", "Свобода", "Нейтралы", "Бандиты")
+
+
+def admin_set_player_faction(
+    storage: Storage,
+    *,
+    target: str,
+    faction: str,
+) -> ActionResult:
+    """Админ: перевести игрока в другую группировку по id или прозвищу."""
+    from app.player_busy import recover_stuck_player
+
+    faction_name = (faction or "").strip()
+    if faction_name not in VALID_ADMIN_FACTIONS:
+        return ActionResult(
+            False,
+            "Неизвестная группировка. Доступно: " + ", ".join(VALID_ADMIN_FACTIONS),
+        )
+
+    raw = (target or "").strip()
+    if not raw:
+        return ActionResult(False, "Укажи telegram_id или прозвище.")
+
+    if raw.isdigit():
+        telegram_id = int(raw)
+    else:
+        found = storage.find_telegram_id_by_nickname(raw)
+        if found is None:
+            return ActionResult(False, f"Игрок «{raw}» не найден.")
+        telegram_id = found
+
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Персонаж не найден.")
+
+    old_faction = player.faction
+    if old_faction == faction_name:
+        return ActionResult(
+            True,
+            f"«{player.nickname}» (id {telegram_id}) уже в группировке «{faction_name}».",
+        )
+
+    recover_stuck_player(storage, telegram_id, force_clear=True)
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is not None and is_traveling(player):
+        storage.clear_travel(telegram_id)
+
+    raids_cancelled = len(storage.cancel_all_open_raids_led_by(telegram_id))
+    lobbies_cancelled = storage.cancel_all_open_war_lobbies_led_by(telegram_id)
+    storage.set_faction(telegram_id, faction_name)
+    updated = storage.get_character(telegram_id, refresh_energy=False)
+    home = updated.location if updated is not None else faction_home_base(faction_name)
+    rank = updated.faction_rank if updated is not None else None
+
+    parts = [
+        f"«{player.nickname}» (id {telegram_id}): {old_faction or 'без ГП'} → «{faction_name}».",
+        f"Локация сброшена на базу: {home}.",
+    ]
+    if rank:
+        parts.append(f"Звание: {rank}.")
+    if raids_cancelled or lobbies_cancelled:
+        parts.append(
+            f"Отменено: рейдов {raids_cancelled}, военных лобби {lobbies_cancelled}."
+        )
+    return ActionResult(True, "\n".join(parts))
+
+
+def apply_pending_admin_faction_transfers(storage: Storage) -> list[str]:
+    """Одноразовые админ-переводы ГП при старте бота (meta-флаг, без повторов)."""
+    pending: tuple[tuple[str, str, str], ...] = (
+        # meta_key, nickname, faction
+        ("admin_fix:vorobey_neutrals_20260811", "Воробей", "Нейтралы"),
+    )
+    notes: list[str] = []
+    for meta_key, nickname, faction in pending:
+        if storage.get_meta(meta_key):
+            continue
+        result = admin_set_player_faction(storage, target=nickname, faction=faction)
+        storage.set_meta(meta_key, "1" if result.ok else f"fail:{result.text[:120]}")
+        notes.append(result.text)
+    return notes
+
+
 def cancel_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
     character = storage.get_character(telegram_id, refresh_energy=False)
     if character is None:

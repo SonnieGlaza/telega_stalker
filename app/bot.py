@@ -961,6 +961,49 @@ async def admin_delete_player(message: Message, bot: Bot, command: CommandObject
     await message.answer(result.text)
 
 
+@router.message(Command("setfaction"))
+async def admin_set_faction(message: Message, bot: Bot, command: CommandObject) -> None:
+    if not is_admin_user(message.from_user.id):
+        await message.answer("Команда только для администратора.")
+        return
+    raw = (command.args or "").strip()
+    parts = raw.split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer(
+            "Использование: /setfaction [telegram_id|прозвище] [группировка]\n"
+            "Пример: /setfaction Воробей Нейтралы\n"
+            "Группировки: Долг, Свобода, Нейтралы, Бандиты"
+        )
+        return
+    target, faction = parts[0].strip(), parts[1].strip()
+    from app.game_logic import admin_set_player_faction
+
+    storage = get_storage()
+    result = admin_set_player_faction(storage, target=target, faction=faction)
+    await message.answer(result.text)
+    if not result.ok:
+        return
+    telegram_id = (
+        int(target)
+        if target.isdigit()
+        else storage.find_telegram_id_by_nickname(target)
+    )
+    if telegram_id is None:
+        return
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction is None:
+        return
+    try:
+        await bot.send_message(
+            telegram_id,
+            f"🔄 Админ перевёл тебя в группировку «{h(player.faction)}».\n"
+            f"Ты на базе: {h(player.location)}.",
+            reply_markup=main_menu_keyboard(),
+        )
+    except Exception:
+        logger.debug("Set-faction notify failed for %s", telegram_id, exc_info=True)
+
+
 @router.message(Command("unstick"))
 async def admin_unstick_player(message: Message, bot: Bot, command: CommandObject) -> None:
     if not is_admin_user(message.from_user.id):
@@ -7755,6 +7798,13 @@ async def run_bot() -> None:
             logger.info("Backfilled gear_power for %s characters", synced)
     except Exception:
         logger.exception("gear_power backfill failed")
+    try:
+        from app.game_logic import apply_pending_admin_faction_transfers
+
+        for note in apply_pending_admin_faction_transfers(storage):
+            logger.info("Admin faction transfer: %s", note)
+    except Exception:
+        logger.exception("Pending admin faction transfers failed")
 
     async def periodic_snapshot_sync() -> None:
         while True:

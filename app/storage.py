@@ -1510,16 +1510,19 @@ class Storage:
         from app.faction_ranks import default_rank_key
         from app.game_logic import faction_home_base
 
+        tid = int(telegram_id)
         rank_key = default_rank_key(faction)
         home = faction_home_base(faction)
         with self._connect() as conn:
+            # Если уходил с поста командира — снимаем лидерство со старой ГП.
+            conn.execute("UPDATE factions SET leader_id = NULL WHERE leader_id = ?", (tid,))
             conn.execute(
                 """
                 UPDATE characters
                 SET faction = ?, faction_rank = ?, location = ?
                 WHERE telegram_id = ?
                 """,
-                (faction, rank_key, home, telegram_id),
+                (faction, rank_key, home, tid),
             )
         self.save_snapshot()
 
@@ -2888,16 +2891,13 @@ class Storage:
         normalized = (nickname or "").strip().casefold()
         if not normalized:
             return None
+        # SQLite lower() не делает casefold для кириллицы — сравниваем в Python.
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT telegram_id FROM characters
-                WHERE lower(trim(nickname)) = ?
-                LIMIT 1
-                """,
-                (normalized,),
-            ).fetchone()
-        return int(row["telegram_id"]) if row is not None else None
+            rows = conn.execute("SELECT telegram_id, nickname FROM characters").fetchall()
+        for row in rows:
+            if str(row["nickname"] or "").strip().casefold() == normalized:
+                return int(row["telegram_id"])
+        return None
 
     def list_faction_member_ids(self, faction: str) -> list[int]:
         with self._connect() as conn:
