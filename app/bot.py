@@ -363,6 +363,7 @@ from app.keyboards import (
     trader_buy_categories_keyboard,
     trader_buy_armor_keyboard,
     trader_buy_consumables_keyboard,
+    buy_item_qty_keyboard,
     trader_buy_consumable_qty_keyboard,
     trader_buy_gear_keyboard,
     trader_buy_repair_keyboard,
@@ -2722,14 +2723,55 @@ async def show_buy_consumable_qty(callback: CallbackQuery) -> None:
     item_key = (callback.data or "").split(":", maxsplit=1)[1]
     item = SHOP_ITEMS.get(item_key)
     if item is None or item_key not in BULK_BUY_ITEM_KEYS or int(item.get("buy_price", 0)) <= 0:
-        await reply_action_result(callback, "Такого расходника нет у торговца.")
+        await reply_action_result(callback, "Такого товара нельзя купить пачкой.")
         return
     title = str(item["name"])
     unit_price = int(item["buy_price"])
+    if item_key == "stash_case":
+        qty_keyboard = buy_item_qty_keyboard(
+            item_key,
+            unit_price=unit_price,
+            back_callback="trade:buy:gear:0",
+            back_text="⬅️ Назад",
+        )
+    else:
+        qty_keyboard = trader_buy_consumable_qty_keyboard(item_key, unit_price=unit_price, title=title)
     await edit_menu_message(
         callback,
         _trader_text(callback.from_user.id, f"Покупка: {title}\nЦена за 1 шт.: {unit_price} RU\nВыбери количество:"),
-        trader_buy_consumable_qty_keyboard(item_key, unit_price=unit_price, title=title),
+        qty_keyboard,
+    )
+
+
+@router.callback_query(F.data.startswith("invbuyqty:"))
+async def show_inventory_buy_qty(callback: CallbackQuery) -> None:
+    item_key = (callback.data or "").split(":", maxsplit=1)[1]
+    item = SHOP_ITEMS.get(item_key)
+    if item is None or item_key not in BULK_BUY_ITEM_KEYS or int(item.get("buy_price", 0)) <= 0:
+        await reply_action_result(callback, "Этот предмет нельзя купить пачкой из инвентаря.")
+        return
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    title = str(item["name"])
+    unit_price = int(item["buy_price"])
+    text = (
+        f"Покупка: {title}\n"
+        f"Цена за 1 шт.: {unit_price} RU\n"
+        f"Баланс: {player.money:,} RU\n"
+        f"Выбери количество:"
+    )
+    await edit_menu_message(
+        callback,
+        text,
+        buy_item_qty_keyboard(
+            item_key,
+            unit_price=unit_price,
+            back_callback="inventory:open",
+            back_text="⬅️ Назад в инвентарь",
+        ),
     )
 
 
@@ -2751,6 +2793,22 @@ async def handle_buy(callback: CallbackQuery) -> None:
     db = get_storage()
     result = buy_item(db, callback.from_user.id, item_key, amount=amount)
     await reply_action_result(callback, result.text)
+    if result.ok and item_key == "stash_case":
+        player = db.get_character(callback.from_user.id, refresh_energy=False)
+        if player is not None:
+            try:
+                await edit_menu_message(
+                    callback,
+                    format_inventory(
+                        player,
+                        rating_points=int(db.get_player_stats(player.telegram_id).get("rating_points", 0)),
+                        storage=db,
+                    ),
+                    inventory_equipment_keyboard(money=player.money),
+                    answer_callback=False,
+                )
+            except TelegramBadRequest:
+                pass
     if result.ok and item_key == "truck":
         player = db.get_character(callback.from_user.id, refresh_energy=False)
         if player is not None:

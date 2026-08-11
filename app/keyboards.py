@@ -244,7 +244,13 @@ def trader_buy_consumables_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
     )
 
 
-def trader_buy_consumable_qty_keyboard(item_key: str, *, unit_price: int, title: str) -> InlineKeyboardMarkup:
+def buy_item_qty_keyboard(
+    item_key: str,
+    *,
+    unit_price: int,
+    back_callback: str,
+    back_text: str,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for amount in BUY_CONSUMABLE_AMOUNTS:
         total = unit_price * amount
@@ -256,10 +262,17 @@ def trader_buy_consumable_qty_keyboard(item_key: str, *, unit_price: int, title:
                 )
             ]
         )
-    rows.append(
-        [InlineKeyboardButton(text="⬅️ Назад к расходникам", callback_data="trade:buy:consumables:0")]
-    )
+    rows.append([InlineKeyboardButton(text=back_text, callback_data=back_callback)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def trader_buy_consumable_qty_keyboard(item_key: str, *, unit_price: int, title: str) -> InlineKeyboardMarkup:
+    return buy_item_qty_keyboard(
+        item_key,
+        unit_price=unit_price,
+        back_callback="trade:buy:consumables:0",
+        back_text="⬅️ Назад к расходникам",
+    )
 
 
 def trader_buy_gear_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
@@ -272,7 +285,7 @@ def trader_buy_gear_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
         ("Купить велосипед (3500)", "buy:bicycle"),
         ("Купить грузовик (50000)", "buy:truck"),
         ("Купить спальник (20000)", "buy:sleeping_bag"),
-        ("Купить тайник (2000)", "buy:stash_case"),
+        ("Купить тайник (от 2000)", "buyqty:stash_case"),
     ]
     return _trader_page_keyboard(
         items,
@@ -300,10 +313,7 @@ def inventory_equipment_keyboard(*, money: int | None = None) -> InlineKeyboardM
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="🧰 Расходники", callback_data="inventory:consumables")],
         [InlineKeyboardButton(text="🗄 Схрон", callback_data="stash:menu")],
-        [
-            InlineKeyboardButton(text="🛒 Купить тайник (2000)", callback_data="buy:stash_case"),
-            InlineKeyboardButton(text="❌", callback_data="inventory:open"),
-        ],
+        [InlineKeyboardButton(text="🛒 Купить тайник (от 2000)", callback_data="invbuyqty:stash_case")],
         [InlineKeyboardButton(text="📦 Открыть тайник", callback_data="use:stash_case")],
         [InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")],
         [InlineKeyboardButton(text="⚙️ Экипировка", callback_data="equip:root")],

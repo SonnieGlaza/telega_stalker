@@ -3722,6 +3722,7 @@ BULK_BUY_ITEM_KEYS: frozenset[str] = frozenset(
         "fuel_can",
         "armor_upgrade",
         "gear_upgrade",
+        "stash_case",
     }
 )
 BULK_BUY_MAX_QTY = 25
