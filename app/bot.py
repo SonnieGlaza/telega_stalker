@@ -4800,11 +4800,22 @@ async def show_zone_map(message: Message) -> None:
                 reply_markup=keyboard,
             )
         else:
-            await message.answer_photo(
-                photo=image,
-                caption=caption,
-                reply_markup=keyboard,
-            )
+            try:
+                await message.answer_photo(
+                    photo=image,
+                    caption=caption,
+                    reply_markup=keyboard,
+                )
+            except Exception:
+                logger.exception(
+                    "sendPhoto failed for zone map user %s, retry as document",
+                    message.from_user.id,
+                )
+                await message.answer_document(
+                    document=image,
+                    caption=caption,
+                    reply_markup=keyboard,
+                )
     except Exception:
         logger.exception("Failed to build/send zone map for user %s", message.from_user.id)
         await message.answer(

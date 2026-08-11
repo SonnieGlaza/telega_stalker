@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "NotoSans-Regular.ttf"
+LOCAL_FONT_FALLBACK_PATH = PROJECT_ROOT / "assets" / "fonts" / "DejaVuSans.ttf"
 ZONE_BACKGROUND_PATH = PROJECT_ROOT / "assets" / "zone_map" / "zone_background.jpg"
 
 # Нормализованные координаты (x%, y%) — разметка на zone_background.jpg.
@@ -78,16 +79,30 @@ POINT_TYPE_COLORS = {
 }
 
 TELEGRAM_PHOTO_MAX_BYTES = 10 * 1024 * 1024
+TELEGRAM_PHOTO_MAX_SUM_DIMENSION = 10_000
 FALLBACK_SIZE = (3133, 8456)
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
-    try:
-        if LOCAL_FONT_PATH.exists():
-            return ImageFont.truetype(str(LOCAL_FONT_PATH), size=size)
-    except OSError:
-        pass
+    for font_path in (LOCAL_FONT_PATH, LOCAL_FONT_FALLBACK_PATH):
+        try:
+            if font_path.exists():
+                return ImageFont.truetype(str(font_path), size=size)
+        except OSError:
+            continue
     return ImageFont.load_default()
+
+
+def _fit_for_telegram_photo(image: Image.Image) -> Image.Image:
+    """sendPhoto принимает только если width + height <= 10000."""
+    width, height = image.size
+    total = width + height
+    if total <= TELEGRAM_PHOTO_MAX_SUM_DIMENSION:
+        return image
+    scale = (TELEGRAM_PHOTO_MAX_SUM_DIMENSION - 10) / total
+    new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+    logger.info("Scaling zone map for Telegram: %sx%s -> %sx%s", width, height, *new_size)
+    return image.resize(new_size, Image.Resampling.LANCZOS)
 
 
 def _load_background() -> Image.Image:
@@ -184,6 +199,7 @@ def build_zone_map_image(
     if show_markers:
         _draw_location_labels(canvas, current_location=current_location)
 
+    canvas = _fit_for_telegram_photo(canvas)
     output = BytesIO()
     canvas.convert("RGB").save(output, format="JPEG", quality=88, optimize=True, progressive=True)
     data = output.getvalue()
