@@ -44,31 +44,35 @@ LOCATION_DISPLAY_NAMES: dict[str, str] = {
     "Радар": "Радар",
 }
 
-# Смещение подписи относительно маркера, тоже в пикселях карты 640×1280.
-# Плюс X — правее, плюс Y — ниже.
+# Смещение подписи относительно маркера, в пикселях карты 640×1280.
+# Плюс X — правее, плюс Y — ниже. Плашки держатся рядом с точкой.
 LABEL_OFFSETS_PX: dict[str, tuple[int, int]] = {
-    "Болото": (218, 28),
-    "Кордон": (38, 28),
-    "Свалка": (32, -70),
-    "НИИ Агропром": (-179, -13),
-    "Темная долина": (-13, 28),
-    "Янтарь": (26, 26),
-    "Росток": (-179, -70),
-    "Армейские склады": (26, 26),
-    "Рыжий лес": (192, 26),
-    "Радар": (26, -70),
+    "Болото": (-50, -48),
+    "Кордон": (-74, -52),
+    "Свалка": (-73, -47),
+    "НИИ Агропром": (-73, 12),
+    "Темная долина": (-73, -50),
+    "Янтарь": (-73, -51),
+    "Росток": (-73, -47),
+    "Армейские склады": (-73, -51),
+    "Рыжий лес": (-73, -48),
+    "Радар": (-73, -51),
 }
 
-# Кандидаты смещения, если preferred пересекается с уже занятой плашкой.
+# Ближние запасные позиции, если preferred пересекается с другой плашкой.
 LABEL_FALLBACK_OFFSETS_PX: tuple[tuple[int, int], ...] = (
-    (26, 28),
-    (-218, 28),
-    (26, -70),
-    (-218, -70),
-    (26, 64),
-    (-218, 64),
-    (77, -102),
-    (-269, -102),
+    (-73, -48),
+    (-73, 12),
+    (14, -48),
+    (14, 12),
+    (-170, -48),
+    (-170, 12),
+    (-50, -48),
+    (-90, 16),
+    (14, -70),
+    (-170, -70),
+    (14, 36),
+    (-120, 36),
 )
 
 MAP_LABEL_MARKER_COLOR = (0, 210, 255)
@@ -262,12 +266,12 @@ def _draw_control_overlays(
     """Маркеры контроля + подписи: тип территории, владелец, сила NPC."""
     width, height = canvas.size
     draw = ImageDraw.Draw(canvas)
-    name_font = _load_font(max(22, width // 28))
-    details_font = _load_font(max(17, width // 38))
-    r_outer = max(12, width // 48)
-    r_inner = max(7, width // 78)
-    pad = max(6, width // 110)
-    gap = max(4, pad // 2)
+    name_font = _load_font(max(16, width // 36))
+    details_font = _load_font(max(13, width // 48))
+    r_outer = max(10, width // 52)
+    r_inner = max(6, width // 84)
+    pad = max(5, width // 130)
+    gap = max(3, pad // 2)
 
     by_name = {str(loc.get("name") or ""): loc for loc in locations}
     ordered = sorted(
@@ -305,7 +309,7 @@ def _draw_control_overlays(
         )
         if current_location and name == current_location:
             draw.ellipse(
-                (x - r_outer - 8, y - r_outer - 8, x + r_outer + 8, y + r_outer + 8),
+                (x - r_outer - 6, y - r_outer - 6, x + r_outer + 6, y + r_outer + 6),
                 outline=(255, 240, 120, 255),
                 width=max(3, r_outer // 4),
             )
@@ -313,23 +317,23 @@ def _draw_control_overlays(
         owner_text = str(controlled_by) if controlled_by else "нейтрал"
         owner_marker = ""
         if player_faction and controlled_by == player_faction:
-            owner_marker = " (союз)"
+            owner_marker = " +"
         display_name = LOCATION_DISPLAY_NAMES.get(name, name)
-        details_text = f"{point_type or 'точка'}; {owner_text}{owner_marker}; NPC {npc_power}"
+        details_text = f"{_short_point_type(point_type)}; {owner_text}{owner_marker}; NPC {npc_power}"
 
-        preferred = LABEL_OFFSETS_PX.get(name, (13, 20))
+        preferred = LABEL_OFFSETS_PX.get(name, (14, 14))
         candidates: list[tuple[int, int]] = [preferred]
         for offset in LABEL_FALLBACK_OFFSETS_PX:
             if offset not in candidates:
                 candidates.append(offset)
 
-        selected: tuple[int, int, tuple[int, int, int, int], int] | None = None
+        scored: list[tuple[float, int, int, tuple[int, int, int, int], int]] = []
         for ox, oy in candidates:
             dx, dy = _scale_layout_xy(ox, oy, width, height)
             label_x = x + dx
             label_y = y + dy
             name_bbox = draw.textbbox((label_x, label_y), display_name, font=name_font)
-            line_gap = (name_bbox[3] - name_bbox[1]) + 6
+            line_gap = (name_bbox[3] - name_bbox[1]) + 4
             details_bbox = draw.textbbox(
                 (label_x, label_y + line_gap),
                 details_text,
@@ -351,16 +355,26 @@ def _draw_control_overlays(
             padded = (box[0] - gap, box[1] - gap, box[2] + gap, box[3] + gap)
             if any(_rects_intersect(padded, reserved) for reserved in reserved_rects):
                 continue
-            selected = (label_x, label_y, box, line_gap)
-            break
+            # Не закрываем центр маркера плашкой; лёгкое касание края ок.
+            if box[0] <= x <= box[2] and box[1] <= y <= box[3]:
+                continue
+            cx = (box[0] + box[2]) / 2
+            cy = (box[1] + box[3]) / 2
+            dist = ((cx - x) ** 2 + (cy - y) ** 2) ** 0.5
+            # preferred offset gets a small bonus so ручная разметка держится
+            bonus = -18.0 if (ox, oy) == preferred else 0.0
+            scored.append((dist + bonus, label_x, label_y, box, line_gap))
 
-        if selected is None:
+        if scored:
+            scored.sort(key=lambda item: item[0])
+            _, label_x, label_y, box, line_gap = scored[0]
+        else:
             ox, oy = preferred
             dx, dy = _scale_layout_xy(ox, oy, width, height)
             label_x = x + dx
             label_y = y + dy
             name_bbox = draw.textbbox((label_x, label_y), display_name, font=name_font)
-            line_gap = (name_bbox[3] - name_bbox[1]) + 6
+            line_gap = (name_bbox[3] - name_bbox[1]) + 4
             details_bbox = draw.textbbox(
                 (label_x, label_y + line_gap),
                 details_text,
@@ -379,15 +393,13 @@ def _draw_control_overlays(
                 width=width,
                 height=height,
             )
-            selected = (label_x, label_y, box, line_gap)
 
-        label_x, label_y, box, line_gap = selected
         box_x1, box_y1, box_x2, box_y2 = box
         reserved_rects.append((box_x1 - gap, box_y1 - gap, box_x2 + gap, box_y2 + gap))
 
         # Полоска от маркера к плашке — видно, какая подпись к какой точке.
         anchor_x, anchor_y = _label_anchor(x, y, box)
-        line_w = max(3, width // 160)
+        line_w = max(2, width // 220)
         draw.line((x, y, anchor_x, anchor_y), fill=MAP_CONNECTOR_COLOR, width=line_w)
         dot = max(2, line_w)
         draw.ellipse(
@@ -399,10 +411,10 @@ def _draw_control_overlays(
 
         draw.rounded_rectangle(
             (box_x1, box_y1, box_x2, box_y2),
-            radius=max(6, pad),
-            fill=(10, 14, 12, 220),
-            outline=(70, 90, 80, 255),
-            width=max(2, pad // 4),
+            radius=max(5, pad),
+            fill=(8, 12, 10, 228),
+            outline=(90, 110, 100, 255),
+            width=max(1, pad // 4),
         )
         name_fill = (255, 245, 170) if current_location and name == current_location else MAP_LABEL_TEXT_COLOR
         draw.text((label_x, label_y), display_name, fill=name_fill, font=name_font)
