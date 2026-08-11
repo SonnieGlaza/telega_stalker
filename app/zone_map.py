@@ -112,6 +112,9 @@ POINT_TYPE_COLORS = {
 TELEGRAM_PHOTO_MAX_BYTES = 10 * 1024 * 1024
 TELEGRAM_PHOTO_MAX_SUM_DIMENSION = 10_000
 FALLBACK_SIZE = (3133, 8456)
+# Лёгкое затемнение спутникового фона, чтобы плашки и маркеры читались лучше.
+MAP_BACKGROUND_DARKEN_ALPHA = 125
+MAP_CONNECTOR_COLOR = (180, 200, 185, 255)
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -143,7 +146,8 @@ def _load_background() -> Image.Image:
             w, h = bg.size
             if w <= 0 or h <= 0:
                 raise ValueError("invalid background dimensions")
-            return bg
+            shade = Image.new("RGBA", (w, h), (0, 0, 0, MAP_BACKGROUND_DARKEN_ALPHA))
+            return Image.alpha_composite(bg, shade)
         except Exception:
             logger.exception("Failed to load zone background from %s", ZONE_BACKGROUND_PATH)
 
@@ -162,6 +166,24 @@ def _load_background() -> Image.Image:
         font=title_font,
     )
     return bg
+
+
+def _label_anchor(x: int, y: int, box: tuple[int, int, int, int]) -> tuple[int, int]:
+    """Ближайшая точка на краю плашки к маркеру — якорь для соединительной линии."""
+    box_x1, box_y1, box_x2, box_y2 = box
+    if x < box_x1:
+        anchor_x = box_x1
+    elif x > box_x2:
+        anchor_x = box_x2
+    else:
+        anchor_x = x
+    if y < box_y1:
+        anchor_y = box_y1
+    elif y > box_y2:
+        anchor_y = box_y2
+    else:
+        anchor_y = y
+    return anchor_x, anchor_y
 
 
 def _point_xy(name: str, width: int, height: int) -> tuple[int, int] | None:
@@ -347,6 +369,18 @@ def _draw_control_overlays(
         label_x, label_y, box, line_gap = selected
         box_x1, box_y1, box_x2, box_y2 = box
         reserved_rects.append((box_x1 - gap, box_y1 - gap, box_x2 + gap, box_y2 + gap))
+
+        # Полоска от маркера к плашке — видно, какая подпись к какой точке.
+        anchor_x, anchor_y = _label_anchor(x, y, box)
+        line_w = max(2, width // 220)
+        draw.line((x, y, anchor_x, anchor_y), fill=MAP_CONNECTOR_COLOR, width=line_w)
+        dot = max(2, line_w)
+        draw.ellipse(
+            (anchor_x - dot, anchor_y - dot, anchor_x + dot, anchor_y + dot),
+            fill=MAP_CONNECTOR_COLOR,
+            outline=(20, 26, 22, 255),
+            width=1,
+        )
 
         draw.rounded_rectangle(
             (box_x1, box_y1, box_x2, box_y2),
