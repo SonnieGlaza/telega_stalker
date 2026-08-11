@@ -13,18 +13,22 @@ LOCAL_FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "NotoSans-Regular.ttf"
 LOCAL_FONT_FALLBACK_PATH = PROJECT_ROOT / "assets" / "fonts" / "DejaVuSans.ttf"
 ZONE_BACKGROUND_PATH = PROJECT_ROOT / "assets" / "zone_map" / "zone_background.jpg"
 
-# Нормализованные координаты (x%, y%) — разметка на zone_background.jpg.
-MAP_POINTS_NORM: dict[str, tuple[float, float]] = {
-    "Болото": (0.185, 0.875),
-    "Кордон": (0.450, 0.875),
-    "Свалка": (0.495, 0.750),
-    "НИИ Агропром": (0.220, 0.720),
-    "Темная долина": (0.755, 0.725),
-    "Янтарь": (0.180, 0.635),
-    "Росток": (0.375, 0.620),
-    "Армейские склады": (0.505, 0.530),
-    "Рыжий лес": (0.310, 0.350),
-    "Радар": (0.670, 0.415),
+# Размер zone_background.jpg. Координаты точек пишите в пикселях этого файла:
+# (x, y) где (0, 0) — левый верх, например (320, 100) = центр по X, 100 px сверху.
+MAP_LAYOUT_SIZE = (640, 1280)
+
+# Маркеры локаций: пиксели на карте 640×1280.
+MAP_POINTS_PX: dict[str, tuple[int, int]] = {
+    "Болото": (118, 1120),
+    "Кордон": (288, 1120),
+    "Свалка": (317, 960),
+    "НИИ Агропром": (141, 922),
+    "Темная долина": (483, 928),
+    "Янтарь": (115, 813),
+    "Росток": (240, 794),
+    "Армейские склады": (323, 678),
+    "Рыжий лес": (198, 448),
+    "Радар": (429, 531),
 }
 
 LOCATION_DISPLAY_NAMES: dict[str, str] = {
@@ -40,30 +44,31 @@ LOCATION_DISPLAY_NAMES: dict[str, str] = {
     "Радар": "Радар",
 }
 
-# Смещения подписи относительно точки (в долях ширины / высоты карты).
-LABEL_OFFSETS_NORM: dict[str, tuple[float, float]] = {
-    "Болото": (0.34, 0.022),
-    "Кордон": (0.06, 0.022),
-    "Свалка": (0.05, -0.055),
-    "НИИ Агропром": (-0.28, -0.01),
-    "Темная долина": (-0.02, 0.022),
-    "Янтарь": (0.04, 0.02),
-    "Росток": (-0.28, -0.055),
-    "Армейские склады": (0.04, 0.02),
-    "Рыжий лес": (-0.30, 0.020),
-    "Радар": (0.04, -0.055),
+# Смещение подписи относительно маркера, тоже в пикселях карты 640×1280.
+# Плюс X — правее, плюс Y — ниже.
+LABEL_OFFSETS_PX: dict[str, tuple[int, int]] = {
+    "Болото": (218, 28),
+    "Кордон": (38, 28),
+    "Свалка": (32, -70),
+    "НИИ Агропром": (-179, -13),
+    "Темная долина": (-13, 28),
+    "Янтарь": (26, 26),
+    "Росток": (-179, -70),
+    "Армейские склады": (26, 26),
+    "Рыжий лес": (-192, 26),
+    "Радар": (26, -70),
 }
 
 # Кандидаты смещения, если preferred пересекается с уже занятой плашкой.
-LABEL_FALLBACK_OFFSETS_NORM: tuple[tuple[float, float], ...] = (
-    (0.04, 0.022),
-    (-0.34, 0.022),
-    (0.04, -0.055),
-    (-0.34, -0.055),
-    (0.04, 0.05),
-    (-0.34, 0.05),
-    (0.12, -0.08),
-    (-0.42, -0.08),
+LABEL_FALLBACK_OFFSETS_PX: tuple[tuple[int, int], ...] = (
+    (26, 28),
+    (-218, 28),
+    (26, -70),
+    (-218, -70),
+    (26, 64),
+    (-218, 64),
+    (77, -102),
+    (-269, -102),
 )
 
 MAP_LABEL_MARKER_COLOR = (0, 210, 255)
@@ -111,7 +116,7 @@ POINT_TYPE_COLORS = {
 
 TELEGRAM_PHOTO_MAX_BYTES = 10 * 1024 * 1024
 TELEGRAM_PHOTO_MAX_SUM_DIMENSION = 10_000
-FALLBACK_SIZE = (2673, 7216)
+FALLBACK_SIZE = MAP_LAYOUT_SIZE
 # Лёгкое затемнение спутникового фона, чтобы плашки и маркеры читались лучше.
 MAP_BACKGROUND_DARKEN_ALPHA = 55
 MAP_CONNECTOR_COLOR = (180, 200, 185, 255)
@@ -186,11 +191,19 @@ def _label_anchor(x: int, y: int, box: tuple[int, int, int, int]) -> tuple[int, 
     return anchor_x, anchor_y
 
 
+def _scale_layout_xy(x: int, y: int, width: int, height: int) -> tuple[int, int]:
+    """Переводит пиксели разметки 640×1280 в размер текущего холста."""
+    ref_w, ref_h = MAP_LAYOUT_SIZE
+    if ref_w <= 0 or ref_h <= 0:
+        return x, y
+    return int(round(x * width / ref_w)), int(round(y * height / ref_h))
+
+
 def _point_xy(name: str, width: int, height: int) -> tuple[int, int] | None:
-    norm = MAP_POINTS_NORM.get(name)
-    if norm is None:
+    point = MAP_POINTS_PX.get(name)
+    if point is None:
         return None
-    return int(norm[0] * width), int(norm[1] * height)
+    return _scale_layout_xy(point[0], point[1], width, height)
 
 
 def _marker_outline(color: tuple[int, int, int]) -> tuple[int, int, int]:
@@ -258,8 +271,8 @@ def _draw_control_overlays(
 
     by_name = {str(loc.get("name") or ""): loc for loc in locations}
     ordered = sorted(
-        (name for name in MAP_POINTS_NORM if name in by_name),
-        key=lambda key: MAP_POINTS_NORM[key][1],
+        (name for name in MAP_POINTS_PX if name in by_name),
+        key=lambda key: MAP_POINTS_PX[key][1],
     )
     reserved_rects: list[tuple[int, int, int, int]] = []
 
@@ -304,16 +317,17 @@ def _draw_control_overlays(
         display_name = LOCATION_DISPLAY_NAMES.get(name, name)
         details_text = f"{point_type or 'точка'}; {owner_text}{owner_marker}; NPC {npc_power}"
 
-        preferred = LABEL_OFFSETS_NORM.get(name, (0.02, 0.016))
-        candidates: list[tuple[float, float]] = [preferred]
-        for offset in LABEL_FALLBACK_OFFSETS_NORM:
+        preferred = LABEL_OFFSETS_PX.get(name, (13, 20))
+        candidates: list[tuple[int, int]] = [preferred]
+        for offset in LABEL_FALLBACK_OFFSETS_PX:
             if offset not in candidates:
                 candidates.append(offset)
 
         selected: tuple[int, int, tuple[int, int, int, int], int] | None = None
         for ox, oy in candidates:
-            label_x = int(x + ox * width)
-            label_y = int(y + oy * height)
+            dx, dy = _scale_layout_xy(ox, oy, width, height)
+            label_x = x + dx
+            label_y = y + dy
             name_bbox = draw.textbbox((label_x, label_y), display_name, font=name_font)
             line_gap = (name_bbox[3] - name_bbox[1]) + 6
             details_bbox = draw.textbbox(
@@ -342,8 +356,9 @@ def _draw_control_overlays(
 
         if selected is None:
             ox, oy = preferred
-            label_x = int(x + ox * width)
-            label_y = int(y + oy * height)
+            dx, dy = _scale_layout_xy(ox, oy, width, height)
+            label_x = x + dx
+            label_y = y + dy
             name_bbox = draw.textbbox((label_x, label_y), display_name, font=name_font)
             line_gap = (name_bbox[3] - name_bbox[1]) + 6
             details_bbox = draw.textbbox(
@@ -410,7 +425,7 @@ def _draw_location_labels(
     label_font = _load_font(max(48, width // 42))
     r = max(14, width // 55)
 
-    for name in sorted(MAP_POINTS_NORM, key=lambda key: MAP_POINTS_NORM[key][1]):
+    for name in sorted(MAP_POINTS_PX, key=lambda key: MAP_POINTS_PX[key][1]):
         xy = _point_xy(name, width, height)
         if xy is None:
             continue
