@@ -411,7 +411,7 @@ from app.export_players import (
 from app.profile_card import build_character_card
 from app.faction_ranks import ranks_for_faction
 from app.storage import Character, Storage, NicknameTakenError
-from app.zone_map import build_zone_map_image
+from app.zone_map import TELEGRAM_PHOTO_MAX_BYTES, build_zone_map_image
 
 logger = logging.getLogger(__name__)
 
@@ -4791,11 +4791,20 @@ async def show_zone_map(message: Message) -> None:
             show_markers=False,
         )
         image = BufferedInputFile(image_bytes, filename="zone_map.png")
-        await message.answer_photo(
-            photo=image,
-            caption="Карта Зоны.",
-            reply_markup=_pda_keyboard_for(player),
-        )
+        caption = "Карта Зоны."
+        keyboard = _pda_keyboard_for(player)
+        if len(image_bytes) > TELEGRAM_PHOTO_MAX_BYTES:
+            await message.answer_document(
+                document=image,
+                caption=caption,
+                reply_markup=keyboard,
+            )
+        else:
+            await message.answer_photo(
+                photo=image,
+                caption=caption,
+                reply_markup=keyboard,
+            )
     except Exception:
         logger.exception("Failed to build/send zone map for user %s", message.from_user.id)
         await message.answer(

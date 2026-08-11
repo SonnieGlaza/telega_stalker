@@ -66,8 +66,8 @@ POINT_TYPE_COLORS = {
     "точка интереса": (186, 130, 255),
 }
 
-TELEGRAM_MAX_DIMENSION = 2048
-FALLBACK_SIZE = (758, 2048)
+TELEGRAM_PHOTO_MAX_BYTES = 10 * 1024 * 1024
+FALLBACK_SIZE = (3133, 8456)
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -86,9 +86,6 @@ def _load_background() -> Image.Image:
             w, h = bg.size
             if w <= 0 or h <= 0:
                 raise ValueError("invalid background dimensions")
-            scale = min(1.0, TELEGRAM_MAX_DIMENSION / max(w, h))
-            if scale < 1.0:
-                bg = bg.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
             return bg
         except Exception:
             logger.exception("Failed to load zone background from %s", ZONE_BACKGROUND_PATH)
@@ -128,6 +125,11 @@ def build_zone_map_image(
     *,
     show_markers: bool = False,
 ) -> bytes:
+    if not show_markers and ZONE_BACKGROUND_PATH.exists():
+        data = ZONE_BACKGROUND_PATH.read_bytes()
+        if data:
+            return data
+
     canvas = _load_background()
 
     if show_markers:
