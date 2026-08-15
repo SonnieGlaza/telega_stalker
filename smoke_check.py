@@ -1346,7 +1346,6 @@ def run_smoke_check() -> None:
 
         # Top gear set achievement: Nosorog + Gauss (Gauss requires trader stage 4).
         from app.game_logic import (
-            set_trader_weapon_tier,
             get_trader_weapon_tier,
             upgrade_trader_weapon_tier,
             unlocked_trader_weapon_keys,
