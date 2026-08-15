@@ -160,7 +160,9 @@ def smuggle_transport_keyboard(
 def trader_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🟢 Покупка", callback_data="trade:menu:buy")],
+            [InlineKeyboardButton(text="🍺 Бармен", callback_data="trade:vendor:barkeep")],
+            [InlineKeyboardButton(text="🩺 Медик", callback_data="trade:vendor:medic")],
+            [InlineKeyboardButton(text="🔧 Техник", callback_data="trade:vendor:tech")],
             [InlineKeyboardButton(text="🔴 Продажа", callback_data="trade:menu:sell")],
         ]
     )
@@ -214,45 +216,142 @@ def _trader_page_keyboard(
 
 
 def trader_buy_categories_keyboard() -> InlineKeyboardMarkup:
+    """Совместимость: старое меню покупки → бармен."""
+    return barkeep_menu_keyboard()
+
+
+def barkeep_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🧰 Расходники", callback_data="trade:buy:consumables:0")],
-            [InlineKeyboardButton(text="🛠 Прочее", callback_data="trade:buy:gear:0")],
-            [InlineKeyboardButton(text="🦺 Броня", callback_data="trade:buy:armor:0")],
-            [InlineKeyboardButton(text="🔫 Оружие", callback_data="trade:buy:weapons:0")],
-            [InlineKeyboardButton(text="🔧 Ремонт", callback_data="trade:buy:repair")],
+            [InlineKeyboardButton(text="🍽 Еда и вода", callback_data="trade:barkeep:food:0")],
+            [InlineKeyboardButton(text="🛠 Прочее", callback_data="trade:barkeep:gear:0")],
+            [InlineKeyboardButton(text="🦺 Броня", callback_data="trade:barkeep:armor:0")],
+            [InlineKeyboardButton(text="🔫 Оружие", callback_data="trade:barkeep:weapons:0")],
+            [InlineKeyboardButton(text="⭐ Ассортимент", callback_data="trade:upgrade:barkeep")],
             [InlineKeyboardButton(text="⬅️ Назад к торговцу", callback_data="trade:menu:root")],
         ]
     )
 
 
+def medic_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💊 Аптечки и антирад", callback_data="trade:medic:buy:0")],
+            [InlineKeyboardButton(text="⭐ Ассортимент", callback_data="trade:upgrade:medic")],
+            [InlineKeyboardButton(text="⬅️ Назад к торговцу", callback_data="trade:menu:root")],
+        ]
+    )
+
+
+def tech_menu_keyboard(*, can_buy_upgrade: bool = True) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="Ремонт оружия", callback_data="repair:weapon")],
+        [InlineKeyboardButton(text="Ремонт брони", callback_data="repair:armor")],
+        [InlineKeyboardButton(text="Ремонт грузовика", callback_data="repair:truck")],
+        [InlineKeyboardButton(text="Ремонт Нивы", callback_data="repair:niva")],
+    ]
+    if can_buy_upgrade:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Купить улучшение брони (+1 защита, 5000 RU)",
+                    callback_data="upgrade:armor",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="⭐ Уровень сервиса", callback_data="trade:upgrade:tech")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад к торговцу", callback_data="trade:menu:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def vendor_upgrade_keyboard(vendor: str, *, can_upgrade: bool) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if can_upgrade:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⭐ Купить следующий этап",
+                    callback_data=f"trade:upgrade:{vendor}:confirm",
+                )
+            ]
+        )
+    back = {
+        "barkeep": "trade:vendor:barkeep",
+        "medic": "trade:vendor:medic",
+        "tech": "trade:vendor:tech",
+    }.get(vendor, "trade:menu:root")
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 BUY_CONSUMABLE_AMOUNTS: tuple[int, ...] = (1, 5, 10, 25)
 
 
-def trader_buy_consumables_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
-    items = [
-        ("Энергетик (от 250)", "buyqty:energy_drink"),
-        ("Аптечка (от 260)", "buyqty:medkit"),
-        ("Армейская аптечка (от 450)", "buyqty:medkit_army"),
-        ("Научная аптечка (от 600)", "buyqty:medkit_science"),
-        ("Патроны (от 120)", "buyqty:ammo_pack"),
-        ("Водка (от 150)", "buyqty:vodka"),
-        ("Антирад (от 400)", "buyqty:antirad"),
-        ("Хлеб (от 50)", "buyqty:bread"),
-        ("Колбаса (от 100)", "buyqty:sausage"),
-        ("Тушёнка (от 250)", "buyqty:stew"),
-        ("Вода (от 50)", "buyqty:water_bottle"),
-        ("Минералка (от 100)", "buyqty:mineral_water"),
-        ("Чай Бороды (от 250)", "buyqty:beard_tea"),
-        ("Дизель +5 (от 450)", "buyqty:diesel_can"),
-        ("Бензин +5 (от 225)", "buyqty:gasoline_can"),
+def _filter_shop_rows(
+    catalog: list[tuple[str, str, str]],
+    unlocked_keys: set[str] | frozenset[str] | None,
+) -> list[tuple[str, str]]:
+    if unlocked_keys is None:
+        return [(title, cb) for title, cb, _key in catalog]
+    return [
+        (title, cb)
+        for title, cb, key in catalog
+        if key in unlocked_keys
+        or (key == "weapon_fort12" and "weapon_fora12" in unlocked_keys)
+        or (key == "armor_zarya" and "armor_sunrise" in unlocked_keys)
+        or (key == "armor_bulat" and "armor_berill5m" in unlocked_keys)
+        or (key == "armor_exo" and "armor_exoskeleton" in unlocked_keys)
     ]
+
+
+def trader_buy_consumables_keyboard(
+    *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
+) -> InlineKeyboardMarkup:
+    return barkeep_food_keyboard(page=page, unlocked_keys=unlocked_keys)
+
+
+def barkeep_food_keyboard(
+    *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
+) -> InlineKeyboardMarkup:
+    catalog = [
+        ("Энергетик (от 250)", "buyqty:energy_drink", "energy_drink"),
+        ("Патроны (от 120)", "buyqty:ammo_pack", "ammo_pack"),
+        ("Водка (от 150)", "buyqty:vodka", "vodka"),
+        ("Хлеб (от 50)", "buyqty:bread", "bread"),
+        ("Колбаса (от 100)", "buyqty:sausage", "sausage"),
+        ("Тушёнка (от 250)", "buyqty:stew", "stew"),
+        ("Вода (от 50)", "buyqty:water_bottle", "water_bottle"),
+        ("Минералка (от 100)", "buyqty:mineral_water", "mineral_water"),
+        ("Чай Бороды (от 250)", "buyqty:beard_tea", "beard_tea"),
+        ("Дизель +5 (от 450)", "buyqty:diesel_can", "diesel_can"),
+        ("Бензин +5 (от 225)", "buyqty:gasoline_can", "gasoline_can"),
+    ]
+    items = _filter_shop_rows(catalog, unlocked_keys)
     return _trader_page_keyboard(
         items,
         page=page,
-        page_prefix="trade:buy:consumables",
-        back_callback="trade:menu:buy",
-        back_text="⬅️ Назад к категориям покупки",
+        page_prefix="trade:barkeep:food",
+        back_callback="trade:vendor:barkeep",
+        back_text="⬅️ Назад к бармену",
+    )
+
+
+def medic_buy_keyboard(
+    *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
+) -> InlineKeyboardMarkup:
+    catalog = [
+        ("Аптечка (от 260)", "buyqty:medkit", "medkit"),
+        ("Армейская аптечка (от 450)", "buyqty:medkit_army", "medkit_army"),
+        ("Антирад (от 400)", "buyqty:antirad", "antirad"),
+        ("Научная аптечка (от 600)", "buyqty:medkit_science", "medkit_science"),
+    ]
+    items = _filter_shop_rows(catalog, unlocked_keys)
+    return _trader_page_keyboard(
+        items,
+        page=page,
+        page_prefix="trade:medic:buy",
+        back_callback="trade:vendor:medic",
+        back_text="⬅️ Назад к медику",
     )
 
 
@@ -280,46 +379,50 @@ def buy_item_qty_keyboard(
 
 
 def trader_buy_consumable_qty_keyboard(item_key: str, *, unit_price: int, title: str) -> InlineKeyboardMarkup:
+    from app.vendors import shop_item_vendor
+
+    vendor = shop_item_vendor(item_key)
+    if vendor == "medic":
+        back_callback = "trade:medic:buy:0"
+        back_text = "⬅️ Назад к медику"
+    else:
+        back_callback = "trade:barkeep:food:0"
+        back_text = "⬅️ Назад к бармену"
     return buy_item_qty_keyboard(
         item_key,
         unit_price=unit_price,
-        back_callback="trade:buy:consumables:0",
-        back_text="⬅️ Назад к расходникам",
+        back_callback=back_callback,
+        back_text=back_text,
     )
 
 
-def trader_buy_gear_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
-    items = [
-        ("Купить детектор «Отклик» (1000)", "buy:detector_otklik"),
-        ("Купить детектор «Медведь» (4000)", "buy:detector_medved"),
-        ("Купить детектор «Велес» (10000)", "buy:detector_veles"),
-        ("Купить детектор «Сварог» (30000)", "buy:detector_svarog"),
-        ("Купить Ниву (10000)", "buy:niva"),
-        ("Купить велосипед (3500)", "buy:bicycle"),
-        ("Купить грузовик (50000)", "buy:truck"),
-        ("Купить спальник (20000)", "buy:sleeping_bag"),
-        ("Купить тайник (от 2000)", "buyqty:stash_case"),
+def trader_buy_gear_keyboard(
+    *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
+) -> InlineKeyboardMarkup:
+    catalog = [
+        ("Купить детектор «Отклик» (1000)", "buy:detector_otklik", "detector_otklik"),
+        ("Купить детектор «Медведь» (4000)", "buy:detector_medved", "detector_medved"),
+        ("Купить детектор «Велес» (10000)", "buy:detector_veles", "detector_veles"),
+        ("Купить детектор «Сварог» (30000)", "buy:detector_svarog", "detector_svarog"),
+        ("Купить Ниву (10000)", "buy:niva", "niva"),
+        ("Купить велосипед (3500)", "buy:bicycle", "bicycle"),
+        ("Купить грузовик (50000)", "buy:truck", "truck"),
+        ("Купить спальник (20000)", "buy:sleeping_bag", "sleeping_bag"),
+        ("Купить тайник (от 2000)", "buyqty:stash_case", "stash_case"),
     ]
+    items = _filter_shop_rows(catalog, unlocked_keys)
     return _trader_page_keyboard(
         items,
         page=page,
-        page_prefix="trade:buy:gear",
-        back_callback="trade:menu:buy",
-        back_text="⬅️ Назад к категориям покупки",
+        page_prefix="trade:barkeep:gear",
+        back_callback="trade:vendor:barkeep",
+        back_text="⬅️ Назад к бармену",
     )
 
 
 def trader_buy_repair_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Ремонт оружия", callback_data="repair:weapon")],
-            [InlineKeyboardButton(text="Ремонт брони", callback_data="repair:armor")],
-            [InlineKeyboardButton(text="Купить улучшение брони (+1 защита, 5000 RU)", callback_data="upgrade:armor")],
-            [InlineKeyboardButton(text="Ремонт грузовика", callback_data="repair:truck")],
-            [InlineKeyboardButton(text="Ремонт Нивы", callback_data="repair:niva")],
-            [InlineKeyboardButton(text="⬅️ Назад к категориям покупки", callback_data="trade:menu:buy")],
-        ]
-    )
+    """Совместимость: ремонт теперь у техника."""
+    return tech_menu_keyboard(can_buy_upgrade=True)
 
 
 def inventory_equipment_keyboard(*, money: int | None = None) -> InlineKeyboardMarkup:
@@ -593,52 +696,58 @@ def equip_armor_keyboard(available_armor: list[tuple[str, str, int]]) -> InlineK
     return equip_slot_page_keyboard("armor", page=0, total_pages=1, options=available_armor)
 
 
-def trader_buy_armor_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
-    items = [
-        ("Купить Кожаную куртку (1470)", "buy:armor_leather"),
-        ("Купить Сталкерский бронежилет (2950)", "buy:armor_stalker_vest"),
-        ("Купить Комбинезон «Заря» (3270)", "buy:armor_sunrise"),
-        ("Купить ПСЗ-7 «Долг» (4750)", "buy:armor_psz7d"),
-        ("Купить Берилл-5М «Булат» (8670)", "buy:armor_berill5m"),
-        ("Купить Костюм СЕВА (8840)", "buy:armor_seva"),
-        ("Купить Научный костюм (16040)", "buy:armor_scientific"),
-        ("Купить Экзоскелет (29450)", "buy:armor_exoskeleton"),
-        ("Купить Носорог (90000)", "buy:armor_nosorog"),
+def trader_buy_armor_keyboard(
+    *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
+) -> InlineKeyboardMarkup:
+    catalog = [
+        ("Купить Кожаную куртку (1470)", "buy:armor_leather", "armor_leather"),
+        ("Купить Сталкерский бронежилет (2950)", "buy:armor_stalker_vest", "armor_stalker_vest"),
+        ("Купить Комбинезон «Заря» (3270)", "buy:armor_sunrise", "armor_zarya"),
+        ("Купить ПСЗ-7 «Долг» (4750)", "buy:armor_psz7d", "armor_psz7d"),
+        ("Купить Берилл-5М «Булат» (8670)", "buy:armor_berill5m", "armor_bulat"),
+        ("Купить Костюм СЕВА (8840)", "buy:armor_seva", "armor_seva"),
+        ("Купить Научный костюм (16040)", "buy:armor_scientific", "armor_scientific"),
+        ("Купить Экзоскелет (29450)", "buy:armor_exoskeleton", "armor_exo"),
+        ("Купить Носорог (90000)", "buy:armor_nosorog", "armor_nosorog"),
     ]
+    items = _filter_shop_rows(catalog, unlocked_keys)
     return _trader_page_keyboard(
         items,
         page=page,
-        page_prefix="trade:buy:armor",
-        back_callback="trade:menu:buy",
-        back_text="⬅️ Назад к категориям покупки",
+        page_prefix="trade:barkeep:armor",
+        back_callback="trade:vendor:barkeep",
+        back_text="⬅️ Назад к бармену",
     )
 
 
-def trader_buy_weapons_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
-    items = [
-        ("Купить ПМ (1470)", "buy:weapon_pm"),
-        ("Купить Фора-12 (2130)", "buy:weapon_fora12"),
-        ("Купить Обрез (1960)", "buy:weapon_sawedoff"),
-        ("Купить Гадюка-5 (3600)", "buy:weapon_mp5"),
-        ("Купить Чейзер-13 (4090)", "buy:weapon_chaser13"),
-        ("Купить АКС-74У (4250)", "buy:weapon_aks74u"),
-        ("Купить АК-74 (5560)", "buy:weapon_ak74"),
-        ("Купить СПАС-12 (6380)", "buy:weapon_spas12"),
-        ("Купить ТРс-301 (8180)", "buy:weapon_lr300"),
-        ("Купить ИЛ86 (8510)", "buy:weapon_il86"),
-        ("Купить АН-94 (8510)", "buy:weapon_an94"),
-        ("Купить ГП37 (12930)", "buy:weapon_gp37"),
-        ("Купить Винтарь ВС (14240)", "buy:weapon_vintar"),
-        ("Купить СВДм-2 (14400)", "buy:weapon_svd"),
-        ("Купить РП-74 (15550)", "buy:weapon_rp74"),
-        ("Купить Гаусс-пушку (90000)", "buy:weapon_gauss"),
+def trader_buy_weapons_keyboard(
+    *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
+) -> InlineKeyboardMarkup:
+    catalog = [
+        ("Купить ПМ (1470)", "buy:weapon_pm", "weapon_pm"),
+        ("Купить Фора-12 (2130)", "buy:weapon_fora12", "weapon_fort12"),
+        ("Купить Обрез (1960)", "buy:weapon_sawedoff", "weapon_sawedoff"),
+        ("Купить Гадюка-5 (3600)", "buy:weapon_mp5", "weapon_mp5"),
+        ("Купить Чейзер-13 (4090)", "buy:weapon_chaser13", "weapon_chaser13"),
+        ("Купить АКС-74У (4250)", "buy:weapon_aks74u", "weapon_aks74u"),
+        ("Купить АК-74 (5560)", "buy:weapon_ak74", "weapon_ak74"),
+        ("Купить СПАС-12 (6380)", "buy:weapon_spas12", "weapon_spas12"),
+        ("Купить ТРс-301 (8180)", "buy:weapon_lr300", "weapon_lr300"),
+        ("Купить ИЛ86 (8510)", "buy:weapon_il86", "weapon_il86"),
+        ("Купить АН-94 (8510)", "buy:weapon_an94", "weapon_an94"),
+        ("Купить ГП37 (12930)", "buy:weapon_gp37", "weapon_gp37"),
+        ("Купить Винтарь ВС (14240)", "buy:weapon_vintar", "weapon_vintar"),
+        ("Купить СВДм-2 (14400)", "buy:weapon_svd", "weapon_svd"),
+        ("Купить РП-74 (15550)", "buy:weapon_rp74", "weapon_rp74"),
+        ("Купить Гаусс-пушку (90000)", "buy:weapon_gauss", "weapon_gauss"),
     ]
+    items = _filter_shop_rows(catalog, unlocked_keys)
     return _trader_page_keyboard(
         items,
         page=page,
-        page_prefix="trade:buy:weapons",
-        back_callback="trade:menu:buy",
-        back_text="⬅️ Назад к категориям покупки",
+        page_prefix="trade:barkeep:weapons",
+        back_callback="trade:vendor:barkeep",
+        back_text="⬅️ Назад к бармену",
     )
 
 

@@ -42,7 +42,8 @@ def _all_callback_data() -> set[str]:
 def _callback_handler_coverage() -> tuple[set[str], set[str], list[str]]:
     bot_source = (PROJECT_ROOT / "app" / "bot.py").read_text(encoding="utf-8")
     exact_handlers = set(re.findall(r'@router\.callback_query\(F\.data == "([^"]+)"\)', bot_source))
-    prefix_handlers = set(re.findall(r'@router\.callback_query\(F\.data\.startswith\("([^"]+)"\)\)', bot_source))
+    # Любые F.data.startswith("...") в хендлерах (в т.ч. через |).
+    prefix_handlers = set(re.findall(r'F\.data\.startswith\("([^"]+)"\)', bot_source))
     # Exact multi-value filters: F.data.in_({...})
     for block in re.findall(r"@router\.callback_query\(\s*F\.data\.in_\(\s*\{([^}]+)\}\s*\)", bot_source, flags=re.S):
         exact_handlers.update(re.findall(r'"([^"]+)"', block))
@@ -55,6 +56,9 @@ def _callback_handler_coverage() -> tuple[set[str], set[str], list[str]]:
             continue
         # Registration-only callbacks are handled under FSM state filters.
         if callback_data.startswith("gender:"):
+            continue
+        # Динамические confirm-колбэки покрыты startswith trade:upgrade:
+        if callback_data.endswith(":confirm"):
             continue
         missing.append(callback_data)
     return exact_handlers, prefix_handlers, missing
@@ -142,7 +146,21 @@ def run_smoke_check() -> None:
         assert not again.ok
 
         # Economy / trader items.
+        from app.vendors import set_vendor_tier, get_vendor_tier, upgrade_vendor_tier, apply_tech_repair_discount
+
+        # На старте бармен/медик/техник — этап 1.
+        assert get_vendor_tier(storage, 111, "barkeep") == 1
         assert buy_item(storage, 111, "detector_otklik").ok
+        assert buy_item(storage, 111, "medkit").ok
+        assert not buy_item(storage, 111, "weapon_gauss").ok
+        assert not buy_item(storage, 111, "medkit_science").ok
+        assert not buy_item(storage, 111, "truck").ok
+        # Максимальные этапы для дальнейших smoke-покупок.
+        set_vendor_tier(storage, 111, "barkeep", 4)
+        set_vendor_tier(storage, 222, "barkeep", 4)
+        set_vendor_tier(storage, 333, "barkeep", 4)
+        set_vendor_tier(storage, 111, "medic", 4)
+        set_vendor_tier(storage, 111, "tech", 4)
         storage.change_money(111, 100000)
         assert buy_item(storage, 111, "truck").ok
         storage.change_money(222, 20000)
@@ -172,13 +190,24 @@ def run_smoke_check() -> None:
         assert before_travel is not None
         before_truck_durability = before_travel.truck_durability
         assert buy_item(storage, 111, "sleeping_bag").ok
-        assert buy_item(storage, 111, "medkit").ok
         storage.change_money(111, 100000)
         bulk = buy_item(storage, 111, "medkit", amount=10)
         assert bulk.ok, bulk.text
         assert "×10" in bulk.text
         assert not buy_item(storage, 111, "detector_otklik", amount=5).ok
         assert use_medkit(storage, 111).ok is False  # hp full
+
+        # Апгрейд медика с нуля.
+        set_vendor_tier(storage, 222, "medic", 1)
+        storage.change_money(222, 80_000, skip_debt_collect=True)
+        assert upgrade_vendor_tier(storage, 222, "medic").ok
+        assert upgrade_vendor_tier(storage, 222, "medic").ok
+        assert upgrade_vendor_tier(storage, 222, "medic").ok
+        assert get_vendor_tier(storage, 222, "medic") == 4
+        assert buy_item(storage, 222, "medkit_science").ok
+        # Скидка техника.
+        discounted, pct = apply_tech_repair_discount(storage, 111, 1000)
+        assert pct == 8 and discounted == 920
 
         from app.game_logic import (
             default_trader_sell_catalog_buttons,
@@ -883,10 +912,11 @@ def run_smoke_check() -> None:
         assert revived.hp["222"] > 0
         clear_raid_grid_session(storage, revived)
 
-        # NPC sprites: only maloy.
-        from app.npc_assets import pick_npc_kind
+        # NPC sprites pool.
+        from app.npc_assets import NPC_SPRITE_KEYS, pick_npc_kind
 
-        assert pick_npc_kind() == "maloy"
+        assert pick_npc_kind() in NPC_SPRITE_KEYS
+        assert pick_npc_kind(marauder=True) in ("bandit", "maloy", "mercenary")
 
         # Arena on home base: training reward like easy quest after at least one wave.
         from app.arena_grid import arena_forfeit, get_arena_session, save_arena_session, start_arena
