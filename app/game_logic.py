@@ -807,7 +807,7 @@ def upgrade_trader_weapon_tier(storage: Storage, telegram_id: int) -> ActionResu
     label = TRADER_WEAPON_STAGE_LABELS.get(nxt, f"этап {nxt}")
     return ActionResult(
         True,
-        f"Ассортимент оружия улучшен до этапа {nxt}/4 (−{cost} RU).\nТеперь доступно: {label}.",
+        f"Ассортимент оружия улучшен до этапа {nxt}/{TRADER_WEAPON_TIER_MAX} (−{cost} RU).\nТеперь доступно: {label}.",
         payload={"trader_weapon_tier": nxt},
     )
 
