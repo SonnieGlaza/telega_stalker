@@ -180,6 +180,13 @@ from app.game_logic import (
     BULK_BUY_ITEM_KEYS,
     SHOP_ITEMS,
     buy_item,
+    upgrade_trader_weapon_tier,
+    get_trader_weapon_tier,
+    unlocked_trader_weapon_keys,
+    trader_weapon_assortment_blurb,
+    TRADER_WEAPON_TIER_MAX,
+    TRADER_WEAPON_TIER_UPGRADE_COST,
+    TRADER_WEAPON_STAGE_LABELS,
     buy_first_faction_auction,
     cancel_own_first_auction,
     build_exchange_lots_overview,
@@ -369,6 +376,7 @@ from app.keyboards import (
     trader_buy_gear_keyboard,
     trader_buy_repair_keyboard,
     trader_buy_weapons_keyboard,
+    trader_weapon_upgrade_keyboard,
     trader_keyboard,
     trader_sell_categories_keyboard,
     trader_sell_armor_keyboard,
@@ -2676,13 +2684,48 @@ async def show_buy_armor(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("trade:buy:weapons"))
 async def show_buy_weapons(callback: CallbackQuery) -> None:
     page = _trade_category_page(callback.data, prefix="trade:buy:weapons")
+    storage = get_storage()
+    unlocked = unlocked_trader_weapon_keys(get_trader_weapon_tier(storage, callback.from_user.id))
     await edit_menu_message(
         callback,
         _trader_text(
             callback.from_user.id,
-            "Покупка оружия.\nПосле покупки предмет добавляется в инвентарь.",
+            trader_weapon_assortment_blurb(storage, callback.from_user.id)
+            + "\n\nПокупка оружия.\nПосле покупки предмет добавляется в инвентарь.",
         ),
-        trader_buy_weapons_keyboard(page=page),
+        trader_buy_weapons_keyboard(page=page, unlocked_keys=unlocked),
+    )
+
+
+@router.callback_query(F.data.in_({"trade:upgrade:weapons", "trade:upgrade:weapons:confirm"}))
+async def trader_upgrade_weapons_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    tid = callback.from_user.id
+    if callback.data == "trade:upgrade:weapons:confirm":
+        result = upgrade_trader_weapon_tier(storage, tid)
+        await reply_action_result(callback, result.text)
+        if not result.ok and "максимальный" not in result.text:
+            # Показать экран ассортимента снова при нехватке денег и т.п.
+            pass
+    tier = get_trader_weapon_tier(storage, tid)
+    can_upgrade = tier < TRADER_WEAPON_TIER_MAX
+    body = trader_weapon_assortment_blurb(storage, tid)
+    if can_upgrade:
+        nxt = tier + 1
+        cost = int(TRADER_WEAPON_TIER_UPGRADE_COST.get(nxt, 0))
+        nxt_label = TRADER_WEAPON_STAGE_LABELS.get(nxt, f"этап {nxt}")
+        body += (
+            f"\n\nУлучшение до этапа {nxt}/4 ({nxt_label}) стоит {cost} RU.\n"
+            "Этапы накопительные: каждый открывает следующий тир стволов.\n"
+            "На 4 этапе появляются Гаусс-пушка и Енот."
+        )
+    else:
+        body += "\n\nДальше ассортимент расширится позже."
+    await edit_menu_message(
+        callback,
+        _trader_text(tid, body),
+        trader_weapon_upgrade_keyboard(can_upgrade=can_upgrade),
+        answer_callback=callback.data != "trade:upgrade:weapons:confirm",
     )
 
 
@@ -3235,6 +3278,9 @@ def _quests_rules_text() -> str:
         "НПС с тир-2 стволами могут стрелять на 2 клетки после твоего хода.\n"
         "На 🟠/🔴 мутанты каждый ход идут к тебе (на твою клетку не встают); "
         "на 🟡 — случайный сдвиг. НПС с шансом 50% сдвигаются случайно.\n"
+        "🛡 Сопровождение: доведи NPC от A до B (он идёт за тобой). "
+        "Аномалии всегда; вокруг — мутанты или НПС с T1-стволами. "
+        "Если подопечного схватят — контракт сорван.\n"
         "📡 Поиск артефактов — тактическая охота на сетке (нужен детектор).\n"
         "🚚 Контрабанда — отдельный рейс с риском."
     )
