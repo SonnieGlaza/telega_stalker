@@ -220,6 +220,7 @@ def trader_buy_categories_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🛠 Прочее", callback_data="trade:buy:gear:0")],
             [InlineKeyboardButton(text="🦺 Броня", callback_data="trade:buy:armor:0")],
             [InlineKeyboardButton(text="🔫 Оружие", callback_data="trade:buy:weapons:0")],
+            [InlineKeyboardButton(text="⭐ Ассортимент оружия", callback_data="trade:upgrade:weapons")],
             [InlineKeyboardButton(text="🔧 Ремонт", callback_data="trade:buy:repair")],
             [InlineKeyboardButton(text="⬅️ Назад к торговцу", callback_data="trade:menu:root")],
         ]
@@ -614,25 +615,34 @@ def trader_buy_armor_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
     )
 
 
-def trader_buy_weapons_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
-    items = [
-        ("Купить ПМ (1470)", "buy:weapon_pm"),
-        ("Купить Фора-12 (2130)", "buy:weapon_fora12"),
-        ("Купить Обрез (1960)", "buy:weapon_sawedoff"),
-        ("Купить Гадюка-5 (3600)", "buy:weapon_mp5"),
-        ("Купить Чейзер-13 (4090)", "buy:weapon_chaser13"),
-        ("Купить АКС-74У (4250)", "buy:weapon_aks74u"),
-        ("Купить АК-74 (5560)", "buy:weapon_ak74"),
-        ("Купить СПАС-12 (6380)", "buy:weapon_spas12"),
-        ("Купить ТРс-301 (8180)", "buy:weapon_lr300"),
-        ("Купить ИЛ86 (8510)", "buy:weapon_il86"),
-        ("Купить АН-94 (8510)", "buy:weapon_an94"),
-        ("Купить ГП37 (12930)", "buy:weapon_gp37"),
-        ("Купить Винтарь ВС (14240)", "buy:weapon_vintar"),
-        ("Купить СВДм-2 (14400)", "buy:weapon_svd"),
-        ("Купить РП-74 (15550)", "buy:weapon_rp74"),
-        ("Купить Гаусс-пушку (90000)", "buy:weapon_gauss"),
+def trader_buy_weapons_keyboard(*, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None) -> InlineKeyboardMarkup:
+    catalog = [
+        ("Купить ПМ (1470)", "buy:weapon_pm", "weapon_pm"),
+        ("Купить Фора-12 (2130)", "buy:weapon_fora12", "weapon_fort12"),
+        ("Купить Обрез (1960)", "buy:weapon_sawedoff", "weapon_sawedoff"),
+        ("Купить Гадюка-5 (3600)", "buy:weapon_mp5", "weapon_mp5"),
+        ("Купить Чейзер-13 (4090)", "buy:weapon_chaser13", "weapon_chaser13"),
+        ("Купить АКС-74У (4250)", "buy:weapon_aks74u", "weapon_aks74u"),
+        ("Купить АК-74 (5560)", "buy:weapon_ak74", "weapon_ak74"),
+        ("Купить СПАС-12 (6380)", "buy:weapon_spas12", "weapon_spas12"),
+        ("Купить ТРс-301 (8180)", "buy:weapon_lr300", "weapon_lr300"),
+        ("Купить ИЛ86 (8510)", "buy:weapon_il86", "weapon_il86"),
+        ("Купить АН-94 (8510)", "buy:weapon_an94", "weapon_an94"),
+        ("Купить ГП37 (12930)", "buy:weapon_gp37", "weapon_gp37"),
+        ("Купить Винтарь ВС (14240)", "buy:weapon_vintar", "weapon_vintar"),
+        ("Купить СВДм-2 (14400)", "buy:weapon_svd", "weapon_svd"),
+        ("Купить РП-74 (15550)", "buy:weapon_rp74", "weapon_rp74"),
+        ("Купить Гаусс-пушку (90000)", "buy:weapon_gauss", "weapon_gauss"),
+        ("Купить Енот (85000)", "buy:weapon_raccoon", "weapon_raccoon"),
     ]
+    if unlocked_keys is None:
+        items = [(title, cb) for title, cb, _key in catalog]
+    else:
+        items = [
+            (title, cb)
+            for title, cb, key in catalog
+            if key in unlocked_keys or (key == "weapon_fort12" and "weapon_fora12" in unlocked_keys)
+        ]
     return _trader_page_keyboard(
         items,
         page=page,
@@ -640,6 +650,16 @@ def trader_buy_weapons_keyboard(*, page: int = 0) -> InlineKeyboardMarkup:
         back_callback="trade:menu:buy",
         back_text="⬅️ Назад к категориям покупки",
     )
+
+
+def trader_weapon_upgrade_keyboard(*, can_upgrade: bool) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if can_upgrade:
+        rows.append(
+            [InlineKeyboardButton(text="⭐ Купить следующий этап", callback_data="trade:upgrade:weapons:confirm")]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад к категориям покупки", callback_data="trade:menu:buy")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def trader_sell_categories_keyboard(

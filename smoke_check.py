@@ -468,6 +468,46 @@ def run_smoke_check() -> None:
             assert chase_sess.player not in chase_sess.enemies
         assert _manhattan(chase_sess.enemies[0], chase_sess.player) == 1
 
+        # Escort: anomalies always; escort follows into previous player cell; hostiles T1 or mutants.
+        escort_tpl = QUEST_CONTRACTS["easy_escort_dump"]
+        assert escort_tpl.mission_kind == "escort"
+        escort_sess = _build_session(escort_tpl, QUESTS["easy"])
+        assert escort_sess.escort_alive and escort_sess.escort is not None
+        assert len(escort_sess.hazards) >= 1
+        assert len(escort_sess.objectives) == 1
+        has_mut = len(escort_sess.enemies) >= 1
+        has_npc = len(escort_sess.npcs) >= 1
+        assert has_mut != has_npc
+        if escort_sess.npcs:
+            assert all(w in {"ПМ", "Фора-12", "Обрез"} for w in escort_sess.npc_weapons)
+        from app.quest_mission import move_quest_mission, clear_mission_session
+
+        clear_mission_session(storage, 111)
+        # Put escort adjacent and clear threats for a deterministic follow step.
+        escort_sess.player = (2, 2)
+        escort_sess.start = (2, 2)
+        escort_sess.escort = (2, 3)
+        escort_sess.escort_alive = True
+        escort_sess.enemies = []
+        escort_sess.enemy_kinds = []
+        escort_sess.npcs = []
+        escort_sess.npc_kinds = []
+        escort_sess.npc_weapons = []
+        escort_sess.hazards = []
+        escort_sess.objectives = [(5, 5)]
+        escort_sess.collected = []
+        escort_sess.objectives_done = False
+        escort_sess.turn_seq = 0
+        save_mission_session(storage, 111, escort_sess)
+        follow = move_quest_mission(storage, 111, "right")
+        assert follow.ok, follow.text
+        after_escort = get_mission_session(storage, 111)
+        assert after_escort is not None
+        assert after_escort.player == (3, 2)
+        assert after_escort.escort == (2, 2)
+        assert after_escort.escort_alive
+        clear_mission_session(storage, 111)
+
         # Forced finish for smoke.
         session.collected = list(session.objectives)
         session.objectives_done = True
@@ -1325,12 +1365,40 @@ def run_smoke_check() -> None:
         assert "equip:upgrade:install" in callbacks
         assert "equip:upgrade:remove" in callbacks
 
-        # Top gear set achievement: Nosorog + Gauss.
-        storage.change_money(111, 200_000)
+        # Top gear set achievement: Nosorog + Gauss (Gauss requires trader stage 4).
+        from app.game_logic import (
+            get_trader_weapon_tier,
+            upgrade_trader_weapon_tier,
+            unlocked_trader_weapon_keys,
+            TRADER_WEAPON_TIER_MAX,
+            TRADER_WEAPON_TIER_UPGRADE_COST,
+        )
+
+        assert get_trader_weapon_tier(storage, 111) == 1
+        assert "weapon_pm" in unlocked_trader_weapon_keys(1)
+        assert "weapon_gauss" not in unlocked_trader_weapon_keys(1)
+        assert "weapon_raccoon" not in unlocked_trader_weapon_keys(4)
+        locked_gauss = buy_item(storage, 111, "weapon_gauss")
+        assert not locked_gauss.ok
+        # Отдельный пул на апгрейд ассортимента (без сбора долга за респаун).
+        upgrade_budget = sum(TRADER_WEAPON_TIER_UPGRADE_COST.values()) + 1000
+        storage.change_money(111, upgrade_budget, skip_debt_collect=True)
+        assert upgrade_trader_weapon_tier(storage, 111).ok  # →2
+        assert upgrade_trader_weapon_tier(storage, 111).ok  # →3
+        assert upgrade_trader_weapon_tier(storage, 111).ok  # →4
+        assert "weapon_gauss" not in unlocked_trader_weapon_keys(4)
+        assert upgrade_trader_weapon_tier(storage, 111).ok  # →5
+        assert get_trader_weapon_tier(storage, 111) == TRADER_WEAPON_TIER_MAX
+        assert "weapon_gauss" in unlocked_trader_weapon_keys(5)
+        assert "weapon_raccoon" in unlocked_trader_weapon_keys(5)
+        storage.change_money(111, 300_000, skip_debt_collect=True)
         buy_n = buy_item(storage, 111, "armor_nosorog")
         assert buy_n.ok, buy_n.text
         buy_g = buy_item(storage, 111, "weapon_gauss")
         assert buy_g.ok, buy_g.text
+        buy_raccoon = buy_item(storage, 111, "weapon_raccoon")
+        assert buy_raccoon.ok, buy_raccoon.text
+        assert SHOP_ITEMS["weapon_raccoon"]["name"] == "Енот"
         assert "Тяжёлая артиллерия" in buy_g.text or "Тяжёлая артиллерия" in buy_n.text or (
             "nosorog_gauss" in storage.get_player_achievement_keys(111)
         )
@@ -1342,6 +1410,7 @@ def run_smoke_check() -> None:
         assert "war:section:scenario" in callbacks
         assert "war:section:lobby" in callbacks
         assert "war:section:assault" not in callbacks
+        assert "trade:upgrade:weapons" in callbacks
 
         # Garage vehicle rental: withdraw returns to faction garage after 30 minutes.
         import json

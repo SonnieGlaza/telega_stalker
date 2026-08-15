@@ -46,7 +46,7 @@ class QuestContractTemplate:
     work_location: str
     min_transport: str | None = None  # "niva" | "truck"
     return_home: bool = True
-    # collect/scout/loot — поиск; clear_mutant/clear_marauder — зачистка; anomaly — аномалии.
+    # collect/scout/loot — поиск; clear_*/anomaly — угрозы; escort — сопровождение NPC A→B.
     mission_kind: str = "collect"
 
 
@@ -59,6 +59,13 @@ QUEST_CONTRACTS: dict[str, QuestContractTemplate] = {
     ),
     "easy_dump": QuestContractTemplate(
         "easy_dump", "easy", "Поиск хабара на Свалке", "Свалка", mission_kind="loot"
+    ),
+    "easy_escort_dump": QuestContractTemplate(
+        "easy_escort_dump",
+        "easy",
+        "Сопровождение курьера на Свалке",
+        "Свалка",
+        mission_kind="escort",
     ),
     "hard_yantar": QuestContractTemplate(
         "hard_yantar",
@@ -84,6 +91,14 @@ QUEST_CONTRACTS: dict[str, QuestContractTemplate] = {
         min_transport="niva",
         mission_kind="clear_mutant",
     ),
+    "hard_escort_agroprom": QuestContractTemplate(
+        "hard_escort_agroprom",
+        "hard",
+        "Провести сталкера к Агропрому",
+        "НИИ Агропром",
+        min_transport="niva",
+        mission_kind="escort",
+    ),
     "heavy_boloto": QuestContractTemplate(
         "heavy_boloto", "heavy", "Опасный сбор на Болоте", "Болото", mission_kind="collect"
     ),
@@ -102,6 +117,14 @@ QUEST_CONTRACTS: dict[str, QuestContractTemplate] = {
         "Темная долина",
         min_transport="niva",
         mission_kind="clear_marauder",
+    ),
+    "heavy_escort_valley": QuestContractTemplate(
+        "heavy_escort_valley",
+        "heavy",
+        "Эскорт через Темную долину",
+        "Темная долина",
+        min_transport="niva",
+        mission_kind="escort",
     ),
     "impossible_radar": QuestContractTemplate(
         "impossible_radar",
@@ -201,6 +224,7 @@ WEAPON_CATALOG: dict[str, dict[str, int | str]] = {
     "weapon_svd": {"name": "СВДм-2", "buy_price": 14400, "sell_price": 7040},
     "weapon_rp74": {"name": "РП-74", "buy_price": 15550, "sell_price": 7530},
     "weapon_gauss": {"name": "Гаусс-пушка", "buy_price": 90000, "sell_price": 45000},
+    "weapon_raccoon": {"name": "Енот", "buy_price": 85000, "sell_price": 42000},
 }
 
 # Сезонные награды топ-3 — не продаются у торговца, выдаются в конце сезона.
@@ -268,6 +292,7 @@ WEAPON_RATING_BY_NAME: dict[str, int] = {
     "СВДм-2": 8,
     "РП-74": 8,
     "Гаусс-пушка": 10,
+    "Енот": 9,
     "РПК «Чемпион Зоны»": 10,
     "ВСС «Серебряный сталкер»": 8,
 }
@@ -358,6 +383,7 @@ ITEM_LABELS = {
     "weapon_svd": "СВДм-2",
     "weapon_rp74": "РП-74",
     "weapon_gauss": "Гаусс-пушка",
+    "weapon_raccoon": "Енот",
 }
 
 FUEL_CAN_DIESEL_AMOUNT = 5
@@ -685,8 +711,119 @@ STASH_WEAPON_BY_TIER: dict[int, tuple[str, ...]] = {
     2: ("weapon_mp5", "weapon_chaser13", "weapon_aks74u"),
     3: ("weapon_ak74", "weapon_spas12"),
     4: ("weapon_lr300", "weapon_il86", "weapon_an94"),
-    5: ("weapon_gp37", "weapon_vintar", "weapon_svd", "weapon_rp74"),
+    5: (
+        "weapon_gp37",
+        "weapon_vintar",
+        "weapon_svd",
+        "weapon_rp74",
+        "weapon_gauss",
+        "weapon_raccoon",
+    ),
 }
+
+# Ассортимент оружия у торговца: 5 этапов (накопительно).
+# 1=T1 … 4=T4, 5=T5 (включая Гаусс и Енот).
+TRADER_WEAPON_TIER_MAX = 5
+TRADER_WEAPON_TIER_META_PREFIX = "trader:weapon_tier:"
+# Стоимость перехода на этот этап (с предыдущего).
+TRADER_WEAPON_TIER_UPGRADE_COST: dict[int, int] = {
+    2: 12000,
+    3: 30000,
+    4: 75000,
+    5: 120000,
+}
+TRADER_WEAPON_STAGE_LABELS: dict[int, str] = {
+    1: "T1 — пистолеты и обрезы",
+    2: "T2 — ПП и дробовики",
+    3: "T3 — автоматы и СПАС",
+    4: "T4 — штурмовые винтовки",
+    5: "T5 — топ + Гаусс и Енот",
+}
+
+
+def trader_weapon_tier_meta_key(telegram_id: int) -> str:
+    return f"{TRADER_WEAPON_TIER_META_PREFIX}{int(telegram_id)}"
+
+
+def get_trader_weapon_tier(storage: Storage, telegram_id: int) -> int:
+    raw = storage.get_meta(trader_weapon_tier_meta_key(telegram_id))
+    if raw is None or str(raw).strip() == "":
+        return 1
+    try:
+        tier = int(raw)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(TRADER_WEAPON_TIER_MAX, tier))
+
+
+def set_trader_weapon_tier(storage: Storage, telegram_id: int, tier: int) -> None:
+    safe = max(1, min(TRADER_WEAPON_TIER_MAX, int(tier)))
+    storage.set_meta(trader_weapon_tier_meta_key(telegram_id), str(safe))
+
+
+def unlocked_trader_weapon_keys(tier: int) -> frozenset[str]:
+    """Ключи оружия, доступные к покупке на данном этапе ассортимента."""
+    safe = max(1, min(TRADER_WEAPON_TIER_MAX, int(tier)))
+    unlocked: set[str] = set()
+    for t in range(1, safe + 1):
+        unlocked.update(STASH_WEAPON_BY_TIER.get(t, ()))
+    # Алиас клавиатуры Фора-12.
+    if "weapon_fort12" in unlocked:
+        unlocked.add("weapon_fora12")
+    return frozenset(unlocked)
+
+
+def trader_weapon_is_unlocked(storage: Storage, telegram_id: int, item_key: str) -> bool:
+    key = normalize_shop_item_key(item_key)
+    if key == "weapon_fora12":
+        key = "weapon_fort12"
+    return key in unlocked_trader_weapon_keys(get_trader_weapon_tier(storage, telegram_id))
+
+
+def upgrade_trader_weapon_tier(storage: Storage, telegram_id: int) -> ActionResult:
+    """Купить следующий этап ассортимента оружия у торговца."""
+    character = storage.get_character(telegram_id)
+    if character is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(character):
+        return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
+    current = get_trader_weapon_tier(storage, telegram_id)
+    if current >= TRADER_WEAPON_TIER_MAX:
+        return ActionResult(
+            False,
+            f"Ассортимент оружия уже максимальный (этап {TRADER_WEAPON_TIER_MAX}/{TRADER_WEAPON_TIER_MAX}):\n"
+            f"{TRADER_WEAPON_STAGE_LABELS[TRADER_WEAPON_TIER_MAX]}",
+        )
+    nxt = current + 1
+    cost = int(TRADER_WEAPON_TIER_UPGRADE_COST.get(nxt, 0))
+    if cost <= 0:
+        return ActionResult(False, "Улучшение недоступно.")
+    if not storage.change_money(telegram_id, -cost):
+        return ActionResult(False, f"Недостаточно денег для улучшения ассортимента ({cost} RU).")
+    set_trader_weapon_tier(storage, telegram_id, nxt)
+    label = TRADER_WEAPON_STAGE_LABELS.get(nxt, f"этап {nxt}")
+    return ActionResult(
+        True,
+        f"Ассортимент оружия улучшен до этапа {nxt}/{TRADER_WEAPON_TIER_MAX} (−{cost} RU).\nТеперь доступно: {label}.",
+        payload={"trader_weapon_tier": nxt},
+    )
+
+
+def trader_weapon_assortment_blurb(storage: Storage, telegram_id: int) -> str:
+    tier = get_trader_weapon_tier(storage, telegram_id)
+    label = TRADER_WEAPON_STAGE_LABELS.get(tier, f"этап {tier}")
+    lines = [f"🔫 Ассортимент оружия: этап {tier}/{TRADER_WEAPON_TIER_MAX} — {label}."]
+    if tier < TRADER_WEAPON_TIER_MAX:
+        nxt = tier + 1
+        cost = int(TRADER_WEAPON_TIER_UPGRADE_COST.get(nxt, 0))
+        nxt_label = TRADER_WEAPON_STAGE_LABELS.get(nxt, f"этап {nxt}")
+        lines.append(f"Следующий этап ({nxt_label}) — {cost} RU.")
+    else:
+        lines.append("Максимум: T5 стволы, Гаусс-пушка и Енот.")
+    return "\n".join(lines)
 STASH_CONSUMABLE_DROP_CHANCE = 40  # % на каждый обычный расходник при открытии
 # Редкие расходники в тайнике — пониженный шанс.
 STASH_CONSUMABLE_DROP_CHANCE_BY_KEY: dict[str, int] = {
@@ -3854,6 +3991,15 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
     if item_key == "sleeping_bag" and character.sleeping_bag_owned:
         return ActionResult(False, "У тебя уже есть спальник.")
 
+    if item_key in WEAPON_CATALOG and item_key not in SEASON_REWARD_ITEM_KEYS:
+        if not trader_weapon_is_unlocked(storage, telegram_id, item_key):
+            tier = get_trader_weapon_tier(storage, telegram_id)
+            return ActionResult(
+                False,
+                f"«{title}» пока нет в ассортименте (этап {tier}/{TRADER_WEAPON_TIER_MAX}). "
+                "Улучши ассортимент оружия у торговца.",
+            )
+
     # Пачкой — только расходники, и не больше ×25.
     if qty > 1:
         if item_key in {"truck", "niva", "bicycle", "sleeping_bag"}:
@@ -4027,6 +4173,7 @@ TRADER_SELL_CATALOG: dict[str, tuple[str, ...]] = {
         "weapon_svd",
         "weapon_rp74",
         "weapon_gauss",
+        "weapon_raccoon",
     ),
 }
 

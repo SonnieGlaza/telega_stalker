@@ -30,16 +30,17 @@ _ASSAULT = frozenset({"АК-74", "ТРс-301", "ИЛ86", "АН-94", "ГП37", "�
 # Снайперки — 3 клетки.
 _SNIPER = frozenset({"Винтарь ВС", "СВДм-2"})
 _GAUSS = frozenset({"Гаусс-пушка", "РПК «Чемпион Зоны»"})
+_RACCOON = frozenset({"Енот"})
 
 # Оружие для NPC-защитников (рандом при спавне).
 NPC_WEAPONS = ("ПМ", "Обрез", "АК-74", "СПАС-12", "СВДм-2", "Гаусс-пушка")
 
 
 def weapon_shoot_range(weapon_name: str) -> int:
-    """Пистолеты/дробовики=1, автоматы=2, снайперки=3, гаус=4, нож=1."""
+    """Пистолеты/дробовики=1, автоматы=2, снайперки=3, гаус/енот=4, нож=1."""
     if weapon_name == "Нож":
         return 1
-    if weapon_name in _GAUSS:
+    if weapon_name in _GAUSS or weapon_name in _RACCOON:
         return 4
     if weapon_name in _SNIPER:
         return 3

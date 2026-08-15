@@ -61,6 +61,8 @@ from app.storage import Character, Storage
 
 # Тир-2 стволы с дальностью 2 клетки (автоматы), как обещано в меню заданий.
 QUEST_NPC_WEAPONS: tuple[str, ...] = ("АК-74", "ТРс-301", "ИЛ86")
+# Сопровождение: вокруг только T1-стволы.
+QUEST_ESCORT_NPC_WEAPONS: tuple[str, ...] = ("ПМ", "Фора-12", "Обрез")
 
 
 MISSION_META_PREFIX = "quest_mission:"
@@ -112,6 +114,7 @@ KIND_LABELS: dict[str, str] = {
     "clear_mutant": "Зачистка мутантов",
     "clear_marauder": "Зачистка мародёров",
     "anomaly": "Аномалии",
+    "escort": "Сопровождение",
 }
 
 HOSTILE_MOVE_CHANCE = 0.5
@@ -146,6 +149,9 @@ class QuestMissionSession:
     npcs: list[tuple[int, int]] = field(default_factory=list)  # мародёры / НПС
     npc_kinds: list[str] = field(default_factory=list)  # maloy, …
     npc_weapons: list[str] = field(default_factory=list)
+    escort: tuple[int, int] | None = None
+    escort_kind: str = ""
+    escort_alive: bool = False
     moves: int = 0
     max_moves: int = MAX_MOVES
     grid: int = GRID_SIZE
@@ -171,6 +177,9 @@ class QuestMissionSession:
             "npcs": [list(p) for p in self.npcs],
             "npc_kinds": list(self.npc_kinds),
             "npc_weapons": list(self.npc_weapons),
+            "escort": list(self.escort) if self.escort is not None else None,
+            "escort_kind": self.escort_kind,
+            "escort_alive": self.escort_alive,
             "moves": self.moves,
             "max_moves": self.max_moves,
             "grid": self.grid,
@@ -182,6 +191,10 @@ class QuestMissionSession:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> QuestMissionSession:
+        escort_raw = raw.get("escort")
+        escort: tuple[int, int] | None = None
+        if isinstance(escort_raw, (list, tuple)) and len(escort_raw) >= 2:
+            escort = (int(escort_raw[0]), int(escort_raw[1]))
         return cls(
             contract_key=str(raw.get("contract_key") or ""),
             title=str(raw.get("title") or ""),
@@ -198,6 +211,9 @@ class QuestMissionSession:
             npcs=[(int(p[0]), int(p[1])) for p in (raw.get("npcs") or [])],
             npc_kinds=_parse_npc_kinds(raw.get("npcs") or [], raw.get("npc_kinds")),
             npc_weapons=_parse_npc_weapons(raw.get("npcs") or [], raw.get("npc_weapons")),
+            escort=escort,
+            escort_kind=str(raw.get("escort_kind") or ""),
+            escort_alive=bool(raw.get("escort_alive")),
             moves=int(raw.get("moves") or 0),
             max_moves=int(raw.get("max_moves") or MAX_MOVES),
             grid=int(raw.get("grid") or GRID_SIZE),
@@ -408,7 +424,10 @@ def _location_danger(location: str, difficulty: str) -> int:
 
 
 def _difficulty_threat_flags(difficulty: str, kind: str) -> tuple[bool, bool, bool]:
-    """Аномалии / мутанты / НПС по сложности (+ принудительно для зачисток)."""
+    """Аномалии / мутанты / НПС по сложности (+ принудительно для зачисток/эскорта)."""
+    if kind == "escort":
+        # Аномалии всегда 100%. Вокруг — либо мутанты, либо T1-НПС (выбирается при спавне).
+        return True, True, True
     anom, mutants, npcs = DIFFICULTY_THREATS.get(difficulty, (True, False, False))
     if kind == "clear_mutant":
         mutants = True
@@ -422,6 +441,21 @@ def _free_cell(grid: int, forbidden: set[tuple[int, int]]) -> tuple[int, int]:
     if not free:
         return 0, 0
     return random.choice(free)
+
+
+def _farthest_cell(grid: int, origin: tuple[int, int], forbidden: set[tuple[int, int]]) -> tuple[int, int]:
+    best: tuple[int, int] | None = None
+    best_d = -1
+    for x in range(grid):
+        for y in range(grid):
+            cell = (x, y)
+            if cell in forbidden:
+                continue
+            d = _manhattan(origin, cell)
+            if d > best_d:
+                best_d = d
+                best = cell
+    return best if best is not None else _free_cell(grid, forbidden)
 
 
 def _adjacent_cells(pos: tuple[int, int], grid: int) -> list[tuple[int, int]]:
@@ -469,12 +503,14 @@ def _spawn_npcs(
     weapons: list[str],
     *,
     marauder: bool = False,
+    weapon_pool: tuple[str, ...] | None = None,
 ) -> None:
+    pool = weapon_pool or QUEST_NPC_WEAPONS
     for _ in range(max(0, n)):
         cell = _free_cell(grid, forbidden)
         npcs.append(cell)
         kinds.append(pick_npc_kind(marauder=marauder))
-        weapons.append(random.choice(QUEST_NPC_WEAPONS))
+        weapons.append(random.choice(pool))
         forbidden.add(cell)
 
 
@@ -493,10 +529,22 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
     npcs: list[tuple[int, int]] = []
     npc_kinds: list[str] = []
     npc_weapons: list[str] = []
+    escort: tuple[int, int] | None = None
+    escort_kind = ""
+    escort_alive = False
 
     # Цели задания — по типу контракта.
     if kind in {"clear_mutant", "clear_marauder"}:
         pass  # цель = зачистить соответствующих врагов
+    elif kind == "escort":
+        dest = _farthest_cell(grid, start, forbidden)
+        objectives.append(dest)
+        forbidden.add(dest)
+        adj = [c for c in _adjacent_cells(start, grid) if c not in forbidden]
+        escort = random.choice(adj) if adj else _free_cell(grid, forbidden)
+        forbidden.add(escort)
+        escort_kind = pick_npc_kind(marauder=False)
+        escort_alive = True
     elif kind == "scout":
         objectives.append(_free_cell(grid, forbidden))
         forbidden.add(objectives[0])
@@ -509,26 +557,45 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
         obj_n = 2 if difficulty == "easy" else 3
         _spawn_n(obj_n, grid, forbidden, objectives)
 
-    # Угрозы — строго по сложности (+ добор для зачисток).
+    # Угрозы — строго по сложности (+ добор для зачисток / эскорта).
     want_anom, want_mut, want_npc = _difficulty_threat_flags(difficulty, kind)
     base_n = 2 + max(0, danger // 2)
-    if want_anom:
-        anom_n = base_n + (1 if kind == "anomaly" else 0)
+    if kind == "escort":
+        # Аномалии всегда; вокруг — мутанты ИЛИ T1-НПС.
+        anom_n = base_n + 1
         _spawn_n(anom_n, grid, forbidden, hazards)
-    if want_mut:
-        mut_n = base_n + (1 if kind == "clear_mutant" else 0)
-        _spawn_mutants(mut_n, grid, forbidden, enemies, enemy_kinds)
-    if want_npc:
-        npc_n = base_n + (1 if kind == "clear_marauder" else 0)
-        _spawn_npcs(
-            npc_n,
-            grid,
-            forbidden,
-            npcs,
-            npc_kinds,
-            npc_weapons,
-            marauder=kind == "clear_marauder" or want_npc,
-        )
+        host_n = base_n
+        if random.random() < 0.5:
+            _spawn_mutants(host_n, grid, forbidden, enemies, enemy_kinds)
+        else:
+            _spawn_npcs(
+                host_n,
+                grid,
+                forbidden,
+                npcs,
+                npc_kinds,
+                npc_weapons,
+                marauder=True,
+                weapon_pool=QUEST_ESCORT_NPC_WEAPONS,
+            )
+    else:
+        if want_anom:
+            anom_n = base_n + (1 if kind == "anomaly" else 0)
+            _spawn_n(anom_n, grid, forbidden, hazards)
+        if want_mut:
+            mut_n = base_n + (1 if kind == "clear_mutant" else 0)
+            _spawn_mutants(mut_n, grid, forbidden, enemies, enemy_kinds)
+        if want_npc:
+            npc_n = base_n + (1 if kind == "clear_marauder" else 0)
+            _spawn_npcs(
+                npc_n,
+                grid,
+                forbidden,
+                npcs,
+                npc_kinds,
+                npc_weapons,
+                marauder=kind == "clear_marauder" or want_npc,
+            )
 
     return QuestMissionSession(
         contract_key=template.key,
@@ -545,6 +612,9 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
         npcs=npcs,
         npc_kinds=npc_kinds,
         npc_weapons=npc_weapons,
+        escort=escort,
+        escort_kind=escort_kind,
+        escort_alive=escort_alive,
         max_moves=MAX_MOVES + danger,
         resources_spent=False,
         started_at=_utc_now().isoformat(),
@@ -826,9 +896,43 @@ def _hazard_damage(kind: str, character: Character) -> int:
         raw = 20
     elif kind == "loot":
         raw = 15
+    elif kind == "escort":
+        raw = 22
     else:
         raw = 25
     return apply_incoming_damage(raw, character, min_damage=1)
+
+
+def _fail_escort_mission(
+    storage: Storage,
+    telegram_id: int,
+    session: QuestMissionSession,
+    *,
+    reason: str,
+) -> ActionResult:
+    session.escort_alive = False
+    clear_mission_session(storage, telegram_id)
+    quest = QUESTS.get(session.difficulty) or QUESTS["easy"]
+    fail_result = apply_contract_mission_fail(
+        storage,
+        telegram_id,
+        quest=quest,
+        work_location=session.location,
+        title=session.title,
+        reason=reason,
+    )
+    storage.set_active_contract(telegram_id, None)
+    return ActionResult(
+        False,
+        fail_result.text,
+        payload={"mission_active": False, "mission_done": True, "escort_failed": True},
+    )
+
+
+def _escort_hit_by_hostiles(session: QuestMissionSession) -> bool:
+    if session.kind != "escort" or not session.escort_alive or session.escort is None:
+        return False
+    return session.escort in session.enemies or session.escort in session.npcs
 
 
 def _mission_rating(storage: Storage, telegram_id: int) -> int:
@@ -871,11 +975,18 @@ def mission_status_caption(session: QuestMissionSession, character: Character | 
         lines.append(f"Зачистка: мутанты осталось {len(session.enemies)}")
     elif session.kind == "clear_marauder":
         lines.append(f"Зачистка: НПС осталось {len(session.npcs)}")
+    elif session.kind == "escort":
+        status = "жив, следует за тобой" if session.escort_alive else "потерян"
+        lines.append(f"Подопечный: {status}")
+        left = len([p for p in session.objectives if p not in session.collected])
+        lines.append(f"Точка B: {'достигнута' if left == 0 else 'ещё впереди'}")
     else:
         left = len([p for p in session.objectives if p not in session.collected])
         lines.append(f"Цели: {len(session.collected)}/{len(session.objectives)} (осталось {left})")
     if session.objectives_done:
         lines.append("Цель взята — вернись на стартовую клетку (зелёная рамка).")
+    elif session.kind == "escort":
+        lines.append("Доведи подопечного до точки B, затем вернись на старт.")
     else:
         lines.append("Собери цели / зачисти поле, затем вернись на старт.")
     if character is not None:
@@ -990,26 +1101,36 @@ def start_or_resume_quest_mission(
     image = _render_for_player(storage, telegram_id, session, player)
     want_anom, want_mut, want_npc = _difficulty_threat_flags(template.difficulty, template.mission_kind)
     threat_parts: list[str] = []
-    if want_anom:
-        threat_parts.append("аномалии")
-    if want_mut:
-        threat_parts.append("мутанты")
-    if want_npc:
-        threat_parts.append("НПС")
-    threat_txt = ", ".join(threat_parts) if threat_parts else "без угроз"
+    if template.mission_kind == "escort":
+        threat_txt = "аномалии (всегда) + мутанты или НПС с T1-стволами"
+    else:
+        if want_anom:
+            threat_parts.append("аномалии")
+        if want_mut:
+            threat_parts.append("мутанты")
+        if want_npc:
+            threat_parts.append("НПС")
+        threat_txt = ", ".join(threat_parts) if threat_parts else "без угроз"
+    escort_hint = ""
+    if template.mission_kind == "escort":
+        escort_hint = (
+            "\nПодопечный (голубое кольцо) идёт за тобой клетка в клетку. "
+            "Доведи его до точки B — если его схватят или он погибнет, контракт сорван."
+        )
     return ActionResult(
         True,
         f"Вылазка: «{template.title}» на «{template.work_location}».\n"
         f"{KIND_LABELS.get(template.mission_kind, template.mission_kind)}. "
         f"Энергия −{quest.energy_cost}.\n"
-        f"Угрозы ({template.difficulty}): {threat_txt}.\n"
+        f"Угрозы ({template.difficulty}): {threat_txt}."
+        f"{escort_hint}\n"
         "Зелёная обводка — ты и цели (собери их). Красная — враги. Аномалии без обводки.\n"
         "Дойди до целей и вернись на старт (зелёная рамка клетки).\n"
         "НПС с шансом 50% сдвигаются случайно. "
         "На 🟠/🔴 мутанты каждый ход идут к тебе, но на твою клетку не встают."
         + (
             " 🔫 Мутантов и НПС можно расстреливать с места — кнопки стрельбы по направлениям."
-            if want_mut or want_npc
+            if (want_mut or want_npc or template.mission_kind == "escort")
             else ""
         ),
         payload={
@@ -1114,6 +1235,19 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
             notes.append(note)
         if dead is not None:
             death_result = dead
+    if session.kind == "escort" and session.escort_alive and _escort_hit_by_hostiles(session):
+        session.turn_seq = expected_seq + 1
+        if not _save_mission_if_turn_ok(storage, telegram_id, session, expected_seq):
+            from app.tactical_combat import STALE_TURN_MESSAGE
+
+            return ActionResult(False, STALE_TURN_MESSAGE, payload={"mission_active": True})
+        _apply_quest_mission_damage(storage, telegram_id, pending_damage)
+        return _fail_escort_mission(
+            storage,
+            telegram_id,
+            session,
+            reason="Подопечного схватили на маршруте.",
+        )
     session.turn_seq = expected_seq + 1
     if not _save_mission_if_turn_ok(storage, telegram_id, session, expected_seq):
         from app.tactical_combat import STALE_TURN_MESSAGE
@@ -1214,6 +1348,20 @@ def _complete_quest_turn_after_action(
     pending_damage += shot_damage
     _fight_on_cell("мутанта", "enemies", kinds_attr="enemy_kinds")
     _fight_on_cell("НПС", "npcs", kinds_attr="npc_kinds", npc=True)
+
+    if session.kind == "escort" and session.escort_alive and _escort_hit_by_hostiles(session):
+        session.turn_seq = expected_seq + 1
+        if not _save_mission_if_turn_ok(storage, telegram_id, session, expected_seq):
+            from app.tactical_combat import STALE_TURN_MESSAGE
+
+            return ActionResult(False, STALE_TURN_MESSAGE, payload={"mission_active": True})
+        _apply_quest_mission_damage(storage, telegram_id, pending_damage)
+        return _fail_escort_mission(
+            storage,
+            telegram_id,
+            session,
+            reason="Подопечного схватили на маршруте.",
+        )
 
     if _objectives_complete(session):
         session.objectives_done = True
@@ -1396,16 +1544,24 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
         )
 
     expected_seq = session.turn_seq
+    old_pos = session.player
     session.player = (nx, ny)
     session.moves += 1
     notes: list[str] = []
     pending_damage = 0
     death_result: ActionResult | None = None
 
+    if session.kind == "escort" and session.escort_alive:
+        session.escort = old_pos
+        notes.append("Подопечный следует за тобой.")
+
     # Цель.
     if session.player in session.objectives and session.player not in session.collected:
         session.collected.append(session.player)
-        notes.append("Цель отмечена.")
+        if session.kind == "escort":
+            notes.append("Точка B достигнута — веди подопечного обратно на старт.")
+        else:
+            notes.append("Цель отмечена.")
 
     def _fight_on_cell(
         label: str,
@@ -1434,6 +1590,19 @@ def move_quest_mission(storage: Storage, telegram_id: int, direction: str) -> Ac
 
     _fight_on_cell("мутантом", "enemies", kinds_attr="enemy_kinds", npc=False)
     _fight_on_cell("НПС", "npcs", kinds_attr="npc_kinds", npc=True)
+
+    if session.kind == "escort" and session.escort_alive and _escort_hit_by_hostiles(session):
+        # Враг уже стоял на клетке, куда встал подопечный.
+        return _complete_quest_turn_after_action(
+            storage,
+            telegram_id,
+            session,
+            player,
+            expected_seq,
+            notes + ["Подопечного накрыли!"],
+            pending_damage,
+            death_result,
+        )
 
     # Аномалия.
     if session.player in session.hazards:
@@ -1642,6 +1811,31 @@ def render_mission_frame(
         else:
             _glow(canvas, cx, cy, (70, 230, 110), 22)
 
+    # Подопечный эскорта — NPC со голубым кольцом (не враг).
+    if session.kind == "escort" and session.escort_alive and session.escort is not None:
+        ex, ey = session.escort
+        ecx = margin + ex * cell + cell // 2
+        ecy = margin + ey * cell + cell // 2
+        escort_sprite = npc_sprite_image(session.escort_kind or "maloy")
+        escort_ring = (80, 190, 230)
+        if escort_sprite is not None:
+            _paste_circle(
+                canvas,
+                escort_sprite,
+                ecx,
+                ecy,
+                MISSION_NPC_GRID_DIAMETER,
+                ring_color=escort_ring,
+                ring_width=4,
+            )
+        else:
+            _draw_enemy_icon(ImageDraw.Draw(canvas), ecx, ecy, marauder=False)
+            ImageDraw.Draw(canvas).ellipse(
+                (ecx - 28, ecy - 28, ecx + 28, ecy + 28),
+                outline=escort_ring,
+                width=3,
+            )
+
     # Игрок — аватар персонажа в зелёном кольце.
     px, py = session.player
     pcx = margin + px * cell + cell // 2
@@ -1690,6 +1884,9 @@ def render_mission_frame(
         draw.text((pl + 18, y), f"Мутанты: {len(session.enemies)}", fill=(230, 180, 160), font=body)
     elif session.kind == "clear_marauder":
         draw.text((pl + 18, y), f"НПС: {len(session.npcs)}", fill=(230, 180, 160), font=body)
+    elif session.kind == "escort":
+        escort_txt = "Подопечный: жив" if session.escort_alive else "Подопечный: потерян"
+        draw.text((pl + 18, y), escort_txt, fill=(140, 210, 235), font=body)
     else:
         done = len(session.collected)
         total = len(session.objectives)
@@ -1707,6 +1904,8 @@ def render_mission_frame(
     draw.text((pl + 18, y + 48), f"Ход {session.moves}/{session.max_moves}", fill=(200, 200, 200), font=small)
     if session.objectives_done:
         draw.text((pl + 18, y + 72), ">> Вернись на старт!", fill=(120, 255, 140), font=body)
+    elif session.kind == "escort":
+        draw.text((pl + 18, y + 72), "Веди к точке B (голубой — подопечный)", fill=(170, 200, 210), font=small)
     else:
         draw.text((pl + 18, y + 72), "Зелёные — цели, красные — враги", fill=(170, 170, 170), font=small)
 
