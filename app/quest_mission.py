@@ -115,6 +115,18 @@ KIND_LABELS: dict[str, str] = {
 }
 
 HOSTILE_MOVE_CHANCE = 0.5
+# Мутанты преследуют игрока (не заходя на его клетку) на 🟠/🔴 и в контрабанде.
+MUTANT_CHASE_DIFFICULTIES = frozenset({"heavy", "impossible"})
+
+
+def _manhattan(a: tuple[int, int], b: tuple[int, int]) -> int:
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+def _mutants_chase_player(session: QuestMissionSession | Any) -> bool:
+    if bool(getattr(session, "mutant_chase", False)):
+        return True
+    return str(getattr(session, "difficulty", "") or "") in MUTANT_CHASE_DIFFICULTIES
 
 
 @dataclass
@@ -560,32 +572,61 @@ def _move_hostile_units(
     units: list[tuple[int, int]],
     session: QuestMissionSession,
     kinds: list[str] | None = None,
+    *,
+    chase_player: bool = False,
+    allow_player_cell: bool = True,
 ) -> tuple[list[tuple[int, int]], list[str] | None, int]:
-    """С шансом HOSTILE_MOVE_CHANCE сдвинуть юнит на соседнюю клетку."""
+    """Сдвинуть юниты на соседнюю клетку.
+
+    Обычный режим: с шансом HOSTILE_MOVE_CHANCE случайный шаг (может зайти на игрока).
+    chase_player: всегда шаг к сталкеру; на его клетку не встают.
+    """
     moved = 0
     result: list[tuple[int, int]] = []
     result_kinds: list[str] = []
     occupied = _occupied_for_hostile_move(session)
+    player_pos = session.player
     for i, pos in enumerate(units):
         kind = kinds[i] if kinds is not None and i < len(kinds) else None
         occupied.discard(pos)
-        if random.random() >= HOSTILE_MOVE_CHANCE:
+        if not chase_player and random.random() >= HOSTILE_MOVE_CHANCE:
             result.append(pos)
             if kind is not None:
                 result_kinds.append(kind)
             occupied.add(pos)
             continue
-        candidates = [
-            cell
-            for cell in _adjacent_cells(pos, session.grid)
-            if cell not in occupied or cell == session.player
-        ]
+
+        candidates: list[tuple[int, int]] = []
+        for cell in _adjacent_cells(pos, session.grid):
+            if cell == player_pos:
+                if allow_player_cell and not chase_player:
+                    candidates.append(cell)
+                continue
+            if cell in occupied:
+                continue
+            candidates.append(cell)
+
         if not candidates:
             result.append(pos)
             if kind is not None:
                 result_kinds.append(kind)
             occupied.add(pos)
             continue
+        if chase_player:
+            cur_dist = _manhattan(pos, player_pos)
+            closer = [cell for cell in candidates if _manhattan(cell, player_pos) < cur_dist]
+            same = [cell for cell in candidates if _manhattan(cell, player_pos) == cur_dist]
+            if closer:
+                candidates = closer
+            elif same:
+                candidates = same
+            else:
+                # Уже в упор: все шаги только отдаляют — стоим.
+                result.append(pos)
+                if kind is not None:
+                    result_kinds.append(kind)
+                occupied.add(pos)
+                continue
         nxt = random.choice(candidates)
         result.append(nxt)
         if kind is not None:
@@ -626,14 +667,22 @@ def _maybe_npc_shots(
 
 def _maybe_move_hostiles(session: QuestMissionSession) -> list[str]:
     notes: list[str] = []
+    chase = _mutants_chase_player(session)
     session.enemies, session.enemy_kinds, mut_moved = _move_hostile_units(
-        list(session.enemies), session, list(session.enemy_kinds)
+        list(session.enemies),
+        session,
+        list(session.enemy_kinds),
+        chase_player=chase,
+        allow_player_cell=not chase,
     )
     session.npcs, session.npc_kinds, npc_moved = _move_hostile_units(
         list(session.npcs), session, list(session.npc_kinds)
     )
     if mut_moved:
-        notes.append(f"Мутанты сдвинулись ({mut_moved}).")
+        if chase:
+            notes.append(f"Мутанты идут на тебя ({mut_moved}).")
+        else:
+            notes.append(f"Мутанты сдвинулись ({mut_moved}).")
     if npc_moved:
         notes.append(f"НПС сдвинулись ({npc_moved}).")
     return notes
@@ -956,7 +1005,8 @@ def start_or_resume_quest_mission(
         f"Угрозы ({template.difficulty}): {threat_txt}.\n"
         "Зелёная обводка — ты и цели (собери их). Красная — враги. Аномалии без обводки.\n"
         "Дойди до целей и вернись на старт (зелёная рамка клетки).\n"
-        "Мутанты и НПС с шансом 50% сдвигаются на соседнюю клетку каждый ход."
+        "НПС с шансом 50% сдвигаются случайно. "
+        "На 🟠/🔴 мутанты каждый ход идут к тебе, но на твою клетку не встают."
         + (
             " 🔫 Мутантов и НПС можно расстреливать с места — кнопки стрельбы по направлениям."
             if want_mut or want_npc

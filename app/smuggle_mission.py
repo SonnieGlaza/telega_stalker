@@ -412,6 +412,11 @@ def _as_quest_compat(session: SmuggleMissionSession) -> Any:
         def grid(self) -> int:
             return session.grid
 
+        @property
+        def mutant_chase(self) -> bool:
+            # Контрабанда: мутанты преследуют, как на 🟠/🔴.
+            return True
+
     return _Compat()
 
 

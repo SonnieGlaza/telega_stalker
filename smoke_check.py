@@ -453,6 +453,20 @@ def run_smoke_check() -> None:
         _maybe_move_hostiles(imp_sess)
         assert len(imp_sess.enemies) + len(imp_sess.npcs) == before
 
+        # 🟠/🔴: мутанты преследуют и не встают на клетку игрока.
+        from app.quest_mission import _manhattan
+
+        chase_sess = _build_session(imp_tpl, QUESTS["impossible"])
+        chase_sess.player = (5, 5)
+        chase_sess.enemies = [(0, 0)]
+        chase_sess.enemy_kinds = ["blind_dog"]
+        chase_sess.npcs = []
+        chase_sess.npc_kinds = []
+        for _ in range(16):
+            _maybe_move_hostiles(chase_sess)
+            assert chase_sess.player not in chase_sess.enemies
+        assert _manhattan(chase_sess.enemies[0], chase_sess.player) == 1
+
         # Forced finish for smoke.
         session.collected = list(session.objectives)
         session.objectives_done = True
