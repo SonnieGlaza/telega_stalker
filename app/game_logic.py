@@ -294,8 +294,8 @@ WEAPON_RATING_BY_NAME: dict[str, int] = {
     "Винтарь ВС": 9,
     "СВДм-2": 9,
     "РП-74": 9,
-    "Енот": 10,
-    "Гаусс-пушка": 10,
+    "Енот": 9,
+    "Гаусс-пушка": 9,
     "РПК «Чемпион Зоны»": 10,
     "ВСС «Серебряный сталкер»": 9,
 }
@@ -318,6 +318,31 @@ ARMOR_RATING_BY_NAME: dict[str, int] = {
 ARMOR_RATING_BY_NAME.setdefault("Бронежилет сталкера", ARMOR_RATING_BY_NAME["Сталкерский бронежилет"])
 ARMOR_RATING_BY_NAME.setdefault("Усиленный бронекостюм", ARMOR_RATING_BY_NAME["ПСЗ-7 «Долг»"])
 ARMOR_RATING_BY_NAME.setdefault("Штурмовой экзоскелет", ARMOR_RATING_BY_NAME["Экзоскелет"])
+
+# Шанс полного блока входящего урона (мобы/NPC) по названию экипированной брони.
+ARMOR_BLOCK_CHANCE_BY_NAME: dict[str, int] = {
+    "Куртка новичка": 0,
+    "Кожаная куртка": 3,
+    "Сталкерский бронежилет": 5,
+    "Комбинезон «Заря»": 7,
+    "ПСЗ-7 «Долг»": 8,
+    "Берилл-5М «Булат»": 10,
+    "Костюм СЕВА": 12,
+    "Научный костюм": 14,
+    "Экзоскелет": 16,
+    "Носорог": 20,
+    "Костюм «Чемпион Зоны»": 20,
+    "Бронекостюм «Бронза сезона»": 16,
+}
+ARMOR_BLOCK_CHANCE_BY_NAME.setdefault(
+    "Бронежилет сталкера", ARMOR_BLOCK_CHANCE_BY_NAME["Сталкерский бронежилет"]
+)
+ARMOR_BLOCK_CHANCE_BY_NAME.setdefault(
+    "Усиленный бронекостюм", ARMOR_BLOCK_CHANCE_BY_NAME["ПСЗ-7 «Долг»"]
+)
+ARMOR_BLOCK_CHANCE_BY_NAME.setdefault(
+    "Штурмовой экзоскелет", ARMOR_BLOCK_CHANCE_BY_NAME["Экзоскелет"]
+)
 
 
 ITEM_LABELS = {
@@ -1340,8 +1365,17 @@ def armor_defense(character: Character) -> int:
         return 0
 
 
+def armor_block_chance(character: Character) -> int:
+    """Шанс (%) полностью сбросить входящий удар по экипированной броне."""
+    armor_name = str(character.equipment.get("armor", "Куртка новичка"))
+    return max(0, min(100, int(ARMOR_BLOCK_CHANCE_BY_NAME.get(armor_name, 0))))
+
+
 def apply_incoming_damage(raw_damage: int, character: Character, *, min_damage: int = 1) -> int:
-    """1 защита = −1 к входящему урону."""
+    """Блок брони (полный промах) → 0; иначе 1 защита апгрейда = −1 к урону."""
+    chance = armor_block_chance(character)
+    if chance > 0 and random.randint(1, 100) <= chance:
+        return 0
     return max(min_damage, int(raw_damage) - armor_defense(character))
 
 
@@ -5550,7 +5584,7 @@ def shop_weapon_button_title(item_key: str) -> str:
 
 
 def shop_armor_button_title(item_key: str) -> str:
-    """Подпись кнопки брони: имя · сила · цена."""
+    """Подпись кнопки брони: имя · сила · блок% · цена."""
     key = normalize_shop_item_key(item_key)
     item = ARMOR_CATALOG.get(key) or SHOP_ITEMS.get(key)
     if item is None:
@@ -5558,7 +5592,8 @@ def shop_armor_button_title(item_key: str) -> str:
     name = str(item["name"])
     price = int(item["buy_price"])
     power = _armor_rating(name)
-    return _telegram_button_title(f"{name} · сила {power} · {price}")
+    block = int(ARMOR_BLOCK_CHANCE_BY_NAME.get(name, 0))
+    return _telegram_button_title(f"{name} · сила {power} · блок {block}% · {price}")
 
 
 def shop_gear_button_title(item_key: str) -> str:

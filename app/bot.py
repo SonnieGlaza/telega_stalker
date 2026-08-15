@@ -2746,7 +2746,7 @@ async def show_barkeep_armor(callback: CallbackQuery) -> None:
         _trader_text(
             callback.from_user.id,
             "Бармен — броня и костюмы.\n"
-            "На кнопке: сила (к снаряжению) · цена.\n"
+            "На кнопке: сила · блок N% (шанс сбить удар) · цена.\n"
             "После покупки предмет в инвентаре.",
         ),
         trader_buy_armor_keyboard(page=page, unlocked_keys=_barkeep_unlocked(storage, callback.from_user.id)),

@@ -1415,8 +1415,10 @@ def run_smoke_check() -> None:
         assert buy_raccoon.ok, buy_raccoon.text
         assert SHOP_ITEMS["weapon_raccoon"]["name"] == "Енот"
         from app.game_logic import (
+            ARMOR_BLOCK_CHANCE_BY_NAME,
             ARMOR_RATING_BY_NAME,
             WEAPON_RATING_BY_NAME,
+            armor_block_chance,
             shop_armor_button_title,
             shop_gear_button_title,
             shop_weapon_button_title,
@@ -1439,8 +1441,32 @@ def run_smoke_check() -> None:
         assert WEAPON_RATING_BY_NAME["ПМ"] == 2
         assert WEAPON_RATING_BY_NAME["Фора-12"] == 3
         assert WEAPON_RATING_BY_NAME["Обрез"] == 3
-        assert WEAPON_RATING_BY_NAME["Гаусс-пушка"] == 10
+        assert WEAPON_RATING_BY_NAME["Енот"] == 9
+        assert WEAPON_RATING_BY_NAME["Гаусс-пушка"] == 9
         assert ARMOR_RATING_BY_NAME["Носорог"] == 9
+        from app.tactical_combat import weapon_shoot_range
+
+        assert ARMOR_BLOCK_CHANCE_BY_NAME["Кожаная куртка"] == 3
+        assert ARMOR_BLOCK_CHANCE_BY_NAME["Носорог"] == 20
+        assert "блок 3%" in leather_label
+        assert weapon_shoot_range("АКС-74У") == 2
+        assert weapon_shoot_range("СПАС-12") == 1
+        assert weapon_shoot_range("Винтарь ВС") == 3
+        assert weapon_shoot_range("Енот") == 4
+        assert weapon_shoot_range("Гаусс-пушка") == 4
+        # Полный блок: при шансе 100% урон всегда 0.
+        storage.set_equipment_item(111, "armor", "Носорог")
+        ch = storage.get_character(111)
+        assert ch is not None
+        assert armor_block_chance(ch) == 20
+        import random as _rnd
+
+        _orig = _rnd.randint
+        _rnd.randint = lambda a, b: 1  # всегда в пределах 20%
+        try:
+            assert apply_incoming_damage(15, ch, min_damage=1) == 0
+        finally:
+            _rnd.randint = _orig
         assert "Тяжёлая артиллерия" in buy_g.text or "Тяжёлая артиллерия" in buy_n.text or (
             "nosorog_gauss" in storage.get_player_achievement_keys(111)
         )

@@ -23,12 +23,12 @@ NPC_MOVE_CHANCE = 0.25
 
 # Пистолеты и дробовики — 1 клетка.
 _PISTOL_SHOTGUN = frozenset(
-    {"ПМ", "Фора-12", "Обрез", "Гадюка-5", "Чейзер-13", "АКС-74У", "СПАС-12"}
+    {"ПМ", "Фора-12", "Обрез", "Гадюка-5", "Чейзер-13", "СПАС-12"}
 )
-# Автоматы — 2 клетки.
-_ASSAULT = frozenset({"АК-74", "ТРс-301", "ИЛ86", "АН-94", "ГП37", "РП-74"})
+# Автоматы / укороченные — 2 клетки (дороже и дальше).
+_ASSAULT = frozenset({"АКС-74У", "АК-74", "ТРс-301", "ИЛ86", "АН-94", "ГП37", "РП-74"})
 # Снайперки — 3 клетки.
-_SNIPER = frozenset({"Винтарь ВС", "СВДм-2"})
+_SNIPER = frozenset({"Винтарь ВС", "СВДм-2", "ВСС «Серебряный сталкер»"})
 _GAUSS = frozenset({"Гаусс-пушка", "РПК «Чемпион Зоны»"})
 _RACCOON = frozenset({"Енот"})
 
@@ -37,7 +37,7 @@ NPC_WEAPONS = ("ПМ", "Обрез", "АК-74", "СПАС-12", "СВДм-2", "Г
 
 
 def weapon_shoot_range(weapon_name: str) -> int:
-    """Пистолеты/дробовики=1, автоматы=2, снайперки=3, гаус/енот=4, нож=1."""
+    """Дальность по классу/цене: ближнее=1, автоматы=2, снайпер=3, топ=4."""
     if weapon_name == "Нож":
         return 1
     if weapon_name in _GAUSS or weapon_name in _RACCOON:
@@ -49,11 +49,11 @@ def weapon_shoot_range(weapon_name: str) -> int:
     if weapon_name in _PISTOL_SHOTGUN:
         return 1
     rating = _weapon_rating(weapon_name)
-    if rating <= 3:
+    if rating <= 4:
         return 1
-    if rating <= 6:
-        return 2
     if rating <= 8:
+        return 2
+    if rating <= 9:
         return 3
     return 4
 
@@ -150,7 +150,10 @@ def random_hostile_shots(
             dmg = pre
         key = str(pid)
         player_hp[key] = max(0, player_hp.get(key, 0) - dmg)
-        notes.append(f"Вражеский огонь ({weapon}): −{dmg} HP.")
+        if dmg <= 0:
+            notes.append(f"Вражеский огонь ({weapon}): броня сбила удар.")
+        else:
+            notes.append(f"Вражеский огонь ({weapon}): −{dmg} HP.")
     return notes
 
 
