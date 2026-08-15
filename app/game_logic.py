@@ -5524,6 +5524,71 @@ def _armor_rating(armor_name: str) -> int:
     return ARMOR_RATING_BY_NAME.get(armor_name, 1)
 
 
+def _telegram_button_title(text: str, *, limit: int = 64) -> str:
+    raw = " ".join(str(text).split())
+    if len(raw) <= limit:
+        return raw
+    return raw[: max(1, limit - 1)].rstrip() + "…"
+
+
+def shop_weapon_button_title(item_key: str) -> str:
+    """Подпись кнопки оружия: имя · сила · дальность · цена."""
+    from app.tactical_combat import weapon_shoot_range
+
+    key = normalize_shop_item_key(item_key)
+    item = WEAPON_CATALOG.get(key) or SHOP_ITEMS.get(key)
+    if item is None:
+        return key
+    name = str(item["name"])
+    price = int(item["buy_price"])
+    power = _weapon_rating(name)
+    shoot_range = weapon_shoot_range(name)
+    return _telegram_button_title(f"{name} · сила {power} · д.{shoot_range} · {price}")
+
+
+def shop_armor_button_title(item_key: str) -> str:
+    """Подпись кнопки брони: имя · сила · цена."""
+    key = normalize_shop_item_key(item_key)
+    item = ARMOR_CATALOG.get(key) or SHOP_ITEMS.get(key)
+    if item is None:
+        return key
+    name = str(item["name"])
+    price = int(item["buy_price"])
+    power = _armor_rating(name)
+    return _telegram_button_title(f"{name} · сила {power} · {price}")
+
+
+def shop_gear_button_title(item_key: str) -> str:
+    """Подпись кнопки прочего: транспорт / детектор / спальник / тайник."""
+    key = normalize_shop_item_key(item_key)
+    item = SHOP_ITEMS.get(key)
+    if item is None:
+        return key
+    name = str(item["name"])
+    price = int(item["buy_price"])
+    detector_chance = next((base for dkey, _label, base in ARTIFACT_DETECTORS if dkey == key), None)
+    if detector_chance is not None:
+        short = name.replace("Детектор ", "").replace("«", "").replace("»", "")
+        return _telegram_button_title(f"{short} · арт.{detector_chance}% · {price}")
+    if key == "bicycle":
+        return _telegram_button_title(
+            f"Велосипед · ×{TRAVEL_SPEED_BICYCLE:g} · нагр.×{TRANSPORT_QUEST_REWARD_MULT['bicycle']:g} · {price}"
+        )
+    if key == "niva":
+        return _telegram_button_title(
+            f"Нива · ×{TRAVEL_SPEED_NIVA:g} · нагр.×{TRANSPORT_QUEST_REWARD_MULT['niva']:g} · бензин · {price}"
+        )
+    if key == "truck":
+        return _telegram_button_title(
+            f"Грузовик · ×{TRAVEL_SPEED_TRUCK:g} · нагр.×{TRANSPORT_QUEST_REWARD_MULT['truck']:g} · дизель · {price}"
+        )
+    if key == "sleeping_bag":
+        return _telegram_button_title(f"Спальник · энергия ×2 · {price}")
+    if key == "stash_case":
+        return _telegram_button_title(f"Тайник · от {price}")
+    return _telegram_button_title(f"{name} · {price}")
+
+
 def _safe_fromiso(value: str) -> datetime:
     try:
         return datetime.fromisoformat(value)

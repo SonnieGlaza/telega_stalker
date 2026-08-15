@@ -1414,6 +1414,19 @@ def run_smoke_check() -> None:
         buy_raccoon = buy_item(storage, 111, "weapon_raccoon")
         assert buy_raccoon.ok, buy_raccoon.text
         assert SHOP_ITEMS["weapon_raccoon"]["name"] == "Енот"
+        from app.game_logic import (
+            shop_armor_button_title,
+            shop_gear_button_title,
+            shop_weapon_button_title,
+        )
+
+        pm_label = shop_weapon_button_title("weapon_pm")
+        assert "сила" in pm_label and "д." in pm_label and "1470" in pm_label
+        leather_label = shop_armor_button_title("armor_leather")
+        assert "сила" in leather_label and "1470" in leather_label
+        bike_label = shop_gear_button_title("bicycle")
+        assert "×" in bike_label and "нагр." in bike_label
+        assert "арт." in shop_gear_button_title("detector_otklik")
         assert "Тяжёлая артиллерия" in buy_g.text or "Тяжёлая артиллерия" in buy_n.text or (
             "nosorog_gauss" in storage.get_player_achievement_keys(111)
         )

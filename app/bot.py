@@ -2726,7 +2726,8 @@ async def show_barkeep_gear(callback: CallbackQuery) -> None:
         callback,
         _trader_text(
             callback.from_user.id,
-            "Бармен — детекторы, транспорт, спальник, тайник.",
+            "Бармен — детекторы, транспорт, спальник, тайник.\n"
+            "На кнопке: арт.% / скорость× / нагр.× / цена.",
         ),
         trader_buy_gear_keyboard(page=page, unlocked_keys=_barkeep_unlocked(storage, callback.from_user.id)),
     )
@@ -2744,7 +2745,9 @@ async def show_barkeep_armor(callback: CallbackQuery) -> None:
         callback,
         _trader_text(
             callback.from_user.id,
-            "Бармен — броня и костюмы.\nПосле покупки предмет в инвентаре.",
+            "Бармен — броня и костюмы.\n"
+            "На кнопке: сила (к снаряжению) · цена.\n"
+            "После покупки предмет в инвентаре.",
         ),
         trader_buy_armor_keyboard(page=page, unlocked_keys=_barkeep_unlocked(storage, callback.from_user.id)),
     )
@@ -2762,7 +2765,9 @@ async def show_barkeep_weapons(callback: CallbackQuery) -> None:
         callback,
         _trader_text(
             callback.from_user.id,
-            "Бармен — оружие.\nПосле покупки предмет в инвентаре.",
+            "Бармен — оружие.\n"
+            "На кнопке: сила · д.N (дальность клеток) · цена.\n"
+            "После покупки предмет в инвентаре.",
         ),
         trader_buy_weapons_keyboard(page=page, unlocked_keys=_barkeep_unlocked(storage, callback.from_user.id)),
     )

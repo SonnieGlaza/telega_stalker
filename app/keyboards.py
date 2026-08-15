@@ -399,16 +399,18 @@ def trader_buy_consumable_qty_keyboard(item_key: str, *, unit_price: int, title:
 def trader_buy_gear_keyboard(
     *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
 ) -> InlineKeyboardMarkup:
+    from app.game_logic import shop_gear_button_title
+
     catalog = [
-        ("Купить детектор «Отклик» (1000)", "buy:detector_otklik", "detector_otklik"),
-        ("Купить детектор «Медведь» (4000)", "buy:detector_medved", "detector_medved"),
-        ("Купить детектор «Велес» (10000)", "buy:detector_veles", "detector_veles"),
-        ("Купить детектор «Сварог» (30000)", "buy:detector_svarog", "detector_svarog"),
-        ("Купить Ниву (10000)", "buy:niva", "niva"),
-        ("Купить велосипед (3500)", "buy:bicycle", "bicycle"),
-        ("Купить грузовик (50000)", "buy:truck", "truck"),
-        ("Купить спальник (20000)", "buy:sleeping_bag", "sleeping_bag"),
-        ("Купить тайник (от 2000)", "buyqty:stash_case", "stash_case"),
+        (shop_gear_button_title("detector_otklik"), "buy:detector_otklik", "detector_otklik"),
+        (shop_gear_button_title("detector_medved"), "buy:detector_medved", "detector_medved"),
+        (shop_gear_button_title("detector_veles"), "buy:detector_veles", "detector_veles"),
+        (shop_gear_button_title("detector_svarog"), "buy:detector_svarog", "detector_svarog"),
+        (shop_gear_button_title("niva"), "buy:niva", "niva"),
+        (shop_gear_button_title("bicycle"), "buy:bicycle", "bicycle"),
+        (shop_gear_button_title("truck"), "buy:truck", "truck"),
+        (shop_gear_button_title("sleeping_bag"), "buy:sleeping_bag", "sleeping_bag"),
+        (shop_gear_button_title("stash_case"), "buyqty:stash_case", "stash_case"),
     ]
     items = _filter_shop_rows(catalog, unlocked_keys)
     return _trader_page_keyboard(
@@ -699,16 +701,18 @@ def equip_armor_keyboard(available_armor: list[tuple[str, str, int]]) -> InlineK
 def trader_buy_armor_keyboard(
     *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
 ) -> InlineKeyboardMarkup:
+    from app.game_logic import shop_armor_button_title
+
     catalog = [
-        ("Купить Кожаную куртку (1470)", "buy:armor_leather", "armor_leather"),
-        ("Купить Сталкерский бронежилет (2950)", "buy:armor_stalker_vest", "armor_stalker_vest"),
-        ("Купить Комбинезон «Заря» (3270)", "buy:armor_sunrise", "armor_zarya"),
-        ("Купить ПСЗ-7 «Долг» (4750)", "buy:armor_psz7d", "armor_psz7d"),
-        ("Купить Берилл-5М «Булат» (8670)", "buy:armor_berill5m", "armor_bulat"),
-        ("Купить Костюм СЕВА (8840)", "buy:armor_seva", "armor_seva"),
-        ("Купить Научный костюм (16040)", "buy:armor_scientific", "armor_scientific"),
-        ("Купить Экзоскелет (29450)", "buy:armor_exoskeleton", "armor_exo"),
-        ("Купить Носорог (90000)", "buy:armor_nosorog", "armor_nosorog"),
+        (shop_armor_button_title("armor_leather"), "buy:armor_leather", "armor_leather"),
+        (shop_armor_button_title("armor_stalker_vest"), "buy:armor_stalker_vest", "armor_stalker_vest"),
+        (shop_armor_button_title("armor_zarya"), "buy:armor_sunrise", "armor_zarya"),
+        (shop_armor_button_title("armor_psz7d"), "buy:armor_psz7d", "armor_psz7d"),
+        (shop_armor_button_title("armor_bulat"), "buy:armor_berill5m", "armor_bulat"),
+        (shop_armor_button_title("armor_seva"), "buy:armor_seva", "armor_seva"),
+        (shop_armor_button_title("armor_scientific"), "buy:armor_scientific", "armor_scientific"),
+        (shop_armor_button_title("armor_exo"), "buy:armor_exoskeleton", "armor_exo"),
+        (shop_armor_button_title("armor_nosorog"), "buy:armor_nosorog", "armor_nosorog"),
     ]
     items = _filter_shop_rows(catalog, unlocked_keys)
     return _trader_page_keyboard(
@@ -723,24 +727,26 @@ def trader_buy_armor_keyboard(
 def trader_buy_weapons_keyboard(
     *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
 ) -> InlineKeyboardMarkup:
+    from app.game_logic import shop_weapon_button_title
+
     catalog = [
-        ("Купить ПМ (1470)", "buy:weapon_pm", "weapon_pm"),
-        ("Купить Фора-12 (2130)", "buy:weapon_fora12", "weapon_fort12"),
-        ("Купить Обрез (1960)", "buy:weapon_sawedoff", "weapon_sawedoff"),
-        ("Купить Гадюка-5 (3600)", "buy:weapon_mp5", "weapon_mp5"),
-        ("Купить Чейзер-13 (4090)", "buy:weapon_chaser13", "weapon_chaser13"),
-        ("Купить АКС-74У (4250)", "buy:weapon_aks74u", "weapon_aks74u"),
-        ("Купить АК-74 (5560)", "buy:weapon_ak74", "weapon_ak74"),
-        ("Купить СПАС-12 (6380)", "buy:weapon_spas12", "weapon_spas12"),
-        ("Купить ТРс-301 (8180)", "buy:weapon_lr300", "weapon_lr300"),
-        ("Купить ИЛ86 (8510)", "buy:weapon_il86", "weapon_il86"),
-        ("Купить АН-94 (8510)", "buy:weapon_an94", "weapon_an94"),
-        ("Купить ГП37 (12930)", "buy:weapon_gp37", "weapon_gp37"),
-        ("Купить Винтарь ВС (14240)", "buy:weapon_vintar", "weapon_vintar"),
-        ("Купить СВДм-2 (14400)", "buy:weapon_svd", "weapon_svd"),
-        ("Купить РП-74 (15550)", "buy:weapon_rp74", "weapon_rp74"),
-        ("Купить Гаусс-пушку (90000)", "buy:weapon_gauss", "weapon_gauss"),
-        ("Купить Енот (85000)", "buy:weapon_raccoon", "weapon_raccoon"),
+        (shop_weapon_button_title("weapon_pm"), "buy:weapon_pm", "weapon_pm"),
+        (shop_weapon_button_title("weapon_fort12"), "buy:weapon_fora12", "weapon_fort12"),
+        (shop_weapon_button_title("weapon_sawedoff"), "buy:weapon_sawedoff", "weapon_sawedoff"),
+        (shop_weapon_button_title("weapon_mp5"), "buy:weapon_mp5", "weapon_mp5"),
+        (shop_weapon_button_title("weapon_chaser13"), "buy:weapon_chaser13", "weapon_chaser13"),
+        (shop_weapon_button_title("weapon_aks74u"), "buy:weapon_aks74u", "weapon_aks74u"),
+        (shop_weapon_button_title("weapon_ak74"), "buy:weapon_ak74", "weapon_ak74"),
+        (shop_weapon_button_title("weapon_spas12"), "buy:weapon_spas12", "weapon_spas12"),
+        (shop_weapon_button_title("weapon_lr300"), "buy:weapon_lr300", "weapon_lr300"),
+        (shop_weapon_button_title("weapon_il86"), "buy:weapon_il86", "weapon_il86"),
+        (shop_weapon_button_title("weapon_an94"), "buy:weapon_an94", "weapon_an94"),
+        (shop_weapon_button_title("weapon_gp37"), "buy:weapon_gp37", "weapon_gp37"),
+        (shop_weapon_button_title("weapon_vintar"), "buy:weapon_vintar", "weapon_vintar"),
+        (shop_weapon_button_title("weapon_svd"), "buy:weapon_svd", "weapon_svd"),
+        (shop_weapon_button_title("weapon_rp74"), "buy:weapon_rp74", "weapon_rp74"),
+        (shop_weapon_button_title("weapon_gauss"), "buy:weapon_gauss", "weapon_gauss"),
+        (shop_weapon_button_title("weapon_raccoon"), "buy:weapon_raccoon", "weapon_raccoon"),
     ]
     items = _filter_shop_rows(catalog, unlocked_keys)
     return _trader_page_keyboard(
