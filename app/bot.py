@@ -355,6 +355,7 @@ from app.keyboards import (
     pda_keyboard,
     sortie_keyboard,
     quests_keyboard,
+    quests_info_keyboard,
     travel_keyboard,
     travel_transport_keyboard,
     smuggle_transport_keyboard,
@@ -3224,8 +3225,40 @@ QUEST_DIFFICULTY_EMOJI = {
 }
 
 
+def _quests_rules_text() -> str:
+    return (
+        "Контракты с переходами: прими на базе, доберись до точки, нажми «Выполнить работу» "
+        "(ресурсы спишутся при старте вылазки).\n"
+        "Поле 6×6, лимит ходов ~28+ (зависит от локации).\n"
+        "Угрозы: 🟢 — аномалии; 🟡 — аномалии+мутанты; "
+        "🟠/🔴 — аномалии+мутанты+НПС (сложнее = больше угроз и награда).\n"
+        "НПС с тир-2 стволами могут стрелять на 2 клетки после твоего хода.\n"
+        "На 🟠/🔴 мутанты каждый ход идут к тебе (на твою клетку не встают); "
+        "на 🟡 — случайный сдвиг. НПС с шансом 50% сдвигаются случайно.\n"
+        "📡 Поиск артефактов — тактическая охота на сетке (нужен детектор).\n"
+        "🚚 Контрабанда — отдельный рейс с риском."
+    )
+
+
+def _quests_compact_status(storage, player) -> str:
+    """Короткий статус для меню кнопок — без простыни правил."""
+    lines = ["📋 Задания"]
+    active = storage.get_active_contract(player.telegram_id)
+    if active:
+        template = QUEST_CONTRACTS.get(str(active.get("template_key", "")))
+        stage = str(active.get("stage", "work"))
+        title = template.title if template else "контракт"
+        lines.append(f"📌 {title} · этап: {stage}")
+        if template and stage == "work":
+            lines.append(f"Точка: «{template.work_location}»")
+    else:
+        lines.append("Выбери контракт, поиск артефактов или контрабанду.")
+    if is_traveling(player):
+        lines.append("⏱ Ты в пути — таймер в отдельном сообщении.")
+    return "\n".join(lines)
+
+
 def _quests_menu_payload(storage, player):
-    overview = build_quest_overview(storage, player)
     active = storage.get_active_contract(player.telegram_id)
     home = faction_home_base(player.faction)
     traveling = is_traveling(player)
@@ -3279,19 +3312,13 @@ def _quests_menu_payload(storage, player):
         show_go_home=show_go_home,
         show_cancel=show_cancel,
     )
-    intro = (
-        "Контракты с переходами: прими на базе, доберись до точки, нажми «Выполнить работу» "
-        "(ресурсы спишутся при старте вылазки).\n"
-        "Поле 6×6, лимит ходов ~28+ (зависит от локации).\n"
-        "Угрозы: легко — аномалии; средне — аномалии+мутанты; "
-        "опасно и невозможно — аномалии+мутанты+НПС (сложнее = больше угроз и награда).\n"
-        "НПС с тир-2 стволами могут стрелять на 2 клетки после твоего хода.\n"
-        "На 🟠/🔴 мутанты каждый ход идут к тебе (на твою клетку не встают); "
-        "на 🟡 — случайный сдвиг. НПС с шансом 50% сдвигаются случайно.\n"
-        "📡 Поиск артефактов — тактическая охота на сетке (нужен детектор).\n"
-        "🚚 Контрабанда — отдельная кнопка ниже.\n\n"
-    )
-    return intro + overview, keyboard
+    return _quests_compact_status(storage, player), keyboard
+
+
+def _quests_info_payload(storage, player) -> tuple[str, object]:
+    overview = build_quest_overview(storage, player)
+    text = f"{_quests_rules_text()}\n\n{overview}"
+    return text, quests_info_keyboard()
 
 
 @router.message(F.text == "📋 Задания")
@@ -3329,6 +3356,17 @@ async def refresh_quests_menu(callback: CallbackQuery) -> None:
     text, keyboard = _quests_menu_payload(storage, player)
     if auto:
         text = f"{auto}\n\n{text}"
+    await edit_menu_message(callback, text, keyboard)
+
+
+@router.callback_query(F.data == "quests:info")
+async def quests_info_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or not player_ready(player):
+        await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
+        return
+    text, keyboard = _quests_info_payload(storage, player)
     await edit_menu_message(callback, text, keyboard)
 
 

@@ -94,9 +94,20 @@ def quests_keyboard(
     if show_cancel:
         rows.append([InlineKeyboardButton(text="❌ Отменить контракт", callback_data="contract:cancel")])
     rows.append([InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")])
-    rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="contract:refresh")])
     rows.append([InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:menu")])
+    rows.append(
+        [
+            InlineKeyboardButton(text="ℹ️ Справка", callback_data="quests:info"),
+            InlineKeyboardButton(text="🔄 Обновить", callback_data="contract:refresh"),
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def quests_info_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="⬅️ К заданиям", callback_data="contract:refresh")]]
+    )
 
 
 def travel_keyboard(
