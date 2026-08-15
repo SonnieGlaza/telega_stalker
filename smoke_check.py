@@ -42,7 +42,8 @@ def _all_callback_data() -> set[str]:
 def _callback_handler_coverage() -> tuple[set[str], set[str], list[str]]:
     bot_source = (PROJECT_ROOT / "app" / "bot.py").read_text(encoding="utf-8")
     exact_handlers = set(re.findall(r'@router\.callback_query\(F\.data == "([^"]+)"\)', bot_source))
-    prefix_handlers = set(re.findall(r'@router\.callback_query\(F\.data\.startswith\("([^"]+)"\)\)', bot_source))
+    # Любые F.data.startswith("...") в хендлерах (в т.ч. через |).
+    prefix_handlers = set(re.findall(r'F\.data\.startswith\("([^"]+)"\)', bot_source))
     # Exact multi-value filters: F.data.in_({...})
     for block in re.findall(r"@router\.callback_query\(\s*F\.data\.in_\(\s*\{([^}]+)\}\s*\)", bot_source, flags=re.S):
         exact_handlers.update(re.findall(r'"([^"]+)"', block))
@@ -55,6 +56,9 @@ def _callback_handler_coverage() -> tuple[set[str], set[str], list[str]]:
             continue
         # Registration-only callbacks are handled under FSM state filters.
         if callback_data.startswith("gender:"):
+            continue
+        # Динамические confirm-колбэки покрыты startswith trade:upgrade:
+        if callback_data.endswith(":confirm"):
             continue
         missing.append(callback_data)
     return exact_handlers, prefix_handlers, missing
@@ -142,7 +146,21 @@ def run_smoke_check() -> None:
         assert not again.ok
 
         # Economy / trader items.
+        from app.vendors import set_vendor_tier, get_vendor_tier, upgrade_vendor_tier, apply_tech_repair_discount
+
+        # На старте бармен/медик/техник — этап 1.
+        assert get_vendor_tier(storage, 111, "barkeep") == 1
         assert buy_item(storage, 111, "detector_otklik").ok
+        assert buy_item(storage, 111, "medkit").ok
+        assert not buy_item(storage, 111, "weapon_gauss").ok
+        assert not buy_item(storage, 111, "medkit_science").ok
+        assert not buy_item(storage, 111, "truck").ok
+        # Максимальные этапы для дальнейших smoke-покупок.
+        set_vendor_tier(storage, 111, "barkeep", 4)
+        set_vendor_tier(storage, 222, "barkeep", 4)
+        set_vendor_tier(storage, 333, "barkeep", 4)
+        set_vendor_tier(storage, 111, "medic", 4)
+        set_vendor_tier(storage, 111, "tech", 4)
         storage.change_money(111, 100000)
         assert buy_item(storage, 111, "truck").ok
         storage.change_money(222, 20000)
@@ -172,13 +190,24 @@ def run_smoke_check() -> None:
         assert before_travel is not None
         before_truck_durability = before_travel.truck_durability
         assert buy_item(storage, 111, "sleeping_bag").ok
-        assert buy_item(storage, 111, "medkit").ok
         storage.change_money(111, 100000)
         bulk = buy_item(storage, 111, "medkit", amount=10)
         assert bulk.ok, bulk.text
         assert "×10" in bulk.text
         assert not buy_item(storage, 111, "detector_otklik", amount=5).ok
         assert use_medkit(storage, 111).ok is False  # hp full
+
+        # Апгрейд медика с нуля.
+        set_vendor_tier(storage, 222, "medic", 1)
+        storage.change_money(222, 80_000, skip_debt_collect=True)
+        assert upgrade_vendor_tier(storage, 222, "medic").ok
+        assert upgrade_vendor_tier(storage, 222, "medic").ok
+        assert upgrade_vendor_tier(storage, 222, "medic").ok
+        assert get_vendor_tier(storage, 222, "medic") == 4
+        assert buy_item(storage, 222, "medkit_science").ok
+        # Скидка техника.
+        discounted, pct = apply_tech_repair_discount(storage, 111, 1000)
+        assert pct == 8 and discounted == 920
 
         from app.game_logic import (
             default_trader_sell_catalog_buttons,
@@ -1365,32 +1394,18 @@ def run_smoke_check() -> None:
         assert "equip:upgrade:install" in callbacks
         assert "equip:upgrade:remove" in callbacks
 
-        # Top gear set achievement: Nosorog + Gauss (Gauss requires trader stage 4).
-        from app.game_logic import (
-            get_trader_weapon_tier,
-            upgrade_trader_weapon_tier,
-            unlocked_trader_weapon_keys,
-            TRADER_WEAPON_TIER_MAX,
-            TRADER_WEAPON_TIER_UPGRADE_COST,
-        )
+        # Top gear: Nosorog + Gauss + Енот (бармен этап 4).
+        from app.vendors import set_vendor_tier, get_vendor_tier, unlocked_vendor_item_keys
 
-        assert get_trader_weapon_tier(storage, 111) == 1
-        assert "weapon_pm" in unlocked_trader_weapon_keys(1)
-        assert "weapon_gauss" not in unlocked_trader_weapon_keys(1)
-        assert "weapon_raccoon" not in unlocked_trader_weapon_keys(4)
+        set_vendor_tier(storage, 111, "barkeep", 1)
+        assert "weapon_gauss" not in unlocked_vendor_item_keys("barkeep", 1)
+        assert "weapon_raccoon" not in unlocked_vendor_item_keys("barkeep", 3)
         locked_gauss = buy_item(storage, 111, "weapon_gauss")
         assert not locked_gauss.ok
-        # Отдельный пул на апгрейд ассортимента (без сбора долга за респаун).
-        upgrade_budget = sum(TRADER_WEAPON_TIER_UPGRADE_COST.values()) + 1000
-        storage.change_money(111, upgrade_budget, skip_debt_collect=True)
-        assert upgrade_trader_weapon_tier(storage, 111).ok  # →2
-        assert upgrade_trader_weapon_tier(storage, 111).ok  # →3
-        assert upgrade_trader_weapon_tier(storage, 111).ok  # →4
-        assert "weapon_gauss" not in unlocked_trader_weapon_keys(4)
-        assert upgrade_trader_weapon_tier(storage, 111).ok  # →5
-        assert get_trader_weapon_tier(storage, 111) == TRADER_WEAPON_TIER_MAX
-        assert "weapon_gauss" in unlocked_trader_weapon_keys(5)
-        assert "weapon_raccoon" in unlocked_trader_weapon_keys(5)
+        set_vendor_tier(storage, 111, "barkeep", 4)
+        assert get_vendor_tier(storage, 111, "barkeep") == 4
+        assert "weapon_gauss" in unlocked_vendor_item_keys("barkeep", 4)
+        assert "weapon_raccoon" in unlocked_vendor_item_keys("barkeep", 4)
         storage.change_money(111, 300_000, skip_debt_collect=True)
         buy_n = buy_item(storage, 111, "armor_nosorog")
         assert buy_n.ok, buy_n.text
@@ -1410,7 +1425,8 @@ def run_smoke_check() -> None:
         assert "war:section:scenario" in callbacks
         assert "war:section:lobby" in callbacks
         assert "war:section:assault" not in callbacks
-        assert "trade:upgrade:weapons" in callbacks
+        assert "trade:vendor:barkeep" in callbacks
+        assert "trade:upgrade:barkeep" in callbacks
 
         # Garage vehicle rental: withdraw returns to faction garage after 30 minutes.
         import json

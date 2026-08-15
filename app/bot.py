@@ -180,13 +180,6 @@ from app.game_logic import (
     BULK_BUY_ITEM_KEYS,
     SHOP_ITEMS,
     buy_item,
-    upgrade_trader_weapon_tier,
-    get_trader_weapon_tier,
-    unlocked_trader_weapon_keys,
-    trader_weapon_assortment_blurb,
-    TRADER_WEAPON_TIER_MAX,
-    TRADER_WEAPON_TIER_UPGRADE_COST,
-    TRADER_WEAPON_STAGE_LABELS,
     buy_first_faction_auction,
     cancel_own_first_auction,
     build_exchange_lots_overview,
@@ -376,8 +369,13 @@ from app.keyboards import (
     trader_buy_gear_keyboard,
     trader_buy_repair_keyboard,
     trader_buy_weapons_keyboard,
-    trader_weapon_upgrade_keyboard,
     trader_keyboard,
+    barkeep_menu_keyboard,
+    barkeep_food_keyboard,
+    medic_menu_keyboard,
+    medic_buy_keyboard,
+    tech_menu_keyboard,
+    vendor_upgrade_keyboard,
     trader_sell_categories_keyboard,
     trader_sell_armor_keyboard,
     trader_sell_consumables_keyboard,
@@ -2569,18 +2567,72 @@ async def show_trader(message: Message) -> None:
     if await reject_if_busy(message, player.telegram_id):
         return
     await message.answer(
-        _trader_text(message.from_user.id, "Торговец на связи. Выбери раздел:"),
+        _trader_text(message.from_user.id, "Торговая зона. Выбери специалиста:"),
         reply_markup=trader_keyboard(),
     )
 
 
 @router.callback_query(F.data == "trade:menu:buy")
 async def show_buy_menu(callback: CallbackQuery) -> None:
+    # Совместимость со старой кнопкой «Покупка» → бармен.
+    storage = get_storage()
     await edit_menu_message(
         callback,
-        _trader_text(callback.from_user.id, "Покупка: выбери категорию."),
-        trader_buy_categories_keyboard(),
+        _trader_text(
+            callback.from_user.id,
+            _vendor_intro(storage, callback.from_user.id, "barkeep"),
+        ),
+        barkeep_menu_keyboard(),
     )
+
+
+@router.callback_query(F.data == "trade:vendor:barkeep")
+async def show_barkeep(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    await edit_menu_message(
+        callback,
+        _trader_text(
+            callback.from_user.id,
+            _vendor_intro(storage, callback.from_user.id, "barkeep"),
+        ),
+        barkeep_menu_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "trade:vendor:medic")
+async def show_medic(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    await edit_menu_message(
+        callback,
+        _trader_text(
+            callback.from_user.id,
+            _vendor_intro(storage, callback.from_user.id, "medic"),
+        ),
+        medic_menu_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "trade:vendor:tech")
+async def show_tech(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    from app.vendors import vendor_item_is_unlocked
+
+    can_upgrade = vendor_item_is_unlocked(storage, callback.from_user.id, "armor_upgrade")
+    await edit_menu_message(
+        callback,
+        _trader_text(
+            callback.from_user.id,
+            _vendor_intro(storage, callback.from_user.id, "tech"),
+        ),
+        tech_menu_keyboard(can_buy_upgrade=can_upgrade),
+    )
+
+
+def _vendor_intro(storage, telegram_id: int, vendor: str) -> str:
+    from app.vendors import vendor_assortment_blurb, VENDOR_TITLES
+
+    title = VENDOR_TITLES.get(vendor, vendor)
+    return f"«{title}».\n{vendor_assortment_blurb(storage, telegram_id, vendor)}"
 
 
 @router.callback_query(F.data == "trade:menu:sell")
@@ -2603,7 +2655,7 @@ async def show_sell_menu(callback: CallbackQuery) -> None:
 async def show_trade_root(callback: CallbackQuery) -> None:
     await edit_menu_message(
         callback,
-        _trader_text(callback.from_user.id, "Торговец на связи. Выбери раздел:"),
+        _trader_text(callback.from_user.id, "Торговая зона. Выбери специалиста:"),
         trader_keyboard(),
     )
 
@@ -2638,111 +2690,156 @@ def _sell_category_keyboard(player, category: str, page: int):
     return trader_sell_categories_keyboard()
 
 
-@router.callback_query(F.data.startswith("trade:buy:consumables"))
-async def show_buy_consumables(callback: CallbackQuery) -> None:
-    page = _trade_category_page(callback.data, prefix="trade:buy:consumables")
-    await edit_menu_message(
-        callback,
-        _trader_text(
-            callback.from_user.id,
-            "Покупка расходников:\nВыбери товар, затем количество (×1 / ×5 / ×10 / ×25).",
-        ),
-        trader_buy_consumables_keyboard(page=page),
-    )
+def _barkeep_unlocked(storage, telegram_id: int):
+    from app.vendors import get_vendor_tier, unlocked_vendor_item_keys
+
+    return unlocked_vendor_item_keys("barkeep", get_vendor_tier(storage, telegram_id, "barkeep"))
 
 
-@router.callback_query(F.data.startswith("trade:buy:gear"))
-async def show_buy_gear(callback: CallbackQuery) -> None:
-    page = _trade_category_page(callback.data, prefix="trade:buy:gear")
-    await edit_menu_message(
-        callback,
-        _trader_text(
-            callback.from_user.id,
-            "Прочее:\n"
-            "• Оружие и броня — в своих разделах.\n"
-            "• После покупки предмет попадает в инвентарь.\n"
-            "• Экипировка — во вкладке «🎒 Инвентарь».\n"
-            "• Ремонт — в разделе «🔧 Ремонт».",
-        ),
-        trader_buy_gear_keyboard(page=page),
-    )
-
-
-@router.callback_query(F.data.startswith("trade:buy:armor"))
-async def show_buy_armor(callback: CallbackQuery) -> None:
-    page = _trade_category_page(callback.data, prefix="trade:buy:armor")
-    await edit_menu_message(
-        callback,
-        _trader_text(
-            callback.from_user.id,
-            "Покупка брони и костюмов.\nПосле покупки предмет добавляется в инвентарь.",
-        ),
-        trader_buy_armor_keyboard(page=page),
-    )
-
-
-@router.callback_query(F.data.startswith("trade:buy:weapons"))
-async def show_buy_weapons(callback: CallbackQuery) -> None:
-    page = _trade_category_page(callback.data, prefix="trade:buy:weapons")
+@router.callback_query(
+    F.data.startswith("trade:barkeep:food") | F.data.startswith("trade:buy:consumables")
+)
+async def show_barkeep_food(callback: CallbackQuery) -> None:
     storage = get_storage()
-    unlocked = unlocked_trader_weapon_keys(get_trader_weapon_tier(storage, callback.from_user.id))
+    page = _trade_category_page(callback.data, prefix="trade:barkeep:food")
+    if (callback.data or "").startswith("trade:buy:consumables"):
+        page = _trade_category_page(callback.data, prefix="trade:buy:consumables")
     await edit_menu_message(
         callback,
         _trader_text(
             callback.from_user.id,
-            trader_weapon_assortment_blurb(storage, callback.from_user.id)
-            + "\n\nПокупка оружия.\nПосле покупки предмет добавляется в инвентарь.",
+            "Бармен — еда, вода и бытовые расходники.\nВыбери товар, затем количество.",
         ),
-        trader_buy_weapons_keyboard(page=page, unlocked_keys=unlocked),
+        barkeep_food_keyboard(page=page, unlocked_keys=_barkeep_unlocked(storage, callback.from_user.id)),
     )
 
 
-@router.callback_query(F.data.in_({"trade:upgrade:weapons", "trade:upgrade:weapons:confirm"}))
-async def trader_upgrade_weapons_callback(callback: CallbackQuery) -> None:
+@router.callback_query(
+    F.data.startswith("trade:barkeep:gear") | F.data.startswith("trade:buy:gear")
+)
+async def show_barkeep_gear(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    page = _trade_category_page(callback.data, prefix="trade:barkeep:gear")
+    if (callback.data or "").startswith("trade:buy:gear"):
+        page = _trade_category_page(callback.data, prefix="trade:buy:gear")
+    await edit_menu_message(
+        callback,
+        _trader_text(
+            callback.from_user.id,
+            "Бармен — детекторы, транспорт, спальник, тайник.",
+        ),
+        trader_buy_gear_keyboard(page=page, unlocked_keys=_barkeep_unlocked(storage, callback.from_user.id)),
+    )
+
+
+@router.callback_query(
+    F.data.startswith("trade:barkeep:armor") | F.data.startswith("trade:buy:armor")
+)
+async def show_barkeep_armor(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    page = _trade_category_page(callback.data, prefix="trade:barkeep:armor")
+    if (callback.data or "").startswith("trade:buy:armor"):
+        page = _trade_category_page(callback.data, prefix="trade:buy:armor")
+    await edit_menu_message(
+        callback,
+        _trader_text(
+            callback.from_user.id,
+            "Бармен — броня и костюмы.\nПосле покупки предмет в инвентаре.",
+        ),
+        trader_buy_armor_keyboard(page=page, unlocked_keys=_barkeep_unlocked(storage, callback.from_user.id)),
+    )
+
+
+@router.callback_query(
+    F.data.startswith("trade:barkeep:weapons") | F.data.startswith("trade:buy:weapons")
+)
+async def show_barkeep_weapons(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    page = _trade_category_page(callback.data, prefix="trade:barkeep:weapons")
+    if (callback.data or "").startswith("trade:buy:weapons"):
+        page = _trade_category_page(callback.data, prefix="trade:buy:weapons")
+    await edit_menu_message(
+        callback,
+        _trader_text(
+            callback.from_user.id,
+            "Бармен — оружие.\nПосле покупки предмет в инвентаре.",
+        ),
+        trader_buy_weapons_keyboard(page=page, unlocked_keys=_barkeep_unlocked(storage, callback.from_user.id)),
+    )
+
+
+@router.callback_query(F.data.startswith("trade:medic:buy"))
+async def show_medic_buy(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    from app.vendors import get_vendor_tier, unlocked_vendor_item_keys
+
+    page = _trade_category_page(callback.data, prefix="trade:medic:buy")
+    unlocked = unlocked_vendor_item_keys("medic", get_vendor_tier(storage, callback.from_user.id, "medic"))
+    await edit_menu_message(
+        callback,
+        _trader_text(
+            callback.from_user.id,
+            "Медик — аптечки и антирад.\nВыбери товар, затем количество.",
+        ),
+        medic_buy_keyboard(page=page, unlocked_keys=unlocked),
+    )
+
+
+@router.callback_query(F.data.startswith("trade:upgrade:"))
+async def vendor_upgrade_callback(callback: CallbackQuery) -> None:
+    from app.vendors import (
+        VENDOR_KEYS,
+        VENDOR_TIER_MAX,
+        VENDOR_UPGRADE_COST,
+        VENDOR_STAGE_LABELS,
+        get_vendor_tier,
+        upgrade_vendor_tier,
+        vendor_assortment_blurb,
+    )
+
+    raw = callback.data or ""
+    parts = raw.split(":")
+    # trade:upgrade:<vendor> or trade:upgrade:<vendor>:confirm
+    vendor = parts[2] if len(parts) >= 3 else ""
+    if vendor not in VENDOR_KEYS:
+        await safe_callback_answer(callback, "Неизвестный специалист.", show_alert=True)
+        return
     storage = get_storage()
     tid = callback.from_user.id
-    if callback.data == "trade:upgrade:weapons:confirm":
-        result = upgrade_trader_weapon_tier(storage, tid)
+    confirm = len(parts) >= 4 and parts[3] == "confirm"
+    if confirm:
+        result = upgrade_vendor_tier(storage, tid, vendor)
         await reply_action_result(callback, result.text)
-        if not result.ok and "максимальный" not in result.text:
-            # Показать экран ассортимента снова при нехватке денег и т.п.
-            pass
-    tier = get_trader_weapon_tier(storage, tid)
-    can_upgrade = tier < TRADER_WEAPON_TIER_MAX
-    body = trader_weapon_assortment_blurb(storage, tid)
+    tier = get_vendor_tier(storage, tid, vendor)
+    can_upgrade = tier < VENDOR_TIER_MAX
+    body = vendor_assortment_blurb(storage, tid, vendor)
     if can_upgrade:
         nxt = tier + 1
-        cost = int(TRADER_WEAPON_TIER_UPGRADE_COST.get(nxt, 0))
-        nxt_label = TRADER_WEAPON_STAGE_LABELS.get(nxt, f"этап {nxt}")
-        body += (
-            f"\n\nУлучшение до этапа {nxt}/{TRADER_WEAPON_TIER_MAX} ({nxt_label}) стоит {cost} RU.\n"
-            "Этапы накопительные: каждый открывает следующий тир стволов.\n"
-            "На 5 этапе появляются T5, Гаусс-пушка и Енот."
-        )
-    else:
-        body += "\n\nДальше ассортимент расширится позже."
+        cost = int(VENDOR_UPGRADE_COST.get(vendor, {}).get(nxt, 0))
+        nxt_label = VENDOR_STAGE_LABELS.get(vendor, {}).get(nxt, f"этап {nxt}")
+        body += f"\n\nУлучшение до этапа {nxt}/{VENDOR_TIER_MAX} ({nxt_label}) — {cost} RU."
     await edit_menu_message(
         callback,
         _trader_text(tid, body),
-        trader_weapon_upgrade_keyboard(can_upgrade=can_upgrade),
-        answer_callback=callback.data != "trade:upgrade:weapons:confirm",
+        vendor_upgrade_keyboard(vendor, can_upgrade=can_upgrade),
+        answer_callback=not confirm,
     )
 
 
 @router.callback_query(F.data == "trade:buy:repair")
 async def show_buy_repair(callback: CallbackQuery) -> None:
+    # Совместимость → техник.
+    storage = get_storage()
+    from app.vendors import vendor_item_is_unlocked
+
+    can_upgrade = vendor_item_is_unlocked(storage, callback.from_user.id, "armor_upgrade")
     await edit_menu_message(
         callback,
         _trader_text(
             callback.from_user.id,
-            "Ремонт снаряжения:\n"
-            "• Оружие и броня — по текущей прочности.\n"
-            "• Улучшение брони — предмет в инвентарь (5000 RU, +1 защита).\n"
-            "  Установи/сними в «Экипировка» на любую броню.\n"
-            "• Грузовик — восстановление прочности кузова.\n"
-            "• Нива — восстановление прочности (дешевле грузовика).",
+            _vendor_intro(storage, callback.from_user.id, "tech"),
         ),
-        trader_buy_repair_keyboard(),
+        tech_menu_keyboard(can_buy_upgrade=can_upgrade),
     )
 
 

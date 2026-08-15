@@ -985,6 +985,9 @@ class Storage:
             f"notify:prefs:{tid}",
             f"tutorial:seen:{tid}",
             f"trader:weapon_tier:{tid}",
+            f"vendor:barkeep_tier:{tid}",
+            f"vendor:medic_tier:{tid}",
+            f"vendor:tech_tier:{tid}",
         ]
         like_prefixes = (
             f"contracts:daily_done:{tid}:",

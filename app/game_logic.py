@@ -3991,14 +3991,17 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
     if item_key == "sleeping_bag" and character.sleeping_bag_owned:
         return ActionResult(False, "У тебя уже есть спальник.")
 
-    if item_key in WEAPON_CATALOG and item_key not in SEASON_REWARD_ITEM_KEYS:
-        if not trader_weapon_is_unlocked(storage, telegram_id, item_key):
-            tier = get_trader_weapon_tier(storage, telegram_id)
-            return ActionResult(
-                False,
-                f"«{title}» пока нет в ассортименте (этап {tier}/{TRADER_WEAPON_TIER_MAX}). "
-                "Улучши ассортимент оружия у торговца.",
-            )
+    from app.vendors import shop_item_vendor, vendor_item_is_unlocked, get_vendor_tier, VENDOR_TIER_MAX, VENDOR_TITLES
+
+    vendor = shop_item_vendor(item_key)
+    if vendor is not None and not vendor_item_is_unlocked(storage, telegram_id, item_key):
+        tier = get_vendor_tier(storage, telegram_id, vendor)
+        who = VENDOR_TITLES.get(vendor, "торговец")
+        return ActionResult(
+            False,
+            f"«{title}» пока нет у специалиста «{who}» (этап {tier}/{VENDOR_TIER_MAX}). "
+            f"Улучши ассортимент у него.",
+        )
 
     # Пачкой — только расходники, и не больше ×25.
     if qty > 1:
@@ -4694,6 +4697,9 @@ def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult
         return ActionResult(False, f"{'Оружие' if target == 'weapon' else 'Броня'} уже в идеальном состоянии.")
     missing = MAX_DURABILITY - current
     price = max(80, missing * 7)
+    from app.vendors import apply_tech_repair_discount
+
+    price, discount_pct = apply_tech_repair_discount(storage, telegram_id, price)
     if not storage.change_money(telegram_id, -price):
         return ActionResult(False, f"Недостаточно денег на ремонт ({price} RU).")
     storage.update_equipment_fields(telegram_id, {f"{target}_durability": MAX_DURABILITY})
@@ -4701,9 +4707,10 @@ def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult
     _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     target_label = "Оружие" if target == "weapon" else "Броня"
+    discount_note = f" (−{discount_pct}% у техника)" if discount_pct > 0 else ""
     return ActionResult(
         True,
-        f"{target_label} «{item_name}» полностью отремонтировано за {price} RU.{achievements_text}",
+        f"{target_label} «{item_name}» полностью отремонтировано за {price} RU{discount_note}.{achievements_text}",
     )
 
 
@@ -4728,7 +4735,7 @@ def install_armor_upgrade(storage: Storage, telegram_id: int) -> ActionResult:
     if int(player.inventory.get("armor_upgrade", 0)) <= 0:
         return ActionResult(
             False,
-            "Нет улучшения брони в инвентаре. Купи у торговца в разделе «Ремонт».",
+            "Нет улучшения брони в инвентаре. Купи у техника.",
         )
     if not storage.remove_item(telegram_id, "armor_upgrade", 1):
         return ActionResult(False, "Нет улучшения брони в инвентаре.")
@@ -4782,13 +4789,17 @@ def repair_truck(storage: Storage, telegram_id: int) -> ActionResult:
     missing = 100 - current
     # Ремонт транспорта −10% от базовой формулы missing*70 / floor 500.
     price = max(450, int(round(missing * 63)))
+    from app.vendors import apply_tech_repair_discount
+
+    price, discount_pct = apply_tech_repair_discount(storage, telegram_id, price)
     if not storage.change_money(telegram_id, -price):
         return ActionResult(False, f"Недостаточно денег на ремонт грузовика ({price} RU).")
     storage.set_truck_durability(telegram_id, 100)
     storage.add_player_stat(telegram_id, "trades_done", 1)
     _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
-    return ActionResult(True, f"Грузовик полностью отремонтирован за {price} RU.{achievements_text}")
+    discount_note = f" (−{discount_pct}% у техника)" if discount_pct > 0 else ""
+    return ActionResult(True, f"Грузовик полностью отремонтирован за {price} RU{discount_note}.{achievements_text}")
 
 
 def repair_niva(storage: Storage, telegram_id: int) -> ActionResult:
@@ -4808,13 +4819,17 @@ def repair_niva(storage: Storage, telegram_id: int) -> ActionResult:
     missing = 100 - current
     # Ремонт Нивы дешевле грузовика: missing×35, минимум 200 RU.
     price = max(200, int(round(missing * 35)))
+    from app.vendors import apply_tech_repair_discount
+
+    price, discount_pct = apply_tech_repair_discount(storage, telegram_id, price)
     if not storage.change_money(telegram_id, -price):
         return ActionResult(False, f"Недостаточно денег на ремонт Нивы ({price} RU).")
     storage.set_niva_durability(telegram_id, 100)
     storage.add_player_stat(telegram_id, "trades_done", 1)
     _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
-    return ActionResult(True, f"Нива полностью отремонтирована за {price} RU.{achievements_text}")
+    discount_note = f" (−{discount_pct}% у техника)" if discount_pct > 0 else ""
+    return ActionResult(True, f"Нива полностью отремонтирована за {price} RU{discount_note}.{achievements_text}")
 
 
 def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = None) -> ActionResult:
