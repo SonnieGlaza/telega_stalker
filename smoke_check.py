@@ -1415,18 +1415,32 @@ def run_smoke_check() -> None:
         assert buy_raccoon.ok, buy_raccoon.text
         assert SHOP_ITEMS["weapon_raccoon"]["name"] == "Енот"
         from app.game_logic import (
+            ARMOR_RATING_BY_NAME,
+            WEAPON_RATING_BY_NAME,
             shop_armor_button_title,
             shop_gear_button_title,
             shop_weapon_button_title,
         )
 
         pm_label = shop_weapon_button_title("weapon_pm")
-        assert "сила" in pm_label and "д." in pm_label and "1470" in pm_label
+        assert "сила 2" in pm_label and "д." in pm_label and "2000" in pm_label
         leather_label = shop_armor_button_title("armor_leather")
-        assert "сила" in leather_label and "1470" in leather_label
+        assert "сила 2" in leather_label and "2000" in leather_label
         bike_label = shop_gear_button_title("bicycle")
         assert "×" in bike_label and "нагр." in bike_label
         assert "арт." in shop_gear_button_title("detector_otklik")
+        fora_label = shop_weapon_button_title("weapon_fort12")
+        assert "сила 3" in fora_label and "3000" in fora_label
+        sawed_label = shop_weapon_button_title("weapon_sawedoff")
+        assert "сила 3" in sawed_label and "1800" in sawed_label
+        assert int(SHOP_ITEMS["weapon_pm"]["buy_price"]) == 2000
+        assert int(SHOP_ITEMS["weapon_fort12"]["buy_price"]) == 3000
+        assert int(SHOP_ITEMS["weapon_sawedoff"]["buy_price"]) == 1800
+        assert WEAPON_RATING_BY_NAME["ПМ"] == 2
+        assert WEAPON_RATING_BY_NAME["Фора-12"] == 3
+        assert WEAPON_RATING_BY_NAME["Обрез"] == 3
+        assert WEAPON_RATING_BY_NAME["Гаусс-пушка"] == 10
+        assert ARMOR_RATING_BY_NAME["Носорог"] == 9
         assert "Тяжёлая артиллерия" in buy_g.text or "Тяжёлая артиллерия" in buy_n.text or (
             "nosorog_gauss" in storage.get_player_achievement_keys(111)
         )
