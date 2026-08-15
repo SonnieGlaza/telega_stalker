@@ -344,6 +344,31 @@ ARMOR_BLOCK_CHANCE_BY_NAME.setdefault(
     "Штурмовой экзоскелет", ARMOR_BLOCK_CHANCE_BY_NAME["Экзоскелет"]
 )
 
+# Постоянное смягчение входящего урона (−HP) с 100% шансом по экипированной броне.
+ARMOR_MITIGATION_BY_NAME: dict[str, int] = {
+    "Куртка новичка": 0,
+    "Кожаная куртка": 1,
+    "Сталкерский бронежилет": 2,
+    "Комбинезон «Заря»": 2,
+    "ПСЗ-7 «Долг»": 3,
+    "Берилл-5М «Булат»": 3,
+    "Костюм СЕВА": 4,
+    "Научный костюм": 4,
+    "Экзоскелет": 5,
+    "Носорог": 6,
+    "Костюм «Чемпион Зоны»": 6,
+    "Бронекостюм «Бронза сезона»": 5,
+}
+ARMOR_MITIGATION_BY_NAME.setdefault(
+    "Бронежилет сталкера", ARMOR_MITIGATION_BY_NAME["Сталкерский бронежилет"]
+)
+ARMOR_MITIGATION_BY_NAME.setdefault(
+    "Усиленный бронекостюм", ARMOR_MITIGATION_BY_NAME["ПСЗ-7 «Долг»"]
+)
+ARMOR_MITIGATION_BY_NAME.setdefault(
+    "Штурмовой экзоскелет", ARMOR_MITIGATION_BY_NAME["Экзоскелет"]
+)
+
 
 ITEM_LABELS = {
     "energy_drink": "Энергетик",
@@ -1358,11 +1383,17 @@ def compute_total_gear_power(character: Character) -> int:
 
 
 def armor_defense(character: Character) -> int:
-    """Плоское снижение урона от ударов: +1 за каждый уровень улучшения брони."""
+    """Плоское снижение урона от апгрейдов брони: +1 за каждый уровень улучшения."""
     try:
         return max(0, int(character.equipment.get("armor_upgrade_level", 0)))
     except (TypeError, ValueError):
         return 0
+
+
+def armor_flat_mitigation(character: Character) -> int:
+    """Постоянное смягчение удара (−HP) от самой брони, всегда."""
+    armor_name = str(character.equipment.get("armor", "Куртка новичка"))
+    return max(0, int(ARMOR_MITIGATION_BY_NAME.get(armor_name, 0)))
 
 
 def armor_block_chance(character: Character) -> int:
@@ -1372,11 +1403,12 @@ def armor_block_chance(character: Character) -> int:
 
 
 def apply_incoming_damage(raw_damage: int, character: Character, *, min_damage: int = 1) -> int:
-    """Блок брони (полный промах) → 0; иначе 1 защита апгрейда = −1 к урону."""
+    """Блок брони → 0; иначе урон − смягчение брони − апгрейды (не ниже min_damage)."""
     chance = armor_block_chance(character)
     if chance > 0 and random.randint(1, 100) <= chance:
         return 0
-    return max(min_damage, int(raw_damage) - armor_defense(character))
+    reduced = int(raw_damage) - armor_flat_mitigation(character) - armor_defense(character)
+    return max(min_damage, reduced)
 
 
 def _inventory_has_named_gear(character: Character, catalog: dict[str, dict[str, int | str]], name: str) -> bool:
@@ -4560,13 +4592,21 @@ def build_equip_root_text(character: Character) -> tuple[str, list[tuple[str, st
     if artifact and artifact != "Нет":
         art_note = f" ({_artifact_bonus_short(artifact)})"
     defense = armor_defense(character)
+    flat_mit = armor_flat_mitigation(character)
+    block = armor_block_chance(character)
     upgrade_stock = int(character.inventory.get("armor_upgrade", 0))
     defense_line = ""
-    if defense > 0 or upgrade_stock > 0:
-        defense_line = (
-            f"\n🛡 Защита на броне: +{defense} (−{defense} урона от удара)"
-            f"\n📦 Улучшений в инвентаре: {upgrade_stock}"
-        )
+    armor_bonus_bits: list[str] = []
+    if flat_mit > 0:
+        armor_bonus_bits.append(f"смягчение −{flat_mit} HP")
+    if block > 0:
+        armor_bonus_bits.append(f"блок {block}%")
+    if defense > 0:
+        armor_bonus_bits.append(f"апгрейд −{defense}")
+    if armor_bonus_bits:
+        defense_line = "\n🛡 " + " · ".join(armor_bonus_bits)
+    if upgrade_stock > 0:
+        defense_line += f"\n📦 Улучшений в инвентаре: {upgrade_stock}"
     text = (
         "⚙️ Экипировка\n"
         "Выбери категорию, затем предмет из инвентаря.\n"
@@ -5584,7 +5624,7 @@ def shop_weapon_button_title(item_key: str) -> str:
 
 
 def shop_armor_button_title(item_key: str) -> str:
-    """Подпись кнопки брони: имя · сила · блок% · цена."""
+    """Подпись кнопки брони: имя · сила · смягчение · блок% · цена."""
     key = normalize_shop_item_key(item_key)
     item = ARMOR_CATALOG.get(key) or SHOP_ITEMS.get(key)
     if item is None:
@@ -5592,8 +5632,11 @@ def shop_armor_button_title(item_key: str) -> str:
     name = str(item["name"])
     price = int(item["buy_price"])
     power = _armor_rating(name)
+    mit = int(ARMOR_MITIGATION_BY_NAME.get(name, 0))
     block = int(ARMOR_BLOCK_CHANCE_BY_NAME.get(name, 0))
-    return _telegram_button_title(f"{name} · сила {power} · блок {block}% · {price}")
+    return _telegram_button_title(
+        f"{name} · сила {power} · −{mit} · блок {block}% · {price}"
+    )
 
 
 def shop_gear_button_title(item_key: str) -> str:

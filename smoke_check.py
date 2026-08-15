@@ -1416,9 +1416,11 @@ def run_smoke_check() -> None:
         assert SHOP_ITEMS["weapon_raccoon"]["name"] == "Енот"
         from app.game_logic import (
             ARMOR_BLOCK_CHANCE_BY_NAME,
+            ARMOR_MITIGATION_BY_NAME,
             ARMOR_RATING_BY_NAME,
             WEAPON_RATING_BY_NAME,
             armor_block_chance,
+            armor_flat_mitigation,
             shop_armor_button_title,
             shop_gear_button_title,
             shop_weapon_button_title,
@@ -1428,6 +1430,7 @@ def run_smoke_check() -> None:
         assert "сила 2" in pm_label and "д." in pm_label and "2000" in pm_label
         leather_label = shop_armor_button_title("armor_leather")
         assert "сила 2" in leather_label and "2000" in leather_label
+        assert "−1" in leather_label and "блок 3%" in leather_label
         bike_label = shop_gear_button_title("bicycle")
         assert "×" in bike_label and "нагр." in bike_label
         assert "арт." in shop_gear_button_title("detector_otklik")
@@ -1448,23 +1451,33 @@ def run_smoke_check() -> None:
 
         assert ARMOR_BLOCK_CHANCE_BY_NAME["Кожаная куртка"] == 3
         assert ARMOR_BLOCK_CHANCE_BY_NAME["Носорог"] == 20
-        assert "блок 3%" in leather_label
+        assert ARMOR_MITIGATION_BY_NAME["Кожаная куртка"] == 1
+        assert ARMOR_MITIGATION_BY_NAME["Носорог"] == 6
         assert weapon_shoot_range("АКС-74У") == 2
         assert weapon_shoot_range("СПАС-12") == 1
         assert weapon_shoot_range("Винтарь ВС") == 3
         assert weapon_shoot_range("Енот") == 4
         assert weapon_shoot_range("Гаусс-пушка") == 4
-        # Полный блок: при шансе 100% урон всегда 0.
         storage.set_equipment_item(111, "armor", "Носорог")
+        storage.update_equipment_fields(111, {"armor_upgrade_level": 0})
         ch = storage.get_character(111)
         assert ch is not None
         assert armor_block_chance(ch) == 20
+        assert armor_flat_mitigation(ch) == 6
         import random as _rnd
 
         _orig = _rnd.randint
-        _rnd.randint = lambda a, b: 1  # всегда в пределах 20%
+        _rnd.randint = lambda a, b: 1  # блок срабатывает
         try:
             assert apply_incoming_damage(15, ch, min_damage=1) == 0
+        finally:
+            _rnd.randint = _orig
+        ch = storage.get_character(111)
+        assert ch is not None
+        _rnd.randint = lambda a, b: 100  # блок не срабатывает
+        try:
+            # 15 − 6 смягчение − 0 апгрейд = 9
+            assert apply_incoming_damage(15, ch, min_damage=1) == 9
         finally:
             _rnd.randint = _orig
         assert "Тяжёлая артиллерия" in buy_g.text or "Тяжёлая артиллерия" in buy_n.text or (
