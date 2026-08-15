@@ -66,6 +66,7 @@ class Character:
 SURVIVAL_HOURLY_GAIN = 1
 SURVIVAL_DAMAGE_PER_TICK = 10
 SURVIVAL_DAMAGE_TICK_MINUTES = 30
+SURVIVAL_NEED_MAX = 100  # голод / жажда / радиация
 SURVIVAL_CRITICAL_NEED = 100  # голод/жажда/радиация ≥ порога → урон HP
 
 # Telegram user id > 2^31-1 → Postgres INTEGER overflow. Everywhere BIGINT.
@@ -1959,8 +1960,8 @@ class Storage:
 
             hours_passed = int((now - needs_updated_at).total_seconds() // 3600)
             if hours_passed > 0:
-                hunger = min(200, hunger + hours_passed * SURVIVAL_HOURLY_GAIN)
-                thirst = min(200, thirst + hours_passed * SURVIVAL_HOURLY_GAIN)
+                hunger = min(SURVIVAL_NEED_MAX, hunger + hours_passed * SURVIVAL_HOURLY_GAIN)
+                thirst = min(SURVIVAL_NEED_MAX, thirst + hours_passed * SURVIVAL_HOURLY_GAIN)
                 needs_updated_at = now
                 changed = True
 
@@ -2011,9 +2012,9 @@ class Storage:
                 WHERE telegram_id = ?
                 """,
                 (
-                    max(0, min(200, radiation)),
-                    max(0, min(200, hunger)),
-                    max(0, min(200, thirst)),
+                    max(0, min(SURVIVAL_NEED_MAX, radiation)),
+                    max(0, min(SURVIVAL_NEED_MAX, hunger)),
+                    max(0, min(SURVIVAL_NEED_MAX, thirst)),
                     final_health,
                     needs_updated_at.isoformat(),
                     survival_damage_at.isoformat(),
@@ -2050,9 +2051,9 @@ class Storage:
         character = self.get_character(telegram_id, refresh_energy=False)
         if character is None:
             return False
-        new_radiation = max(0, min(200, character.radiation + radiation_delta))
-        new_hunger = max(0, min(200, character.hunger + hunger_delta))
-        new_thirst = max(0, min(200, character.thirst + thirst_delta))
+        new_radiation = max(0, min(SURVIVAL_NEED_MAX, character.radiation + radiation_delta))
+        new_hunger = max(0, min(SURVIVAL_NEED_MAX, character.hunger + hunger_delta))
+        new_thirst = max(0, min(SURVIVAL_NEED_MAX, character.thirst + thirst_delta))
         try:
             from app.game_logic import effective_max_health
 
@@ -2094,6 +2095,48 @@ class Storage:
                     remember_death_cause(self, telegram_id, cause)
             except Exception:
                 pass
+        return True
+
+    def set_survival_needs(
+        self,
+        telegram_id: int,
+        *,
+        radiation: int | None = None,
+        hunger: int | None = None,
+        thirst: int | None = None,
+    ) -> bool:
+        """Абсолютная установка шкал выживания (в пределах 0…SURVIVAL_NEED_MAX)."""
+        character = self.get_character(telegram_id, refresh_energy=False)
+        if character is None:
+            return False
+        new_radiation = (
+            max(0, min(SURVIVAL_NEED_MAX, int(radiation)))
+            if radiation is not None
+            else character.radiation
+        )
+        new_hunger = (
+            max(0, min(SURVIVAL_NEED_MAX, int(hunger))) if hunger is not None else character.hunger
+        )
+        new_thirst = (
+            max(0, min(SURVIVAL_NEED_MAX, int(thirst))) if thirst is not None else character.thirst
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE characters
+                SET radiation = ?, hunger = ?, thirst = ?, needs_updated_at = ?, survival_damage_at = ?
+                WHERE telegram_id = ?
+                """,
+                (
+                    new_radiation,
+                    new_hunger,
+                    new_thirst,
+                    utc_now().isoformat(),
+                    utc_now().isoformat(),
+                    telegram_id,
+                ),
+            )
+        self.save_snapshot()
         return True
 
     def recover_energy(self, telegram_id: int) -> None:
@@ -4223,9 +4266,9 @@ class Storage:
             travel_transport=Storage._row_get(row, "travel_transport"),
             active_contract_json=Storage._row_get(row, "active_contract_json"),
             energy_updated_at=_as_dt(Storage._row_get(row, "energy_updated_at")),
-            radiation=max(0, min(200, _as_int(Storage._row_get(row, "radiation"), 0))),
-            hunger=max(0, min(200, _as_int(Storage._row_get(row, "hunger"), 0))),
-            thirst=max(0, min(200, _as_int(Storage._row_get(row, "thirst"), 0))),
+            radiation=max(0, min(SURVIVAL_NEED_MAX, _as_int(Storage._row_get(row, "radiation"), 0))),
+            hunger=max(0, min(SURVIVAL_NEED_MAX, _as_int(Storage._row_get(row, "hunger"), 0))),
+            thirst=max(0, min(SURVIVAL_NEED_MAX, _as_int(Storage._row_get(row, "thirst"), 0))),
             needs_updated_at=_as_dt(Storage._row_get(row, "needs_updated_at")),
             survival_damage_at=_as_dt(Storage._row_get(row, "survival_damage_at")),
         )

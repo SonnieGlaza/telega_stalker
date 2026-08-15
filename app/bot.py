@@ -1563,7 +1563,7 @@ async def cmd_dbstatus(message: Message) -> None:
             f"Спальник: {'да' if me.sleeping_bag_owned else 'нет'}\n"
             f"• Оружие: {me.equipment.get('weapon')} ({me.equipment.get('weapon_durability')}%)\n"
             f"• Броня: {me.equipment.get('armor')} ({me.equipment.get('armor_durability')}%)\n"
-            f"• Рад {me.radiation} | голод {me.hunger} | жажда {me.thirst}"
+            f"• Рад {me.radiation}/100 | голод {me.hunger}/100 | жажда {me.thirst}/100"
         )
     await message.answer(
         "Статус БД:\n"

@@ -634,7 +634,7 @@ def build_character_card(
 
     draw.text(
         (right_x, 424),
-        f"Радиация: {character.radiation}   Голод: {character.hunger}   Жажда: {character.thirst}",
+        f"Радиация: {character.radiation}/100   Голод: {character.hunger}/100   Жажда: {character.thirst}/100",
         fill=(208, 208, 208),
         font=small_font,
     )

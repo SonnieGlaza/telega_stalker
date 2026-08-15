@@ -883,10 +883,11 @@ def run_smoke_check() -> None:
         assert revived.hp["222"] > 0
         clear_raid_grid_session(storage, revived)
 
-        # NPC sprites: only maloy.
-        from app.npc_assets import pick_npc_kind
+        # NPC sprites pool.
+        from app.npc_assets import NPC_SPRITE_KEYS, pick_npc_kind
 
-        assert pick_npc_kind() == "maloy"
+        assert pick_npc_kind() in NPC_SPRITE_KEYS
+        assert pick_npc_kind(marauder=True) in ("bandit", "maloy", "mercenary")
 
         # Arena on home base: training reward like easy quest after at least one wave.
         from app.arena_grid import arena_forfeit, get_arena_session, save_arena_session, start_arena
@@ -1264,6 +1265,27 @@ def run_smoke_check() -> None:
         storage.change_money(111, 700)
         assert get_respawn_debt(storage, 111) == 0
         assert storage.get_character(111, refresh_energy=False).money == 200
+
+        # Survival caps = 100; hunger/thirst death respawn resets needs and HP to 50%.
+        from app.game_logic import remember_death_cause, effective_max_health
+        from app.storage import SURVIVAL_NEED_MAX
+
+        storage.adjust_survival(111, radiation_delta=500, hunger_delta=500, thirst_delta=500)
+        capped = storage.get_character(111, refresh_energy=False)
+        assert capped is not None
+        assert capped.radiation == SURVIVAL_NEED_MAX == 100
+        assert capped.hunger == 100
+        assert capped.thirst == 100
+        storage.change_health(111, -10_000)
+        remember_death_cause(storage, 111, "hunger")
+        storage.change_money(111, RESPAWN_COST_RU + 50, skip_debt_collect=True)
+        hunger_revive = respawn_character(storage, 111)
+        assert hunger_revive.ok, hunger_revive.text
+        revived = storage.get_character(111, refresh_energy=False)
+        assert revived is not None
+        assert revived.radiation == 0 and revived.hunger == 0 and revived.thirst == 0
+        assert revived.health == max(1, int(effective_max_health(revived)) // 2)
+        assert "сброшены" in hunger_revive.text.lower() or "радиация" in hunger_revive.text.lower()
 
         # Rating top achievements: top-10 / top-3 / top-1.
         from app.game_logic import (

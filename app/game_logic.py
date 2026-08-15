@@ -1709,9 +1709,18 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
         debt_added = cost
 
     loot_text = _apply_death_inventory_loot(storage, telegram_id)
+    death_cause = peek_death_cause(storage, telegram_id)
+    survival_death = death_cause in {"hunger", "thirst"}
     current_health = player.health
     current_energy = player.energy
-    storage.change_health(telegram_id, RESPAWN_HEALTH - current_health)
+    max_hp = int(effective_max_health(player))
+    if survival_death:
+        # После смерти от голода/жажды: шкалы с нуля, HP = 50% от максимума.
+        storage.set_survival_needs(telegram_id, radiation=0, hunger=0, thirst=0)
+        target_hp = max(1, max_hp // 2)
+    else:
+        target_hp = RESPAWN_HEALTH
+    storage.change_health(telegram_id, target_hp - current_health)
     storage.restore_energy(telegram_id, RESPAWN_ENERGY - current_energy)
     home = faction_home_base(player.faction)
     storage.set_location(telegram_id, home)
@@ -1735,12 +1744,17 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
     if not pay_lines:
         pay_lines.append(f"Спасение оплачено: {cost} RU.")
 
+    recovery_extra = ""
+    if survival_death:
+        recovery_extra = "Голод, жажда и радиация сброшены до 0.\n"
+
     return ActionResult(
         True,
         f"Сталкеры нашли тебя без сознания и доставили на «{home}».\n"
         f"{pay_lines[0]}\n"
         + (f"{pay_lines[1]}\n" if len(pay_lines) > 1 else "")
-        + f"HP восстановлено до {RESPAWN_HEALTH}, энергия до {RESPAWN_ENERGY}.\n\n"
+        + recovery_extra
+        + f"HP восстановлено до {target_hp}, энергия до {RESPAWN_ENERGY}.\n\n"
         f"{loot_text}",
     )
 
@@ -4776,9 +4790,9 @@ def format_inventory(
 
     current_gear_power = equipment_power(character)
     survival_line = (
-        f"☢ Радиация: {character.radiation} | "
-        f"🍗 Голод: {character.hunger} | "
-        f"💧 Жажда: {character.thirst}"
+        f"☢ Радиация: {character.radiation}/100 | "
+        f"🍗 Голод: {character.hunger}/100 | "
+        f"💧 Жажда: {character.thirst}/100"
     )
     craving_notice = build_survival_craving_notice(character)
     is_leader = False
