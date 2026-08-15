@@ -462,6 +462,7 @@ def run_smoke_check() -> None:
         chase_sess.enemy_kinds = ["blind_dog"]
         chase_sess.npcs = []
         chase_sess.npc_kinds = []
+        chase_sess.hazards = []
         for _ in range(16):
             _maybe_move_hostiles(chase_sess)
             assert chase_sess.player not in chase_sess.enemies
