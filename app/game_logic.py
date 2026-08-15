@@ -711,26 +711,34 @@ STASH_WEAPON_BY_TIER: dict[int, tuple[str, ...]] = {
     2: ("weapon_mp5", "weapon_chaser13", "weapon_aks74u"),
     3: ("weapon_ak74", "weapon_spas12"),
     4: ("weapon_lr300", "weapon_il86", "weapon_an94"),
-    5: ("weapon_gp37", "weapon_vintar", "weapon_svd", "weapon_rp74"),
+    5: (
+        "weapon_gp37",
+        "weapon_vintar",
+        "weapon_svd",
+        "weapon_rp74",
+        "weapon_gauss",
+        "weapon_raccoon",
+    ),
 }
 
-# Ассортимент оружия у торговца: 4 этапа (накопительно).
-# 1=T1, 2=+T2, 3=+T3, 4=+T4 + Гаусс + Енот. Тир-5 пока не в ассортименте.
-TRADER_WEAPON_TIER_MAX = 4
+# Ассортимент оружия у торговца: 5 этапов (накопительно).
+# 1=T1 … 4=T4, 5=T5 (включая Гаусс и Енот).
+TRADER_WEAPON_TIER_MAX = 5
 TRADER_WEAPON_TIER_META_PREFIX = "trader:weapon_tier:"
 # Стоимость перехода на этот этап (с предыдущего).
 TRADER_WEAPON_TIER_UPGRADE_COST: dict[int, int] = {
     2: 12000,
     3: 30000,
     4: 75000,
+    5: 120000,
 }
 TRADER_WEAPON_STAGE_LABELS: dict[int, str] = {
     1: "T1 — пистолеты и обрезы",
     2: "T2 — ПП и дробовики",
     3: "T3 — автоматы и СПАС",
-    4: "T4 — штурмовые + Гаусс и Енот",
+    4: "T4 — штурмовые винтовки",
+    5: "T5 — топ + Гаусс и Енот",
 }
-TRADER_STAGE4_EXTRA_WEAPONS: tuple[str, ...] = ("weapon_gauss", "weapon_raccoon")
 
 
 def trader_weapon_tier_meta_key(telegram_id: int) -> str:
@@ -759,8 +767,6 @@ def unlocked_trader_weapon_keys(tier: int) -> frozenset[str]:
     unlocked: set[str] = set()
     for t in range(1, safe + 1):
         unlocked.update(STASH_WEAPON_BY_TIER.get(t, ()))
-    if safe >= 4:
-        unlocked.update(TRADER_STAGE4_EXTRA_WEAPONS)
     # Алиас клавиатуры Фора-12.
     if "weapon_fort12" in unlocked:
         unlocked.add("weapon_fora12")
@@ -788,7 +794,7 @@ def upgrade_trader_weapon_tier(storage: Storage, telegram_id: int) -> ActionResu
     if current >= TRADER_WEAPON_TIER_MAX:
         return ActionResult(
             False,
-            f"Ассортимент оружия уже максимальный (этап {TRADER_WEAPON_TIER_MAX}/4):\n"
+            f"Ассортимент оружия уже максимальный (этап {TRADER_WEAPON_TIER_MAX}/{TRADER_WEAPON_TIER_MAX}):\n"
             f"{TRADER_WEAPON_STAGE_LABELS[TRADER_WEAPON_TIER_MAX]}",
         )
     nxt = current + 1
@@ -816,7 +822,7 @@ def trader_weapon_assortment_blurb(storage: Storage, telegram_id: int) -> str:
         nxt_label = TRADER_WEAPON_STAGE_LABELS.get(nxt, f"этап {nxt}")
         lines.append(f"Следующий этап ({nxt_label}) — {cost} RU.")
     else:
-        lines.append("Максимум: T4 стволы, Гаусс-пушка и Енот.")
+        lines.append("Максимум: T5 стволы, Гаусс-пушка и Енот.")
     return "\n".join(lines)
 STASH_CONSUMABLE_DROP_CHANCE = 40  # % на каждый обычный расходник при открытии
 # Редкие расходники в тайнике — пониженный шанс.

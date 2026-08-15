@@ -1356,7 +1356,7 @@ def run_smoke_check() -> None:
         assert get_trader_weapon_tier(storage, 111) == 1
         assert "weapon_pm" in unlocked_trader_weapon_keys(1)
         assert "weapon_gauss" not in unlocked_trader_weapon_keys(1)
-        assert "weapon_raccoon" not in unlocked_trader_weapon_keys(3)
+        assert "weapon_raccoon" not in unlocked_trader_weapon_keys(4)
         locked_gauss = buy_item(storage, 111, "weapon_gauss")
         assert not locked_gauss.ok
         # Отдельный пул на апгрейд ассортимента (без сбора долга за респаун).
@@ -1365,9 +1365,11 @@ def run_smoke_check() -> None:
         assert upgrade_trader_weapon_tier(storage, 111).ok  # →2
         assert upgrade_trader_weapon_tier(storage, 111).ok  # →3
         assert upgrade_trader_weapon_tier(storage, 111).ok  # →4
+        assert "weapon_gauss" not in unlocked_trader_weapon_keys(4)
+        assert upgrade_trader_weapon_tier(storage, 111).ok  # →5
         assert get_trader_weapon_tier(storage, 111) == TRADER_WEAPON_TIER_MAX
-        assert "weapon_gauss" in unlocked_trader_weapon_keys(4)
-        assert "weapon_raccoon" in unlocked_trader_weapon_keys(4)
+        assert "weapon_gauss" in unlocked_trader_weapon_keys(5)
+        assert "weapon_raccoon" in unlocked_trader_weapon_keys(5)
         storage.change_money(111, 300_000, skip_debt_collect=True)
         buy_n = buy_item(storage, 111, "armor_nosorog")
         assert buy_n.ok, buy_n.text

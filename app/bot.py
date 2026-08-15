@@ -2715,9 +2715,9 @@ async def trader_upgrade_weapons_callback(callback: CallbackQuery) -> None:
         cost = int(TRADER_WEAPON_TIER_UPGRADE_COST.get(nxt, 0))
         nxt_label = TRADER_WEAPON_STAGE_LABELS.get(nxt, f"этап {nxt}")
         body += (
-            f"\n\nУлучшение до этапа {nxt}/4 ({nxt_label}) стоит {cost} RU.\n"
+            f"\n\nУлучшение до этапа {nxt}/{TRADER_WEAPON_TIER_MAX} ({nxt_label}) стоит {cost} RU.\n"
             "Этапы накопительные: каждый открывает следующий тир стволов.\n"
-            "На 4 этапе появляются Гаусс-пушка и Енот."
+            "На 5 этапе появляются T5, Гаусс-пушка и Енот."
         )
     else:
         body += "\n\nДальше ассортимент расширится позже."

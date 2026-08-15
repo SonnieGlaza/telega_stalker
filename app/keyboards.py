@@ -628,6 +628,10 @@ def trader_buy_weapons_keyboard(*, page: int = 0, unlocked_keys: set[str] | froz
         ("Купить ТРс-301 (8180)", "buy:weapon_lr300", "weapon_lr300"),
         ("Купить ИЛ86 (8510)", "buy:weapon_il86", "weapon_il86"),
         ("Купить АН-94 (8510)", "buy:weapon_an94", "weapon_an94"),
+        ("Купить ГП37 (12930)", "buy:weapon_gp37", "weapon_gp37"),
+        ("Купить Винтарь ВС (14240)", "buy:weapon_vintar", "weapon_vintar"),
+        ("Купить СВДм-2 (14400)", "buy:weapon_svd", "weapon_svd"),
+        ("Купить РП-74 (15550)", "buy:weapon_rp74", "weapon_rp74"),
         ("Купить Гаусс-пушку (90000)", "buy:weapon_gauss", "weapon_gauss"),
         ("Купить Енот (85000)", "buy:weapon_raccoon", "weapon_raccoon"),
     ]
