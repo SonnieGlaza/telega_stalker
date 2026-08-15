@@ -93,6 +93,7 @@ def quests_keyboard(
         rows.append([InlineKeyboardButton(text=label, callback_data=callback_data)])
     if show_cancel:
         rows.append([InlineKeyboardButton(text="❌ Отменить контракт", callback_data="contract:cancel")])
+    rows.append([InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")])
     rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="contract:refresh")])
     rows.append([InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -316,7 +317,6 @@ def inventory_equipment_keyboard(*, money: int | None = None) -> InlineKeyboardM
         [InlineKeyboardButton(text="🗄 Схрон", callback_data="stash:menu")],
         [InlineKeyboardButton(text="🛒 Купить тайник (от 2000)", callback_data="invbuyqty:stash_case")],
         [InlineKeyboardButton(text="📦 Открыть тайник", callback_data="use:stash_case")],
-        [InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")],
         [InlineKeyboardButton(text="⚙️ Экипировка", callback_data="equip:root")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
