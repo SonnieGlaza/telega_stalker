@@ -1597,6 +1597,35 @@ def run_smoke_check() -> None:
         assert inv222.get("weapon_season_silver", 0) >= 1
         inv333 = storage.get_character(333, refresh_energy=False).inventory
         assert inv333.get("armor_season_bronze", 0) >= 1
+        from app.season_chat_titles import (
+            SEASON_CHAT_TITLE_BY_PLACE,
+            SEASON_CHAT_TITLE_PENDING_META,
+            ZONE_COMMON_CHAT_ID,
+            ZONE_FACTION_CHAT_IDS,
+            build_season_chat_title_jobs,
+        )
+
+        assert SEASON_CHAT_TITLE_BY_PLACE[1] == "Чемпион Зоны"
+        assert SEASON_CHAT_TITLE_BY_PLACE[2] == "Серебро сезона"
+        assert SEASON_CHAT_TITLE_BY_PLACE[3] == "Бронза сезона"
+        assert all(len(t) <= 16 for t in SEASON_CHAT_TITLE_BY_PLACE.values())
+        assert ZONE_COMMON_CHAT_ID == -1003958853707
+        assert ZONE_FACTION_CHAT_IDS["Нейтралы"] == -1004295857240
+        pending_raw = storage.get_meta(SEASON_CHAT_TITLE_PENDING_META) or ""
+        pending = json.loads(pending_raw) if pending_raw else {}
+        jobs = pending.get("jobs") or []
+        assert jobs, "season chat titles must be queued"
+        assert any(
+            int(j.get("user_id") or 0) == 111
+            and j.get("title") == "Чемпион Зоны"
+            and int(j.get("chat_id") or 0) == ZONE_COMMON_CHAT_ID
+            for j in jobs
+        )
+        # Faction chat job if winner has a faction.
+        sample_jobs = build_season_chat_title_jobs(
+            storage, [{"telegram_id": 111, "season_rating": 100}]
+        )
+        assert any(int(j["chat_id"]) == ZONE_COMMON_CHAT_ID for j in sample_jobs)
 
         # Atomic money: balance cannot go negative.
         bal_before = int(storage.get_character(111, refresh_energy=False).money)

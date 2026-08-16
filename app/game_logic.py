@@ -2004,7 +2004,8 @@ def _season_reward_blurb() -> str:
         "Награды сезона (не продаются у торговца):\n"
         "🥇 РПК «Чемпион Зоны» + Костюм «Чемпион Зоны»\n"
         "🥈 ВСС «Серебряный сталкер»\n"
-        "🥉 Бронекостюм «Бронза сезона»"
+        "🥉 Бронекостюм «Бронза сезона»\n"
+        "🏷 Титулы в чатах: Чемпион Зоны / Серебро сезона / Бронза сезона"
     )
 
 
@@ -2052,6 +2053,18 @@ def process_rating_season(storage: Storage) -> str | None:
         if reward_lines:
             lines.append("")
             lines.extend(reward_lines)
+        try:
+            from app.season_chat_titles import queue_season_chat_titles
+
+            queued = queue_season_chat_titles(storage, top)
+            if queued:
+                lines.append("")
+                lines.append(
+                    "🏷 В чатах Зоны будут обновлены статусы (титулы) топ-3 сезона."
+                )
+        except Exception:
+            # Не ломаем конец сезона из‑за очереди титулов.
+            pass
     else:
         lines.append("В этом сезоне никто не набрал очков.")
 
