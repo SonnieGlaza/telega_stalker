@@ -237,11 +237,12 @@ def run_smoke_check() -> None:
 
         # Artifact hunt mini-game (visual field).
         from app.artifact_hunt import (
-            start_artifact_hunt,
-            move_artifact_hunt,
-            get_hunt_session,
             abandon_artifact_hunt,
+            artifact_beside_anomaly,
+            get_hunt_session,
             location_anomaly_count,
+            move_artifact_hunt,
+            start_artifact_hunt,
         )
 
         storage.restore_energy(111, 100)
@@ -251,7 +252,9 @@ def run_smoke_check() -> None:
         hunt = start_artifact_hunt(storage, 111)
         assert hunt.ok, hunt.text
         assert hunt.payload and hunt.payload.get("hunt_image")
-        assert get_hunt_session(storage, 111) is not None
+        sess = get_hunt_session(storage, 111)
+        assert sess is not None
+        assert artifact_beside_anomaly(sess), "artifact must spawn next to an anomaly"
         assert location_anomaly_count("Кордон") == 3
         step = move_artifact_hunt(storage, 111, "right")
         assert step.payload is not None

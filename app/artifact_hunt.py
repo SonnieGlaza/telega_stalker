@@ -477,18 +477,59 @@ def _random_free_cell(
     return random.choice(free)
 
 
+def _grid_neighbors(cell: tuple[int, int], grid: int) -> list[tuple[int, int]]:
+    """Соседние клетки (8 направлений, включая диагонали)."""
+    x, y = cell
+    neighbors: list[tuple[int, int]] = []
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            if dx == 0 and dy == 0:
+                continue
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < grid and 0 <= ny < grid:
+                neighbors.append((nx, ny))
+    return neighbors
+
+
+def _cells_adjacent_to_any(
+    cells: list[tuple[int, int]],
+    grid: int,
+    *,
+    forbidden: set[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    """Свободные клетки рядом хотя бы с одной из переданных (для арта у аномалий)."""
+    candidates: set[tuple[int, int]] = set()
+    for cell in cells:
+        for neighbor in _grid_neighbors(cell, grid):
+            if neighbor not in forbidden:
+                candidates.add(neighbor)
+    return list(candidates)
+
+
+def artifact_beside_anomaly(session: HuntSession) -> bool:
+    """Артефакт на соседней с аномалией клетке (для тестов и отладки)."""
+    anomaly_set = set(session.anomalies)
+    for neighbor in _grid_neighbors(session.artifact, session.grid):
+        if neighbor in anomaly_set:
+            return True
+    return False
+
+
 def _build_session(character: Character, detector_key: str, detector_name: str) -> HuntSession:
     grid = HUNT_GRID_SIZE
     anomaly_n = location_anomaly_count(character.location)
     player = (random.randrange(grid), random.randrange(grid))
     forbidden: set[tuple[int, int]] = {player}
-    artifact = _random_free_cell(grid, forbidden)
-    forbidden.add(artifact)
     anomalies: list[tuple[int, int]] = []
     for _ in range(anomaly_n):
         cell = _random_free_cell(grid, forbidden)
         anomalies.append(cell)
         forbidden.add(cell)
+    adjacent_to_anomalies = _cells_adjacent_to_any(anomalies, grid, forbidden=forbidden)
+    if adjacent_to_anomalies:
+        artifact = random.choice(adjacent_to_anomalies)
+    else:
+        artifact = _random_free_cell(grid, forbidden)
     circles_needed = DETECTOR_CIRCLES_NEEDED.get(detector_key, 5)
     session = HuntSession(
         location=character.location,
