@@ -1971,6 +1971,54 @@ def run_smoke_check() -> None:
         assert "detector_otklik" in ITEM_LABELS
         assert "sleeping_bag" in ITEM_LABELS
 
+        from app.enemy_hud import (
+            HUD_SLOTS,
+            default_hp_for_kind,
+            draw_enemy_hud,
+            hud_slots_from_kinds,
+            hud_slots_from_raid,
+        )
+        from PIL import Image
+
+        assert default_hp_for_kind("blind_dog") == 16
+        slots = hud_slots_from_kinds(["blind_dog", "flesh"], ["bandit"])
+        assert len(slots) == 3
+        assert slots[0].kind == "blind_dog" and not slots[0].is_npc
+        assert slots[2].is_npc
+        raid_slots = hud_slots_from_raid(["bot", "mutant"], ["maloy", "blind_dog"])
+        assert raid_slots[0].is_npc and not raid_slots[1].is_npc
+        hud_canvas = Image.new("RGBA", (400, 300), (20, 20, 22, 255))
+        draw_enemy_hud(
+            hud_canvas,
+            slots,
+            grid_left=10,
+            grid_top=10,
+            grid_right=390,
+            grid_bottom=290,
+        )
+        assert hud_canvas.size == (400, 300)
+
+        from app.quest_mission import QuestMissionSession, render_mission_frame
+
+        hud_session = QuestMissionSession(
+            contract_key="easy_boloto",
+            title="Зачистка",
+            location="Кордон",
+            kind="clear_mutant",
+            difficulty="heavy",
+            player=(0, 5),
+            start=(0, 5),
+            objectives=[],
+            hazards=[(2, 2)],
+            enemies=[(3, 3), (4, 4)],
+            enemy_kinds=["blind_dog", "blind_dog"],
+            npcs=[],
+            npc_kinds=[],
+        )
+        hud_png = render_mission_frame(hud_session, storage.get_character(111, refresh_energy=False))
+        assert len(hud_png) > 2000
+        assert HUD_SLOTS == 6
+
         from app.game_logic import TUTORIAL_PAGES
 
         arena_pages = [body for title, body in TUTORIAL_PAGES if title == "Арена"]

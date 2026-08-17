@@ -39,6 +39,7 @@ from app.tactical_combat import (
 )
 from app.mutant_assets import pick_mutant_kind
 from app.tactical_hp import apply_tactical_medkit_spend, plan_tactical_medkit, sync_session_hp_to_db
+from app.enemy_hud import draw_enemy_hud, hud_slots_from_kinds
 from app.tactical_render import load_tactical_font, paste_mutant_sprite, paste_player_avatar
 
 DUEL_GRID_SIZE = 8
@@ -925,6 +926,14 @@ def render_duel_frame(
     for line in session.log[-8:]:
         draw.text((pl + 14, y), line[:42], fill=(170, 170, 170), font=small)
         y += 16
+    draw_enemy_hud(
+        canvas,
+        hud_slots_from_kinds(session.mutant_kinds, []),
+        grid_left=margin,
+        grid_top=margin,
+        grid_right=margin + grid_px,
+        grid_bottom=margin + grid_px,
+    )
     buf = BytesIO()
     canvas.save(buf, format="PNG")
     return buf.getvalue()

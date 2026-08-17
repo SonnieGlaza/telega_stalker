@@ -35,6 +35,7 @@ from app.tactical_combat import (
     spawn_edge_positions,
     weapon_shoot_range,
 )
+from app.enemy_hud import draw_enemy_hud, hud_slots_from_kinds
 from app.tactical_render import load_tactical_font, paste_npc_sprite, paste_player_avatar
 
 ARENA_GRID_SIZE = 8
@@ -774,6 +775,14 @@ def render_arena_frame(storage: Storage, session: ArenaGridSession) -> bytes:
     for line in arena_status_caption(session).split("\n")[:8]:
         draw.text((pl + 10, y), line[:34], fill=(220, 220, 220), font=small)
         y += 18
+    draw_enemy_hud(
+        canvas,
+        hud_slots_from_kinds([], ["maloy"] * len(session.hostiles)),
+        grid_left=margin,
+        grid_top=margin,
+        grid_right=margin + grid_px,
+        grid_bottom=margin + grid_px,
+    )
     buf = BytesIO()
     canvas.save(buf, format="PNG", optimize=True)
     return buf.getvalue()

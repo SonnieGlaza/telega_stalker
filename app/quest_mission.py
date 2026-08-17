@@ -16,6 +16,7 @@ from app.artifact_hunt import (
     _paste_circle,
     _paste_rounded,
 )
+from app.enemy_hud import draw_enemy_hud, hud_slots_from_kinds
 from app.game_logic import (
     CONTRACT_TURN_IN_BONUS_PERCENT,
     QUESTS,
@@ -1934,6 +1935,15 @@ def render_mission_frame(
     draw.text((pl + 18, bar_top + 84), f"Аптечки: {meds}", fill=(180, 200, 180), font=small)
     draw.text((pl + 18, pb - 50), session.title[:28], fill=(160, 160, 160), font=small)
     draw.text((pl + 18, pb - 28), "Стрелки - ход, кнопка - аптечка", fill=(130, 130, 130), font=small)
+
+    draw_enemy_hud(
+        canvas,
+        hud_slots_from_kinds(session.enemy_kinds, session.npc_kinds),
+        grid_left=margin,
+        grid_top=margin,
+        grid_right=margin + grid_px,
+        grid_bottom=margin + grid_px,
+    )
 
     out = canvas.convert("RGB")
     buf = BytesIO()

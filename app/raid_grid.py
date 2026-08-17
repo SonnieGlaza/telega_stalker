@@ -49,6 +49,7 @@ from app.tactical_combat import (
     weapon_shoot_range,
 )
 from app.tactical_hp import apply_tactical_medkit_spend, finalize_group_tactical_hp, plan_tactical_medkit
+from app.enemy_hud import draw_enemy_hud, hud_slots_from_raid
 from app.tactical_render import (
     load_tactical_font,
     paste_mutant_sprite,
@@ -1402,6 +1403,14 @@ def render_rgrid_frame(storage: Storage, session: RaidGridSession, viewer_id: in
         mark = " <" if pid == session.active_player() else ""
         draw.text((pl + 10, y), f"{h(name)}{mark}: HP {hp}"[:38], fill=(180, 180, 180), font=small)
         y += 15
+    draw_enemy_hud(
+        canvas,
+        hud_slots_from_raid(session.hostile_types, session.hostile_kinds),
+        grid_left=margin,
+        grid_top=margin,
+        grid_right=margin + grid_px,
+        grid_bottom=margin + grid_px,
+    )
     buf = BytesIO()
     canvas.save(buf, format="PNG")
     return buf.getvalue()

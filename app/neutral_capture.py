@@ -35,6 +35,7 @@ from app.mutant_assets import pick_mutant_kind
 from app.npc_assets import pick_npc_kind
 from app.storage import Character, Storage
 from app.tactical_hp import apply_tactical_medkit_spend, finalize_group_tactical_hp, plan_tactical_medkit
+from app.enemy_hud import draw_enemy_hud, hud_slots_from_mixed_kinds
 from app.tactical_render import hostile_kind_to_sprite, load_tactical_font, paste_mutant_sprite, paste_npc_sprite, paste_player_avatar
 
 NCAP_GRID_SIZE = 6
@@ -1183,6 +1184,14 @@ def render_ncap_frame(storage: Storage, session: NeutralCaptureSession, viewer_i
     y += 18
     if session.log:
         draw.text((pl + 14, y), session.log[-1][:40], fill=(170, 170, 170), font=small)
+    draw_enemy_hud(
+        canvas,
+        hud_slots_from_mixed_kinds(session.hostile_kinds),
+        grid_left=margin,
+        grid_top=margin,
+        grid_right=margin + grid_px,
+        grid_bottom=margin + grid_px,
+    )
     buf = BytesIO()
     canvas.save(buf, format="PNG")
     return buf.getvalue()

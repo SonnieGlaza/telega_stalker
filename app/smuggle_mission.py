@@ -14,6 +14,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 from app.artifact_hunt import FONT_CANDIDATES, _load_location_thumb, _paste_circle, _paste_rounded
+from app.enemy_hud import draw_enemy_hud, hud_slots_from_kinds
 from app.game_logic import (
     ActionResult,
     _is_dead,
@@ -678,6 +679,15 @@ def render_smuggle_frame(session: SmuggleMissionSession, character: Character | 
     draw.text((pl + 18, y + 26), f"Ход {session.moves + 1}/{session.max_moves}", fill=(200, 200, 200), font=small)
     draw.text((pl + 18, y + 48), "Жёлтые — точки, линия — путь", fill=(170, 170, 170), font=small)
     draw.text((pl + 18, y + 72), f"Шанс сдачи ~{session.success_chance}%", fill=(200, 180, 140), font=small)
+
+    draw_enemy_hud(
+        canvas,
+        hud_slots_from_kinds(session.enemy_kinds, session.npc_kinds),
+        grid_left=margin,
+        grid_top=margin,
+        grid_right=margin + grid_px,
+        grid_bottom=margin + grid_px,
+    )
 
     buf = BytesIO()
     canvas.save(buf, format="PNG")
