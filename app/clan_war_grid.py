@@ -922,10 +922,10 @@ def render_cwar_frame(storage: Storage, session: ClanWarGridSession, viewer_id: 
     draw_enemy_hud(
         canvas,
         hud_slots_from_kinds([], session.defender_kinds),
-        grid_left=margin,
-        grid_top=margin,
-        grid_right=margin + grid_px,
-        grid_bottom=margin + grid_px,
+        panel_left=pl,
+        panel_top=margin,
+        panel_right=width - margin,
+        panel_bottom=height - margin,
     )
     buf = BytesIO()
     canvas.save(buf, format="PNG")

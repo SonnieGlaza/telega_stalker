@@ -1991,10 +1991,10 @@ def run_smoke_check() -> None:
         draw_enemy_hud(
             hud_canvas,
             slots,
-            grid_left=10,
-            grid_top=10,
-            grid_right=390,
-            grid_bottom=290,
+            panel_left=10,
+            panel_top=10,
+            panel_right=390,
+            panel_bottom=290,
         )
         assert hud_canvas.size == (400, 300)
 

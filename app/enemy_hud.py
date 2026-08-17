@@ -1,4 +1,4 @@
-"""Плашка врагов слева внизу тактического поля: 6 индустриальных слотов."""
+"""Плашка врагов внизу правой информационной панели: 6 индустриальных слотов."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from app.tactical_render import hostile_kind_to_sprite, load_tactical_font
 HUD_SLOTS = 6
 HUD_RING = (210, 45, 40)
 DEFAULT_HP = 16
+# Запас по высоте внизу правой панели, чтобы подписи не заезжали на плашку.
+HUD_PANEL_BOTTOM_RESERVE = 64
 
 # Показатель «живучести» на плашке (бой пока one-shot: слот пустеет, когда враг снят).
 HP_BY_KIND: dict[str, int] = {
@@ -85,35 +87,34 @@ def draw_enemy_hud(
     canvas: Image.Image,
     slots: Sequence[EnemyHudSlot],
     *,
-    grid_left: int,
-    grid_top: int,
-    grid_right: int,
-    grid_bottom: int,
+    panel_left: int,
+    panel_top: int,
+    panel_right: int,
+    panel_bottom: int,
     max_slots: int = HUD_SLOTS,
 ) -> None:
-    """Рисует компактную плашку в левом нижнем углу игрового поля."""
+    """Рисует компактную плашку в самом низу правой информационной панели."""
     if not slots:
         return
-    grid_w = max(80, grid_right - grid_left)
-    grid_h = max(80, grid_bottom - grid_top)
-    slot_w = max(22, min(30, (grid_w - 12) // 16))
-    slot_h = int(slot_w * 1.18)
-    if slot_h + 8 > grid_h // 4:
-        slot_h = max(26, grid_h // 5)
-        slot_w = max(20, int(slot_h / 1.18))
-    gap = 1
-    pad = 3
+    panel_w = max(80, panel_right - panel_left)
+    panel_h = max(60, panel_bottom - panel_top)
+    inset = 8
+    inner_w = max(60, panel_w - inset * 2)
+    gap = 2
+    pad = 4
+    slot_w = max(28, min(46, (inner_w - pad * 2 - (max_slots - 1) * gap) // max_slots))
+    slot_h = int(slot_w * 1.2)
+    if slot_h + 12 > panel_h // 3:
+        slot_h = max(30, panel_h // 4)
+        slot_w = max(24, int(slot_h / 1.2))
     bar_w = max_slots * slot_w + (max_slots - 1) * gap + pad * 2
     bar_h = slot_h + pad * 2
-    x0 = grid_left + 4
-    y1 = grid_bottom - 4
+    x0 = panel_left + (panel_w - bar_w) // 2
     x1 = x0 + bar_w
+    y1 = panel_bottom - inset
     y0 = y1 - bar_h
-    if x1 > grid_right - 4:
-        x1 = grid_right - 4
-        x0 = max(grid_left + 4, x1 - bar_w)
-    if y0 < grid_top + 4:
-        y0 = grid_top + 4
+    if y0 < panel_top + inset:
+        y0 = panel_top + inset
         y1 = y0 + bar_h
 
     if canvas.mode != "RGBA":

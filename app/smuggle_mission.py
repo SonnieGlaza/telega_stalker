@@ -683,10 +683,10 @@ def render_smuggle_frame(session: SmuggleMissionSession, character: Character | 
     draw_enemy_hud(
         canvas,
         hud_slots_from_kinds(session.enemy_kinds, session.npc_kinds),
-        grid_left=margin,
-        grid_top=margin,
-        grid_right=margin + grid_px,
-        grid_bottom=margin + grid_px,
+        panel_left=pl,
+        panel_top=pt,
+        panel_right=pr,
+        panel_bottom=pb,
     )
 
     buf = BytesIO()
