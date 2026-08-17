@@ -93,8 +93,9 @@ def draw_enemy_hud(
     panel_bottom: int,
     max_slots: int = HUD_SLOTS,
     bottom_gap: int = 8,
+    y_top: int | None = None,
 ) -> None:
-    """Рисует плашку внизу правой панели. bottom_gap оставляет место подписи под ней."""
+    """Рисует плашку на правой панели. y_top — верх плашки; иначе низ панели минус bottom_gap."""
     if not slots:
         return
     panel_w = max(80, panel_right - panel_left)
@@ -112,11 +113,18 @@ def draw_enemy_hud(
     bar_h = slot_h + pad * 2
     x0 = panel_left + (panel_w - bar_w) // 2
     x1 = x0 + bar_w
-    y1 = panel_bottom - max(inset, int(bottom_gap))
-    y0 = y1 - bar_h
+    if y_top is not None:
+        y0 = int(y_top)
+        y1 = y0 + bar_h
+    else:
+        y1 = panel_bottom - max(inset, int(bottom_gap))
+        y0 = y1 - bar_h
     if y0 < panel_top + inset:
         y0 = panel_top + inset
         y1 = y0 + bar_h
+    if y1 > panel_bottom - inset:
+        y1 = panel_bottom - inset
+        y0 = y1 - bar_h
 
     if canvas.mode != "RGBA":
         raise ValueError("enemy HUD expects an RGBA canvas")
