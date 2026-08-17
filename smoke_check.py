@@ -2052,11 +2052,73 @@ def run_smoke_check() -> None:
         assert "detector_otklik" in ITEM_LABELS
         assert "sleeping_bag" in ITEM_LABELS
 
-        from app.game_logic import TUTORIAL_PAGES
+        from app.game_logic import (
+            FACTION_LORE,
+            TOPUP_RATE_RU_PER_STAR,
+            TRADER_SELL_CATALOG,
+            TUTORIAL_COMPLETE_REWARD_RU,
+            TUTORIAL_MENU_BUTTON,
+            TUTORIAL_PAGES,
+            format_faction_lore,
+        )
 
-        arena_pages = [body for title, body in TUTORIAL_PAGES if title == "Арена"]
-        assert len(arena_pages) == 1
-        assert "⚔️ Арена" in arena_pages[0]
+        assert TOPUP_RATE_RU_PER_STAR == 20
+        assert TRADER_SELL_CATALOG["weapons"][0] == "ammo_pack"
+        assert "ammo_pack" not in TRADER_SELL_CATALOG["consumables"]
+        assert set(FACTION_LORE) == {"Долг", "Свобода", "Нейтралы", "Бандиты"}
+        for faction_name, lore in FACTION_LORE.items():
+            assert "Как сформировал" in lore
+            assert "Цель в Зоне" in lore
+            assert format_faction_lore(faction_name) == lore
+        assert TUTORIAL_MENU_BUTTON == "🔥 Как не сдохнуть"
+        assert TUTORIAL_COMPLETE_REWARD_RU == 250
+        assert len(TUTORIAL_PAGES) == 7
+        assert any("арена" in body.lower() for _, body in TUTORIAL_PAGES)
+
+        from app.keyboards import (
+            pda_keyboard,
+            topup_root_keyboard,
+            trader_buy_consumables_keyboard,
+            trader_buy_weapons_keyboard,
+        )
+
+        weapon_texts = [btn.text for row in trader_buy_weapons_keyboard().inline_keyboard for btn in row]
+        assert any("Патрон" in text for text in weapon_texts)
+        food_texts = [btn.text for row in trader_buy_consumables_keyboard().inline_keyboard for btn in row]
+        assert not any("Патрон" in text for text in food_texts)
+        pda_texts = [btn.text for row in pda_keyboard().keyboard for btn in row]
+        assert TUTORIAL_MENU_BUTTON in pda_texts
+        root_data = [btn.callback_data for row in topup_root_keyboard(has_faction=True).inline_keyboard for btn in row]
+        assert "topup:menu:self" in root_data
+        assert "topup:menu:faction" in root_data
+        no_fac_data = [
+            btn.callback_data for row in topup_root_keyboard(has_faction=False).inline_keyboard for btn in row
+        ]
+        assert "topup:menu:faction" not in no_fac_data
+
+        from app.chat_medals import get_chat_medal, save_chat_medal, sanitize_medal_title
+
+        assert sanitize_medal_title("🔥Ветеран🔥") == "Ветеран"
+        assert len(sanitize_medal_title("A" * 40)) == 16
+        assert save_chat_medal(storage, 111, "Ветеран") == "Ветеран"
+        assert get_chat_medal(storage, 111) == "Ветеран"
+
+        before_money = int(storage.get_character(111, refresh_energy=False).money)
+        treasury_before = {
+            str(row["name"]): int(row["treasury"]) for row in storage.get_factions()
+        }
+        ok, dup = storage.apply_topup_payment(111, "pay-self-1", 1, 20)
+        assert ok and not dup
+        assert int(storage.get_character(111, refresh_energy=False).money) == before_money + 20
+        ok, dup = storage.apply_topup_payment(111, "pay-self-1", 1, 20)
+        assert (not ok) and dup
+        ok, dup = storage.apply_topup_payment(111, "pay-gp-1", 5, 100, to_faction="Долг")
+        assert ok and not dup
+        assert int(storage.get_character(111, refresh_energy=False).money) == before_money + 20
+        treasury_after = {
+            str(row["name"]): int(row["treasury"]) for row in storage.get_factions()
+        }
+        assert treasury_after["Долг"] == treasury_before["Долг"] + 100
 
 
 if __name__ == "__main__":

@@ -61,7 +61,7 @@ def pda_keyboard(*, is_leader: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🏆 Рейтинг"), KeyboardButton(text="🗺 Карта")],
         [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="☠️ Смерти")],
         [KeyboardButton(text="📅 Ежедневка"), KeyboardButton(text="🔔 Уведомления")],
-        [KeyboardButton(text="📘 Обучение"), KeyboardButton(text="🏛 Клановые задачи")],
+        [KeyboardButton(text="🔥 Как не сдохнуть"), KeyboardButton(text="🏛 Клановые задачи")],
     ]
     if is_leader:
         rows[-1].append(KeyboardButton(text="📣 Сбор"))
@@ -339,7 +339,6 @@ def barkeep_food_keyboard(
 ) -> InlineKeyboardMarkup:
     catalog = [
         ("Энергетик (от 250)", "buyqty:energy_drink", "energy_drink"),
-        ("Патроны (от 120)", "buyqty:ammo_pack", "ammo_pack"),
         ("Водка (от 150)", "buyqty:vodka", "vodka"),
         ("Хлеб (от 50)", "buyqty:bread", "bread"),
         ("Колбаса (от 100)", "buyqty:sausage", "sausage"),
@@ -409,6 +408,9 @@ def trader_buy_consumable_qty_keyboard(item_key: str, *, unit_price: int, title:
     if vendor == "medic":
         back_callback = "trade:medic:buy:0"
         back_text = "⬅️ Назад к медику"
+    elif item_key == "ammo_pack":
+        back_callback = "trade:barkeep:weapons:0"
+        back_text = "⬅️ Назад к оружию"
     else:
         back_callback = "trade:barkeep:food:0"
         back_text = "⬅️ Назад к бармену"
@@ -754,6 +756,7 @@ def trader_buy_weapons_keyboard(
     from app.game_logic import shop_weapon_button_title
 
     catalog = [
+        ("Патроны (от 120)", "buyqty:ammo_pack", "ammo_pack"),
         (shop_weapon_button_title("weapon_pm"), "buy:weapon_pm", "weapon_pm"),
         (shop_weapon_button_title("weapon_fort12"), "buy:weapon_fora12", "weapon_fort12"),
         (shop_weapon_button_title("weapon_sawedoff"), "buy:weapon_sawedoff", "weapon_sawedoff"),
@@ -894,15 +897,29 @@ def locations_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def topup_keyboard() -> InlineKeyboardMarkup:
+def topup_root_keyboard(*, has_faction: bool = False) -> InlineKeyboardMarkup:
     rate = TOPUP_RATE_RU_PER_STAR
+    rows = [
+        [InlineKeyboardButton(text=f"⭐ Себе (1⭐ = {rate} RU)", callback_data="topup:menu:self")],
+    ]
+    if has_faction:
+        rows.append(
+            [InlineKeyboardButton(text=f"🏛 Казна группировки (1⭐ = {rate} RU)", callback_data="topup:menu:faction")]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def topup_keyboard(*, dest: str = "self") -> InlineKeyboardMarkup:
+    rate = TOPUP_RATE_RU_PER_STAR
+    prefix = "topup:self" if dest != "faction" else "topup:faction"
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=f"⭐ 1 звезда ({rate} RU)", callback_data="topup:1")],
-            [InlineKeyboardButton(text=f"⭐ 5 звёзд ({5 * rate} RU)", callback_data="topup:5")],
-            [InlineKeyboardButton(text=f"⭐ 10 звёзд ({10 * rate} RU)", callback_data="topup:10")],
-            [InlineKeyboardButton(text=f"⭐ 25 звёзд ({25 * rate} RU)", callback_data="topup:25")],
-            [InlineKeyboardButton(text="⭐ Другое количество", callback_data="topup:custom")],
+            [InlineKeyboardButton(text=f"⭐ 1 звезда ({rate} RU)", callback_data=f"{prefix}:1")],
+            [InlineKeyboardButton(text=f"⭐ 5 звёзд ({5 * rate} RU)", callback_data=f"{prefix}:5")],
+            [InlineKeyboardButton(text=f"⭐ 10 звёзд ({10 * rate} RU)", callback_data=f"{prefix}:10")],
+            [InlineKeyboardButton(text=f"⭐ 25 звёзд ({25 * rate} RU)", callback_data=f"{prefix}:25")],
+            [InlineKeyboardButton(text="⭐ Другое количество", callback_data=f"{prefix}:custom")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="topup:menu:root")],
         ]
     )
 
