@@ -3778,9 +3778,12 @@ class Storage:
         payment_charge_id: str,
         stars_amount: int,
         ru_amount: int,
+        *,
+        to_faction: str | None = None,
     ) -> tuple[bool, bool]:
         if stars_amount <= 0 or ru_amount <= 0 or not payment_charge_id.strip():
             return False, False
+        faction = str(to_faction or "").strip() or None
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT money FROM characters WHERE telegram_id = ?",
@@ -3788,6 +3791,10 @@ class Storage:
             ).fetchone()
             if row is None:
                 return False, False
+            if faction:
+                fac = conn.execute("SELECT name FROM factions WHERE name = ?", (faction,)).fetchone()
+                if fac is None:
+                    return False, False
             new_money = int(row["money"]) + ru_amount
             conn.savepoint("sp_topup")
             try:
@@ -3810,10 +3817,16 @@ class Storage:
                 conn.rollback_to_savepoint("sp_topup")
                 return False, True
 
-            conn.execute(
-                "UPDATE characters SET money = ? WHERE telegram_id = ?",
-                (new_money, telegram_id),
-            )
+            if faction:
+                conn.execute(
+                    "UPDATE factions SET treasury = treasury + ? WHERE name = ?",
+                    (ru_amount, faction),
+                )
+            else:
+                conn.execute(
+                    "UPDATE characters SET money = ? WHERE telegram_id = ?",
+                    (new_money, telegram_id),
+                )
         self.save_snapshot()
         return True, False
 

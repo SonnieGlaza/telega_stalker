@@ -330,6 +330,7 @@ from app.game_logic import (
     build_notify_prefs_text,
     build_tutorial_page,
     claim_tutorial_completion,
+    format_faction_lore,
     build_clan_quest_overview,
     claim_clan_quest,
     can_claim_clan_quest,
@@ -365,6 +366,7 @@ from app.keyboards import (
     smuggle_transport_keyboard,
     raid_keyboard,
     topup_keyboard,
+    topup_root_keyboard,
     trader_buy_categories_keyboard,
     trader_buy_armor_keyboard,
     trader_buy_consumables_keyboard,
@@ -485,6 +487,7 @@ def _release_travel_eta_lock(telegram_id: int) -> None:
     _travel_eta_locks.pop(int(telegram_id), None)
 
 TOPUP_PAYLOAD_PREFIX = "topup_stars:"
+TOPUP_FACTION_PAYLOAD_PREFIX = "topup_faction:"
 TOPUP_ALLOWED_AMOUNTS = {1, 5, 10, 25}
 TOPUP_MIN_STARS = 1
 TOPUP_MAX_STARS = 500
@@ -733,27 +736,55 @@ def player_ready(player: Character) -> bool:
     return player.faction is not None
 
 
-def parse_topup_stars_amount(payload: str) -> int | None:
-    if not payload.startswith(TOPUP_PAYLOAD_PREFIX):
+def parse_topup_payload(payload: str) -> tuple[int, str] | None:
+    """(stars, dest) dest = self | faction."""
+    dest = "self"
+    raw = payload or ""
+    if raw.startswith(TOPUP_FACTION_PAYLOAD_PREFIX):
+        dest = "faction"
+        stars_part = raw.removeprefix(TOPUP_FACTION_PAYLOAD_PREFIX)
+    elif raw.startswith(TOPUP_PAYLOAD_PREFIX):
+        stars_part = raw.removeprefix(TOPUP_PAYLOAD_PREFIX)
+    else:
         return None
-    stars_part = payload.replace(TOPUP_PAYLOAD_PREFIX, "", 1)
     try:
         stars_amount = int(stars_part)
     except ValueError:
         return None
     if stars_amount < TOPUP_MIN_STARS or stars_amount > TOPUP_MAX_STARS:
         return None
-    return stars_amount
+    return stars_amount, dest
 
 
-async def send_topup_invoice(bot: Bot, chat_id: int, stars_amount: int) -> None:
+def parse_topup_stars_amount(payload: str) -> int | None:
+    parsed = parse_topup_payload(payload)
+    return None if parsed is None else parsed[0]
+
+
+async def send_topup_invoice(
+    bot: Bot,
+    chat_id: int,
+    stars_amount: int,
+    *,
+    dest: str = "self",
+    faction: str | None = None,
+) -> None:
     ru_amount = stars_amount * TOPUP_RATE_RU_PER_STAR
-    payload = f"{TOPUP_PAYLOAD_PREFIX}{stars_amount}"
-    prices = [LabeledPrice(label=f"{ru_amount} RU в игре", amount=stars_amount)]
+    if dest == "faction" and faction:
+        payload = f"{TOPUP_FACTION_PAYLOAD_PREFIX}{stars_amount}"
+        title = f"Донат в казну «{faction}»"
+        description = f"{stars_amount}⭐ = {ru_amount} RU в казну группировки"
+        label = f"{ru_amount} RU в казну"
+    else:
+        payload = f"{TOPUP_PAYLOAD_PREFIX}{stars_amount}"
+        title = "Пополнение игровой валюты"
+        description = f"{stars_amount}⭐ = {ru_amount} RU"
+        label = f"{ru_amount} RU в игре"
+    prices = [LabeledPrice(label=label, amount=stars_amount)]
     await bot.send_invoice(
         chat_id=chat_id,
-        title="Пополнение игровой валюты",
-        description=f"{stars_amount}⭐ = {ru_amount} RU",
+        title=title,
+        description=description,
         payload=payload,
         currency="XTR",
         prices=prices,
@@ -1055,6 +1086,67 @@ async def admin_set_faction(message: Message, bot: Bot, command: CommandObject) 
         logger.debug("Set-faction notify failed for %s", telegram_id, exc_info=True)
 
 
+@router.message(Command("medal"))
+async def admin_set_medal(message: Message, bot: Bot, command: CommandObject) -> None:
+    if not is_admin_user(message.from_user.id):
+        await message.answer("Команда только для администратора.")
+        return
+    raw = (command.args or "").strip()
+    parts = raw.split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer(
+            "Медалька в беседах (титул у ника, до 16 символов, без эмодзи).\n"
+            "Использование: /medal [telegram_id|прозвище] [титул]\n"
+            "Пример: /medal 123456 Ветеран\n"
+            "Снять: /medaloff 123456"
+        )
+        return
+    target, title = parts[0], parts[1]
+    storage = get_storage()
+    if target.isdigit():
+        telegram_id = int(target)
+    else:
+        telegram_id = storage.find_telegram_id_by_nickname(target)
+        if telegram_id is None:
+            await message.answer(f"Игрок «{h(target)}» не найден.")
+            return
+    from app.chat_medals import apply_chat_medal, sanitize_medal_title
+
+    clean = sanitize_medal_title(title)
+    if not clean:
+        await message.answer("Титул пустой после очистки. Telegram не принимает эмодзи в медальках.")
+        return
+    notes = await apply_chat_medal(bot, storage, telegram_id, clean)
+    await message.answer(
+        f"Медаль «{clean}» для id {telegram_id}.\n" + "\n".join(f"• {n}" for n in notes)
+    )
+
+
+@router.message(Command("medaloff"))
+async def admin_clear_medal(message: Message, bot: Bot, command: CommandObject) -> None:
+    if not is_admin_user(message.from_user.id):
+        await message.answer("Команда только для администратора.")
+        return
+    target = (command.args or "").strip()
+    if not target:
+        await message.answer("Использование: /medaloff [telegram_id|прозвище]")
+        return
+    storage = get_storage()
+    if target.isdigit():
+        telegram_id = int(target)
+    else:
+        telegram_id = storage.find_telegram_id_by_nickname(target)
+        if telegram_id is None:
+            await message.answer(f"Игрок «{h(target)}» не найден.")
+            return
+    from app.chat_medals import remove_chat_medal
+
+    notes = await remove_chat_medal(bot, storage, telegram_id)
+    await message.answer(
+        f"Медаль снята с id {telegram_id}.\n" + "\n".join(f"• {n}" for n in notes)
+    )
+
+
 @router.message(Command("unstick"))
 async def admin_unstick_player(message: Message, bot: Bot, command: CommandObject) -> None:
     if not is_admin_user(message.from_user.id):
@@ -1106,9 +1198,13 @@ async def show_topup(message: Message, state: FSMContext) -> None:
         await message.answer("Сначала создай персонажа через /start.")
         return
     await state.clear()
+    has_faction = bool(player.faction)
     await message.answer(
-        f"Выбери пакет пополнения.\nКурс: 1 звезда = {TOPUP_RATE_RU_PER_STAR} RU.",
-        reply_markup=topup_keyboard(),
+        "Донат в Зону.\n"
+        f"Курс: 1⭐ = {TOPUP_RATE_RU_PER_STAR} RU.\n\n"
+        "⭐ Себе — деньги на карман сталкера.\n"
+        "🏛 Казна группировки — в общий котёл ГП (и лор, зачем вы в Зоне).",
+        reply_markup=topup_root_keyboard(has_faction=has_faction),
     )
 
 
@@ -1261,15 +1357,56 @@ async def handle_topup(callback: CallbackQuery, bot: Bot, state: FSMContext) -> 
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
 
-    parts = (callback.data or "").split(":", maxsplit=1)
-    if len(parts) != 2:
+    parts = (callback.data or "").split(":")
+    if len(parts) < 2:
         await callback.answer("Некорректный пакет пополнения.", show_alert=True)
         return
-    option = parts[1]
+
+    # topup:menu:root | topup:menu:self | topup:menu:faction
+    # topup:self:1 | topup:faction:custom
+    if parts[1] == "menu":
+        kind = parts[2] if len(parts) > 2 else "root"
+        if kind == "root":
+            await callback.message.answer(
+                "Донат в Зону.\n"
+                f"Курс: 1⭐ = {TOPUP_RATE_RU_PER_STAR} RU.",
+                reply_markup=topup_root_keyboard(has_faction=bool(player.faction)),
+            )
+            await callback.answer()
+            return
+        if kind == "faction":
+            if not player.faction:
+                await callback.answer("Сначала вступи в группировку.", show_alert=True)
+                return
+            lore = format_faction_lore(player.faction)
+            await callback.message.answer(
+                f"{lore}\n\n"
+                f"Донат в казну «{player.faction}».\n"
+                f"Курс: 1⭐ = {TOPUP_RATE_RU_PER_STAR} RU — всё уходит в общий котёл.",
+                reply_markup=topup_keyboard(dest="faction"),
+            )
+            await callback.answer()
+            return
+        await callback.message.answer(
+            f"Пополнение себе.\nКурс: 1⭐ = {TOPUP_RATE_RU_PER_STAR} RU.",
+            reply_markup=topup_keyboard(dest="self"),
+        )
+        await callback.answer()
+        return
+
+    dest = parts[1]
+    option = parts[2] if len(parts) > 2 else ""
+    if dest not in {"self", "faction"}:
+        await callback.answer("Некорректный пакет пополнения.", show_alert=True)
+        return
+    if dest == "faction" and not player.faction:
+        await callback.answer("Сначала вступи в группировку.", show_alert=True)
+        return
     if option == "custom":
+        await state.update_data(topup_dest=dest)
         await state.set_state(Registration.topup_custom_stars)
         await callback.message.answer(
-            f"Введи количество звёзд для пополнения (от {TOPUP_MIN_STARS} до {TOPUP_MAX_STARS}).\n"
+            f"Введи количество звёзд (от {TOPUP_MIN_STARS} до {TOPUP_MAX_STARS}).\n"
             "Отмена: /cancel или «⬅️ В меню»."
         )
         await callback.answer()
@@ -1285,7 +1422,13 @@ async def handle_topup(callback: CallbackQuery, bot: Bot, state: FSMContext) -> 
         return
 
     await state.clear()
-    await send_topup_invoice(bot=bot, chat_id=callback.from_user.id, stars_amount=stars_amount)
+    await send_topup_invoice(
+        bot=bot,
+        chat_id=callback.from_user.id,
+        stars_amount=stars_amount,
+        dest=dest,
+        faction=player.faction,
+    )
     await callback.answer()
 
 
@@ -1311,8 +1454,20 @@ async def process_custom_topup_stars(message: Message, state: FSMContext, bot: B
         )
         return
 
+    data = await state.get_data()
+    dest = str(data.get("topup_dest") or "self")
+    if dest == "faction" and not player.faction:
+        await state.clear()
+        await message.answer("Сначала вступи в группировку.")
+        return
     await state.clear()
-    await send_topup_invoice(bot=bot, chat_id=message.from_user.id, stars_amount=stars_amount)
+    await send_topup_invoice(
+        bot=bot,
+        chat_id=message.from_user.id,
+        stars_amount=stars_amount,
+        dest=dest,
+        faction=player.faction,
+    )
 
 
 @router.pre_checkout_query()
@@ -1337,9 +1492,10 @@ async def successful_payment_handler(message: Message) -> None:
     if payment is None:
         return
     payload = payment.invoice_payload or ""
-    stars_amount = parse_topup_stars_amount(payload)
-    if stars_amount is None:
+    parsed = parse_topup_payload(payload)
+    if parsed is None:
         return
+    stars_amount, dest = parsed
     if payment.currency != "XTR":
         await message.answer("Платеж получен в неподдерживаемой валюте.")
         return
@@ -1349,11 +1505,17 @@ async def successful_payment_handler(message: Message) -> None:
 
     ru_amount = stars_amount * TOPUP_RATE_RU_PER_STAR
     db = get_storage()
+    player = db.get_character(message.from_user.id, refresh_energy=False)
+    faction = player.faction if dest == "faction" and player is not None else None
+    if dest == "faction" and not faction:
+        dest = "self"
+        faction = None
     applied, already_applied = db.apply_topup_payment(
         telegram_id=message.from_user.id,
         payment_charge_id=payment.telegram_payment_charge_id,
         stars_amount=stars_amount,
         ru_amount=ru_amount,
+        to_faction=faction,
     )
     if already_applied:
         await message.answer("Этот платеж уже был зачислен ранее.")
@@ -1362,6 +1524,18 @@ async def successful_payment_handler(message: Message) -> None:
         await message.answer("Платеж успешен, но начисление не выполнено. Обратись к администратору.")
         return
     player = db.get_character(message.from_user.id, refresh_energy=False)
+    if dest == "faction" and faction:
+        treasury = 0
+        for row in db.get_factions():
+            if row.get("name") == faction:
+                treasury = int(row.get("treasury") or 0)
+                break
+        await message.answer(
+            f"Оплата прошла: {stars_amount}⭐.\n"
+            f"В казну «{faction}» зачислено {ru_amount} RU.\n"
+            f"Казна сейчас: {treasury} RU."
+        )
+        return
     balance = player.money if player is not None else "неизвестно"
     await message.answer(
         f"Оплата прошла успешно: {stars_amount}⭐.\n"
@@ -1870,9 +2044,11 @@ async def process_faction(callback: CallbackQuery, state: FSMContext) -> None:
         "3) Накопи на велосипед (3500) — ускорит переходы\n\n"
         f"📢 Канал обновлений: {UPDATE_CHANNEL}\n"
         "💬 Чаты группировки и общий — в КПК → 💬 Чаты\n\n"
-        "Открываю меню персонажа.",
+        "Открываю меню. Сейчас кину короткое обучение — без него Зона съест.",
         reply_markup=main_menu_keyboard(),
     )
+    text, page, total = build_tutorial_page(0)
+    await callback.message.answer(text, reply_markup=tutorial_keyboard(page, total))
     await callback.answer()
 
 
@@ -5146,7 +5322,7 @@ async def notify_toggle_callback(callback: CallbackQuery) -> None:
             pass
 
 
-@router.message(F.text == "📘 Обучение")
+@router.message(F.text.in_({"🔥 Как не сдохнуть", "📘 Обучение"}))
 async def show_tutorial(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
@@ -8167,6 +8343,11 @@ async def run_bot() -> None:
                         title_notes = await apply_pending_season_chat_titles(bot, get_storage())
                         if title_notes:
                             logger.info("Season chat titles: %s", "; ".join(title_notes))
+                        from app.chat_medals import reapply_all_chat_medals
+
+                        medal_notes = await reapply_all_chat_medals(bot, get_storage())
+                        if medal_notes:
+                            logger.info("Chat medals reapplied: %s", "; ".join(medal_notes))
                     except Exception:
                         logger.exception("Season chat title apply failed")
             except Exception:
