@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.artifact_hunt import (
     FONT_CANDIDATES,
+    _cover_crop,
     _load_location_thumb,
     _paste_circle,
     _paste_rounded,
@@ -805,7 +806,11 @@ def _resolve_hostile_contact(
             ]
         setattr(session, unit_attr, [e for e in units if e != session.player])
     phrase = encounter_phrase_for_kind(kind, npc=npc) if kind else f"с {label}"
-    note = f"Бой {phrase}: −{dmg} HP."
+    from app.combat_loot import grant_combat_loot
+
+    loot = grant_combat_loot(storage, telegram_id, npc=npc)
+    loot_note = f" Лут: {loot}." if loot else ""
+    note = f"Бой {phrase}: −{dmg} HP.{loot_note}"
     # Учитываем уже накопленный урон хода (выстрелы НПС).
     if int(player.health) - max(0, int(prior_damage)) - dmg <= 0:
         from app.game_logic import remember_death_cause, remember_death_killer
@@ -971,6 +976,10 @@ def mission_status_caption(session: QuestMissionSession, character: Character | 
         threat_bits.append(f"НПС {len(session.npcs)}")
     if threat_bits:
         lines.append("Угрозы: " + ", ".join(threat_bits))
+    if session.enemies:
+        lines.append(f"HP мутантов: {len(session.enemies)} живых")
+    if session.npcs:
+        lines.append(f"HP НПС: {len(session.npcs)} живых")
     if session.kind == "clear_mutant":
         lines.append(f"Зачистка: мутанты осталось {len(session.enemies)}")
     elif session.kind == "clear_marauder":
@@ -997,13 +1006,20 @@ def mission_status_caption(session: QuestMissionSession, character: Character | 
     return "\n".join(lines)
 
 
+def _is_help_event_mission(session: QuestMissionSession) -> bool:
+    return str(session.contract_key).startswith("help_") or str(session.title).startswith("Помощь:")
+
+
 def _finish_success(storage: Storage, telegram_id: int, session: QuestMissionSession) -> ActionResult:
     clear_mission_session(storage, telegram_id)
     template = QUEST_CONTRACTS.get(session.contract_key)
     quest = QUESTS.get(session.difficulty)
-    if template is None or quest is None:
+    is_help = _is_help_event_mission(session)
+    if quest is None or (template is None and not is_help):
         storage.set_active_contract(telegram_id, None)
         return ActionResult(False, "Контракт повреждён после миссии.")
+    if quest is None:
+        quest = QUESTS["hard"]
 
     result = apply_contract_mission_success(
         storage,
@@ -1014,6 +1030,13 @@ def _finish_success(storage: Storage, telegram_id: int, session: QuestMissionSes
     )
     reward = int((result.payload or {}).get("reward", 0))
     character = storage.get_character(telegram_id, refresh_energy=False)
+    if is_help or template is None or not template.return_home:
+        storage.set_active_contract(telegram_id, None)
+        return ActionResult(
+            True,
+            result.text,
+            payload={"mission_active": False, "mission_done": True, "reward": reward},
+        )
     if template.return_home:
         storage.set_active_contract(
             telegram_id,
@@ -1479,12 +1502,20 @@ def shoot_quest_mission(storage: Storage, telegram_id: int, direction: str) -> A
     notes: list[str] = []
     if hit_cell is not None and hit_kind == "npc":
         label = _remove_npc_at(session, hit_cell)
-        notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).")
+        from app.combat_loot import grant_combat_loot
+
+        loot = grant_combat_loot(storage, telegram_id, npc=True)
+        loot_note = f" Лут: {loot}." if loot else ""
+        notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).{loot_note}")
         if session.kind == "clear_marauder" and not session.npcs:
             notes.append("Зона зачищена от мародёров.")
     elif hit_cell is not None and hit_kind == "mutant":
         label = _remove_enemy_at(session, hit_cell)
-        notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).")
+        from app.combat_loot import grant_combat_loot
+
+        loot = grant_combat_loot(storage, telegram_id, npc=False)
+        loot_note = f" Лут: {loot}." if loot else ""
+        notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).{loot_note}")
         if session.kind == "clear_mutant" and not session.enemies:
             notes.append("Зона зачищена от мутантов.")
     else:
@@ -1731,9 +1762,26 @@ def render_mission_frame(
     field = (margin - 8, margin - 8, margin + grid_px + 8, margin + grid_px + 8)
     draw.rounded_rectangle(field, radius=14, fill=(34, 36, 40, 255), outline=(70, 74, 80), width=2)
 
+    loc_bg = _load_location_thumb(session.location)
+    if loc_bg is not None:
+        field_img = _cover_crop(loc_bg, grid_px, grid_px).convert("RGBA")
+        field_img.putalpha(160)
+        canvas.paste(field_img, (margin, margin), field_img)
+
     for gy in range(grid):
         for gx in range(grid):
-            _draw_cell(canvas, margin + gx * cell, margin + gy * cell, cell)
+            left = margin + gx * cell
+            top = margin + gy * cell
+            if loc_bg is None:
+                _draw_cell(canvas, left, top, cell)
+            else:
+                overlay = Image.new("RGBA", (cell, cell), (12, 14, 16, 55))
+                canvas.alpha_composite(overlay, (left, top))
+                ImageDraw.Draw(canvas).rectangle(
+                    (left, top, left + cell - 1, top + cell - 1),
+                    outline=(28, 30, 32),
+                    width=1,
+                )
 
     # Старт — зелёная рамка.
     sx, sy = session.start

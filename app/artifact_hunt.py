@@ -443,15 +443,15 @@ def location_anomaly_count(location: str) -> int:
     """Чем севернее (меньше Y на карте) — тем больше аномалий."""
     point = MAP_TRAVEL_POINTS.get(location)
     if point is None:
-        return 5
+        return 8
     _x, y = point
     if y >= 450:
-        return 3
+        return 6
     if y >= 300:
-        return 5
+        return 8
     if y >= 180:
-        return 7
-    return 9
+        return 10
+    return 12
 
 
 def _chebyshev(a: tuple[int, int], b: tuple[int, int]) -> int:
@@ -663,12 +663,19 @@ def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) ->
     storage.add_player_stat(telegram_id, "artifacts_found", 1)
     label = ITEM_LABELS.get(art_key, art_key)
     kind = "мусорный артефакт (без бонусов)" if art_key in ARTIFACT_JUNK_KEYS else "артефакт"
+    bonus_note = ""
+    from app.game_logic import daily_artifact_hunt_done_today, mark_daily_artifact_hunt_done, DAILY_ARTIFACT_HUNT_BONUS_RU
+
+    if art_key not in ARTIFACT_JUNK_KEYS and not daily_artifact_hunt_done_today(storage, telegram_id):
+        storage.change_money(telegram_id, DAILY_ARTIFACT_HUNT_BONUS_RU)
+        mark_daily_artifact_hunt_done(storage, telegram_id)
+        bonus_note = f"\n🗓 Ежедневный поиск: +{DAILY_ARTIFACT_HUNT_BONUS_RU} RU к цене арта."
     return ActionResult(
         True,
         f"Арт найден на «{session.location}»!\n"
         f"Детектор «{session.detector_name}»: {session.circles_filled}/{session.circles_needed}.\n"
         f"Найден {kind}: {label} x1.\n"
-        f"Ходов: {session.moves}, рад за вылазку +{session.rad_gained}.{survival_text}",
+        f"Ходов: {session.moves}, рад за вылазку +{session.rad_gained}.{bonus_note}{survival_text}",
         payload={"hunt_active": False, "hunt_done": True, "art_key": art_key},
     )
 
@@ -1004,11 +1011,26 @@ def render_hunt_frame(
     field_bg = (margin - 10, margin - 10, margin + grid_px + 10, margin + grid_px + 10)
     draw.rounded_rectangle(field_bg, radius=16, fill=(36, 38, 42, 255), outline=(75, 78, 84, 255), width=3)
 
+    thumb = _load_location_thumb(session.location)
+    if thumb is not None:
+        field = _cover_crop(thumb, grid_px, grid_px).convert("RGBA")
+        field.putalpha(170)
+        canvas.paste(field, (margin, margin), field)
+
     for gy in range(grid):
         for gx in range(grid):
             left = margin + gx * cell
             top = margin + gy * cell
-            _draw_rock_cell(canvas, left, top, cell, gx, gy)
+            if thumb is None:
+                _draw_rock_cell(canvas, left, top, cell, gx, gy)
+            else:
+                overlay = Image.new("RGBA", (cell, cell), (8, 10, 12, 50))
+                canvas.alpha_composite(overlay, (left, top))
+                ImageDraw.Draw(canvas).rectangle(
+                    (left, top, left + cell - 1, top + cell - 1),
+                    outline=(28, 28, 30),
+                    width=2,
+                )
 
     for ax, ay in session.anomalies:
         cx = margin + ax * cell + cell // 2

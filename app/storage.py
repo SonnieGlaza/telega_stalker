@@ -2191,11 +2191,14 @@ class Storage:
             try:
                 equipment = json.loads(self._row_get(row, "equipment_json", "{}") or "{}")
                 if isinstance(equipment, dict):
-                    artifact_value = str(equipment.get("artifact") or "").strip()
                     from app.game_logic import ARTIFACT_ENERGY_REGEN_NAMES, ARTIFACT_RAD_CLEANSE_NAMES
 
-                    has_zone_artifact = artifact_value in ARTIFACT_ENERGY_REGEN_NAMES
-                    has_antirad_artifact = artifact_value in ARTIFACT_RAD_CLEANSE_NAMES
+                    art_names = [
+                        str(equipment.get("artifact") or "").strip(),
+                        str(equipment.get("artifact_2") or "").strip(),
+                    ]
+                    has_zone_artifact = any(n in ARTIFACT_ENERGY_REGEN_NAMES for n in art_names)
+                    has_antirad_artifact = any(n in ARTIFACT_RAD_CLEANSE_NAMES for n in art_names)
             except (TypeError, json.JSONDecodeError, ImportError):
                 has_zone_artifact = False
                 has_antirad_artifact = False

@@ -43,7 +43,7 @@ from app.npc_assets import (
     pick_npc_kind,
 )
 from app.quest_mission import LOCATION_DANGER, MOVE_DELTAS, _draw_enemy_icon
-from app.tactical_combat import STALE_TURN_MESSAGE, best_step_toward, manhattan_distance
+from app.tactical_combat import STALE_TURN_MESSAGE, best_step_toward, manhattan_distance, ray_cast_first_hit, weapon_shoot_range
 from app.storage import Character, Storage
 
 COOP_MAX_PLAYERS = 3
@@ -177,8 +177,10 @@ class CoopMissionSession:
     hazards: list[tuple[int, int]] = field(default_factory=list)
     enemies: list[tuple[int, int]] = field(default_factory=list)
     enemy_kinds: list[str] = field(default_factory=list)
+    enemy_hp: list[int] = field(default_factory=list)
     npcs: list[tuple[int, int]] = field(default_factory=list)
     npc_kinds: list[str] = field(default_factory=list)
+    npc_hp: list[int] = field(default_factory=list)
     death_causes: dict[str, str] = field(default_factory=dict)
     death_killers: dict[str, str] = field(default_factory=dict)
     carrying: dict[str, str] = field(default_factory=dict)
@@ -220,8 +222,10 @@ class CoopMissionSession:
             "hazards": [list(p) for p in self.hazards],
             "enemies": [list(p) for p in self.enemies],
             "enemy_kinds": list(self.enemy_kinds),
+            "enemy_hp": list(self.enemy_hp),
             "npcs": [list(p) for p in self.npcs],
             "npc_kinds": list(self.npc_kinds),
+            "npc_hp": list(self.npc_hp),
             "death_causes": dict(self.death_causes),
             "death_killers": dict(self.death_killers),
             "carrying": dict(self.carrying),
@@ -255,8 +259,10 @@ class CoopMissionSession:
             enemy_kinds=_parse_kind_list(
                 raw.get("enemies") or [], raw.get("enemy_kinds"), MUTANT_SPRITE_KEYS, valid=MUTANT_SPRITES
             ),
+            enemy_hp=[int(x) for x in (raw.get("enemy_hp") or [])],
             npcs=[(int(p[0]), int(p[1])) for p in (raw.get("npcs") or [])],
             npc_kinds=_parse_kind_list(raw.get("npcs") or [], raw.get("npc_kinds"), NPC_SPRITE_KEYS, valid=NPC_SPRITES),
+            npc_hp=[int(x) for x in (raw.get("npc_hp") or [])],
             death_causes={str(k): str(v) for k, v in (raw.get("death_causes") or {}).items()},
             death_killers={str(k): str(v) for k, v in (raw.get("death_killers") or {}).items()},
             carrying={str(k): str(v) for k, v in (raw.get("carrying") or {}).items()},
@@ -659,12 +665,14 @@ def _build_coop_map(session: CoopMissionSession) -> None:
         cell = _free_cell(grid, forbidden)
         session.enemies.append(cell)
         session.enemy_kinds.append(pick_mutant_kind())
+        session.enemy_hp.append(random.randint(10, 18))
         forbidden.add(cell)
     npc_n = 1 if danger < 3 else 2
     for _ in range(npc_n):
         cell = _free_cell(grid, forbidden)
         session.npcs.append(cell)
         session.npc_kinds.append(pick_npc_kind())
+        session.npc_hp.append(random.randint(12, 20))
         forbidden.add(cell)
 
 
@@ -1052,8 +1060,14 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         session.enemies.pop(idx)
         if idx < len(session.enemy_kinds):
             session.enemy_kinds.pop(idx)
+        if idx < len(session.enemy_hp):
+            session.enemy_hp.pop(idx)
+        from app.combat_loot import grant_combat_loot
+
+        loot = grant_combat_loot(storage, telegram_id, npc=False)
+        loot_note = f" Лут: {loot}." if loot else ""
         phrase = encounter_phrase_for_kind(kind, npc=False)
-        session.log.append(f"{h(player.nickname)} сразился {phrase}: −{dmg} HP.")
+        session.log.append(f"{h(player.nickname)} сразился {phrase}: −{dmg} HP.{loot_note}")
         wipe = _check_team_wipe(storage, session)
         if wipe:
             return wipe
@@ -1070,8 +1084,14 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         session.npcs.pop(idx)
         if idx < len(session.npc_kinds):
             session.npc_kinds.pop(idx)
+        if idx < len(session.npc_hp):
+            session.npc_hp.pop(idx)
+        from app.combat_loot import grant_combat_loot
+
+        loot = grant_combat_loot(storage, telegram_id, npc=True)
+        loot_note = f" Лут: {loot}." if loot else ""
         phrase = encounter_phrase_for_kind(kind, npc=True)
-        session.log.append(f"{h(player.nickname)} сразился {phrase}: −{dmg} HP.")
+        session.log.append(f"{h(player.nickname)} сразился {phrase}: −{dmg} HP.{loot_note}")
         wipe = _check_team_wipe(storage, session)
         if wipe:
             return wipe
@@ -1130,6 +1150,96 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
     if not _save_if_turn_ok(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)
     return ActionResult(True, "Ход сделан.", payload={"coop_active": True, "notify_all": session.player_ids})
+
+
+def coop_shoot_available(session: CoopMissionSession) -> bool:
+    return bool(session.enemies or session.npcs)
+
+
+def coop_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
+    from app.combat_loot import grant_combat_loot
+    from app.death_flavor import killer_label_for_kind
+
+    session = get_coop_session_by_player(storage, telegram_id)
+    if session is None:
+        return ActionResult(False, "Активной кооп-вылазки нет.")
+    if session.active_player() != telegram_id:
+        return ActionResult(False, "Сейчас ход напарника.")
+    if session.hp.get(str(telegram_id), 0) <= 0:
+        return ActionResult(False, "Ты ранен и не можешь стрелять.")
+    if direction not in MOVE_DELTAS:
+        return ActionResult(False, "Некорректное направление.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    weapon = str(player.equipment.get("weapon", "Нож"))
+    shoot_range = weapon_shoot_range(weapon)
+    if shoot_range <= 0:
+        return ActionResult(False, "Это оружие не стреляет на дистанции.")
+
+    targets: dict[tuple[int, int], str] = {pos: "mutant" for pos in session.enemies}
+    targets.update({pos: "npc" for pos in session.npcs})
+    hit_cell, hit_kind = ray_cast_first_hit(
+        session.pos(telegram_id),
+        direction,
+        grid=session.grid,
+        max_range=shoot_range,
+        blockers=set(),
+        targets=targets,
+    )
+    turn_seq = session.turn_seq
+    dmg = max(4, shoot_range * 3 + random.randint(0, 4))
+    note = f"{h(player.nickname)} промахнулся ({weapon})."
+    if hit_cell is not None and hit_kind == "mutant" and hit_cell in session.enemies:
+        idx = session.enemies.index(hit_cell)
+        while len(session.enemy_hp) < len(session.enemies):
+            session.enemy_hp.append(12)
+        session.enemy_hp[idx] = max(0, int(session.enemy_hp[idx]) - dmg)
+        kind = session.enemy_kinds[idx] if idx < len(session.enemy_kinds) else ""
+        label = killer_label_for_kind(kind, npc=False) if kind else "мутанта"
+        if session.enemy_hp[idx] <= 0:
+            session.enemies.pop(idx)
+            if idx < len(session.enemy_kinds):
+                session.enemy_kinds.pop(idx)
+            session.enemy_hp.pop(idx)
+            loot = grant_combat_loot(storage, telegram_id, npc=False)
+            loot_note = f" Лут: {loot}." if loot else ""
+            note = f"{h(player.nickname)} убил {label} ({weapon}).{loot_note}"
+        else:
+            note = f"{h(player.nickname)} попал в {label}: {session.enemy_hp[idx]} HP."
+    elif hit_cell is not None and hit_kind == "npc" and hit_cell in session.npcs:
+        idx = session.npcs.index(hit_cell)
+        while len(session.npc_hp) < len(session.npcs):
+            session.npc_hp.append(14)
+        session.npc_hp[idx] = max(0, int(session.npc_hp[idx]) - dmg)
+        kind = session.npc_kinds[idx] if idx < len(session.npc_kinds) else ""
+        label = killer_label_for_kind(kind, npc=True) if kind else "НПС"
+        if session.npc_hp[idx] <= 0:
+            session.npcs.pop(idx)
+            if idx < len(session.npc_kinds):
+                session.npc_kinds.pop(idx)
+            session.npc_hp.pop(idx)
+            loot = grant_combat_loot(storage, telegram_id, npc=True)
+            loot_note = f" Лут: {loot}." if loot else ""
+            note = f"{h(player.nickname)} убил {label} ({weapon}).{loot_note}"
+        else:
+            note = f"{h(player.nickname)} попал в {label}: {session.npc_hp[idx]} HP."
+    session.log.append(note)
+
+    if _objectives_complete(session):
+        return _finish_success(storage, session)
+    _advance_turn(session)
+    _move_enemies(session)
+    _move_npcs(session)
+    session.log.extend(_enemy_attacks(session, storage))
+    session.log.extend(_npc_attacks(session, storage))
+    _maybe_radio_chatter(session, storage)
+    wipe = _check_team_wipe(storage, session)
+    if wipe:
+        return wipe
+    if not _save_if_turn_ok(storage, session, turn_seq):
+        return ActionResult(False, STALE_TURN_MESSAGE)
+    return ActionResult(True, note, payload={"coop_active": True, "notify_all": session.player_ids})
 
 
 def coop_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
@@ -1315,6 +1425,12 @@ def coop_status_caption(session: CoopMissionSession, storage: Storage, viewer_id
         f"Цели: {len(session.collected)}/{len(session.objectives)} (осталось {left_obj})",
         f"Мутанты: {len(session.enemies)} · НПС: {len(session.npcs)} · Аномалии: {len(session.hazards)}",
     ]
+    if session.enemy_hp:
+        bits = "/".join(str(hp) for hp in session.enemy_hp[:6])
+        lines.append(f"HP мутантов: {bits}")
+    if session.npc_hp:
+        bits = "/".join(str(hp) for hp in session.npc_hp[:6])
+        lines.append(f"HP НПС: {bits}")
     for i, pid in enumerate(session.player_ids):
         ch = storage.get_character(pid, refresh_energy=False)
         name = ch.nickname if ch else str(pid)
@@ -1368,12 +1484,23 @@ def render_coop_frame(storage: Storage, session: CoopMissionSession, viewer_id: 
     height = max(margin + grid_px + margin, 680)
     canvas = Image.new("RGBA", (width, height), (18, 20, 22, 255))
     draw = ImageDraw.Draw(canvas)
+    from app.artifact_hunt import _load_location_thumb, _cover_crop
+
+    thumb = _load_location_thumb(session.location)
+    if thumb is not None:
+        field = _cover_crop(thumb, grid_px, grid_px).convert("RGBA")
+        field.putalpha(150)
+        canvas.paste(field, (margin, margin), field)
     for gy in range(grid):
         for gx in range(grid):
             left = margin + gx * cell
             top = margin + gy * cell
-            tone = 62 + ((gx * 17 + gy * 23) % 18)
-            draw.rectangle((left, top, left + cell - 1, top + cell - 1), fill=(tone, tone - 4, tone - 8))
+            if thumb is None:
+                tone = 62 + ((gx * 17 + gy * 23) % 18)
+                draw.rectangle((left, top, left + cell - 1, top + cell - 1), fill=(tone, tone - 4, tone - 8))
+            else:
+                overlay = Image.new("RGBA", (cell, cell), (10, 12, 14, 50))
+                canvas.alpha_composite(overlay, (left, top))
             draw.rectangle((left, top, left + cell - 1, top + cell - 1), outline=(28, 30, 34), width=1)
 
     sx, sy = session.start
@@ -1413,6 +1540,9 @@ def render_coop_frame(storage: Storage, session: CoopMissionSession, viewer_id: 
             _paste_circle(canvas, sprite, cx, cy, MISSION_MUTANT_GRID_DIAMETER, ring_color=enemy_ring, ring_width=3)
         else:
             _draw_enemy_icon(draw, cx, cy, marauder=False)
+        hp_val = session.enemy_hp[i] if i < len(session.enemy_hp) else None
+        if hp_val is not None:
+            draw.text((cx, cy - 28), str(hp_val), fill=(255, 210, 210), font=_load_font(13), anchor="mm")
 
     npc_ring = (210, 55, 45)
     for i, (nx_, ny_) in enumerate(session.npcs):
@@ -1424,6 +1554,9 @@ def render_coop_frame(storage: Storage, session: CoopMissionSession, viewer_id: 
             _paste_circle(canvas, sprite, cx, cy, MISSION_NPC_GRID_DIAMETER, ring_color=npc_ring, ring_width=3)
         else:
             _draw_enemy_icon(draw, cx, cy, marauder=True)
+        hp_val = session.npc_hp[i] if i < len(session.npc_hp) else None
+        if hp_val is not None:
+            draw.text((cx, cy - 28), str(hp_val), fill=(255, 210, 210), font=_load_font(13), anchor="mm")
 
     for i, pid in enumerate(session.player_ids):
         px, py = session.pos(pid)

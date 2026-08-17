@@ -128,6 +128,8 @@ from app.coop_mission import (
     coop_forfeit,
     coop_menu_text,
     coop_move,
+    coop_shoot,
+    coop_shoot_available,
     coop_status_caption,
     coop_use_medkit,
     create_coop_lobby,
@@ -2697,15 +2699,19 @@ async def show_medic(callback: CallbackQuery) -> None:
 async def show_tech(callback: CallbackQuery) -> None:
     storage = get_storage()
     from app.vendors import vendor_item_is_unlocked
+    from app.game_logic import has_extra_artifact_slot
 
     can_upgrade = vendor_item_is_unlocked(storage, callback.from_user.id, "armor_upgrade")
+    can_slot = vendor_item_is_unlocked(storage, callback.from_user.id, "artifact_slot")
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    already_slot = has_extra_artifact_slot(player) if player is not None else False
     await edit_menu_message(
         callback,
         _trader_text(
             callback.from_user.id,
             _vendor_intro(storage, callback.from_user.id, "tech"),
         ),
-        tech_menu_keyboard(can_buy_upgrade=can_upgrade),
+        tech_menu_keyboard(can_buy_upgrade=can_upgrade, can_buy_artifact_slot=can_slot and not already_slot),
     )
 
 
@@ -2919,13 +2925,18 @@ async def show_buy_repair(callback: CallbackQuery) -> None:
     from app.vendors import vendor_item_is_unlocked
 
     can_upgrade = vendor_item_is_unlocked(storage, callback.from_user.id, "armor_upgrade")
+    can_slot = vendor_item_is_unlocked(storage, callback.from_user.id, "artifact_slot")
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    from app.game_logic import has_extra_artifact_slot
+
+    already_slot = has_extra_artifact_slot(player) if player is not None else False
     await edit_menu_message(
         callback,
         _trader_text(
             callback.from_user.id,
             _vendor_intro(storage, callback.from_user.id, "tech"),
         ),
-        tech_menu_keyboard(can_buy_upgrade=can_upgrade),
+        tech_menu_keyboard(can_buy_upgrade=can_upgrade, can_buy_artifact_slot=can_slot and not already_slot),
     )
 
 
@@ -3133,6 +3144,12 @@ async def repair_armor_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "upgrade:armor")
 async def upgrade_armor_callback(callback: CallbackQuery) -> None:
     result = upgrade_armor(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "upgrade:artifact_slot")
+async def upgrade_artifact_slot_callback(callback: CallbackQuery) -> None:
+    result = buy_item(get_storage(), callback.from_user.id, "artifact_slot")
     await reply_action_result(callback, result.text)
 
 
@@ -3464,13 +3481,19 @@ def _quests_rules_text() -> str:
         "🛡 Сопровождение: доведи NPC от A до B (он идёт за тобой). "
         "Аномалии всегда; вокруг — мутанты или НПС с T1-стволами. "
         "Если подопечного схватят — контракт сорван.\n"
-        "📡 Поиск артефактов — тактическая охота на сетке (нужен детектор).\n"
+        "📡 Поиск артефактов — тактическая охота на сетке (нужен детектор). "
+        "Первый ценный арт за сутки даёт +1000 RU к цене.\n"
+        "🆘 Мини-ивенты по рации в общем чате: кнопка «Помочь» — зачистка мутантов "
+        "на указанной локации (награда как за среднее задание).\n"
         "🚚 Контрабанда — отдельный рейс с риском."
     )
 
 
 def _quests_compact_status(storage, player) -> str:
     """Короткий статус для меню кнопок — без простыни правил."""
+    from app.game_logic import DAILY_ARTIFACT_HUNT_BONUS_RU, daily_artifact_hunt_done_today
+    from app.mini_events import get_active_help_event
+
     lines = ["📋 Задания"]
     active = storage.get_active_contract(player.telegram_id)
     if active:
@@ -3482,12 +3505,25 @@ def _quests_compact_status(storage, player) -> str:
             lines.append(f"Точка: «{template.work_location}»")
     else:
         lines.append("Выбери контракт, поиск артефактов или контрабанду.")
+    if daily_artifact_hunt_done_today(storage, player.telegram_id):
+        lines.append("🗓 Ежедневный поиск арта: выполнен сегодня.")
+    else:
+        lines.append(
+            f"🗓 Ежедневный поиск арта: найди ценный арт (+{DAILY_ARTIFACT_HUNT_BONUS_RU} RU к цене)."
+        )
+    event = get_active_help_event(storage)
+    if event:
+        lines.append(
+            f"📡 Рация: {event.get('speaker')} на «{event.get('location')}» — 15 мин."
+        )
     if is_traveling(player):
         lines.append("⏱ Ты в пути — таймер в отдельном сообщении.")
     return "\n".join(lines)
 
 
 def _quests_menu_payload(storage, player):
+    from app.mini_events import help_event_is_joinable
+
     active = storage.get_active_contract(player.telegram_id)
     home = faction_home_base(player.faction)
     traveling = is_traveling(player)
@@ -3540,6 +3576,7 @@ def _quests_menu_payload(storage, player):
         work_location=work_location,
         show_go_home=show_go_home,
         show_cancel=show_cancel,
+        show_help=help_event_is_joinable(storage, player.telegram_id),
     )
     return _quests_compact_status(storage, player), keyboard
 
@@ -4689,7 +4726,12 @@ async def _broadcast_coop_session(
         is_active = active_pid == pid
         medkit = not session.medkits_used.get(str(pid), False) and _player_has_medkit(ch)
         evac = can_evacuate(session, pid)
-        markup = coop_mission_keyboard(is_active_turn=is_active, medkit_available=medkit, evac_available=evac)
+        markup = coop_mission_keyboard(
+            is_active_turn=is_active,
+            medkit_available=medkit,
+            evac_available=evac,
+            shoot_available=is_active and coop_shoot_available(session),
+        )
         caption = coop_status_caption(session, storage, pid)
         if note:
             caption = f"{caption}\n\n{note}" if pid == active_pid else f"{caption}\n\n↪ {note}"
@@ -4766,6 +4808,25 @@ async def _handle_coop_action(bot: Bot, callback: CallbackQuery, result: Any) ->
         return
     await _broadcast_coop_session(bot, storage, session, note=result.text)
     await safe_callback_answer(callback, "Готово")
+
+
+@router.callback_query(F.data == "help_event:join")
+async def help_event_join_callback(callback: CallbackQuery) -> None:
+    from app.mini_events import join_help_event
+
+    storage = get_storage()
+    result = join_help_event(storage, callback.from_user.id)
+    payload = result.payload or {}
+    image = payload.get("mission_image")
+    if image and payload.get("mission_active"):
+        await _send_or_edit_quest_mission_frame(
+            callback,
+            image_bytes=image,
+            caption=str(payload.get("caption") or result.text),
+            note=result.text,
+        )
+        return
+    await reply_action_result(callback, result.text)
 
 
 @router.callback_query(F.data.startswith("qmission:"))
@@ -6207,7 +6268,12 @@ async def show_coop_menu(message: Message, bot: Bot) -> None:
         is_active = session.active_player() == player.telegram_id
         medkit = not session.medkits_used.get(str(player.telegram_id), False) and _player_has_medkit(player)
         evac = can_evacuate(session, player.telegram_id)
-        markup = coop_mission_keyboard(is_active_turn=is_active, medkit_available=medkit, evac_available=evac)
+        markup = coop_mission_keyboard(
+            is_active_turn=is_active,
+            medkit_available=medkit,
+            evac_available=evac,
+            shoot_available=is_active and coop_shoot_available(session),
+        )
         caption = coop_status_caption(session, storage, player.telegram_id)
         msg_id = session.message_ids.get(str(player.telegram_id))
         new_id = await _upsert_tactical_photo(
@@ -6351,6 +6417,12 @@ async def coop_callback(callback: CallbackQuery, bot: Bot) -> None:
         if action.startswith("move:"):
             direction = action.removeprefix("move:")
             result = coop_move(storage, telegram_id, direction)
+            await _handle_coop_action(bot, callback, result)
+            return
+
+        if action.startswith("shoot:"):
+            direction = action.removeprefix("shoot:")
+            result = coop_shoot(storage, telegram_id, direction)
             await _handle_coop_action(bot, callback, result)
             return
 
@@ -8153,6 +8225,33 @@ async def run_bot() -> None:
                             logger.debug("Failed zone event notify to %s", user_id)
             except Exception:
                 logger.exception("Zone event cycle tick failed")
+            try:
+                from app.mini_events import (
+                    format_help_call_html,
+                    format_help_thanks_html,
+                    process_help_event_cycle,
+                )
+                from app.season_chat_titles import ZONE_COMMON_CHAT_ID
+
+                payload = process_help_event_cycle(get_storage())
+                if payload:
+                    text = payload.get("text") or ""
+                    event = payload.get("event") or {}
+                    html = (
+                        format_help_call_html(event)
+                        if payload.get("kind") == "call"
+                        else format_help_thanks_html(text)
+                    )
+                    try:
+                        await bot.send_message(
+                            ZONE_COMMON_CHAT_ID,
+                            html,
+                            parse_mode=ParseMode.HTML,
+                        )
+                    except Exception:
+                        logger.exception("Failed to post help event to common chat")
+            except Exception:
+                logger.exception("Help event cycle tick failed")
             try:
                 season_message = process_rating_season(get_storage())
                 if season_message:

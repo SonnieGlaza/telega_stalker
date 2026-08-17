@@ -183,6 +183,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "detector_svarog": {"name": "Детектор «Сварог»", "buy_price": 30000, "sell_price": 15000},
     "gear_upgrade": {"name": "Улучшение брони (+1 защита)", "buy_price": 5000, "sell_price": 2000},
     "armor_upgrade": {"name": "Улучшение брони (+1 защита)", "buy_price": 5000, "sell_price": 2000},
+    "artifact_slot": {"name": "Доп. ячейка артефакта", "buy_price": 15000, "sell_price": 5000},
     "truck": {"name": "Грузовик", "buy_price": 50000, "sell_price": 17500},
     "niva": {"name": "Нива", "buy_price": 10000, "sell_price": 4500},
     "bicycle": {"name": "Велосипед", "buy_price": 3500, "sell_price": 1500},
@@ -418,6 +419,7 @@ ITEM_LABELS = {
     "armor_berill5m": "Берилл-5М «Булат»",
     "armor_exoskeleton": "Экзоскелет",
     "armor_upgrade": "Улучшение брони (+1 защита)",
+    "artifact_slot": "Доп. ячейка артефакта",
     "gear_upgrade": "Улучшение брони (+1 защита)",
     "weapon_pm": "ПМ",
     "weapon_fort12": "Фора-12",
@@ -1007,6 +1009,8 @@ DAILY_CONTRACT_RATING_BONUS = 2
 WEEKLY_CONTRACT_BONUS_PERCENT = 120
 WEEKLY_CONTRACT_RATING_BONUS = 7
 WEEKLY_CONTRACT_DIFFICULTIES: frozenset[str] = frozenset({"heavy", "impossible"})
+DAILY_ARTIFACT_HUNT_META_PREFIX = "contracts:daily_hunt:"
+DAILY_ARTIFACT_HUNT_BONUS_RU = 1000
 CONTRACT_DAILY_DONE_META_PREFIX = "contracts:daily_done:"
 CONTRACT_WEEKLY_DONE_META_PREFIX = "contracts:weekly_done:"
 
@@ -1348,30 +1352,47 @@ def _durability_penalty(percent: int, max_penalty: int) -> int:
     return int(round((missing / MIN_EFFECTIVE_DURABILITY) * max_penalty))
 
 
+def _equipped_artifact_names(character: Character) -> list[str]:
+    names: list[str] = []
+    for key in ("artifact", "artifact_2"):
+        name = str(character.equipment.get(key, "Нет") or "Нет")
+        if name and name != "Нет":
+            names.append(name)
+    return names
+
+
+def has_extra_artifact_slot(character: Character) -> bool:
+    raw = character.equipment.get("artifact_slots")
+    try:
+        return int(raw or 1) >= 2
+    except (TypeError, ValueError):
+        return False
+
+
 def equipment_power(character: Character) -> int:
     weapon_name = str(character.equipment.get("weapon", "Нож"))
     armor_name = str(character.equipment.get("armor", "Куртка новичка"))
-    artifact_name = str(character.equipment.get("artifact", "Нет"))
     weapon_durability = _durability_percent(character, "weapon")
     armor_durability = _durability_percent(character, "armor")
 
     weapon_level = _weapon_rating(weapon_name)
     armor_level = _armor_rating(armor_name)
-    if artifact_name in ARTIFACT_EQUIP_BONUSES:
-        artifact_bonus = int(ARTIFACT_EQUIP_BONUSES[artifact_name].get("power", 0))
-    elif artifact_name and artifact_name != "Нет":
-        # Старые сейвы с неизвестным артом — как базовый.
-        artifact_bonus = 2
-    else:
-        artifact_bonus = 0
+    artifact_bonus = 0
+    for artifact_name in _equipped_artifact_names(character):
+        if artifact_name in ARTIFACT_EQUIP_BONUSES:
+            artifact_bonus += int(ARTIFACT_EQUIP_BONUSES[artifact_name].get("power", 0))
+        else:
+            artifact_bonus += 2
     durability_penalty = _durability_penalty(weapon_durability, 6) + _durability_penalty(armor_durability, 6)
-    # Жёсткий потолок шкалы профиля: топ оружие+броня+арт = 20.
+    # Жёсткий потолок шкалы профиля: топ оружие+броня+арты = 20.
     return max(1, min(20, weapon_level + armor_level + artifact_bonus - durability_penalty))
 
 
 def _artifact_hp_bonus(character: Character) -> int:
-    artifact_name = str(character.equipment.get("artifact", "Нет"))
-    return int(ARTIFACT_EQUIP_BONUSES.get(artifact_name, {}).get("hp", 0))
+    total = 0
+    for artifact_name in _equipped_artifact_names(character):
+        total += int(ARTIFACT_EQUIP_BONUSES.get(artifact_name, {}).get("hp", 0))
+    return total
 
 
 def effective_max_health(character: Character) -> int:
@@ -2819,6 +2840,19 @@ def _weekly_key(now: datetime) -> str:
     return f"{iso[0]}-W{iso[1]:02d}"
 
 
+def daily_artifact_hunt_done_today(storage: Storage, telegram_id: int, now: datetime | None = None) -> bool:
+    now = now or datetime.now(timezone.utc)
+    return bool(storage.get_meta(f"{DAILY_ARTIFACT_HUNT_META_PREFIX}{int(telegram_id)}:{_daily_key(now)}"))
+
+
+def mark_daily_artifact_hunt_done(storage: Storage, telegram_id: int, now: datetime | None = None) -> None:
+    now = now or datetime.now(timezone.utc)
+    storage.set_meta(
+        f"{DAILY_ARTIFACT_HUNT_META_PREFIX}{int(telegram_id)}:{_daily_key(now)}",
+        "1",
+    )
+
+
 def get_daily_contract_keys(storage: Storage, now: datetime | None = None) -> list[str]:
     """Ротация 2-3 контрактов дня; пересчитывается раз в сутки, хранится в meta."""
     now = now or datetime.now(timezone.utc)
@@ -3016,6 +3050,10 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
     weekly_week = _weekly_key(now)
     tid = character.telegram_id
 
+    lines.append(
+        f"🗓 Ежедневный поиск арта: первый ценный арт за сутки даёт +{DAILY_ARTIFACT_HUNT_BONUS_RU} RU "
+        f"{'(уже получен сегодня)' if daily_artifact_hunt_done_today(storage, tid, now) else '(ещё не найден)'}."
+    )
     lines.append(
         f"🗓 Контракты дня (бонус +{DAILY_CONTRACT_BONUS_PERCENT}% RU, +{DAILY_CONTRACT_RATING_BONUS} рейтинг, "
         "1 раз за каждый контракт):"
@@ -3368,9 +3406,21 @@ def apply_contract_mission_success(
         True,
         f"«{title}» выполнено на «{work_location}»!\n"
         f"Награда: {reward} RU{mult_note}, рейтинг +{rating_success}."
-        f"{extra}{stash_text}{durability_text}{achievements_text}",
+        f"{extra}{stash_text}{durability_text}{achievements_text}{_maybe_help_event_reward(storage, telegram_id, title)}",
         payload={"reward": reward},
     )
+
+
+def _maybe_help_event_reward(storage: Storage, telegram_id: int, title: str) -> str:
+    if not str(title).startswith("Помощь:"):
+        return ""
+    try:
+        from app.mini_events import complete_help_event_if_helper
+
+        extra = complete_help_event_if_helper(storage, telegram_id)
+        return f"\n{extra}" if extra else ""
+    except Exception:
+        return ""
 
 
 def apply_contract_mission_fail(
@@ -4179,6 +4229,17 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
             "Установи их в разделе «Экипировка»."
             f"{achievements_text}",
         )
+    if item_key == "artifact_slot":
+        if has_extra_artifact_slot(character):
+            storage.change_money(telegram_id, total_price)
+            return ActionResult(False, "Дополнительная ячейка артефакта уже установлена.")
+        storage.update_equipment_fields(telegram_id, {"artifact_slots": 2})
+        storage.add_player_stat(telegram_id, "trades_done", 1)
+        _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
+        return ActionResult(
+            True,
+            "Техник поставил доп. ячейку под артефакт. Теперь можно экипировать два арта.",
+        )
 
     storage.add_item(telegram_id, item_key, qty)
     if qty == 1:
@@ -4593,6 +4654,8 @@ def build_equip_root_text(character: Character) -> tuple[str, list[tuple[str, st
     weapon = str(character.equipment.get("weapon", "Нож"))
     armor = str(character.equipment.get("armor", "Куртка новичка"))
     artifact = str(character.equipment.get("artifact", "Нет") or "Нет")
+    artifact_2 = str(character.equipment.get("artifact_2", "Нет") or "Нет")
+    extra_slot = has_extra_artifact_slot(character)
     w_count = len(list_equippable_weapons(character))
     a_count = len(list_equippable_armor(character))
     art_count = len(list_equippable_artifacts(character))
@@ -4604,6 +4667,10 @@ def build_equip_root_text(character: Character) -> tuple[str, list[tuple[str, st
     art_note = ""
     if artifact and artifact != "Нет":
         art_note = f" ({_artifact_bonus_short(artifact)})"
+    art2_line = ""
+    if extra_slot:
+        note2 = f" ({_artifact_bonus_short(artifact_2)})" if artifact_2 and artifact_2 != "Нет" else ""
+        art2_line = f"\n💎 Артефакт 2: {artifact_2}{note2}"
     defense = armor_defense(character)
     flat_mit = armor_flat_mitigation(character)
     block = armor_block_chance(character)
@@ -4626,7 +4693,7 @@ def build_equip_root_text(character: Character) -> tuple[str, list[tuple[str, st
         f"Сила снаряги: {equipment_power(character)}\n\n"
         f"🔫 Оружие: {weapon}\n"
         f"🦺 Броня: {armor}{defense_line}\n"
-        f"💎 Артефакт: {artifact}{art_note}\n\n"
+        f"💎 Артефакт: {artifact}{art_note}{art2_line}\n\n"
         f"В инвентаре: оружие {w_count}, броня {a_count}, арты {art_count}."
     )
     return text, menu_items
@@ -4679,18 +4746,25 @@ def build_equip_slot_page(
     return ("\n".join(lines), slot, safe_page, total_pages, chunk)
 
 
-def _unequip_artifact_to_inventory(storage: Storage, telegram_id: int, equipped_name: str) -> None:
-    """Вернуть экипированный арт в инвентарь и снять бонус HP при необходимости."""
+def _unequip_artifact_to_inventory(
+    storage: Storage,
+    telegram_id: int,
+    equipped_name: str,
+    *,
+    slot: str = "artifact",
+) -> None:
+    """Вернуть экипированный арт в инвентарь и подрезать HP под новый максимум."""
     if not equipped_name or equipped_name == "Нет":
         return
     inv_key = ARTIFACT_NAME_TO_INVENTORY.get(equipped_name)
     if inv_key is not None:
         storage.add_item(telegram_id, inv_key, 1)
-    storage.set_equipment_item(telegram_id, "artifact", "Нет")
-    # После снятия «Живучести» HP не выше базовых 100.
+    storage.set_equipment_item(telegram_id, slot, "Нет")
     player = storage.get_character(telegram_id, refresh_energy=False)
-    if player is not None and player.health > 100:
-        storage.change_health(telegram_id, 100 - player.health, max_health=100)
+    if player is not None:
+        max_hp = effective_max_health(player)
+        if player.health > max_hp:
+            storage.change_health(telegram_id, max_hp - player.health, max_health=max_hp)
     storage.sync_gear_power(telegram_id)
 
 
@@ -4703,6 +4777,10 @@ def unequip_artifact(storage: Storage, telegram_id: int) -> ActionResult:
     blocked = _reject_if_player_busy(storage, telegram_id)
     if blocked is not None:
         return blocked
+    extra = str(player.equipment.get("artifact_2", "Нет") or "Нет")
+    if extra and extra != "Нет":
+        _unequip_artifact_to_inventory(storage, telegram_id, extra, slot="artifact_2")
+        return ActionResult(True, f"Снят артефакт из 2-й ячейки: {extra}. Он вернулся в инвентарь.")
     equipped = str(player.equipment.get("artifact", "Нет") or "Нет")
     if not equipped or equipped == "Нет":
         return ActionResult(False, "Артефакт не экипирован.")
@@ -4942,20 +5020,34 @@ def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = No
         return ActionResult(False, "У тебя нет этого артефакта в инвентаре.")
 
     artifact_name = ARTIFACT_INVENTORY_TO_NAME[chosen_key]
-    equipped_artifact = str(player.equipment.get("artifact", "Нет") or "Нет")
-    if equipped_artifact == artifact_name:
+    slot1 = str(player.equipment.get("artifact", "Нет") or "Нет")
+    slot2 = str(player.equipment.get("artifact_2", "Нет") or "Нет")
+    extra = has_extra_artifact_slot(player)
+    if artifact_name in {slot1, slot2}:
         return ActionResult(False, f"{artifact_name} уже экипирован.")
 
     if not storage.remove_item(telegram_id, chosen_key, 1):
         return ActionResult(False, "У тебя нет этого артефакта в инвентаре.")
 
-    # Смена арта: старый возвращается в инвентарь (как оружие/броня).
-    if equipped_artifact and equipped_artifact != "Нет":
-        old_key = ARTIFACT_NAME_TO_INVENTORY.get(equipped_artifact)
-        if old_key is not None:
-            storage.add_item(telegram_id, old_key, 1)
+    target_slot = "artifact"
+    if extra and (not slot1 or slot1 == "Нет"):
+        target_slot = "artifact"
+    elif extra and (not slot2 or slot2 == "Нет"):
+        target_slot = "artifact_2"
+    elif extra:
+        # Обе ячейки заняты — меняем первую, старый арт в инвентарь.
+        if slot1 and slot1 != "Нет":
+            old_key = ARTIFACT_NAME_TO_INVENTORY.get(slot1)
+            if old_key is not None:
+                storage.add_item(telegram_id, old_key, 1)
+        target_slot = "artifact"
+    else:
+        if slot1 and slot1 != "Нет":
+            old_key = ARTIFACT_NAME_TO_INVENTORY.get(slot1)
+            if old_key is not None:
+                storage.add_item(telegram_id, old_key, 1)
 
-    storage.set_equipment_item(telegram_id, "artifact", artifact_name)
+    storage.set_equipment_item(telegram_id, target_slot, artifact_name)
     storage.sync_gear_power(telegram_id)
 
     bonus = ARTIFACT_EQUIP_BONUSES.get(artifact_name, {"power": 0, "hp": 0})
@@ -4963,8 +5055,8 @@ def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = No
     if bonus.get("power"):
         bonus_parts.append(f"+{bonus['power']} к силе")
     hp_bonus = int(bonus.get("hp") or 0)
-    max_hp = 100 + hp_bonus
     current = storage.get_character(telegram_id, refresh_energy=False)
+    max_hp = effective_max_health(current) if current is not None else 100 + hp_bonus
     if current is not None:
         if current.health > max_hp:
             storage.change_health(telegram_id, max_hp - current.health, max_health=max_hp)

@@ -46,7 +46,7 @@ VENDOR_STAGE_LABELS: dict[str, dict[int, str]] = {
     },
     "tech": {
         1: "улучшение брони, скидка на ремонт 2%",
-        2: "скидка на ремонт 4%",
+        2: "доп. ячейка артефакта, скидка на ремонт 4%",
         3: "скидка на ремонт 6%",
         4: "скидка на ремонт 8%",
     },
@@ -126,7 +126,7 @@ _MEDIC_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
 
 _TECH_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
     1: ("armor_upgrade", "gear_upgrade"),
-    2: (),
+    2: ("artifact_slot",),
     3: (),
     4: (),
 }

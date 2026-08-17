@@ -90,6 +90,7 @@ def quests_keyboard(
     work_location: str = "",
     show_go_home: bool = False,
     show_cancel: bool = False,
+    show_help: bool = False,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if show_work:
@@ -106,6 +107,8 @@ def quests_keyboard(
     if show_cancel:
         rows.append([InlineKeyboardButton(text="❌ Отменить контракт", callback_data="contract:cancel")])
     rows.append([InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")])
+    if show_help:
+        rows.append([InlineKeyboardButton(text="🆘 Помочь по рации", callback_data="help_event:join")])
     rows.append([InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:menu")])
     rows.append(
         [
@@ -255,7 +258,7 @@ def medic_menu_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def tech_menu_keyboard(*, can_buy_upgrade: bool = True) -> InlineKeyboardMarkup:
+def tech_menu_keyboard(*, can_buy_upgrade: bool = True, can_buy_artifact_slot: bool = False) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="Ремонт оружия", callback_data="repair:weapon")],
         [InlineKeyboardButton(text="Ремонт брони", callback_data="repair:armor")],
@@ -268,6 +271,15 @@ def tech_menu_keyboard(*, can_buy_upgrade: bool = True) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="Купить улучшение брони (+1 защита, 5000 RU)",
                     callback_data="upgrade:armor",
+                )
+            ]
+        )
+    if can_buy_artifact_slot:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Доп. ячейка артефакта (15000 RU)",
+                    callback_data="upgrade:artifact_slot",
                 )
             ]
         )
@@ -1488,7 +1500,7 @@ def coop_lobby_list_keyboard(lobbies: list[tuple[str, str, int]]) -> InlineKeybo
 
 
 def coop_mission_keyboard(
-    *, is_active_turn: bool, medkit_available: bool, evac_available: bool = False
+    *, is_active_turn: bool, medkit_available: bool, evac_available: bool = False, shoot_available: bool = False
 ) -> InlineKeyboardMarkup:
     refresh_row = [
         InlineKeyboardButton(text="🔄", callback_data="coop:refresh"),
@@ -1504,6 +1516,17 @@ def coop_mission_keyboard(
             InlineKeyboardButton(text="➡️", callback_data="coop:move:right"),
         ],
     ]
+    if shoot_available:
+        rows.extend(
+            [
+                [InlineKeyboardButton(text="🔫 ⬆️", callback_data="coop:shoot:up")],
+                [
+                    InlineKeyboardButton(text="🔫 ⬅️", callback_data="coop:shoot:left"),
+                    InlineKeyboardButton(text="🔫 ⬇️", callback_data="coop:shoot:down"),
+                    InlineKeyboardButton(text="🔫 ➡️", callback_data="coop:shoot:right"),
+                ],
+            ]
+        )
     if medkit_available:
         rows.append([InlineKeyboardButton(text="💊 Аптечка", callback_data="coop:medkit")])
     if evac_available:

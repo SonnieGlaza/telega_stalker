@@ -255,7 +255,9 @@ def run_smoke_check() -> None:
         sess = get_hunt_session(storage, 111)
         assert sess is not None
         assert artifact_beside_anomaly(sess), "artifact must spawn next to an anomaly"
-        assert location_anomaly_count("Кордон") == 3
+        assert location_anomaly_count("Кордон") == 6
+        assert location_anomaly_count("Радар") == 12
+        assert len(sess.anomalies) == location_anomaly_count("Кордон")
         step = move_artifact_hunt(storage, 111, "right")
         assert step.payload is not None
         if get_hunt_session(storage, 111) is not None:
@@ -272,6 +274,82 @@ def run_smoke_check() -> None:
 
             max_hp = int(effective_max_health(ch))
             storage.change_health(111, max_hp - ch.health, max_health=max_hp)
+
+        from app.game_logic import (
+            DAILY_ARTIFACT_HUNT_BONUS_RU,
+            daily_artifact_hunt_done_today,
+            equip_artifact,
+            has_extra_artifact_slot,
+            mark_daily_artifact_hunt_done,
+            unequip_artifact,
+        )
+
+        assert not has_extra_artifact_slot(storage.get_character(111, refresh_energy=False))
+        storage.change_money(111, 20000)
+        slot_buy = buy_item(storage, 111, "artifact_slot")
+        assert slot_buy.ok, slot_buy.text
+        assert has_extra_artifact_slot(storage.get_character(111, refresh_energy=False))
+        slot_again = buy_item(storage, 111, "artifact_slot")
+        assert not slot_again.ok
+
+        storage.add_item(111, "artifact", 1)
+        storage.add_item(111, "artifact_power", 1)
+        eq1 = equip_artifact(storage, 111, "artifact")
+        eq2 = equip_artifact(storage, 111, "artifact_power")
+        assert eq1.ok, eq1.text
+        assert eq2.ok, eq2.text
+        equipped = storage.get_character(111, refresh_energy=False)
+        assert equipped.equipment.get("artifact") not in {"", "Нет", None}
+        assert equipped.equipment.get("artifact_2") not in {"", "Нет", None}
+        un2 = unequip_artifact(storage, 111)
+        assert un2.ok, un2.text
+        after_un = storage.get_character(111, refresh_energy=False)
+        assert after_un.equipment.get("artifact") not in {"", "Нет", None}
+        assert after_un.equipment.get("artifact_2") in {"", "Нет", None}
+
+        assert not daily_artifact_hunt_done_today(storage, 111)
+        mark_daily_artifact_hunt_done(storage, 111)
+        assert daily_artifact_hunt_done_today(storage, 111)
+        assert DAILY_ARTIFACT_HUNT_BONUS_RU == 1000
+
+        from app.mini_events import (
+            HELP_EVENT_NEXT_META,
+            get_active_help_event,
+            help_event_is_joinable,
+            join_help_event,
+            process_help_event_cycle,
+            thanks_text,
+        )
+
+        storage.set_meta(HELP_EVENT_NEXT_META, datetime.now(timezone.utc).isoformat())
+        radio = process_help_event_cycle(storage)
+        assert radio is not None and radio.get("kind") == "call"
+        event = get_active_help_event(storage)
+        assert event is not None
+        assert help_event_is_joinable(storage, 111)
+        idle_join = join_help_event(storage, 111)
+        assert not idle_join.ok
+        assert "локаци" in idle_join.text.lower()
+        thanks = thanks_text({"helper_names": ["Старый"], "helper_factions": ["Долг"], "thanks_speaker": "Группа учёных"})
+        assert "Старый" in thanks and "Долг" in thanks
+
+        from app.combat_loot import grant_combat_loot
+
+        loot_note = grant_combat_loot(storage, 111, npc=False)
+        assert loot_note is None or isinstance(loot_note, str)
+
+        from app.coop_mission import CoopMissionSession, coop_shoot_available
+
+        shoot_sess = CoopMissionSession(
+            session_id="shoot-t",
+            lobby_id="sl",
+            location="Кордон",
+            player_ids=[111],
+            enemies=[(2, 2)],
+            enemy_hp=[12],
+            enemy_kinds=["blind_dog"],
+        )
+        assert coop_shoot_available(shoot_sess)
 
         travel_result = travel_to(storage, 111, "Янтарь")
         assert travel_result.ok, travel_result.text
@@ -1394,6 +1472,9 @@ def run_smoke_check() -> None:
         assert "stash:menu" in callbacks
         assert "hunt:up" in callbacks
         assert "upgrade:armor" in callbacks
+        assert "upgrade:artifact_slot" in callbacks
+        assert "help_event:join" in callbacks
+        assert "coop:shoot:up" in callbacks
         assert "equip:upgrade:install" in callbacks
         assert "equip:upgrade:remove" in callbacks
 
