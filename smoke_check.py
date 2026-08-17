@@ -2110,7 +2110,7 @@ def run_smoke_check() -> None:
             format_faction_lore,
         )
 
-        assert TOPUP_RATE_RU_PER_STAR == 20
+        assert TOPUP_RATE_RU_PER_STAR == 150
         assert TRADER_SELL_CATALOG["weapons"][0] == "ammo_pack"
         assert "ammo_pack" not in TRADER_SELL_CATALOG["consumables"]
         assert set(FACTION_LORE) == {"Долг", "Свобода", "Нейтралы", "Бандиты"}
@@ -2155,18 +2155,18 @@ def run_smoke_check() -> None:
         treasury_before = {
             str(row["name"]): int(row["treasury"]) for row in storage.get_factions()
         }
-        ok, dup = storage.apply_topup_payment(111, "pay-self-1", 1, 20)
+        ok, dup = storage.apply_topup_payment(111, "pay-self-1", 1, 150)
         assert ok and not dup
-        assert int(storage.get_character(111, refresh_energy=False).money) == before_money + 20
-        ok, dup = storage.apply_topup_payment(111, "pay-self-1", 1, 20)
+        assert int(storage.get_character(111, refresh_energy=False).money) == before_money + 150
+        ok, dup = storage.apply_topup_payment(111, "pay-self-1", 1, 150)
         assert (not ok) and dup
-        ok, dup = storage.apply_topup_payment(111, "pay-gp-1", 5, 100, to_faction="Долг")
+        ok, dup = storage.apply_topup_payment(111, "pay-gp-1", 5, 750, to_faction="Долг")
         assert ok and not dup
-        assert int(storage.get_character(111, refresh_energy=False).money) == before_money + 20
+        assert int(storage.get_character(111, refresh_energy=False).money) == before_money + 150
         treasury_after = {
             str(row["name"]): int(row["treasury"]) for row in storage.get_factions()
         }
-        assert treasury_after["Долг"] == treasury_before["Долг"] + 100
+        assert treasury_after["Долг"] == treasury_before["Долг"] + 750
 
 
 if __name__ == "__main__":
