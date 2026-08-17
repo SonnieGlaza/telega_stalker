@@ -16,8 +16,8 @@ from app.tactical_render import hostile_kind_to_sprite, load_tactical_font
 HUD_SLOTS = 6
 HUD_RING = (210, 45, 40)
 DEFAULT_HP = 16
-# Запас по высоте внизу правой панели, чтобы подписи не заезжали на плашку.
-HUD_PANEL_BOTTOM_RESERVE = 64
+# Место под две нижние строки панели («Зачистка Кордона», «Стрелки — ход…»).
+HUD_FOOTER_GAP = 56
 
 # Показатель «живучести» на плашке (бой пока one-shot: слот пустеет, когда враг снят).
 HP_BY_KIND: dict[str, int] = {
@@ -92,8 +92,9 @@ def draw_enemy_hud(
     panel_right: int,
     panel_bottom: int,
     max_slots: int = HUD_SLOTS,
+    bottom_gap: int = 8,
 ) -> None:
-    """Рисует компактную плашку в самом низу правой информационной панели."""
+    """Рисует плашку внизу правой панели. bottom_gap оставляет место подписи под ней."""
     if not slots:
         return
     panel_w = max(80, panel_right - panel_left)
@@ -111,7 +112,7 @@ def draw_enemy_hud(
     bar_h = slot_h + pad * 2
     x0 = panel_left + (panel_w - bar_w) // 2
     x1 = x0 + bar_w
-    y1 = panel_bottom - inset
+    y1 = panel_bottom - max(inset, int(bottom_gap))
     y0 = y1 - bar_h
     if y0 < panel_top + inset:
         y0 = panel_top + inset
