@@ -24,6 +24,7 @@ from app.game_logic import (
 )
 from app.npc_assets import NPC_SPRITE_KEYS, pick_npc_kind
 from app.storage import Character, Storage
+from app.enemy_hud import draw_enemy_hud, hud_slots_from_kinds
 from app.tactical_render import load_tactical_font, paste_npc_sprite, paste_player_avatar
 from app.tactical_combat import (
     BASE_COVER_ARMOR_BONUS,
@@ -918,6 +919,14 @@ def render_cwar_frame(storage: Storage, session: ClanWarGridSession, viewer_id: 
             mark += " (ты)"
         draw.text((pl + 10, y), f"{name}{mark}: HP {hp}"[:38], fill=(180, 180, 180), font=small)
         y += 15
+    draw_enemy_hud(
+        canvas,
+        hud_slots_from_kinds([], session.defender_kinds),
+        panel_left=pl,
+        panel_top=margin,
+        panel_right=width - margin,
+        panel_bottom=height - margin,
+    )
     buf = BytesIO()
     canvas.save(buf, format="PNG")
     return buf.getvalue()

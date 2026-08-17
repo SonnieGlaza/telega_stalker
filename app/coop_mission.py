@@ -11,6 +11,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from app.artifact_hunt import FONT_CANDIDATES, _paste_circle
+from app.enemy_hud import draw_enemy_hud, hud_slots_from_kinds
 from app.game_logic import (
     RATING_REWARD,
     ActionResult,
@@ -1622,6 +1623,15 @@ def render_coop_frame(storage: Storage, session: CoopMissionSession, viewer_id: 
     for line in session.log[-6:]:
         draw.text((pl + 14, y), line[:44], fill=(160, 160, 160), font=small)
         y += 16
+
+    draw_enemy_hud(
+        canvas,
+        hud_slots_from_kinds(session.enemy_kinds, session.npc_kinds),
+        panel_left=pl,
+        panel_top=margin,
+        panel_right=width - margin,
+        panel_bottom=height - margin,
+    )
 
     buf = BytesIO()
     canvas.save(buf, format="PNG")
