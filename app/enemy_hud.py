@@ -1,4 +1,4 @@
-"""Плашка врагов справа внизу тактического поля: 6 индустриальных слотов."""
+"""Плашка врагов слева внизу тактического поля: 6 индустриальных слотов."""
 
 from __future__ import annotations
 
@@ -91,26 +91,27 @@ def draw_enemy_hud(
     grid_bottom: int,
     max_slots: int = HUD_SLOTS,
 ) -> None:
-    """Рисует плашку в правом нижнем углу игрового поля. Пустые слоты — как на макете."""
+    """Рисует компактную плашку в левом нижнем углу игрового поля."""
     if not slots:
         return
     grid_w = max(80, grid_right - grid_left)
     grid_h = max(80, grid_bottom - grid_top)
-    slot_w = max(44, min(72, (grid_w - 18) // max_slots))
-    slot_h = int(slot_w * 1.28)
-    if slot_h + 14 > grid_h:
-        slot_h = max(52, grid_h - 14)
-        slot_w = max(40, int(slot_h / 1.28))
-    gap = max(2, slot_w // 18)
-    bar_w = max_slots * slot_w + (max_slots - 1) * gap + 10
-    bar_h = slot_h + 10
-    x1 = grid_right - 6
-    y1 = grid_bottom - 6
-    x0 = x1 - bar_w
+    slot_w = max(22, min(30, (grid_w - 12) // 16))
+    slot_h = int(slot_w * 1.18)
+    if slot_h + 8 > grid_h // 4:
+        slot_h = max(26, grid_h // 5)
+        slot_w = max(20, int(slot_h / 1.18))
+    gap = 1
+    pad = 3
+    bar_w = max_slots * slot_w + (max_slots - 1) * gap + pad * 2
+    bar_h = slot_h + pad * 2
+    x0 = grid_left + 4
+    y1 = grid_bottom - 4
+    x1 = x0 + bar_w
     y0 = y1 - bar_h
-    if x0 < grid_left + 4:
-        x0 = grid_left + 4
-        x1 = x0 + bar_w
+    if x1 > grid_right - 4:
+        x1 = grid_right - 4
+        x0 = max(grid_left + 4, x1 - bar_w)
     if y0 < grid_top + 4:
         y0 = grid_top + 4
         y1 = y0 + bar_h
@@ -130,11 +131,11 @@ def draw_enemy_hud(
     draw.rounded_rectangle((x0, y0, x1, y1), radius=6, outline=(70, 72, 68, 220), width=2)
 
     shown = list(slots[:max_slots])
-    idx_font = load_tactical_font(max(10, slot_w // 6))
-    hp_font = load_tactical_font(max(16, slot_w // 2 - 2))
+    idx_font = load_tactical_font(max(8, slot_w // 5))
+    hp_font = load_tactical_font(max(11, slot_w // 3 + 1))
     for i in range(max_slots):
-        sx = x0 + 5 + i * (slot_w + gap)
-        sy = y0 + 5
+        sx = x0 + pad + i * (slot_w + gap)
+        sy = y0 + pad
         slot = shown[i] if i < len(shown) else None
         _draw_slot(layer, draw, sx, sy, slot_w, slot_h, index=i + 1, slot=slot, idx_font=idx_font, hp_font=hp_font)
 
@@ -198,7 +199,7 @@ def _draw_slot(
     draw.polygon(inner, outline=(28, 28, 26, 255))
     draw.line(highlight, fill=(170, 170, 164, 80), width=1)
 
-    pad = max(5, w // 9)
+    pad = max(3, w // 10)
     view_x = x + pad
     view_y = y + pad + 2
     view_s = w - pad * 2
