@@ -17,6 +17,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     BufferedInputFile,
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeDefault,
     CallbackQuery,
     InlineKeyboardMarkup,
     InputMediaPhoto,
@@ -352,6 +355,7 @@ from app.keyboards import (
     gender_keyboard,
     locations_keyboard,
     main_menu_keyboard,
+    group_bot_link_keyboard,
     pda_keyboard,
     sortie_keyboard,
     quests_keyboard,
@@ -426,6 +430,37 @@ from app.zone_map import TELEGRAM_PHOTO_MAX_BYTES, build_zone_map_image
 logger = logging.getLogger(__name__)
 
 router = Router()
+
+GROUP_CHAT_TYPES = frozenset({"group", "supergroup"})
+GROUP_CHAT_ALLOWED_COMMANDS = frozenset({"/start", "/menu"})
+
+
+async def _send_group_bot_link(message: Message, bot: Bot) -> None:
+    me = await bot.get_me()
+    username = (me.username or "").strip()
+    if not username:
+        await message.answer("Игра доступна только в личных сообщениях с ботом.")
+        return
+    await message.answer(
+        "S.T.A.L.K.E.R. RPG — играется в личке с ботом.\n"
+        "Нажми кнопку ниже — откроется бот без лишнего меню в этом чате.",
+        reply_markup=group_bot_link_keyboard(username),
+    )
+
+
+async def setup_bot_commands(bot: Bot) -> None:
+    """В группах — только /start; полное меню команд — в личке."""
+    private_commands = [
+        BotCommand(command="start", description="Начать или войти"),
+        BotCommand(command="menu", description="Главное меню"),
+        BotCommand(command="info", description="Справка по игре"),
+        BotCommand(command="cancel", description="Отменить ввод"),
+    ]
+    await bot.set_my_commands(private_commands, scope=BotCommandScopeDefault())
+    await bot.set_my_commands(
+        [BotCommand(command="start", description="Ссылка на бота")],
+        scope=BotCommandScopeAllGroupChats(),
+    )
 storage: Storage | None = None
 admin_ids: tuple[int, ...] = ()
 SNAPSHOT_SYNC_SECONDS = 300
@@ -754,7 +789,13 @@ async def _apply_and_announce_referral(
     return f"\n\n{result.text}"
 
 
-@router.message(Command("start"))
+@router.message(Command("start"), F.chat.type.in_(GROUP_CHAT_TYPES))
+@router.message(Command("menu"), F.chat.type.in_(GROUP_CHAT_TYPES))
+async def cmd_group_bot_link(message: Message, bot: Bot) -> None:
+    await _send_group_bot_link(message, bot)
+
+
+@router.message(Command("start"), F.chat.type == "private")
 async def cmd_start(message: Message, state: FSMContext, command: CommandObject, bot: Bot) -> None:
     telegram_id = message.from_user.id
     db = get_storage()
@@ -870,7 +911,7 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject,
     await message.answer("Сбой проверки аккаунта. Попробуй /start еще раз.")
 
 
-@router.message(Command("menu"))
+@router.message(Command("menu"), F.chat.type == "private")
 async def cmd_menu(message: Message) -> None:
     storage = get_storage()
     dead = resolve_dead_player(storage, message.from_user.id)
@@ -2109,6 +2150,40 @@ async def show_death_screen(
                 reply_markup=dead_character_keyboard(),
                 parse_mode=None,
             )
+
+
+class GroupChatMiddleware(BaseMiddleware):
+    """В групповых чатах не обрабатываем игровое меню — только /start и /menu со ссылкой на бота."""
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        chat = None
+        if isinstance(event, Message):
+            chat = event.chat
+        elif isinstance(event, CallbackQuery) and event.message:
+            chat = event.message.chat
+
+        if chat is None or chat.type not in GROUP_CHAT_TYPES:
+            return await handler(event, data)
+
+        if isinstance(event, CallbackQuery):
+            await safe_callback_answer(
+                event,
+                "Игра доступна в личке с ботом.",
+                show_alert=True,
+            )
+            return None
+
+        text = (event.text or "").strip()
+        if text:
+            cmd = text.split(maxsplit=1)[0].split("@")[0].casefold()
+            if cmd in GROUP_CHAT_ALLOWED_COMMANDS:
+                return await handler(event, data)
+        return None
 
 
 class PlayerActivityMiddleware(BaseMiddleware):
@@ -8006,6 +8081,10 @@ async def run_bot() -> None:
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    try:
+        await setup_bot_commands(bot)
+    except Exception:
+        logger.exception("Failed to set bot commands")
 
     zone_tick_counter = {"n": 0}
 
@@ -8266,6 +8345,8 @@ async def run_bot() -> None:
     travel_eta_task = asyncio.create_task(periodic_travel_live_eta())
     tactical_task = asyncio.create_task(periodic_tactical_turns())
     dp = Dispatcher()
+    dp.callback_query.outer_middleware(GroupChatMiddleware())
+    dp.message.outer_middleware(GroupChatMiddleware())
     dp.callback_query.outer_middleware(PlayerActivityMiddleware())
     dp.message.outer_middleware(PlayerActivityMiddleware())
     dp.callback_query.outer_middleware(DeadPlayerCallbackMiddleware())

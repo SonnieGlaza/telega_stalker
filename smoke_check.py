@@ -1960,6 +1960,12 @@ def run_smoke_check() -> None:
         _, _, missing_callbacks = _callback_handler_coverage()
         assert not missing_callbacks, f"Missing callback handlers: {', '.join(missing_callbacks)}"
 
+        from app.keyboards import group_bot_link_keyboard
+
+        gkb = group_bot_link_keyboard("telega_stalker_bot")
+        assert gkb.keyboard[0][0].text == "🔗 Ссылка на бота"
+        assert gkb.keyboard[0][0].url == "https://t.me/telega_stalker_bot"
+
         # Label map sanity (no missing key for new items).
         assert "detector_otklik" in ITEM_LABELS
         assert "sleeping_bag" in ITEM_LABELS
