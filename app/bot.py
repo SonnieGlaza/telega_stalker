@@ -355,7 +355,7 @@ from app.keyboards import (
     gender_keyboard,
     locations_keyboard,
     main_menu_keyboard,
-    group_bot_link_keyboard,
+    group_bot_link_inline_keyboard,
     pda_keyboard,
     sortie_keyboard,
     quests_keyboard,
@@ -433,6 +433,7 @@ router = Router()
 
 GROUP_CHAT_TYPES = frozenset({"group", "supergroup"})
 GROUP_CHAT_ALLOWED_COMMANDS = frozenset({"/start", "/menu"})
+GROUP_CHAT_LINK_BUTTON_TEXT = "🔗 Ссылка на бота"
 
 
 async def _send_group_bot_link(message: Message, bot: Bot) -> None:
@@ -441,10 +442,12 @@ async def _send_group_bot_link(message: Message, bot: Bot) -> None:
     if not username:
         await message.answer("Игра доступна только в личных сообщениях с ботом.")
         return
+    url = f"https://t.me/{username}?start=from_group"
     await message.answer(
-        "S.T.A.L.K.E.R. RPG — играется в личке с ботом.\n"
-        "Нажми кнопку ниже — откроется бот без лишнего меню в этом чате.",
-        reply_markup=group_bot_link_keyboard(username),
+        "S.T.A.L.K.E.R. RPG — играется только в личке с ботом.\n"
+        f'Нажми кнопку ниже или открой <a href="{url}">@{username}</a>.',
+        reply_markup=group_bot_link_inline_keyboard(username),
+        disable_web_page_preview=True,
     )
 
 
@@ -2179,6 +2182,9 @@ class GroupChatMiddleware(BaseMiddleware):
             return None
 
         text = (event.text or "").strip()
+        if text == GROUP_CHAT_LINK_BUTTON_TEXT:
+            await _send_group_bot_link(event, event.bot)
+            return None
         if text:
             cmd = text.split(maxsplit=1)[0].split("@")[0].casefold()
             if cmd in GROUP_CHAT_ALLOWED_COMMANDS:

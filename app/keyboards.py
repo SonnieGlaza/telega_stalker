@@ -43,25 +43,14 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def group_bot_link_keyboard(bot_username: str) -> ReplyKeyboardMarkup:
-    """Минимальная клавиатура для групповых чатов — только переход в личку бота."""
-    username = bot_username.lstrip("@")
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🔗 Ссылка на бота", url=f"https://t.me/{username}")],
-        ],
-        resize_keyboard=True,
-    )
-
-
 def group_bot_link_inline_keyboard(bot_username: str | None) -> InlineKeyboardMarkup:
-    """Inline-кнопка для групповых чатов (если reply-клавиатура недоступна)."""
+    """Inline-кнопка со ссылкой на бота (в группах работает только inline, не reply)."""
     if not bot_username:
         return InlineKeyboardMarkup(inline_keyboard=[])
     username = bot_username.lstrip("@")
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🔗 Ссылка на бота", url=f"https://t.me/{username}")],
+            [InlineKeyboardButton(text="🔗 Ссылка на бота", url=f"https://t.me/{username}?start=from_group")],
         ]
     )
 
