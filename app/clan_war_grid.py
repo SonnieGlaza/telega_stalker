@@ -25,7 +25,13 @@ from app.game_logic import (
 from app.npc_assets import NPC_SPRITE_KEYS, pick_npc_kind
 from app.storage import Character, Storage
 from app.enemy_hud import draw_enemy_hud, hud_slots_from_kinds
-from app.tactical_render import load_tactical_font, paste_npc_sprite, paste_player_avatar
+from app.tactical_render import (
+    draw_tactical_cell_overlay,
+    load_tactical_font,
+    paste_location_field_photo,
+    paste_npc_sprite,
+    paste_player_avatar,
+)
 from app.tactical_combat import (
     BASE_COVER_ARMOR_BONUS,
     MOVE_DELTAS,
@@ -845,16 +851,32 @@ def render_cwar_frame(storage: Storage, session: ClanWarGridSession, viewer_id: 
     canvas = Image.new("RGBA", (width, height), (18, 20, 22, 255))
     draw = ImageDraw.Draw(canvas)
     cp = session.control_point
+    base_set = set(session.base_cover)
+    has_photo = paste_location_field_photo(
+        canvas,
+        session.location_name,
+        margin=margin,
+        grid_px=grid_px,
+    )
     for gy in range(grid):
         for gx in range(grid):
             left = margin + gx * cell
             top = margin + gy * cell
             tone = 62 + ((gx * 13 + gy * 19) % 16)
-            fill = (tone, tone - 4, tone - 8)
-            if (gx, gy) in session.base_cover:
-                fill = (tone - 8, tone - 12, tone - 6)
-            draw.rectangle((left, top, left + cell - 1, top + cell - 1), fill=fill)
-            draw.rectangle((left, top, left + cell - 1, top + cell - 1), outline=(28, 30, 34), width=1)
+            fill = (tone - 8, tone - 12, tone - 6) if (gx, gy) in base_set else (tone, tone - 4, tone - 8)
+            overlay = (18, 28, 44, 70) if (gx, gy) in base_set else (10, 12, 14, 50)
+            draw_tactical_cell_overlay(
+                canvas,
+                draw,
+                left=left,
+                top=top,
+                cell=cell,
+                has_photo=has_photo,
+                gx=gx,
+                gy=gy,
+                fill=fill,
+                overlay=overlay,
+            )
     cx, cy = cp
     draw.rectangle(
         (margin + cx * cell + 4, margin + cy * cell + 4, margin + (cx + 1) * cell - 4, margin + (cy + 1) * cell - 4),

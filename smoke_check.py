@@ -1330,12 +1330,13 @@ def run_smoke_check() -> None:
         assert duel_result.ok, duel_result.text
         assert challenger_msg
         assert duel_result.payload and duel_result.payload.get("duel_started")
-        from app.duel_grid import get_duel_session_by_player, duel_shoot
+        from app.duel_grid import get_duel_session_by_player, duel_shoot, render_duel_frame
 
         session = get_duel_session_by_player(storage, 111)
         assert session is not None
         assert session.challenger_id == 111
         assert session.target_id == 222
+        assert len(render_duel_frame(storage, session, 111)) > 1000
         from app.player_busy import player_busy_reason
 
         assert player_busy_reason(storage, 111) is not None

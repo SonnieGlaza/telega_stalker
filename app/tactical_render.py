@@ -200,6 +200,50 @@ def paste_npc_sprite(
     draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(90, 90, 90), outline=(160, 160, 160), width=2)
 
 
+def paste_location_field_photo(
+    canvas: Image.Image,
+    location: str,
+    *,
+    margin: int,
+    grid_px: int,
+    alpha: int = 150,
+) -> bool:
+    """Фото локации под сеткой. True, если картинка нашлась."""
+    from app.artifact_hunt import _cover_crop, _load_location_thumb
+
+    thumb = _load_location_thumb(location)
+    if thumb is None:
+        return False
+    field = _cover_crop(thumb, grid_px, grid_px).convert("RGBA")
+    field.putalpha(alpha)
+    canvas.paste(field, (margin, margin), field)
+    return True
+
+
+def draw_tactical_cell_overlay(
+    canvas: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    *,
+    left: int,
+    top: int,
+    cell: int,
+    has_photo: bool,
+    gx: int,
+    gy: int,
+    fill: tuple[int, int, int] | None = None,
+    overlay: tuple[int, int, int, int] = (10, 12, 14, 50),
+) -> None:
+    """Клетка: серый фон без фото или полупрозрачный оверлей поверх карты."""
+    if has_photo:
+        layer = Image.new("RGBA", (cell, cell), overlay)
+        canvas.alpha_composite(layer, (left, top))
+    else:
+        tone = 62 + ((gx * 17 + gy * 23) % 18)
+        color = fill or (tone, tone - 4, tone - 8)
+        draw.rectangle((left, top, left + cell - 1, top + cell - 1), fill=color)
+    draw.rectangle((left, top, left + cell - 1, top + cell - 1), outline=(28, 30, 34), width=1)
+
+
 def hostile_kind_to_sprite(kind: str) -> tuple[str, bool]:
     """Вернёт (sprite_key, is_npc)."""
     if kind == "bandit":

@@ -40,7 +40,13 @@ from app.tactical_combat import (
 from app.mutant_assets import pick_mutant_kind
 from app.tactical_hp import apply_tactical_medkit_spend, plan_tactical_medkit, sync_session_hp_to_db
 from app.enemy_hud import draw_enemy_hud, hud_slots_from_kinds
-from app.tactical_render import load_tactical_font, paste_mutant_sprite, paste_player_avatar
+from app.tactical_render import (
+    draw_tactical_cell_overlay,
+    load_tactical_font,
+    paste_location_field_photo,
+    paste_mutant_sprite,
+    paste_player_avatar,
+)
 
 DUEL_GRID_SIZE = 8
 DUEL_TURN_SECONDS = 10
@@ -833,6 +839,15 @@ def _match_seconds_left(session: DuelGridSession) -> int | None:
     return max(0, int((deadline - _utc_now()).total_seconds()))
 
 
+def _duel_field_location(storage: Storage, session: DuelGridSession) -> str:
+    for pid in (session.challenger_id, session.target_id):
+        ch = storage.get_character(pid, refresh_energy=False)
+        loc = str(ch.location or "").strip() if ch is not None else ""
+        if loc:
+            return loc
+    return "Кордон"
+
+
 def render_duel_frame(
     storage: Storage,
     session: DuelGridSession,
@@ -849,13 +864,22 @@ def render_duel_frame(
     canvas = Image.new("RGBA", (width, height), (18, 20, 22, 255))
     draw = ImageDraw.Draw(canvas)
     cover_font = load_tactical_font(11)
+    location = _duel_field_location(storage, session)
+    has_photo = paste_location_field_photo(canvas, location, margin=margin, grid_px=grid_px)
     for gy in range(grid):
         for gx in range(grid):
             left = margin + gx * cell
             top = margin + gy * cell
-            tone = 62 + ((gx * 17 + gy * 23) % 18)
-            draw.rectangle((left, top, left + cell - 1, top + cell - 1), fill=(tone, tone - 4, tone - 8))
-            draw.rectangle((left, top, left + cell - 1, top + cell - 1), outline=(28, 30, 34), width=1)
+            draw_tactical_cell_overlay(
+                canvas,
+                draw,
+                left=left,
+                top=top,
+                cell=cell,
+                has_photo=has_photo,
+                gx=gx,
+                gy=gy,
+            )
     for cx, cy in session.cover:
         left = margin + cx * cell + 6
         top = margin + cy * cell + 6
@@ -905,7 +929,8 @@ def render_duel_frame(
     body = load_tactical_font(16)
     small = load_tactical_font(13)
     y = margin + 16
-    draw.text((pl + 14, y), "Тактическая дуэль", fill=(240, 240, 240), font=body)
+    title = f"Дуэль · {location[:16]}" if location else "Тактическая дуэль"
+    draw.text((pl + 14, y), title, fill=(240, 240, 240), font=body)
     y += 28
     secs = _match_seconds_left(session)
     if session.wave_mode:
