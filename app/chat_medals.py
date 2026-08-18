@@ -11,8 +11,10 @@ from aiogram import Bot
 from app.season_chat_titles import (
     ZONE_COMMON_CHAT_ID,
     ZONE_FACTION_CHAT_IDS,
+    ChatTitleError,
     _demote_member,
     _promote_title_only,
+    _telegram_error_text,
 )
 from app.storage import Storage
 
@@ -170,14 +172,26 @@ async def _apply_title_in_chats(
     title: str,
     chat_ids: list[int],
 ) -> list[str]:
+    if not chat_ids:
+        return ["нет известных групп — напиши /start в нужном чате или сделай бота админом"]
     notes: list[str] = []
+    ok = 0
     for chat_id in chat_ids:
         try:
             await _promote_title_only(bot, chat_id, telegram_id, title)
-            notes.append(f"«{title}» в чате {chat_id}")
-        except Exception:
+            notes.append(f"ок: «{title}» в чате {chat_id}")
+            ok += 1
+        except ChatTitleError as exc:
+            notes.append(f"нет: чат {chat_id} — {exc}")
+        except Exception as exc:
             logger.exception("Failed to set title %r for %s in %s", title, telegram_id, chat_id)
-            notes.append(f"не вышло в {chat_id} (бот — админ с правом назначать, игрок в чате)")
+            notes.append(f"нет: чат {chat_id} — {_telegram_error_text(exc)}")
+    if ok == 0:
+        notes.insert(
+            0,
+            "Титул в группах не встал нигде. Бот должен быть админом с правом "
+            "«добавлять администраторов», человек — участником чата.",
+        )
     return notes
 
 

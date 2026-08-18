@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
 
 from app.storage import Storage
 
@@ -104,6 +106,62 @@ def _save_holders(storage: Storage, holders: list[dict[str, Any]]) -> None:
     )
 
 
+class ChatTitleError(RuntimeError):
+    """Понятная причина, почему титул не встал в конкретном чате."""
+
+
+def _member_status(member: Any) -> str:
+    raw = getattr(member, "status", "")
+    return str(getattr(raw, "value", raw) or "").lower()
+
+
+def _telegram_error_text(exc: BaseException) -> str:
+    text = str(exc)
+    if ":" in text:
+        text = text.rsplit(":", 1)[-1]
+    return " ".join(text.split())[:180]
+
+
+async def _bot_can_promote(bot: Bot, chat_id: int) -> str | None:
+    """None если можно назначать админов, иначе причина."""
+    me = await bot.get_me()
+    try:
+        bot_member = await bot.get_chat_member(chat_id, me.id)
+    except TelegramBadRequest as exc:
+        return f"бот не видит чат ({_telegram_error_text(exc)})"
+    status = _member_status(bot_member)
+    if status == "creator":
+        return None
+    if status != "administrator":
+        return "бот не админ в этом чате"
+    can_promote = getattr(bot_member, "can_promote_members", None)
+    if can_promote is False:
+        return "боту нужно право «добавлять администраторов»"
+    return None
+
+
+async def _set_custom_title_with_retry(bot: Bot, chat_id: int, user_id: int, title: str) -> None:
+    last_exc: BaseException | None = None
+    for delay in (0.0, 0.45, 0.9, 1.6):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            await bot.set_chat_administrator_custom_title(
+                chat_id=chat_id,
+                user_id=user_id,
+                custom_title=title[:16],
+            )
+            return
+        except TelegramBadRequest as exc:
+            last_exc = exc
+            lowered = str(exc).lower()
+            if "not an administrator" in lowered or "user_not_participant" in lowered:
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+
+
 async def _demote_member(bot: Bot, chat_id: int, user_id: int) -> None:
     """Снять админку (все права False = demote по Bot API)."""
     await bot.promote_chat_member(
@@ -117,46 +175,43 @@ async def _demote_member(bot: Bot, chat_id: int, user_id: int) -> None:
         can_promote_members=False,
         can_change_info=False,
         can_invite_users=False,
-        can_post_stories=False,
-        can_edit_stories=False,
-        can_delete_stories=False,
-        can_post_messages=False,
-        can_edit_messages=False,
         can_pin_messages=False,
         can_manage_topics=False,
     )
 
 
 async def _promote_title_only(bot: Bot, chat_id: int, user_id: int, title: str) -> None:
-    """Админ почти без прав + custom title.
+    """Админ почти без прав + custom title. Канальные права не шлём — из-за них группа отвечает 400."""
+    reason = await _bot_can_promote(bot, chat_id)
+    if reason:
+        raise ChatTitleError(reason)
 
-    Bot API: если все права False — это demote. Поэтому оставляем только
-    can_invite_users (без бана/удаления/смены инфо чата).
-    """
-    await bot.promote_chat_member(
-        chat_id=chat_id,
-        user_id=user_id,
-        is_anonymous=False,
-        can_manage_chat=False,
-        can_delete_messages=False,
-        can_manage_video_chats=False,
-        can_restrict_members=False,
-        can_promote_members=False,
-        can_change_info=False,
-        can_invite_users=True,
-        can_post_stories=False,
-        can_edit_stories=False,
-        can_delete_stories=False,
-        can_post_messages=False,
-        can_edit_messages=False,
-        can_pin_messages=False,
-        can_manage_topics=False,
-    )
-    await bot.set_chat_administrator_custom_title(
-        chat_id=chat_id,
-        user_id=user_id,
-        custom_title=title[:16],
-    )
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+    except TelegramBadRequest as exc:
+        raise ChatTitleError(f"игрока нет в чате ({_telegram_error_text(exc)})") from exc
+
+    status = _member_status(member)
+    if status in {"left", "kicked"}:
+        raise ChatTitleError("игрока нет в этом чате")
+    if status == "creator":
+        raise ChatTitleError("это владелец чата, бот не может сменить его титул")
+
+    if status != "administrator":
+        # Один True-флаг обязателен, иначе Telegram считает это demote.
+        # Канальные can_post_* / can_*_stories в группах часто ломают весь запрос.
+        try:
+            await bot.promote_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                can_invite_users=True,
+            )
+        except TelegramBadRequest as exc:
+            raise ChatTitleError(f"не вышло назначить админом ({_telegram_error_text(exc)})") from exc
+    try:
+        await _set_custom_title_with_retry(bot, chat_id, user_id, title)
+    except TelegramBadRequest as exc:
+        raise ChatTitleError(f"титул не записался ({_telegram_error_text(exc)})") from exc
 
 
 async def apply_pending_season_chat_titles(bot: Bot, storage: Storage) -> list[str]:

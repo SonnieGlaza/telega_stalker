@@ -745,16 +745,29 @@ def is_admin_user(user_id: int) -> bool:
 
 
 def resolve_player_id(storage: Storage, token: str) -> int | None:
-    """telegram_id или прозвище (без учёта регистра)."""
-    raw = (token or "").strip()
+    """telegram_id или прозвище (без учёта регистра). @username ищется отдельно через бота."""
+    raw = (token or "").strip().lstrip("@")
     if not raw:
         return None
     if raw.isdigit():
-        tid = int(raw)
-        if storage.get_character(tid, refresh_energy=False) is not None:
-            return tid
-        return None
+        return int(raw)
     return storage.find_telegram_id_by_nickname(raw)
+
+
+async def resolve_player_id_async(bot: Bot, storage: Storage, token: str) -> int | None:
+    found = resolve_player_id(storage, token)
+    if found is not None:
+        return found
+    raw = (token or "").strip().lstrip("@")
+    if not raw or raw.isdigit():
+        return None
+    try:
+        chat = await bot.get_chat("@" + raw)
+        uid = int(getattr(chat, "id", 0) or 0)
+        return uid if uid > 0 else None
+    except Exception:
+        logger.debug("Telegram username lookup failed for %s", raw, exc_info=True)
+        return None
 
 
 def parse_target_and_int(args: str | None) -> tuple[str | None, int | None]:
@@ -1186,9 +1199,9 @@ async def admin_set_medal(message: Message, bot: Bot, command: CommandObject) ->
         return
     target, title = parts[0], parts[1]
     storage = get_storage()
-    telegram_id = resolve_player_id(storage, target)
+    telegram_id = await resolve_player_id_async(bot, storage, target)
     if telegram_id is None:
-        await message.answer(f"Игрок «{h(target)}» не найден.")
+        await message.answer(f"Игрок «{h(target)}» не найден (нужен id, игровой ник или @username).")
         return
     from app.chat_medals import apply_chat_medal, sanitize_medal_title
 
@@ -1213,9 +1226,9 @@ async def admin_clear_medal(message: Message, bot: Bot, command: CommandObject) 
         await message.answer("Использование: /medaloff [telegram_id|прозвище]")
         return
     storage = get_storage()
-    telegram_id = resolve_player_id(storage, target)
+    telegram_id = await resolve_player_id_async(bot, storage, target)
     if telegram_id is None:
-        await message.answer(f"Игрок «{h(target)}» не найден.")
+        await message.answer(f"Игрок «{h(target)}» не найден (нужен id, игровой ник или @username).")
         return
     from app.chat_medals import remove_chat_medal
 
@@ -1266,9 +1279,9 @@ async def admin_set_badge(message: Message, bot: Bot, command: CommandObject) ->
     if not target:
         await message.answer("Укажи telegram_id или прозвище.")
         return
-    telegram_id = resolve_player_id(storage, target)
+    telegram_id = await resolve_player_id_async(bot, storage, target)
     if telegram_id is None:
-        await message.answer(f"Игрок «{h(target)}» не найден.")
+        await message.answer(f"Игрок «{h(target)}» не найден (нужен id, игровой ник или @username).")
         return
     from app.player_medals import add_admin_medal_progress
 
@@ -2498,6 +2511,13 @@ class GroupChatMiddleware(BaseMiddleware):
 
         if chat is None or chat.type not in GROUP_CHAT_TYPES:
             return await handler(event, data)
+
+        try:
+            from app.chat_medals import remember_group_chat
+
+            remember_group_chat(get_storage(), chat.id)
+        except Exception:
+            logger.debug("Failed to remember group chat %s", getattr(chat, "id", None), exc_info=True)
 
         if isinstance(event, CallbackQuery):
             await safe_callback_answer(

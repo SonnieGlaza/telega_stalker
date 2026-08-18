@@ -2158,7 +2158,19 @@ def run_smoke_check() -> None:
             sanitize_medal_title,
         )
         from app.player_medals import MEDAL_CHAT_TITLES, chat_title_for_player
-        from app.season_chat_titles import ZONE_COMMON_CHAT_ID, ZONE_FACTION_CHAT_IDS
+        from app.season_chat_titles import ZONE_COMMON_CHAT_ID, ZONE_FACTION_CHAT_IDS, _member_status
+
+        class _MemberStub:
+            status = "member"
+
+        class _AdminStub:
+            class _Status:
+                value = "administrator"
+
+            status = _Status()
+
+        assert _member_status(_MemberStub()) == "member"
+        assert _member_status(_AdminStub()) == "administrator"
 
         assert sanitize_medal_title("🔥Ветеран🔥") == "Ветеран"
         assert len(sanitize_medal_title("A" * 40)) == 16
@@ -2227,6 +2239,8 @@ def run_smoke_check() -> None:
         assert parse_target_and_int("LeaderDuty 250") == ("LeaderDuty", 250)
         assert resolve_player_id(storage, "111") == 111
         assert resolve_player_id(storage, "LeaderDuty") == 111
+        assert resolve_player_id(storage, "@LeaderDuty") == 111
+        assert resolve_player_id(storage, "999001") == 999001
         info_text = _build_info_text(duty_player)
         assert "/fixme" in info_text
         assert "/respawn" in info_text
