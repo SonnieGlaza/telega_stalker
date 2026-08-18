@@ -197,16 +197,24 @@ def format_medals_profile_line(storage: Storage, telegram_id: int) -> str:
     return f"🎖 {emojis}\n"
 
 
+def format_medals_progress_lines(storage: Storage, telegram_id: int) -> list[str]:
+    """Строки как в достижениях: ✅/🔒 + эмодзи + название + условие."""
+    keys = set(get_player_medal_keys(storage, telegram_id))
+    lines: list[str] = []
+    for medal in MEDAL_DEFS:
+        marker = "✅" if medal.key in keys else "🔒"
+        lines.append(f"{marker} {medal.emoji} {medal.title} — {medal.description}")
+    return lines
+
+
 def format_medals_overview(storage: Storage, telegram_id: int) -> str:
     keys = set(get_player_medal_keys(storage, telegram_id))
-    lines = ["🎖 Медали", ""]
-    if keys:
-        lines.append("У тебя: " + " ".join(MEDAL_BY_KEY[k].emoji for k in MEDAL_DEFS if k.key in keys))
+    owned = " ".join(medal.emoji for medal in MEDAL_DEFS if medal.key in keys)
+    lines = ["🏅 Медали", ""]
+    if owned:
+        lines.append(f"У тебя: {owned}")
         lines.append("")
-    for medal in MEDAL_DEFS:
-        mark = "✓" if medal.key in keys else "·"
-        lines.append(f"{mark} {medal.emoji} {medal.title}")
-        lines.append(f"   {medal.description}")
+    lines.extend(format_medals_progress_lines(storage, telegram_id))
     return "\n".join(lines)
 
 

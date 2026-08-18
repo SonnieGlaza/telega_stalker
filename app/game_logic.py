@@ -2539,6 +2539,17 @@ def build_achievements_overview(storage: Storage, telegram_id: int) -> str:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return "Сначала создай персонажа через /start."
+    try:
+        from app.player_medals import format_medals_progress_lines, sync_player_medals
+
+        sync_player_medals(storage, telegram_id)
+        medal_lines = format_medals_progress_lines(storage, telegram_id)
+        medal_have = sum(1 for line in medal_lines if line.startswith("✅"))
+        medal_total = len(medal_lines)
+    except Exception:
+        medal_lines = []
+        medal_have = 0
+        medal_total = 0
     stats = storage.get_player_stats(telegram_id)
     unlocked_rows = storage.list_player_achievements(telegram_id)
     unlocked_keys = {str(row["achievement_key"]) for row in unlocked_rows}
@@ -2557,6 +2568,12 @@ def build_achievements_overview(storage: Storage, telegram_id: int) -> str:
         progress_lines.append(f"{marker} {rule.title} — {rule.description}")
     if not recent_lines:
         recent_lines = ["• Пока нет открытых достижений"]
+    medals_block = ""
+    if medal_lines:
+        medals_block = (
+            f"\n\n🏅 Медали: {medal_have}/{medal_total}\n"
+            f"{chr(10).join(medal_lines)}"
+        )
     return (
         "🎖 Система достижений\n"
         "Выполняй задания, соревнуйся и забирай награды!\n\n"
@@ -2567,6 +2584,7 @@ def build_achievements_overview(storage: Storage, telegram_id: int) -> str:
         f"{chr(10).join(recent_lines)}\n\n"
         "Прогресс:\n"
         f"{chr(10).join(progress_lines)}"
+        f"{medals_block}"
     )
 
 

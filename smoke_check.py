@@ -2169,10 +2169,14 @@ def run_smoke_check() -> None:
         trader_names = [btn.text for row in trader_keyboard("Бандиты").inline_keyboard for btn in row]
         assert any("Боров" in text for text in trader_names)
         medal_data = [btn.callback_data for row in ratings_keyboard().inline_keyboard for btn in row]
+        medal_labels = [btn.text for row in ratings_keyboard().inline_keyboard for btn in row]
         assert "ratings:medals" in medal_data
+        assert "ratings:achievements" in medal_data
+        assert any("Достижения и медали" in text for text in medal_labels)
 
         from app.player_medals import (
             add_admin_medal_progress,
+            format_medals_overview,
             get_player_medal_keys,
             grant_medal,
             refresh_exclusive_and_rotating_medals,
@@ -2193,6 +2197,16 @@ def run_smoke_check() -> None:
         grant_medal(storage, 111, "top_all")
         refresh_exclusive_and_rotating_medals(storage, force_rotating=True)
         assert "richest" in get_player_medal_keys(storage, 111) or storage.top_player_by_money() != 111
+        from app.game_logic import build_achievements_overview
+
+        achievements_text = build_achievements_overview(storage, 111)
+        assert "🏅 Медали:" in achievements_text
+        assert "Бета-тестировщик" in achievements_text
+        assert "✅ 👥 Наставник" in achievements_text
+        assert len(achievements_text) <= 4096
+        medals_text = format_medals_overview(storage, 111)
+        assert "🔒 🛠 Без тебя этого бы не было" in medals_text
+        assert "✅ ⚙ Бета-тестировщик" in medals_text
 
         before_money = int(storage.get_character(111, refresh_energy=False).money)
         treasury_before = {
