@@ -2944,37 +2944,62 @@ class Storage:
             ).fetchone()
         return int(row["total"] if row is not None else 0)
 
-    def top_stars_donor(self) -> int | None:
+    def top_stars_donors(self, limit: int = 5) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(20, int(limit)))
         with self._connect() as conn:
-            row = conn.execute(
+            rows = conn.execute(
                 """
-                SELECT telegram_id, SUM(stars_amount) AS total
-                FROM topup_payments
-                GROUP BY telegram_id
-                HAVING SUM(stars_amount) > 0
-                ORDER BY total DESC, telegram_id ASC
-                LIMIT 1
-                """
-            ).fetchone()
-        if row is None:
-            return None
-        return int(row["telegram_id"])
+                SELECT p.telegram_id,
+                       COALESCE(c.nickname, '') AS nickname,
+                       SUM(p.stars_amount) AS value
+                FROM topup_payments p
+                LEFT JOIN characters c ON c.telegram_id = p.telegram_id
+                GROUP BY p.telegram_id
+                HAVING SUM(p.stars_amount) > 0
+                ORDER BY value DESC, p.telegram_id ASC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [
+            {
+                "telegram_id": int(row["telegram_id"]),
+                "nickname": str(row["nickname"] or ""),
+                "value": int(row["value"] or 0),
+            }
+            for row in rows
+        ]
 
-    def top_player_by_money(self) -> int | None:
+    def top_stars_donor(self) -> int | None:
+        rows = self.top_stars_donors(limit=1)
+        return int(rows[0]["telegram_id"]) if rows else None
+
+    def top_players_by_money(self, limit: int = 5) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(20, int(limit)))
         with self._connect() as conn:
-            row = conn.execute(
+            rows = conn.execute(
                 """
-                SELECT telegram_id
+                SELECT telegram_id, nickname, money AS value
                 FROM characters
                 ORDER BY money DESC, telegram_id ASC
-                LIMIT 1
-                """
-            ).fetchone()
-        if row is None:
-            return None
-        return int(row["telegram_id"])
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [
+            {
+                "telegram_id": int(row["telegram_id"]),
+                "nickname": str(row["nickname"] or ""),
+                "value": int(row["value"] or 0),
+            }
+            for row in rows
+        ]
 
-    def top_player_by_stat(self, stat_key: str) -> int | None:
+    def top_player_by_money(self) -> int | None:
+        rows = self.top_players_by_money(limit=1)
+        return int(rows[0]["telegram_id"]) if rows else None
+
+    def top_players_by_stat(self, stat_key: str, limit: int = 5) -> list[dict[str, Any]]:
         allowed = {
             "artifacts_found",
             "rating_points",
@@ -2982,20 +3007,34 @@ class Storage:
             "money_earned",
         }
         if stat_key not in allowed:
-            return None
+            return []
+        safe_limit = max(1, min(20, int(limit)))
         with self._connect() as conn:
-            row = conn.execute(
+            rows = conn.execute(
                 f"""
-                SELECT telegram_id
-                FROM player_stats
-                WHERE {stat_key} > 0
-                ORDER BY {stat_key} DESC, telegram_id ASC
-                LIMIT 1
+                SELECT ps.telegram_id,
+                       COALESCE(c.nickname, '') AS nickname,
+                       ps.{stat_key} AS value
+                FROM player_stats ps
+                LEFT JOIN characters c ON c.telegram_id = ps.telegram_id
+                WHERE ps.{stat_key} > 0
+                ORDER BY ps.{stat_key} DESC, ps.telegram_id ASC
+                LIMIT ?
                 """,  # noqa: S608
-            ).fetchone()
-        if row is None:
-            return None
-        return int(row["telegram_id"])
+                (safe_limit,),
+            ).fetchall()
+        return [
+            {
+                "telegram_id": int(row["telegram_id"]),
+                "nickname": str(row["nickname"] or ""),
+                "value": int(row["value"] or 0),
+            }
+            for row in rows
+        ]
+
+    def top_player_by_stat(self, stat_key: str) -> int | None:
+        rows = self.top_players_by_stat(stat_key, limit=1)
+        return int(rows[0]["telegram_id"]) if rows else None
 
     def list_players(self, limit: int = 200) -> list[dict[str, Any]]:
         safe_limit = max(1, min(500, int(limit)))

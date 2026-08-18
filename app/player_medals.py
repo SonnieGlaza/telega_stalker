@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.html_utils import html_safe as h
 from app.storage import Storage, utc_now
 
 BETA_DEADLINE = datetime(2026, 8, 30, 23, 59, 59, tzinfo=timezone.utc)
@@ -83,6 +84,21 @@ MEDAL_DEFS: tuple[MedalDef, ...] = (
 MEDAL_BY_KEY: dict[str, MedalDef] = {item.key: item for item in MEDAL_DEFS}
 
 ADMIN_MEDAL_KEYS = frozenset({"mentor", "finder", "idea", "developer"})
+BADGE_TOP_KINDS = frozenset(
+    {
+        "top",
+        "who",
+        "richest",
+        "collector",
+        "money",
+        "arts",
+        "арты",
+        "богат",
+        "donor",
+        "донат",
+        "wealth",
+    }
+)
 
 # Короткие титулы для Telegram custom title (≤16, без эмодзи).
 MEDAL_CHAT_TITLES: dict[str, str] = {
@@ -347,6 +363,69 @@ def add_admin_medal_progress(storage: Storage, telegram_id: int, kind: str, amou
             return f"💡 Идей учтено: {flags['ideas']}. Медаль «Идея» выдана."
         return f"💡 Идей учтено: {flags['ideas']}/{IDEAS_FOR_MEDAL}."
     return "Неизвестный тип медали."
+
+
+def _top_player_label(row: dict[str, Any] | None, telegram_id: int | None = None) -> str:
+    if row is not None:
+        nick = str(row.get("nickname") or "").strip() or "без ника"
+        tid = int(row.get("telegram_id") or 0)
+        return f"{h(nick)} (id {tid})"
+    if telegram_id:
+        return f"id {int(telegram_id)}"
+    return "никого"
+
+
+def _format_top_block(title: str, rows: list[dict[str, Any]], value_fmt) -> str:
+    lines = [title]
+    if not rows:
+        lines.append("пока пусто")
+        return "\n".join(lines)
+    for idx, row in enumerate(rows, start=1):
+        lines.append(f"{idx}. {_top_player_label(row)} — {value_fmt(int(row.get('value') or 0))}")
+    return "\n".join(lines)
+
+
+def format_rotating_tops(storage: Storage, *, limit: int = 5) -> str:
+    """Живые топы по деньгам, артам и донатам для админской /badge top."""
+    money = storage.top_players_by_money(limit)
+    arts = storage.top_players_by_stat("artifacts_found", limit)
+    donors = storage.top_stars_donors(limit)
+    rotating = _load_json_meta(storage, ROTATING_META_KEY)
+    last = _parse_dt(str(rotating.get("at") or ""))
+    last_text = last.strftime("%d.%m.%Y %H:%M UTC") if last else "ещё не было"
+
+    def holder_label(meta_key: str) -> str:
+        try:
+            tid = int(rotating.get(meta_key) or 0)
+        except (TypeError, ValueError):
+            tid = 0
+        if tid <= 0:
+            return "никого"
+        player = storage.get_character(tid, refresh_energy=False)
+        nick = str(getattr(player, "nickname", "") or "").strip() or "без ника"
+        return f"{h(nick)} (id {tid})"
+
+    blocks = [
+        "Топы прямо сейчас (не рейтинг, а живые цифры).",
+        f"Медали «Богач Зоны» / «Собиратель» / «Главная опора» обновляются раз в {ROTATING_MEDAL_DAYS} дня, "
+        f"последний пересчёт: {last_text}. /badge sync выдаст их заново сразу.",
+        "",
+        _format_top_block("💰 Деньги на руках", money, lambda n: f"{n} RU"),
+        "",
+        _format_top_block("💎 Артефактов найдено", arts, lambda n: f"{n} шт."),
+        "",
+        _format_top_block(
+            "🏦 Донаты проекту",
+            donors,
+            lambda n: f"{n}⭐ (~{int(stars_to_rub(n))} ₽)",
+        ),
+        "",
+        "Медали сейчас на:",
+        f"• Богач Зоны — {holder_label('richest')}",
+        f"• Собиратель — {holder_label('collector')}",
+        f"• Главная опора — {holder_label('donor')}",
+    ]
+    return "\n".join(blocks)
 
 
 def sync_player_medals(storage: Storage, telegram_id: int) -> None:

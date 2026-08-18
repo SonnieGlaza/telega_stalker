@@ -1248,6 +1248,7 @@ async def admin_set_badge(message: Message, bot: Bot, command: CommandObject) ->
         await message.answer(
             "Игровые медали (значки в профиле) и титул в группах:\n"
             "Пиши в личку боту — титул уйдёт во все чаты, где есть игрок.\n"
+            "/badge top — кто богаче, кто больше артов нашёл, кто донатит\n"
             "/badge mentor [id|ник]\n"
             "/badge finder [id|ник] [сколько багов]\n"
             "/badge idea [id|ник] [сколько идей]\n"
@@ -1257,6 +1258,11 @@ async def admin_set_badge(message: Message, bot: Bot, command: CommandObject) ->
         return
     kind = raw[0].strip().lower()
     storage = get_storage()
+    from app.player_medals import BADGE_TOP_KINDS, format_rotating_tops
+
+    if kind in BADGE_TOP_KINDS:
+        await message.answer(format_rotating_tops(storage))
+        return
     if kind == "sync":
         from app.chat_medals import sync_all_chat_titles
         from app.player_medals import refresh_exclusive_and_rotating_medals

@@ -2291,6 +2291,7 @@ def run_smoke_check() -> None:
         from app.player_medals import (
             add_admin_medal_progress,
             format_medals_overview,
+            format_rotating_tops,
             get_player_medal_keys,
             grant_medal,
             refresh_exclusive_and_rotating_medals,
@@ -2313,6 +2314,15 @@ def run_smoke_check() -> None:
         grant_medal(storage, 111, "top_all")
         refresh_exclusive_and_rotating_medals(storage, force_rotating=True)
         assert "richest" in get_player_medal_keys(storage, 111) or storage.top_player_by_money() != 111
+        money_top = storage.top_players_by_money(limit=5)
+        assert money_top and int(money_top[0]["telegram_id"]) == storage.top_player_by_money()
+        arts_top = storage.top_players_by_stat("artifacts_found", limit=5)
+        assert arts_top and int(arts_top[0]["value"]) >= 2
+        tops_text = format_rotating_tops(storage)
+        assert "Деньги на руках" in tops_text
+        assert "Артефактов найдено" in tops_text
+        assert "LeaderDuty" in tops_text
+        assert "id 111" in tops_text
         from app.game_logic import build_achievements_overview
 
         achievements_text = build_achievements_overview(storage, 111)
