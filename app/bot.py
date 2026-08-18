@@ -21,6 +21,7 @@ from aiogram.types import (
     BotCommandScopeAllGroupChats,
     BotCommandScopeDefault,
     CallbackQuery,
+    ChatMemberUpdated,
     InlineKeyboardMarkup,
     InputMediaPhoto,
     LabeledPrice,
@@ -441,6 +442,9 @@ GROUP_CHAT_LINK_BUTTON_TEXT = "🔗 Ссылка на бота"
 
 
 async def _send_group_bot_link(message: Message, bot: Bot) -> None:
+    from app.chat_medals import remember_group_chat
+
+    remember_group_chat(get_storage(), message.chat.id)
     me = await bot.get_me()
     username = (me.username or "").strip()
     if not username:
@@ -477,6 +481,7 @@ storage: Storage | None = None
 admin_ids: tuple[int, ...] = ()
 SNAPSHOT_SYNC_SECONDS = 300
 POINTS_INCOME_TICK_SECONDS = 60
+TITLE_SYNC_EVERY_TICKS = 10  # раз в ~10 мин проставить титулы во все известные группы
 TRAVEL_ETA_TICK_SECONDS = 1
 TRAVEL_ETA_MSG_META_PREFIX = "travel_eta_msg:"
 _travel_eta_locks: dict[int, asyncio.Lock] = {}
@@ -862,6 +867,50 @@ async def cmd_group_bot_link(message: Message, bot: Bot) -> None:
     await _send_group_bot_link(message, bot)
 
 
+def _chat_member_status(member: Any) -> str:
+    return str(getattr(member, "status", "") or "")
+
+
+@router.my_chat_member()
+async def on_bot_membership(event: ChatMemberUpdated, bot: Bot) -> None:
+    if event.chat.type not in GROUP_CHAT_TYPES:
+        return
+    from app.chat_medals import (
+        apply_resolved_chat_title,
+        forget_group_chat,
+        remember_group_chat,
+        titled_player_ids,
+    )
+
+    storage = get_storage()
+    new_status = _chat_member_status(event.new_chat_member)
+    if new_status in {"member", "administrator"}:
+        remember_group_chat(storage, event.chat.id)
+        if new_status == "administrator":
+            for tid in titled_player_ids(storage):
+                await apply_resolved_chat_title(bot, storage, tid, chat_ids=[event.chat.id])
+    elif new_status in {"left", "kicked"}:
+        forget_group_chat(storage, event.chat.id)
+
+
+@router.chat_member()
+async def on_user_membership(event: ChatMemberUpdated, bot: Bot) -> None:
+    if event.chat.type not in GROUP_CHAT_TYPES:
+        return
+    user = event.new_chat_member.user
+    if user is None or user.is_bot:
+        return
+    from app.chat_medals import apply_resolved_chat_title, remember_group_chat
+
+    storage = get_storage()
+    remember_group_chat(storage, event.chat.id)
+    old_status = _chat_member_status(event.old_chat_member)
+    new_status = _chat_member_status(event.new_chat_member)
+    present = {"member", "administrator", "creator", "restricted"}
+    if new_status in present and old_status not in present:
+        await apply_resolved_chat_title(bot, storage, user.id, chat_ids=[event.chat.id])
+
+
 @router.message(Command("start"), F.chat.type == "private")
 async def cmd_start(message: Message, state: FSMContext, command: CommandObject, bot: Bot) -> None:
     telegram_id = message.from_user.id
@@ -1128,7 +1177,8 @@ async def admin_set_medal(message: Message, bot: Bot, command: CommandObject) ->
     parts = raw.split(maxsplit=1)
     if len(parts) != 2:
         await message.answer(
-            "Медалька в беседах (титул у ника, до 16 символов, без эмодзи).\n"
+            "Титул у ника во всех группах, где есть игрок и бот-админ (до 16 символов, без эмодзи).\n"
+            "Пиши команду в личку боту — в чаты само синхронизируется.\n"
             "Использование: /medal [telegram_id|прозвище] [титул]\n"
             "Пример: /medal 123456 Ветеран\n"
             "Снять: /medaloff 123456"
@@ -1136,13 +1186,10 @@ async def admin_set_medal(message: Message, bot: Bot, command: CommandObject) ->
         return
     target, title = parts[0], parts[1]
     storage = get_storage()
-    if target.isdigit():
-        telegram_id = int(target)
-    else:
-        telegram_id = storage.find_telegram_id_by_nickname(target)
-        if telegram_id is None:
-            await message.answer(f"Игрок «{h(target)}» не найден.")
-            return
+    telegram_id = resolve_player_id(storage, target)
+    if telegram_id is None:
+        await message.answer(f"Игрок «{h(target)}» не найден.")
+        return
     from app.chat_medals import apply_chat_medal, sanitize_medal_title
 
     clean = sanitize_medal_title(title)
@@ -1151,7 +1198,8 @@ async def admin_set_medal(message: Message, bot: Bot, command: CommandObject) ->
         return
     notes = await apply_chat_medal(bot, storage, telegram_id, clean)
     await message.answer(
-        f"Медаль «{clean}» для id {telegram_id}.\n" + "\n".join(f"• {n}" for n in notes)
+        f"Титул «{clean}» для id {telegram_id} (во все группы, где есть игрок).\n"
+        + "\n".join(f"• {n}" for n in notes)
     )
 
 
@@ -1165,13 +1213,10 @@ async def admin_clear_medal(message: Message, bot: Bot, command: CommandObject) 
         await message.answer("Использование: /medaloff [telegram_id|прозвище]")
         return
     storage = get_storage()
-    if target.isdigit():
-        telegram_id = int(target)
-    else:
-        telegram_id = storage.find_telegram_id_by_nickname(target)
-        if telegram_id is None:
-            await message.answer(f"Игрок «{h(target)}» не найден.")
-            return
+    telegram_id = resolve_player_id(storage, target)
+    if telegram_id is None:
+        await message.answer(f"Игрок «{h(target)}» не найден.")
+        return
     from app.chat_medals import remove_chat_medal
 
     notes = await remove_chat_medal(bot, storage, telegram_id)
@@ -1181,28 +1226,36 @@ async def admin_clear_medal(message: Message, bot: Bot, command: CommandObject) 
 
 
 @router.message(Command("badge"), F.chat.type == "private")
-async def admin_set_badge(message: Message, command: CommandObject) -> None:
+async def admin_set_badge(message: Message, bot: Bot, command: CommandObject) -> None:
     if not is_admin_user(message.from_user.id):
         await message.answer("Команда только для администратора.")
         return
     raw = (command.args or "").strip().split()
     if not raw:
         await message.answer(
-            "Игровые медали (значки в профиле):\n"
+            "Игровые медали (значки в профиле) и титул в группах:\n"
+            "Пиши в личку боту — титул уйдёт во все чаты, где есть игрок.\n"
             "/badge mentor [id|ник]\n"
             "/badge finder [id|ник] [сколько багов]\n"
             "/badge idea [id|ник] [сколько идей]\n"
             "/badge developer [id|ник]\n"
-            "/badge sync — пересчитать авто-медали у всех"
+            "/badge sync — пересчитать медали и заново проставить титулы"
         )
         return
     kind = raw[0].strip().lower()
     storage = get_storage()
     if kind == "sync":
+        from app.chat_medals import sync_all_chat_titles
         from app.player_medals import refresh_exclusive_and_rotating_medals
 
         refresh_exclusive_and_rotating_medals(storage, force_rotating=True, sync_all=True)
-        await message.answer("Медали пересчитаны.")
+        notes = await sync_all_chat_titles(bot, storage)
+        extra = ""
+        if notes:
+            extra = "\n" + "\n".join(f"• {n}" for n in notes[:20])
+            if len(notes) > 20:
+                extra += f"\n• …ещё {len(notes) - 20}"
+        await message.answer(f"Медали пересчитаны, титулы в группах синхронизированы.{extra}")
         return
     rest = raw[1:]
     amount = 1
@@ -1220,7 +1273,13 @@ async def admin_set_badge(message: Message, command: CommandObject) -> None:
     from app.player_medals import add_admin_medal_progress
 
     note = add_admin_medal_progress(storage, telegram_id, kind, amount)
-    await message.answer(f"id {telegram_id}: {note}")
+    from app.chat_medals import apply_resolved_chat_title
+
+    title_notes = await apply_resolved_chat_title(bot, storage, telegram_id)
+    extra = ""
+    if title_notes:
+        extra = "\nТитул в группах:\n" + "\n".join(f"• {n}" for n in title_notes)
+    await message.answer(f"id {telegram_id}: {note}{extra}")
 
 
 @router.message(Command("unstick"), F.chat.type == "private")
@@ -8468,6 +8527,15 @@ async def run_bot() -> None:
     storage.init_db()
     storage.restore_from_snapshot_if_empty()
     try:
+        from app.chat_medals import remember_group_chat
+        from app.season_chat_titles import ZONE_COMMON_CHAT_ID, ZONE_FACTION_CHAT_IDS
+
+        remember_group_chat(storage, ZONE_COMMON_CHAT_ID)
+        for chat_id in ZONE_FACTION_CHAT_IDS.values():
+            remember_group_chat(storage, chat_id)
+    except Exception:
+        logger.exception("Failed to seed zone group chats")
+    try:
         synced = storage.backfill_all_gear_power()
         if synced:
             logger.info("Backfilled gear_power for %s characters", synced)
@@ -8615,6 +8683,15 @@ async def run_bot() -> None:
                 refresh_exclusive_and_rotating_medals(get_storage())
             except Exception:
                 logger.exception("Player medals tick failed")
+            if zone_tick_counter["n"] % TITLE_SYNC_EVERY_TICKS == 0:
+                try:
+                    from app.chat_medals import sync_all_chat_titles
+
+                    title_notes = await sync_all_chat_titles(bot, get_storage())
+                    if title_notes:
+                        logger.info("Chat titles synced: %s", "; ".join(title_notes[:30]))
+                except Exception:
+                    logger.exception("Chat title sync tick failed")
             if zone_tick_counter["n"] % SURVIVAL_DEATH_CHECK_EVERY_TICKS == 0:
                 try:
                     await _push_offline_survival_deaths(bot, get_storage())
@@ -8803,7 +8880,17 @@ async def run_bot() -> None:
     dp.message.outer_middleware(DeadPlayerMenuMiddleware())
     dp.include_router(router)
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(
+            bot,
+            allowed_updates=[
+                "message",
+                "edited_message",
+                "callback_query",
+                "pre_checkout_query",
+                "my_chat_member",
+                "chat_member",
+            ],
+        )
     finally:
         sync_task.cancel()
         zone_task.cancel()

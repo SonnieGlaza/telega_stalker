@@ -2148,12 +2148,33 @@ def run_smoke_check() -> None:
         ]
         assert "topup:menu:faction" not in no_fac_data
 
-        from app.chat_medals import get_chat_medal, save_chat_medal, sanitize_medal_title
+        from app.chat_medals import (
+            forget_group_chat,
+            get_chat_medal,
+            medal_chat_targets,
+            remember_group_chat,
+            resolve_group_title,
+            save_chat_medal,
+            sanitize_medal_title,
+        )
+        from app.player_medals import MEDAL_CHAT_TITLES, chat_title_for_player
+        from app.season_chat_titles import ZONE_COMMON_CHAT_ID, ZONE_FACTION_CHAT_IDS
 
         assert sanitize_medal_title("🔥Ветеран🔥") == "Ветеран"
         assert len(sanitize_medal_title("A" * 40)) == 16
+        for title in MEDAL_CHAT_TITLES.values():
+            assert 0 < len(title) <= 16
+            assert sanitize_medal_title(title) == title
+        assert ZONE_COMMON_CHAT_ID in medal_chat_targets(storage)
+        for chat_id in ZONE_FACTION_CHAT_IDS.values():
+            assert chat_id in medal_chat_targets(storage)
+        remember_group_chat(storage, -100111222333)
+        assert -100111222333 in medal_chat_targets(storage)
+        forget_group_chat(storage, -100111222333)
+        assert -100111222333 not in medal_chat_targets(storage)
         assert save_chat_medal(storage, 111, "Ветеран") == "Ветеран"
         assert get_chat_medal(storage, 111) == "Ветеран"
+        assert resolve_group_title(storage, 111) == "Ветеран"
 
         from app.vendors import vendor_person_name, vendor_quest_label, VENDOR_REP_BY_DIFFICULTY
         from app.game_logic import QUEST_CONTRACTS, list_vendor_contracts_for_character
@@ -2224,6 +2245,8 @@ def run_smoke_check() -> None:
         assert stars_to_rub(167) >= 500
         add_admin_medal_progress(storage, 111, "mentor")
         assert "mentor" in get_player_medal_keys(storage, 111)
+        assert chat_title_for_player(storage, 111) == "Наставник"
+        assert resolve_group_title(storage, 111) == "Ветеран"
         add_admin_medal_progress(storage, 111, "finder", 3)
         assert "finder" in get_player_medal_keys(storage, 111)
         add_admin_medal_progress(storage, 111, "idea", 5)

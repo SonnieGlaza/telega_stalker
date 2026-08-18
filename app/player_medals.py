@@ -84,6 +84,42 @@ MEDAL_BY_KEY: dict[str, MedalDef] = {item.key: item for item in MEDAL_DEFS}
 
 ADMIN_MEDAL_KEYS = frozenset({"mentor", "finder", "idea", "developer"})
 
+# Короткие титулы для Telegram custom title (≤16, без эмодзи).
+MEDAL_CHAT_TITLES: dict[str, str] = {
+    "developer": "Разработчик",
+    "mentor": "Наставник",
+    "finder": "Находчик",
+    "idea": "Идея",
+    "creator": "Лидер ГП",
+    "beta": "Бета",
+    "top_all": "Топ-1",
+    "season_gold": "Чемпион Зоны",
+    "season_silver": "Серебро сезона",
+    "season_bronze": "Бронза сезона",
+    "collector": "Собиратель",
+    "richest": "Богач Зоны",
+    "main_support": "Главная опора",
+    "support": "Опора",
+    "completionist": "Дальше некуда",
+}
+MEDAL_CHAT_TITLE_PRIORITY: tuple[str, ...] = (
+    "developer",
+    "mentor",
+    "finder",
+    "idea",
+    "creator",
+    "beta",
+    "top_all",
+    "season_gold",
+    "season_silver",
+    "season_bronze",
+    "completionist",
+    "main_support",
+    "support",
+    "collector",
+    "richest",
+)
+
 
 def _parse_dt(raw: str | None) -> datetime | None:
     if not raw:
@@ -207,6 +243,17 @@ def format_medals_overview(storage: Storage, telegram_id: int) -> str:
         lines.append("")
     lines.extend(format_medals_progress_lines(storage, telegram_id))
     return "\n".join(lines)
+
+
+def chat_title_for_player(storage: Storage, telegram_id: int) -> str | None:
+    """Короткий титул в беседах по игровым медалям (без явного /medal)."""
+    keys = set(get_player_medal_keys(storage, telegram_id))
+    for medal_key in MEDAL_CHAT_TITLE_PRIORITY:
+        if medal_key in keys:
+            title = MEDAL_CHAT_TITLES.get(medal_key) or ""
+            if title:
+                return title[:16]
+    return None
 
 
 def _exclusive_holder(storage: Storage, medal_key: str, winner_id: int | None) -> None:
