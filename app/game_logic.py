@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import random
 from math import dist
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ from app.faction_ranks import (
 )
 from app.skins import next_skin_progress, resolve_skin
 from app.html_utils import html_safe as h
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -2127,7 +2130,7 @@ def _grant_season_rating_rewards(storage: Storage, top: list[dict[str, Any]]) ->
             storage.add_item(telegram_id, item_key, 1)
             labels.append(label)
         medal = medals[idx - 1] if idx <= len(medals) else "•"
-        nickname = str(row.get("nickname") or f"Игрок {telegram_id}")
+        nickname = h(str(row.get("nickname") or f"Игрок {telegram_id}"))
         lines.append(f"{medal} {nickname} получает: {', '.join(labels)}")
     return lines
 
@@ -2146,12 +2149,12 @@ def process_rating_season(storage: Storage) -> str | None:
 
         remember_season_podium(storage, int(season.get("id") or 0), top)
     except Exception:
-        pass
+        logger.exception("Failed to record season podium medals")
     lines = [f"🏁 Сезон рейтинга #{season.get('id')} завершён!"]
     if top:
         medals = ["🥇", "🥈", "🥉"]
         for idx, row in enumerate(top):
-            nickname = str(row.get("nickname") or f"Игрок {row.get('telegram_id')}")
+            nickname = h(str(row.get("nickname") or f"Игрок {row.get('telegram_id')}"))
             points = int(row.get("season_rating") or 0)
             medal = medals[idx] if idx < len(medals) else "•"
             lines.append(f"{medal} {nickname} — {points} очк. сезона")
@@ -2169,8 +2172,7 @@ def process_rating_season(storage: Storage) -> str | None:
                     "🏷 В чатах Зоны будут обновлены статусы (титулы) топ-3 сезона."
                 )
         except Exception:
-            # Не ломаем конец сезона из‑за очереди титулов.
-            pass
+            logger.exception("Season chat title queue failed")
     else:
         lines.append("В этом сезоне никто не набрал очков.")
 

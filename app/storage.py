@@ -1041,6 +1041,24 @@ class Storage:
                     )
                 else:
                     conn.execute("DELETE FROM meta_kv WHERE key = ?", (registry_key,))
+            row = conn.execute(
+                "SELECT value FROM meta_kv WHERE key = ?",
+                ("chat_medals:index",),
+            ).fetchone()
+            if row is not None:
+                try:
+                    indexed = json.loads(str(row["value"]))
+                except json.JSONDecodeError:
+                    indexed = None
+                if isinstance(indexed, list):
+                    cleaned = [int(x) for x in indexed if int(x) != tid]
+                    if cleaned:
+                        conn.execute(
+                            "INSERT INTO meta_kv(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                            ("chat_medals:index", json.dumps(cleaned, ensure_ascii=False)),
+                        )
+                    else:
+                        conn.execute("DELETE FROM meta_kv WHERE key = ?", ("chat_medals:index",))
         self.save_snapshot()
 
     def delete_character_account(self, telegram_id: int) -> dict[str, Any] | None:
