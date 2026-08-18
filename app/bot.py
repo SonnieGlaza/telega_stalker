@@ -8758,19 +8758,19 @@ async def run_bot() -> None:
                             await bot.send_message(user_id, season_message)
                         except Exception:
                             logger.debug("Failed rating season notify to %s", user_id)
-                    try:
-                        from app.season_chat_titles import apply_pending_season_chat_titles
+                try:
+                    from app.season_chat_titles import apply_pending_season_chat_titles
 
-                        title_notes = await apply_pending_season_chat_titles(bot, get_storage())
-                        if title_notes:
-                            logger.info("Season chat titles: %s", "; ".join(title_notes))
+                    title_notes = await apply_pending_season_chat_titles(bot, get_storage())
+                    if title_notes:
+                        logger.info("Season chat titles: %s", "; ".join(title_notes))
                         from app.chat_medals import reapply_all_chat_medals
 
                         medal_notes = await reapply_all_chat_medals(bot, get_storage())
                         if medal_notes:
                             logger.info("Chat medals reapplied: %s", "; ".join(medal_notes))
-                    except Exception:
-                        logger.exception("Season chat title apply failed")
+                except Exception:
+                    logger.exception("Season chat title apply failed")
             except Exception:
                 logger.exception("Rating season tick failed")
             try:
