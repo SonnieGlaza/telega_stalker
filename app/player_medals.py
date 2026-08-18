@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.html_utils import html_safe as h
 from app.storage import Storage, utc_now
+
+logger = logging.getLogger(__name__)
 
 BETA_DEADLINE = datetime(2026, 8, 30, 23, 59, 59, tzinfo=timezone.utc)
 BETA_MIN_RATING = 700
@@ -87,6 +90,8 @@ ADMIN_MEDAL_KEYS = frozenset({"mentor", "finder", "idea", "developer"})
 BADGE_TOP_KINDS = frozenset(
     {
         "top",
+        "топ",
+        "топы",
         "who",
         "richest",
         "collector",
@@ -94,6 +99,8 @@ BADGE_TOP_KINDS = frozenset(
         "arts",
         "арты",
         "богат",
+        "богач",
+        "собиратель",
         "donor",
         "донат",
         "wealth",
@@ -393,9 +400,18 @@ def _format_top_block(title: str, rows: list[dict[str, Any]], value_fmt) -> str:
 
 def format_rotating_tops(storage: Storage, *, limit: int = 5) -> str:
     """Живые топы по деньгам, артам и донатам для админской /badge top."""
-    money = storage.top_players_by_money(limit)
-    arts = storage.top_players_by_stat("artifacts_found", limit)
-    donors = storage.top_stars_donors(limit)
+
+    def _load_rows(label: str, loader) -> tuple[list[dict[str, Any]], str | None]:
+        try:
+            rows = loader()
+        except Exception:
+            logger.exception("Failed to load %s top", label)
+            return [], f"не удалось прочитать {label}"
+        return list(rows or []), None
+
+    money, money_err = _load_rows("деньги", lambda: storage.top_players_by_money(limit))
+    arts, arts_err = _load_rows("артефакты", lambda: storage.top_players_by_stat("artifacts_found", limit))
+    donors, donors_err = _load_rows("донаты", lambda: storage.top_stars_donors(limit))
     rotating = _load_json_meta(storage, ROTATING_META_KEY)
     last = _parse_dt(str(rotating.get("at") or ""))
     last_text = last.strftime("%d.%m.%Y %H:%M UTC") if last else "ещё не было"
@@ -411,19 +427,25 @@ def format_rotating_tops(storage: Storage, *, limit: int = 5) -> str:
         nick = str(getattr(player, "nickname", "") or "").strip() or "без ника"
         return f"{h(nick)} (id {tid})"
 
+    def block(title: str, rows: list[dict[str, Any]], value_fmt, error: str | None) -> str:
+        if error:
+            return f"{title}\n{error}"
+        return _format_top_block(title, rows, value_fmt)
+
     blocks = [
         "Топы прямо сейчас (не рейтинг, а живые цифры).",
         f"Медали «Богач Зоны» / «Собиратель» / «Главная опора» обновляются раз в {ROTATING_MEDAL_DAYS} дня, "
         f"последний пересчёт: {last_text}. /badge sync выдаст их заново сразу.",
         "",
-        _format_top_block("💰 Деньги на руках", money, lambda n: f"{n} RU"),
+        block("💰 Деньги на руках", money, lambda n: f"{n} RU", money_err),
         "",
-        _format_top_block("💎 Артефактов найдено", arts, lambda n: f"{n} шт."),
+        block("💎 Артефактов найдено", arts, lambda n: f"{n} шт.", arts_err),
         "",
-        _format_top_block(
+        block(
             "🏦 Донаты проекту",
             donors,
             lambda n: f"{n}⭐ (~{int(stars_to_rub(n))} ₽)",
+            donors_err,
         ),
         "",
         "Медали сейчас на:",

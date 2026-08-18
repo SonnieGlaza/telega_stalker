@@ -2276,8 +2276,10 @@ def run_smoke_check() -> None:
         assert set(barkeep_easy).isdisjoint(set(tech_easy))
         assert QUEST_CONTRACTS["easy_escort_boloto"].work_location == "Болото"
 
-        from app.bot import parse_target_and_int, resolve_player_id, _build_info_text
+        from app.bot import parse_target_and_int, resolve_player_id, _build_info_text, GROUP_CHAT_ALLOWED_COMMANDS
 
+        assert "/badge" in GROUP_CHAT_ALLOWED_COMMANDS
+        assert "/top" in GROUP_CHAT_ALLOWED_COMMANDS
         assert parse_target_and_int("LeaderDuty 250") == ("LeaderDuty", 250)
         assert resolve_player_id(storage, "111") == 111
         assert resolve_player_id(storage, "LeaderDuty") == 111
@@ -2289,6 +2291,7 @@ def run_smoke_check() -> None:
         assert len(info_text) <= 4096
 
         from app.player_medals import (
+            BADGE_TOP_KINDS,
             add_admin_medal_progress,
             format_medals_overview,
             format_rotating_tops,
@@ -2371,6 +2374,11 @@ def run_smoke_check() -> None:
         grant_medal(storage, 111, "top_all")
         refresh_exclusive_and_rotating_medals(storage, force_rotating=True)
         assert "richest" in get_player_medal_keys(storage, 111) or storage.top_player_by_money() != 111
+        import inspect
+
+        assert "top" in BADGE_TOP_KINDS
+        assert "топ" in BADGE_TOP_KINDS
+        assert "MAX(COALESCE(c.nickname" in inspect.getsource(storage.top_stars_donors)
         money_top = storage.top_players_by_money(limit=5)
         assert money_top and int(money_top[0]["telegram_id"]) == storage.top_player_by_money()
         arts_top = storage.top_players_by_stat("artifacts_found", limit=5)
@@ -2407,6 +2415,9 @@ def run_smoke_check() -> None:
             str(row["name"]): int(row["treasury"]) for row in storage.get_factions()
         }
         assert treasury_after["Долг"] == treasury_before["Долг"] + 750
+        donors = storage.top_stars_donors(limit=5)
+        assert donors and int(donors[0]["telegram_id"]) == 111
+        assert int(donors[0]["value"]) >= 6
 
 
 if __name__ == "__main__":

@@ -437,7 +437,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 GROUP_CHAT_TYPES = frozenset({"group", "supergroup"})
-GROUP_CHAT_ALLOWED_COMMANDS = frozenset({"/start", "/menu"})
+GROUP_CHAT_ALLOWED_COMMANDS = frozenset({"/start", "/menu", "/badge", "/top"})
 GROUP_CHAT_LINK_BUTTON_TEXT = "🔗 Ссылка на бота"
 
 
@@ -465,6 +465,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="start", description="Начать или войти"),
         BotCommand(command="menu", description="Главное меню"),
         BotCommand(command="info", description="Справка по игре"),
+        BotCommand(command="top", description="Топ по деньгам и артам"),
         BotCommand(command="cancel", description="Отменить ввод"),
         BotCommand(command="pay", description="Перевод RU по id или нику"),
         BotCommand(command="duel", description="Вызвать на дуэль"),
@@ -1238,6 +1239,22 @@ async def admin_clear_medal(message: Message, bot: Bot, command: CommandObject) 
     )
 
 
+async def _send_badge_tops(message: Message, storage: Storage | None = None) -> None:
+    from app.player_medals import format_rotating_tops
+
+    db = storage or get_storage()
+    try:
+        text = format_rotating_tops(db)
+    except Exception as exc:
+        logger.exception("badge top failed")
+        await message.answer(f"Не смог собрать топ: {exc}", parse_mode=None)
+        return
+    try:
+        await message.answer(text)
+    except TelegramBadRequest:
+        await message.answer(text, parse_mode=None)
+
+
 @router.message(Command("badge"), F.chat.type == "private")
 async def admin_set_badge(message: Message, bot: Bot, command: CommandObject) -> None:
     if not is_admin_user(message.from_user.id):
@@ -1261,7 +1278,7 @@ async def admin_set_badge(message: Message, bot: Bot, command: CommandObject) ->
     from app.player_medals import BADGE_TOP_KINDS, format_rotating_tops
 
     if kind in BADGE_TOP_KINDS:
-        await message.answer(format_rotating_tops(storage))
+        await _send_badge_tops(message, storage)
         return
     if kind == "sync":
         from app.chat_medals import sync_all_chat_titles
@@ -1299,6 +1316,34 @@ async def admin_set_badge(message: Message, bot: Bot, command: CommandObject) ->
     if title_notes:
         extra = "\nТитул в группах:\n" + "\n".join(f"• {n}" for n in title_notes)
     await message.answer(f"id {telegram_id}: {note}{extra}")
+
+
+@router.message(Command("top"))
+async def admin_show_tops(message: Message) -> None:
+    if not is_admin_user(message.from_user.id):
+        if message.chat.type == "private":
+            await message.answer("Команда только для администратора.")
+        return
+    await _send_badge_tops(message)
+
+
+@router.message(Command("badge"))
+async def admin_badge_group_top(message: Message, command: CommandObject) -> None:
+    """В группах доходит не всякий /badge; топ можно смотреть и отсюда."""
+    if message.chat.type == "private":
+        return
+    if not is_admin_user(message.from_user.id):
+        return
+    raw = (command.args or "").strip().split()
+    if not raw:
+        return
+    kind = raw[0].strip().lower()
+    from app.player_medals import BADGE_TOP_KINDS
+
+    if kind not in BADGE_TOP_KINDS:
+        await message.answer("Выдачу медалей пиши боту в личку. Здесь: /badge top или /top.")
+        return
+    await _send_badge_tops(message)
 
 
 @router.message(Command("unstick"), F.chat.type == "private")

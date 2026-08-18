@@ -2950,7 +2950,7 @@ class Storage:
             rows = conn.execute(
                 """
                 SELECT p.telegram_id,
-                       COALESCE(c.nickname, '') AS nickname,
+                       MAX(COALESCE(c.nickname, '')) AS nickname,
                        SUM(p.stars_amount) AS value
                 FROM topup_payments p
                 LEFT JOIN characters c ON c.telegram_id = p.telegram_id
