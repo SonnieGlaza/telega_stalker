@@ -2329,6 +2329,38 @@ def run_smoke_check() -> None:
         )
         assert named.startswith("Игрок: LeaderDuty")
         assert "👥" in named
+        from app.image_text import contains_emoji, iter_text_runs, render_emoji_glyph
+
+        assert contains_emoji("🛠 👥")
+        assert not contains_emoji("Игрок: mercury")
+        assert any(is_emoji and "👥" in chunk for is_emoji, chunk in iter_text_runs("Игрок: mercury 👥"))
+        wrench = render_emoji_glyph("🛠", 24)
+        people = render_emoji_glyph("👥", 24)
+        assert wrench is not None and people is not None
+        for glyph in (wrench, people):
+            pix = glyph.load()
+            colors = {
+                pix[x, y][:3]
+                for x in range(glyph.size[0])
+                for y in range(glyph.size[1])
+                if pix[x, y][3] > 40
+            }
+            assert len(colors) >= 8
+        mixed = Image.new("RGB", (420, 48), (21, 21, 26))
+        mixed_draw = ImageDraw.Draw(mixed)
+        mixed_font = ImageFont.truetype(
+            str(Path(__file__).resolve().parent / "assets" / "fonts" / "NotoSans-Regular.ttf"),
+            22,
+        )
+        mixed_draw.text((8, 10), "Игрок: mercury 🛠 👥", fill=(240, 240, 240), font=mixed_font)
+        mixed_pix = mixed.load()
+        mixed_colors = {
+            mixed_pix[x, y]
+            for x in range(mixed.size[0])
+            for y in range(mixed.size[1])
+            if mixed_pix[x, y] not in {(21, 21, 26), (240, 240, 240)}
+        }
+        assert len(mixed_colors) >= 12
         add_admin_medal_progress(storage, 111, "finder", 3)
         assert "finder" in get_player_medal_keys(storage, 111)
         add_admin_medal_progress(storage, 111, "idea", 5)
