@@ -1986,9 +1986,13 @@ async def cmd_dbstatus(message: Message) -> None:
     me = db.get_character(message.from_user.id, refresh_energy=False)
     me_block = "Твой персонаж в БД: нет"
     if me is not None:
+        nick = h(str(me.nickname or ""))
+        faction = h(str(me.faction or "без гп"))
+        weapon = h(str(me.equipment.get("weapon") or "—"))
+        armor = h(str(me.equipment.get("armor") or "—"))
         me_block = (
             f"Твой персонаж в БД:\n"
-            f"• {me.nickname} | {me.gender} | {me.faction or 'без гп'}\n"
+            f"• {nick} | {me.gender} | {faction}\n"
             f"• Локация: {format_location_display(me)}\n"
             f"• HP {me.health} | энергия {me.energy}/{me.max_energy} | сила {me.gear_power}\n"
             f"• RU {me.money} | дизель {me.diesel} | бензин {me.gasoline}\n"
@@ -1996,8 +2000,8 @@ async def cmd_dbstatus(message: Message) -> None:
             f"Велосипед: {'да' if me.bicycle_owned else 'нет'} | "
             f"Грузовик: {'да' if me.truck_owned else 'нет'} ({me.truck_durability}%) | "
             f"Спальник: {'да' if me.sleeping_bag_owned else 'нет'}\n"
-            f"• Оружие: {me.equipment.get('weapon')} ({me.equipment.get('weapon_durability')}%)\n"
-            f"• Броня: {me.equipment.get('armor')} ({me.equipment.get('armor_durability')}%)\n"
+            f"• Оружие: {weapon} ({me.equipment.get('weapon_durability')}%)\n"
+            f"• Броня: {armor} ({me.equipment.get('armor_durability')}%)\n"
             f"• Рад {me.radiation}/100 | голод {me.hunger}/100 | жажда {me.thirst}/100"
         )
     await message.answer(

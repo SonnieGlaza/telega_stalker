@@ -3542,7 +3542,7 @@ def apply_contract_mission_success(
 
         sync_player_medals(storage, telegram_id)
     except Exception:
-        pass
+        logger.exception("Failed to sync player medals after contract completion for %s", telegram_id)
     rep_note = ""
     active = storage.get_active_contract(telegram_id) or {}
     vendor = str(active.get("vendor") or "")

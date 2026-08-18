@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from app.db import DbConfig, DbConnection, connect as db_connect, integrity_error_types
+
+logger = logging.getLogger(__name__)
 
 ENERGY_REGEN_PER_MINUTE = 2
 BASE_LOCATION_NPC_POWER = 100
@@ -1074,6 +1077,7 @@ class Storage:
         }
         now_iso = utc_now().isoformat()
         with self._connect() as conn:
+            self._ensure_referrals_schema(conn)
             conn.execute(
                 """
                 UPDATE auctions
@@ -1087,6 +1091,8 @@ class Storage:
             conn.execute("UPDATE factions SET leader_id = NULL WHERE leader_id = ?", (tid,))
             conn.execute("DELETE FROM player_achievements WHERE telegram_id = ?", (tid,))
             conn.execute("DELETE FROM player_stats WHERE telegram_id = ?", (tid,))
+            conn.execute("DELETE FROM referrals WHERE invitee_id = ?", (tid,))
+            conn.execute("DELETE FROM referrals WHERE referrer_id = ?", (tid,))
             conn.execute("DELETE FROM pending_registrations WHERE telegram_id = ?", (tid,))
             conn.execute("DELETE FROM characters WHERE telegram_id = ?", (tid,))
         self._purge_player_meta_keys(tid)
@@ -1422,7 +1428,11 @@ class Storage:
                             (int(referrer_id), telegram_id),
                         )
             except Exception:
-                pass
+                logger.exception(
+                    "Failed to persist pending registration referrer_id=%s for telegram_id=%s",
+                    int(referrer_id),
+                    int(telegram_id),
+                )
 
         if last_error is not None:
             # Последний шанс: delete + insert минимальных полей в новой транзакции.

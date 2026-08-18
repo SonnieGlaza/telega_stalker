@@ -1714,6 +1714,42 @@ def run_smoke_check() -> None:
             storage, [{"telegram_id": 111, "season_rating": 100}]
         )
         assert any(int(j["chat_id"]) == ZONE_COMMON_CHAT_ID for j in sample_jobs)
+        from app.season_chat_titles import (
+            SEASON_CHAT_TITLE_HOLDERS_META,
+            apply_pending_season_chat_titles,
+        )
+        from unittest.mock import patch
+        import asyncio
+
+        storage.set_meta(
+            SEASON_CHAT_TITLE_PENDING_META,
+            json.dumps(
+                {
+                    "jobs": [
+                        {"chat_id": ZONE_COMMON_CHAT_ID, "user_id": 111, "title": "Чемпион Зоны", "place": 1},
+                        {"chat_id": ZONE_COMMON_CHAT_ID, "user_id": 222, "title": "Серебро сезона", "place": 2},
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+        )
+
+        async def _fake_promote(_bot, _chat_id, user_id, _title):
+            if int(user_id) == 222:
+                raise RuntimeError("temporary telegram error")
+
+        with patch("app.season_chat_titles._promote_title_only", _fake_promote):
+            notes = asyncio.run(apply_pending_season_chat_titles(object(), storage))
+        assert any("111" in note for note in notes)
+        pending_after_raw = storage.get_meta(SEASON_CHAT_TITLE_PENDING_META) or ""
+        pending_after = json.loads(pending_after_raw) if pending_after_raw else {}
+        pending_after_jobs = pending_after.get("jobs") or []
+        assert len(pending_after_jobs) == 1
+        assert int(pending_after_jobs[0].get("user_id") or 0) == 222
+        holders_after_raw = storage.get_meta(SEASON_CHAT_TITLE_HOLDERS_META) or ""
+        holders_after = json.loads(holders_after_raw) if holders_after_raw else {}
+        holders = holders_after.get("holders") or []
+        assert any(int(hh.get("user_id") or 0) == 111 for hh in holders)
 
         # Atomic money: balance cannot go negative.
         bal_before = int(storage.get_character(111, refresh_energy=False).money)
@@ -2028,12 +2064,19 @@ def run_smoke_check() -> None:
         from app.game_logic import admin_delete_player_account
 
         storage.create_character(999888777, "TempDeleteMe", "Мужской")
+        storage.create_character(999888778, "TempInvitee", "Мужской")
+        assert storage.record_referral(999888777, 111)
+        assert storage.record_referral(999888778, 999888777)
+        assert storage.has_referral_claim(999888777)
+        assert storage.has_referral_claim(999888778)
         assert storage.character_exists(999888777)
         storage.set_meta("quest_mission:999888777", '{"test": true}')
         deleted = admin_delete_player_account(storage, 999888777)
         assert deleted.ok, deleted.text
         assert not storage.character_exists(999888777)
         assert storage.get_meta("quest_mission:999888777") is None
+        assert not storage.has_referral_claim(999888777)
+        assert not storage.has_referral_claim(999888778)
         assert not storage.is_nickname_taken("TempDeleteMe")
 
         from app.html_utils import nickname_validation_error

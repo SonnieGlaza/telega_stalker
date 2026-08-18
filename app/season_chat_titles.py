@@ -395,6 +395,7 @@ async def apply_pending_season_chat_titles(bot: Bot, storage: Storage) -> list[s
             logger.exception("Failed to demote season title holder %s in %s", user_id, chat_id)
 
     new_holders: list[dict[str, Any]] = []
+    failed_jobs: list[dict[str, Any]] = []
     for job in jobs:
         if not isinstance(job, dict):
             continue
@@ -414,7 +415,22 @@ async def apply_pending_season_chat_titles(bot: Bot, storage: Storage) -> list[s
             logger.exception(
                 "Failed to set season title %r for %s in %s", title, user_id, chat_id
             )
+            failed_jobs.append(
+                {
+                    "chat_id": chat_id,
+                    "user_id": user_id,
+                    "title": title,
+                    "place": int(job.get("place") or 0),
+                    "faction": str(job.get("faction") or ""),
+                }
+            )
 
     _save_holders(storage, new_holders)
-    storage.set_meta(SEASON_CHAT_TITLE_PENDING_META, "")
+    if failed_jobs:
+        storage.set_meta(
+            SEASON_CHAT_TITLE_PENDING_META,
+            json.dumps({"jobs": failed_jobs}, ensure_ascii=False),
+        )
+    else:
+        storage.set_meta(SEASON_CHAT_TITLE_PENDING_META, "")
     return notes
