@@ -67,6 +67,13 @@ QUEST_CONTRACTS: dict[str, QuestContractTemplate] = {
         "Свалка",
         mission_kind="escort",
     ),
+    "easy_escort_boloto": QuestContractTemplate(
+        "easy_escort_boloto",
+        "easy",
+        "Сопровождение на Болоте",
+        "Болото",
+        mission_kind="escort",
+    ),
     "hard_yantar": QuestContractTemplate(
         "hard_yantar",
         "hard",
@@ -159,7 +166,7 @@ VENDOR_CONTRACT_KEYS: dict[str, dict[str, str]] = {
         "impossible": "impossible_forest",
     },
     "tech": {
-        "easy": "easy_escort_dump",
+        "easy": "easy_escort_boloto",
         "hard": "hard_escort_agroprom",
         "heavy": "heavy_escort_valley",
         "impossible": "impossible_radar",

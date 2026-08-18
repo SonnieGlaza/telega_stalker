@@ -22,6 +22,7 @@ FLAGS_META_PREFIX = "pmedal_flags:"
 JOINED_META_PREFIX = "player:joined:"
 ROTATING_META_KEY = "pmedals:rotating"
 SEASON_PODIUM_META_KEY = "pmedals:season"
+HOLDER_META_PREFIX = "pmedals:holder:"
 
 
 @dataclass(frozen=True)
@@ -94,16 +95,6 @@ def _parse_dt(raw: str | None) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
-
-
-def ensure_joined_at(storage: Storage, telegram_id: int) -> str:
-    key = f"{JOINED_META_PREFIX}{int(telegram_id)}"
-    raw = storage.get_meta(key)
-    if raw:
-        return str(raw)
-    stamp = utc_now().isoformat()
-    storage.set_meta(key, stamp)
-    return stamp
 
 
 def get_joined_at(storage: Storage, telegram_id: int) -> datetime | None:
@@ -219,13 +210,37 @@ def format_medals_overview(storage: Storage, telegram_id: int) -> str:
 
 
 def _exclusive_holder(storage: Storage, medal_key: str, winner_id: int | None) -> None:
-    for tid in storage.list_player_ids():
-        has = medal_key in get_player_medal_keys(storage, tid)
-        if winner_id is not None and tid == int(winner_id):
-            if not has:
-                grant_medal(storage, tid, medal_key)
-        elif has:
-            revoke_medal(storage, tid, medal_key)
+    """Выдать медаль победителю и снять у прошлого, без полного обхода базы."""
+    meta_key = f"{HOLDER_META_PREFIX}{medal_key}"
+    raw = storage.get_meta(meta_key)
+    recorded: int | None = None
+    if raw:
+        try:
+            recorded = int(raw)
+        except (TypeError, ValueError):
+            recorded = None
+    new_id = int(winner_id) if winner_id else None
+    if recorded is not None and recorded == new_id:
+        if new_id is not None and medal_key not in get_player_medal_keys(storage, new_id):
+            grant_medal(storage, new_id, medal_key)
+        return
+    if recorded is None:
+        for tid in storage.list_player_ids():
+            has = medal_key in get_player_medal_keys(storage, tid)
+            if new_id is not None and tid == new_id:
+                if not has:
+                    grant_medal(storage, tid, medal_key)
+            elif has:
+                revoke_medal(storage, tid, medal_key)
+    else:
+        if recorded != new_id:
+            revoke_medal(storage, recorded, medal_key)
+        if new_id is not None:
+            grant_medal(storage, new_id, medal_key)
+    if new_id is not None:
+        storage.set_meta(meta_key, str(new_id))
+    else:
+        storage.delete_meta(meta_key)
 
 
 def _load_json_meta(storage: Storage, key: str) -> dict[str, Any]:
@@ -329,7 +344,12 @@ def sync_player_medals(storage: Storage, telegram_id: int) -> None:
         revoke_medal(storage, tid, "completionist")
 
 
-def refresh_exclusive_and_rotating_medals(storage: Storage, *, force_rotating: bool = False) -> None:
+def refresh_exclusive_and_rotating_medals(
+    storage: Storage,
+    *,
+    force_rotating: bool = False,
+    sync_all: bool = False,
+) -> None:
     board = storage.get_rating_leaderboard(limit=1)
     top_id = None
     if board:
@@ -367,5 +387,6 @@ def refresh_exclusive_and_rotating_medals(storage: Storage, *, force_rotating: b
             ),
         )
 
-    for tid in storage.list_player_ids():
-        sync_player_medals(storage, tid)
+    if sync_all or force_rotating:
+        for tid in storage.list_player_ids():
+            sync_player_medals(storage, tid)

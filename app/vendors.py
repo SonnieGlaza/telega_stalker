@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.game_logic import ActionResult
     from app.storage import Storage
 
 VENDOR_TIER_MAX = 4
@@ -51,13 +50,6 @@ VENDOR_META_PREFIX: dict[str, str] = {
     "tech": "vendor:tech_tier:",
 }
 
-# Стоимость перехода на этап (с предыдущего).
-VENDOR_UPGRADE_COST: dict[str, dict[int, int]] = {
-    "barkeep": {2: 15000, 3: 40000, 4: 100000},
-    "medic": {2: 8000, 3: 20000, 4: 45000},
-    "tech": {2: 10000, 3: 25000, 4: 50000},
-}
-
 VENDOR_STAGE_LABELS: dict[str, dict[int, str]] = {
     "barkeep": {
         1: "еда/вода, T1 стволы и броня, «Отклик», велосипед",
@@ -74,8 +66,8 @@ VENDOR_STAGE_LABELS: dict[str, dict[int, str]] = {
     "tech": {
         1: "улучшение брони, скидка на ремонт 2%",
         2: "доп. ячейка артефакта, скидка на ремонт 4%",
-        3: "скидка на ремонт 6%",
-        4: "скидка на ремонт 8%",
+        3: "новых товаров нет — скидка на ремонт 6%",
+        4: "новых товаров нет — скидка на ремонт 8% (максимум)",
     },
 }
 
@@ -203,10 +195,6 @@ def add_vendor_reputation(storage: Storage, telegram_id: int, vendor: str, amoun
 
 def reputation_to_tier(rep: int) -> int:
     return max(1, min(VENDOR_TIER_MAX, 1 + int(rep) // VENDOR_REP_PER_LEVEL))
-
-
-def next_tier_reputation_need(current_tier: int) -> int:
-    return min(VENDOR_TIER_MAX - 1, max(1, int(current_tier))) * VENDOR_REP_PER_LEVEL
 
 
 def _vendor_meta_key(vendor: str, telegram_id: int) -> str:
@@ -362,50 +350,6 @@ def vendor_assortment_blurb(storage: Storage, telegram_id: int, vendor: str) -> 
 
 def current_rep_need(current_tier: int) -> int:
     return max(1, min(VENDOR_TIER_MAX - 1, int(current_tier))) * VENDOR_REP_PER_LEVEL
-
-
-def upgrade_vendor_tier(storage: Storage, telegram_id: int, vendor: str) -> ActionResult:
-    from app.game_logic import ActionResult, _dead_block_text, _is_dead, _reject_if_player_busy
-
-    if vendor not in VENDOR_META_PREFIX:
-        return ActionResult(False, "Неизвестный торговец.")
-    character = storage.get_character(telegram_id)
-    if character is None:
-        return ActionResult(False, "Сначала создай персонажа через /start.")
-    if _is_dead(character):
-        return ActionResult(False, _dead_block_text())
-    blocked = _reject_if_player_busy(storage, telegram_id)
-    if blocked is not None:
-        return blocked
-    current = get_vendor_tier(storage, telegram_id, vendor)
-    person = vendor_person_name(character.faction, vendor)
-    if current >= VENDOR_TIER_MAX:
-        return ActionResult(
-            False,
-            f"Ассортимент «{person}» уже максимальный "
-            f"(этап {VENDOR_TIER_MAX}/{VENDOR_TIER_MAX}).",
-        )
-    rep = get_vendor_reputation(storage, telegram_id, vendor)
-    need = current_rep_need(current)
-    earned = reputation_to_tier(rep)
-    if earned <= get_stored_vendor_tier(storage, telegram_id, vendor) and earned <= current:
-        return ActionResult(
-            False,
-            f"Этапы «{person}» качаются авторитетом, не за RU. "
-            f"Нужно {need} очков (сейчас {rep}). Бери задания у этого торговца.",
-        )
-    set_vendor_tier(storage, telegram_id, vendor, max(current, earned))
-    shown = get_vendor_tier(storage, telegram_id, vendor)
-    label = VENDOR_STAGE_LABELS.get(vendor, {}).get(shown, f"этап {shown}")
-    extra = ""
-    if vendor == "tech":
-        extra = f"\nСкидка на ремонт: {TECH_REPAIR_DISCOUNT_PERCENT.get(shown, 0)}%."
-    return ActionResult(
-        True,
-        f"«{person}»: ассортимент открыт до этапа {shown}/{VENDOR_TIER_MAX} "
-        f"(авторитет {rep}).\nТеперь: {label}.{extra}",
-        payload={"vendor": vendor, "vendor_tier": shown},
-    )
 
 
 def vendor_purge_meta_keys(telegram_id: int) -> list[str]:

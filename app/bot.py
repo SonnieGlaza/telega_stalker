@@ -462,6 +462,11 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="menu", description="Главное меню"),
         BotCommand(command="info", description="Справка по игре"),
         BotCommand(command="cancel", description="Отменить ввод"),
+        BotCommand(command="pay", description="Перевод RU по id или нику"),
+        BotCommand(command="duel", description="Вызвать на дуэль"),
+        BotCommand(command="respawn", description="Респавн, если мёртв"),
+        BotCommand(command="fixme", description="Сброс зависшей вылазки"),
+        BotCommand(command="sbor", description="Сбор группировки (лидер)"),
     ]
     await bot.set_my_commands(private_commands, scope=BotCommandScopeDefault())
     await bot.set_my_commands(
@@ -734,6 +739,32 @@ def is_admin_user(user_id: int) -> bool:
     return user_id in admin_ids
 
 
+def resolve_player_id(storage: Storage, token: str) -> int | None:
+    """telegram_id или прозвище (без учёта регистра)."""
+    raw = (token or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        tid = int(raw)
+        if storage.get_character(tid, refresh_energy=False) is not None:
+            return tid
+        return None
+    return storage.find_telegram_id_by_nickname(raw)
+
+
+def parse_target_and_int(args: str | None) -> tuple[str | None, int | None]:
+    """'id|ник число' — ник может содержать пробелы."""
+    parts = (args or "").strip().split()
+    if len(parts) < 2:
+        return None, None
+    try:
+        value = int(parts[-1])
+    except ValueError:
+        return None, None
+    target = " ".join(parts[:-1]).strip()
+    return (target or None), value
+
+
 def player_ready(player: Character) -> bool:
     return player.faction is not None
 
@@ -957,8 +988,8 @@ async def cmd_menu(message: Message) -> None:
     await message.answer("Главное меню открыто.", reply_markup=main_menu_keyboard())
 
 
-@router.message(Command("respawn"))
-@router.message(Command("респавн"))
+@router.message(Command("respawn"), F.chat.type == "private")
+@router.message(Command("респавн"), F.chat.type == "private")
 async def cmd_respawn(message: Message) -> None:
     """Принудительный респавн / показ экрана смерти."""
     storage = get_storage()
@@ -987,8 +1018,8 @@ async def cmd_respawn(message: Message) -> None:
     await show_death_screen(message, player)
 
 
-@router.message(Command("fixme"))
-@router.message(Command("починить"))
+@router.message(Command("fixme"), F.chat.type == "private")
+@router.message(Command("починить"), F.chat.type == "private")
 async def cmd_fixme(message: Message) -> None:
     """Сброс зависших сессий (вылазка, бой) без респавна."""
     storage = get_storage()
@@ -1010,7 +1041,7 @@ async def cmd_fixme(message: Message) -> None:
     )
 
 
-@router.message(Command("deleteplayer"))
+@router.message(Command("deleteplayer"), F.chat.type == "private")
 async def admin_delete_player(message: Message, bot: Bot, command: CommandObject) -> None:
     if not is_admin_user(message.from_user.id):
         await message.answer("Команда только для администратора.")
@@ -1045,7 +1076,7 @@ async def admin_delete_player(message: Message, bot: Bot, command: CommandObject
     await message.answer(result.text)
 
 
-@router.message(Command("setfaction"))
+@router.message(Command("setfaction"), F.chat.type == "private")
 async def admin_set_faction(message: Message, bot: Bot, command: CommandObject) -> None:
     if not is_admin_user(message.from_user.id):
         await message.answer("Команда только для администратора.")
@@ -1088,7 +1119,7 @@ async def admin_set_faction(message: Message, bot: Bot, command: CommandObject) 
         logger.debug("Set-faction notify failed for %s", telegram_id, exc_info=True)
 
 
-@router.message(Command("medal"))
+@router.message(Command("medal"), F.chat.type == "private")
 async def admin_set_medal(message: Message, bot: Bot, command: CommandObject) -> None:
     if not is_admin_user(message.from_user.id):
         await message.answer("Команда только для администратора.")
@@ -1124,7 +1155,7 @@ async def admin_set_medal(message: Message, bot: Bot, command: CommandObject) ->
     )
 
 
-@router.message(Command("medaloff"))
+@router.message(Command("medaloff"), F.chat.type == "private")
 async def admin_clear_medal(message: Message, bot: Bot, command: CommandObject) -> None:
     if not is_admin_user(message.from_user.id):
         await message.answer("Команда только для администратора.")
@@ -1149,13 +1180,13 @@ async def admin_clear_medal(message: Message, bot: Bot, command: CommandObject) 
     )
 
 
-@router.message(Command("badge"))
+@router.message(Command("badge"), F.chat.type == "private")
 async def admin_set_badge(message: Message, command: CommandObject) -> None:
     if not is_admin_user(message.from_user.id):
         await message.answer("Команда только для администратора.")
         return
     raw = (command.args or "").strip().split()
-    if len(raw) < 2:
+    if not raw:
         await message.answer(
             "Игровые медали (значки в профиле):\n"
             "/badge mentor [id|ник]\n"
@@ -1170,40 +1201,39 @@ async def admin_set_badge(message: Message, command: CommandObject) -> None:
     if kind == "sync":
         from app.player_medals import refresh_exclusive_and_rotating_medals
 
-        refresh_exclusive_and_rotating_medals(storage, force_rotating=True)
+        refresh_exclusive_and_rotating_medals(storage, force_rotating=True, sync_all=True)
         await message.answer("Медали пересчитаны.")
         return
-    target = raw[1]
+    rest = raw[1:]
     amount = 1
-    if len(raw) >= 3:
-        try:
-            amount = max(1, int(raw[2]))
-        except ValueError:
-            amount = 1
-    if target.isdigit():
-        telegram_id = int(target)
-    else:
-        telegram_id = storage.find_telegram_id_by_nickname(target)
-        if telegram_id is None:
-            await message.answer(f"Игрок «{h(target)}» не найден.")
-            return
+    if kind in {"finder", "idea"} and len(rest) >= 2 and rest[-1].lstrip("-").isdigit():
+        amount = max(1, int(rest[-1]))
+        rest = rest[:-1]
+    target = " ".join(rest).strip()
+    if not target:
+        await message.answer("Укажи telegram_id или прозвище.")
+        return
+    telegram_id = resolve_player_id(storage, target)
+    if telegram_id is None:
+        await message.answer(f"Игрок «{h(target)}» не найден.")
+        return
     from app.player_medals import add_admin_medal_progress
 
     note = add_admin_medal_progress(storage, telegram_id, kind, amount)
     await message.answer(f"id {telegram_id}: {note}")
 
 
-@router.message(Command("unstick"))
+@router.message(Command("unstick"), F.chat.type == "private")
 async def admin_unstick_player(message: Message, bot: Bot, command: CommandObject) -> None:
     if not is_admin_user(message.from_user.id):
         await message.answer("Команда только для администратора.")
         return
     nickname = (command.args or "").strip()
     if not nickname:
-        await message.answer("Использование: /unstick прозвище\nПример: /unstick Сиплый")
+        await message.answer("Использование: /unstick [telegram_id|прозвище]\nПример: /unstick Сиплый")
         return
     storage = get_storage()
-    telegram_id = storage.find_telegram_id_by_nickname(nickname)
+    telegram_id = resolve_player_id(storage, nickname)
     if telegram_id is None:
         await message.answer(f"Игрок «{h(nickname)}» не найден.")
         return
@@ -1315,7 +1345,8 @@ def _build_info_text(player: Character) -> str:
     return (
         "ℹ️ Информация по игре\n\n"
         "Разделы меню:\n"
-        "• 📟 КПК — профиль, чаты (канал обновлений + общий + фракция), рейтинг (общий + сезонный), карта, игроки, рефералка, "
+        "• 📟 КПК — профиль (там же эмодзи игровых медалей), чаты (канал обновлений + общий + фракция), "
+        "рейтинг (общий + сезонный, внутри «Достижения и медали»), карта, игроки, рефералка, "
         "☠️ журнал смертей (последние 5).\n"
         "• 🏕 Вылазка — война, переходы, ⚔️ арена (тренировка 8×8 на базе), рейды и 👥 кооп-вылазка.\n"
         "  В коопе: до 3 игроков, −14 энергии, 1 аптечка/боец, «🏃 Свалить» возвращает энергию; "
@@ -1335,10 +1366,13 @@ def _build_info_text(player: Character) -> str:
         "• /menu — главное меню.\n"
         "• /cancel — отменить ввод суммы/количества.\n"
         "• /info — эта справка.\n"
-        f"• /pay [id] [сумма] — перевод (комиссия {TRANSFER_FEE_PERCENT}%).\n"
-        "• /дуэль [id] — вызвать на дуэль (ID в КПК → Игроки).\n"
+        f"• /pay [id|ник] [сумма] — перевод (комиссия {TRANSFER_FEE_PERCENT}%).\n"
+        "• /дуэль [id|ник] — вызвать на дуэль (ID в КПК → Игроки).\n"
         f"  Проигравший: HP опускается до {DUEL_LOSER_HP_REMAINING}, "
-        f"−{DUEL_LOSER_MONEY_PERCENT}% денег (макс. {DUEL_LOSER_MONEY_CAP} RU).\n\n"
+        f"−{DUEL_LOSER_MONEY_PERCENT}% денег (макс. {DUEL_LOSER_MONEY_CAP} RU).\n"
+        "• /respawn — респавн, если мёртв.\n"
+        "• /fixme — сброс зависшей вылазки/боя без респавна.\n"
+        "• /сбор [текст] — оповестить бойцов (только лидер группировки).\n\n"
         "Механики:\n"
         "• 🗺 Переходы: 1 игровая минута ≈ 10 сек реально;\n"
         f"  пешком ×1, велосипед ×{TRAVEL_SPEED_BICYCLE:g}, "
@@ -1386,6 +1420,7 @@ def _build_info_text(player: Character) -> str:
     )
 
 
+@router.message(Command("info"), F.chat.type == "private")
 @router.message(F.text == "ℹ️ Информация")
 async def show_info(message: Message, state: FSMContext, bot: Bot) -> None:
     player = ensure_character(message)
@@ -1599,23 +1634,16 @@ async def successful_payment_handler(message: Message) -> None:
 ADMIN_GIVE_MAX_RU = 500_000
 
 
-@router.message(Command("give"))
-async def cmd_give(message: Message) -> None:
+@router.message(Command("give"), F.chat.type == "private")
+async def cmd_give(message: Message, command: CommandObject) -> None:
     sender_id = message.from_user.id
     if not is_admin_user(sender_id):
         await message.answer("Команда доступна только администратору.")
         return
 
-    parts = (message.text or "").strip().split()
-    if len(parts) != 3:
-        await message.answer("Использование: /give [telegram_id] [amount]")
-        return
-
-    try:
-        target_telegram_id = int(parts[1])
-        amount = int(parts[2])
-    except ValueError:
-        await message.answer("Telegram ID и amount должны быть целыми числами.")
+    target_token, amount = parse_target_and_int(command.args)
+    if target_token is None or amount is None:
+        await message.answer("Использование: /give [telegram_id|прозвище] [сумма]")
         return
 
     if amount <= 0:
@@ -1626,9 +1654,13 @@ async def cmd_give(message: Message) -> None:
         return
 
     db = get_storage()
+    target_telegram_id = resolve_player_id(db, target_token)
+    if target_telegram_id is None:
+        await message.answer(f"Игрок «{h(target_token)}» не найден.")
+        return
     target = db.get_character(target_telegram_id, refresh_energy=False)
     if target is None:
-        await message.answer("Игрок с таким Telegram ID не найден.")
+        await message.answer("Игрок не найден.")
         return
 
     if not db.change_money(target_telegram_id, amount):
@@ -1638,27 +1670,20 @@ async def cmd_give(message: Message) -> None:
     updated_target = db.get_character(target_telegram_id, refresh_energy=False)
     updated_balance = updated_target.money if updated_target else target.money
     await message.answer(
-        f"Выдано {amount} RU игроку {target.nickname} ({target_telegram_id}).\n"
+        f"Выдано {amount} RU игроку {h(target.nickname)} ({target_telegram_id}).\n"
         f"Новый баланс: {updated_balance} RU."
     )
 
 
-@router.message(Command("settravel"))
-async def admin_set_travel_eta(message: Message, bot: Bot) -> None:
+@router.message(Command("settravel"), F.chat.type == "private")
+async def admin_set_travel_eta(message: Message, bot: Bot, command: CommandObject) -> None:
     if not is_admin_user(message.from_user.id):
         await message.answer("Команда доступна только администратору.")
         return
 
-    parts = (message.text or "").strip().split()
-    if len(parts) != 3:
-        await message.answer("Использование: /settravel [telegram_id] [seconds]")
-        return
-
-    try:
-        target_telegram_id = int(parts[1])
-        seconds = int(parts[2])
-    except ValueError:
-        await message.answer("Telegram ID и seconds должны быть целыми числами.")
+    target_token, seconds = parse_target_and_int(command.args)
+    if target_token is None or seconds is None:
+        await message.answer("Использование: /settravel [telegram_id|прозвище] [секунды]")
         return
 
     if seconds < 0:
@@ -1666,13 +1691,17 @@ async def admin_set_travel_eta(message: Message, bot: Bot) -> None:
         return
 
     storage = get_storage()
+    target_telegram_id = resolve_player_id(storage, target_token)
+    if target_telegram_id is None:
+        await message.answer(f"Игрок «{h(target_token)}» не найден.")
+        return
     target = storage.get_character(target_telegram_id, refresh_energy=False)
     if target is None:
-        await message.answer("Игрок с таким Telegram ID не найден.")
+        await message.answer("Игрок не найден.")
         return
     if not is_traveling(target):
         await message.answer(
-            f"«{target.nickname}» сейчас не в пути "
+            f"«{h(target.nickname)}» сейчас не в пути "
             f"(локация: {target.location})."
         )
         return
@@ -1687,38 +1716,39 @@ async def admin_set_travel_eta(message: Message, bot: Bot) -> None:
         return
 
     await message.answer(
-        f"Время в пути для {target.nickname} ({target_telegram_id}): {seconds} сек.\n"
+        f"Время в пути для {h(target.nickname)} ({target_telegram_id}): {seconds} сек.\n"
         f"Маршрут → «{target.travel_destination}»."
     )
     await publish_travel_live_eta(bot, target_telegram_id)
 
 
-@router.message(Command("leader"))
-@router.message(Command("commander"))
-async def cmd_set_leader(message: Message, bot: Bot) -> None:
+@router.message(Command("leader"), F.chat.type == "private")
+@router.message(Command("commander"), F.chat.type == "private")
+async def cmd_set_leader(message: Message, bot: Bot, command: CommandObject) -> None:
     sender_id = message.from_user.id
     if not is_admin_user(sender_id):
         await message.answer("Команда доступна только администратору.")
         return
 
-    parts = (message.text or "").strip().split(maxsplit=2)
-    if len(parts) != 3:
+    parts = (command.args or "").strip().split(maxsplit=1)
+    if len(parts) != 2:
         await message.answer(
             "Назначение командира группировки:\n"
-            "• /commander [группировка] [telegram_id]\n"
-            "• /leader [группировка] [telegram_id]\n"
+            "• /commander [группировка] [telegram_id|прозвище]\n"
+            "• /leader [группировка] [telegram_id|прозвище]\n"
             "Пример: /commander Долг 123456789"
         )
         return
 
-    faction_name = parts[1]
-    try:
-        leader_id = int(parts[2])
-    except ValueError:
-        await message.answer("Telegram ID командира должен быть целым числом.")
+    faction_name = parts[0].strip()
+    target_token = parts[1].strip()
+    db = get_storage()
+    leader_id = resolve_player_id(db, target_token)
+    if leader_id is None:
+        await message.answer(f"Игрок «{h(target_token)}» не найден.")
         return
 
-    db = get_storage()
+    old_leader = db.get_faction_leader_id(faction_name)
     if not db.set_faction_leader(faction_name, leader_id):
         await message.answer(
             "Не удалось назначить командира. Проверь, что группировка существует, "
@@ -1726,22 +1756,31 @@ async def cmd_set_leader(message: Message, bot: Bot) -> None:
         )
         return
 
+    try:
+        from app.player_medals import sync_player_medals
+
+        sync_player_medals(db, leader_id)
+        if old_leader and old_leader != leader_id:
+            sync_player_medals(db, old_leader)
+    except Exception:
+        logger.exception("Medal sync after leader change failed")
+
     leader = db.get_character(leader_id, refresh_energy=False)
     leader_name = leader.nickname if leader is not None else str(leader_id)
     await message.answer(
-        f"Командир группировки «{faction_name}» назначен: {leader_name} ({leader_id})."
+        f"Командир группировки «{h(faction_name)}» назначен: {h(leader_name)} ({leader_id})."
     )
     try:
         await bot.send_message(
             leader_id,
-            f"⭐ Тебя назначили командиром группировки «{faction_name}».\n"
+            f"⭐ Тебя назначили командиром группировки «{h(faction_name)}».\n"
             "Доступна кнопка «📣 Сбор» и команда /сбор для оповещения бойцов.",
         )
     except Exception:
         logger.exception("Failed to notify new faction commander %s", leader_id)
 
 
-@router.message(Command("export_players"))
+@router.message(Command("export_players"), F.chat.type == "private")
 async def cmd_export_players(message: Message) -> None:
     sender_id = message.from_user.id
     if not is_admin_user(sender_id):
@@ -1769,7 +1808,7 @@ async def cmd_export_players(message: Message) -> None:
         )
 
 
-@router.message(Command("migrate_db"))
+@router.message(Command("migrate_db"), F.chat.type == "private")
 async def cmd_migrate_db(message: Message) -> None:
     sender_id = message.from_user.id
     if not is_admin_user(sender_id):
@@ -1817,7 +1856,7 @@ async def cmd_migrate_db(message: Message) -> None:
     )
 
 
-@router.message(Command("dbstatus"))
+@router.message(Command("dbstatus"), F.chat.type == "private")
 async def cmd_dbstatus(message: Message) -> None:
     if not is_admin_user(message.from_user.id):
         await message.answer("Команда доступна только администратору.")
@@ -1853,7 +1892,7 @@ async def cmd_dbstatus(message: Message) -> None:
     )
 
 
-@router.message(Command("dbsave"))
+@router.message(Command("dbsave"), F.chat.type == "private")
 async def cmd_dbsave(message: Message) -> None:
     if not is_admin_user(message.from_user.id):
         await message.answer("Команда доступна только администратору.")
@@ -3110,40 +3149,33 @@ async def vendor_upgrade_callback(callback: CallbackQuery) -> None:
         VENDOR_KEYS,
         VENDOR_TIER_MAX,
         VENDOR_STAGE_LABELS,
+        current_rep_need,
         get_vendor_tier,
-        upgrade_vendor_tier,
         vendor_assortment_blurb,
     )
 
     raw = callback.data or ""
     parts = raw.split(":")
-    # trade:upgrade:<vendor> or trade:upgrade:<vendor>:confirm
     vendor = parts[2] if len(parts) >= 3 else ""
     if vendor not in VENDOR_KEYS:
         await safe_callback_answer(callback, "Неизвестный специалист.", show_alert=True)
         return
     storage = get_storage()
     tid = callback.from_user.id
-    confirm = len(parts) >= 4 and parts[3] == "confirm"
-    if confirm:
-        result = upgrade_vendor_tier(storage, tid, vendor)
-        await reply_action_result(callback, result.text)
     tier = get_vendor_tier(storage, tid, vendor)
-    can_upgrade = tier < VENDOR_TIER_MAX
     body = vendor_assortment_blurb(storage, tid, vendor)
-    if can_upgrade:
+    if tier < VENDOR_TIER_MAX:
         nxt = tier + 1
         nxt_label = VENDOR_STAGE_LABELS.get(vendor, {}).get(nxt, f"этап {nxt}")
-        need = tier * 100
+        need = current_rep_need(tier)
         body += (
-            f"\n\nЭтап {nxt}/{VENDOR_TIER_MAX} ({nxt_label}) открывается за {need} авторитета "
-            f"(задания у этого торговца, не за RU)."
+            f"\n\nЭтап {nxt}/{VENDOR_TIER_MAX} ({nxt_label}) открывается сам "
+            f"при {need} авторитета за задания у этого торговца. Покупать этап не нужно."
         )
     await edit_menu_message(
         callback,
         _trader_text(tid, body),
-        vendor_upgrade_keyboard(vendor, can_upgrade=can_upgrade),
-        answer_callback=not confirm,
+        vendor_upgrade_keyboard(vendor),
     )
 
 
@@ -5573,7 +5605,7 @@ async def clan_quest_claim_callback(callback: CallbackQuery) -> None:
     )
 
 
-@router.message(Command("cancel"))
+@router.message(Command("cancel"), F.chat.type == "private")
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
     current = await state.get_state()
     if current is None:
@@ -5700,8 +5732,8 @@ async def faction_broadcast_button(message: Message, bot: Bot) -> None:
     await _send_faction_broadcast(message, bot)
 
 
-@router.message(Command("сбор"))
-@router.message(Command("sbor"))
+@router.message(Command("сбор"), F.chat.type == "private")
+@router.message(Command("sbor"), F.chat.type == "private")
 async def faction_broadcast_command(message: Message, bot: Bot) -> None:
     parts = (message.text or "").split(maxsplit=1)
     custom = parts[1].strip() if len(parts) > 1 else None
@@ -5724,8 +5756,8 @@ def _extract_broadcast_body(raw_command_text: str) -> str | None:
     return body or None
 
 
-@router.message(Command("всем"))
-@router.message(Command("all"))
+@router.message(Command("всем"), F.chat.type == "private")
+@router.message(Command("all"), F.chat.type == "private")
 async def broadcast_all_command(message: Message, bot: Bot) -> None:
     sender_id = message.from_user.id
     if not is_admin_user(sender_id):
@@ -6093,8 +6125,8 @@ async def artifact_hunt_callback(callback: CallbackQuery) -> None:
         await safe_callback_answer(callback, "Ошибка охоты. Попробуй ещё раз или /fixme", show_alert=True)
 
 
-@router.message(Command("pay"))
-async def pay_command(message: Message, bot: Bot) -> None:
+@router.message(Command("pay"), F.chat.type == "private")
+async def pay_command(message: Message, bot: Bot, command: CommandObject) -> None:
     sender_id = message.from_user.id
     player = ensure_character(message)
     if player is None:
@@ -6102,17 +6134,16 @@ async def pay_command(message: Message, bot: Bot) -> None:
         return
     if await reject_if_busy(message, sender_id):
         return
-    parts = (message.text or "").strip().split()
-    if len(parts) != 3:
-        await message.answer("Использование: /pay [telegram_id] [сумма]")
+    target_token, amount = parse_target_and_int(command.args)
+    if target_token is None or amount is None:
+        await message.answer("Использование: /pay [telegram_id|прозвище] [сумма]")
         return
-    try:
-        target_telegram_id = int(parts[1])
-        amount = int(parts[2])
-    except ValueError:
-        await message.answer("Telegram ID и сумма должны быть целыми числами.")
+    storage = get_storage()
+    target_telegram_id = resolve_player_id(storage, target_token)
+    if target_telegram_id is None:
+        await message.answer(f"Игрок «{h(target_token)}» не найден.")
         return
-    result = transfer_money_with_fee(get_storage(), sender_id, target_telegram_id, amount)
+    result = transfer_money_with_fee(storage, sender_id, target_telegram_id, amount)
     await message.answer(action_result_text(sender_id, result.text))
     await apply_action_notifies(bot, result)
 
@@ -6136,21 +6167,21 @@ async def _send_duel_challenge(bot: Bot, sender_id: int, target_telegram_id: int
     return reply
 
 
-@router.message(Command("дуэль"))
-@router.message(Command("duel"))
-async def duel_command(message: Message, bot: Bot) -> None:
+@router.message(Command("дуэль"), F.chat.type == "private")
+@router.message(Command("duel"), F.chat.type == "private")
+async def duel_command(message: Message, bot: Bot, command: CommandObject) -> None:
     sender_id = message.from_user.id
-    parts = (message.text or "").strip().split()
-    if len(parts) != 2:
+    target_token = (command.args or "").strip()
+    if not target_token:
         await message.answer(
-            "Использование: /дуэль [telegram_id]\n"
+            "Использование: /дуэль [telegram_id|прозвище]\n"
             "ID смотри в КПК → «👥 Игроки»."
         )
         return
-    try:
-        target_telegram_id = int(parts[1])
-    except ValueError:
-        await message.answer("Telegram ID должен быть целым числом.")
+    storage = get_storage()
+    target_telegram_id = resolve_player_id(storage, target_token)
+    if target_telegram_id is None:
+        await message.answer(f"Игрок «{h(target_token)}» не найден.")
         return
     await message.answer(await _send_duel_challenge(bot, sender_id, target_telegram_id))
 
@@ -8392,13 +8423,16 @@ async def smuggle_legacy_menu_callback(callback: CallbackQuery) -> None:
     await smuggle_menu_callback(callback)
 
 
-@router.message()
+@router.message(F.chat.type.in_(GROUP_CHAT_TYPES), F.text.startswith("/"))
+async def group_other_commands(message: Message, bot: Bot) -> None:
+    await _send_group_bot_link(message, bot)
+
+
+@router.message(F.chat.type == "private")
 async def fallback(message: Message, bot: Bot) -> None:
     player = ensure_character(message)
     normalized_text = _normalize_info_trigger(message.text)
-    if player is not None and (
-        normalized_text.endswith("информация") or normalized_text.startswith("/info")
-    ):
+    if player is not None and normalized_text.endswith("информация"):
         await message.answer(_build_info_text(player))
         return
     dead = resolve_dead_player(get_storage(), message.from_user.id) if player is not None else None

@@ -293,24 +293,15 @@ def tech_menu_keyboard(*, can_buy_upgrade: bool = True, can_buy_artifact_slot: b
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def vendor_upgrade_keyboard(vendor: str, *, can_upgrade: bool) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    if can_upgrade:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="⭐ Открыть этап авторитетом",
-                    callback_data=f"trade:upgrade:{vendor}:confirm",
-                )
-            ]
-        )
+def vendor_upgrade_keyboard(vendor: str) -> InlineKeyboardMarkup:
     back = {
         "barkeep": "trade:vendor:barkeep",
         "medic": "trade:vendor:medic",
         "tech": "trade:vendor:tech",
     }.get(vendor, "trade:menu:root")
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back)])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="⬅️ Назад", callback_data=back)]]
+    )
 
 
 BUY_CONSUMABLE_AMOUNTS: tuple[int, ...] = (1, 5, 10, 25)
@@ -1292,7 +1283,6 @@ def ratings_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Моя статистика", callback_data="ratings:stats")],
             [InlineKeyboardButton(text="🎖 Достижения и медали", callback_data="ratings:achievements")],
-            [InlineKeyboardButton(text="🏅 Медали", callback_data="ratings:medals")],
             [InlineKeyboardButton(text="🏆 Рейтинг за всё время", callback_data="rating:alltime:page:0")],
             [InlineKeyboardButton(text="📅 Рейтинг за сезон", callback_data="rating:season:page:0")],
         ]

@@ -581,6 +581,9 @@ def run_smoke_check() -> None:
         # Escort: anomalies always; escort follows into previous player cell; hostiles T1 or mutants.
         escort_tpl = QUEST_CONTRACTS["easy_escort_dump"]
         assert escort_tpl.mission_kind == "escort"
+        boloto_escort = QUEST_CONTRACTS["easy_escort_boloto"]
+        assert boloto_escort.mission_kind == "escort"
+        assert boloto_escort.work_location == "Болото"
         escort_sess = _build_session(escort_tpl, QUESTS["easy"])
         assert escort_sess.escort_alive and escort_sess.escort is not None
         assert len(escort_sess.hazards) >= 1
@@ -2153,7 +2156,7 @@ def run_smoke_check() -> None:
         assert get_chat_medal(storage, 111) == "Ветеран"
 
         from app.vendors import vendor_person_name, vendor_quest_label, VENDOR_REP_BY_DIFFICULTY
-        from app.game_logic import list_vendor_contracts_for_character
+        from app.game_logic import QUEST_CONTRACTS, list_vendor_contracts_for_character
         from app.keyboards import trader_keyboard, ratings_keyboard
 
         assert vendor_person_name("Бандиты", "barkeep") == "Боров"
@@ -2170,9 +2173,43 @@ def run_smoke_check() -> None:
         assert any("Боров" in text for text in trader_names)
         medal_data = [btn.callback_data for row in ratings_keyboard().inline_keyboard for btn in row]
         medal_labels = [btn.text for row in ratings_keyboard().inline_keyboard for btn in row]
-        assert "ratings:medals" in medal_data
+        assert "ratings:medals" not in medal_data
         assert "ratings:achievements" in medal_data
         assert any("Достижения и медали" in text for text in medal_labels)
+
+        from app.keyboards import vendor_upgrade_keyboard
+
+        upgrade_data = [
+            btn.callback_data
+            for row in vendor_upgrade_keyboard("barkeep").inline_keyboard
+            for btn in row
+        ]
+        assert all(cb and "confirm" not in cb for cb in upgrade_data)
+
+        bandit_player = storage.get_character(333, refresh_energy=False)
+        barkeep_easy = [
+            item.key
+            for item in list_vendor_contracts_for_character(bandit_player, "barkeep")
+            if item.difficulty == "easy"
+        ]
+        tech_easy = [
+            item.key
+            for item in list_vendor_contracts_for_character(bandit_player, "tech")
+            if item.difficulty == "easy"
+        ]
+        assert barkeep_easy and tech_easy
+        assert set(barkeep_easy).isdisjoint(set(tech_easy))
+        assert QUEST_CONTRACTS["easy_escort_boloto"].work_location == "Болото"
+
+        from app.bot import parse_target_and_int, resolve_player_id, _build_info_text
+
+        assert parse_target_and_int("LeaderDuty 250") == ("LeaderDuty", 250)
+        assert resolve_player_id(storage, "111") == 111
+        assert resolve_player_id(storage, "LeaderDuty") == 111
+        info_text = _build_info_text(duty_player)
+        assert "/fixme" in info_text
+        assert "/respawn" in info_text
+        assert len(info_text) <= 4096
 
         from app.player_medals import (
             add_admin_medal_progress,
