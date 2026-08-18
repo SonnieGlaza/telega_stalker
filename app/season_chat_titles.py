@@ -110,9 +110,45 @@ class ChatTitleError(RuntimeError):
     """Понятная причина, почему титул не встал в конкретном чате."""
 
 
+# Безобидные права для «титульной» админки. Telegram ставит custom title только
+# админам, которых повысил сам бот, и только правом, которое у бота есть.
+_DUMMY_PROMOTE_RIGHTS: tuple[str, ...] = (
+    "can_manage_video_chats",
+    "can_pin_messages",
+    "can_invite_users",
+    "can_change_info",
+)
+
+_PROMOTE_FALSE: dict[str, bool] = {
+    "is_anonymous": False,
+    "can_manage_chat": False,
+    "can_delete_messages": False,
+    "can_manage_video_chats": False,
+    "can_restrict_members": False,
+    "can_promote_members": False,
+    "can_change_info": False,
+    "can_invite_users": False,
+    "can_pin_messages": False,
+    "can_manage_topics": False,
+}
+
+
 def _member_status(member: Any) -> str:
     raw = getattr(member, "status", "")
     return str(getattr(raw, "value", raw) or "").lower()
+
+
+def zone_chat_label(chat_id: int) -> str:
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return f"чат {chat_id}"
+    if cid == ZONE_COMMON_CHAT_ID:
+        return "общий чат Зоны"
+    for name, faction_id in ZONE_FACTION_CHAT_IDS.items():
+        if int(faction_id) == cid:
+            return f"чат {name}"
+    return f"чат {cid}"
 
 
 def _telegram_error_text(exc: BaseException) -> str:
@@ -122,27 +158,77 @@ def _telegram_error_text(exc: BaseException) -> str:
     return " ".join(text.split())[:180]
 
 
-async def _bot_can_promote(bot: Bot, chat_id: int) -> str | None:
-    """None если можно назначать админов, иначе причина."""
-    me = await bot.get_me()
-    try:
-        bot_member = await bot.get_chat_member(chat_id, me.id)
-    except TelegramBadRequest as exc:
-        return f"бот не видит чат ({_telegram_error_text(exc)})"
+def _is_title_race_error(exc: BaseException) -> bool:
+    lowered = str(exc).lower()
+    return (
+        "not an administrator" in lowered
+        or "user_not_participant" in lowered
+        or "not enough rights to change custom title" in lowered
+    )
+
+
+def _is_custom_title_forbidden(exc: BaseException) -> bool:
+    return "not enough rights to change custom title" in str(exc).lower()
+
+
+def _is_promote_forbidden(exc: BaseException) -> bool:
+    if _is_custom_title_forbidden(exc):
+        return False
+    lowered = str(exc).lower()
+    return "right_forbidden" in lowered or "not enough rights" in lowered
+
+
+def _title_only_promote_kwargs(dummy_right: str) -> dict[str, bool]:
+    kwargs = dict(_PROMOTE_FALSE)
+    if dummy_right not in kwargs:
+        raise ValueError(f"unknown dummy promote right: {dummy_right}")
+    kwargs[dummy_right] = True
+    return kwargs
+
+
+def _pick_dummy_rights(bot_member: Any) -> list[str]:
+    """Права, которыми бот может выдать титульную админку (у него они сами True)."""
+    if _member_status(bot_member) == "creator":
+        return list(_DUMMY_PROMOTE_RIGHTS)
+    known_true = [name for name in _DUMMY_PROMOTE_RIGHTS if getattr(bot_member, name, None) is True]
+    if known_true:
+        return known_true
+    if all(getattr(bot_member, name, None) is False for name in _DUMMY_PROMOTE_RIGHTS):
+        return []
+    return list(_DUMMY_PROMOTE_RIGHTS)
+
+
+def _promote_block_reason(bot_member: Any) -> str | None:
     status = _member_status(bot_member)
     if status == "creator":
         return None
     if status != "administrator":
         return "бот не админ в этом чате"
-    can_promote = getattr(bot_member, "can_promote_members", None)
-    if can_promote is False:
+    if getattr(bot_member, "can_promote_members", None) is False:
         return "боту нужно право «добавлять администраторов»"
     return None
 
 
+async def _get_bot_member(bot: Bot, chat_id: int) -> Any:
+    me = await bot.get_me()
+    try:
+        return await bot.get_chat_member(chat_id, me.id)
+    except TelegramBadRequest as exc:
+        raise ChatTitleError(f"бот не видит чат ({_telegram_error_text(exc)})") from exc
+
+
+async def _bot_can_promote(bot: Bot, chat_id: int) -> str | None:
+    """None если можно назначать админов, иначе причина."""
+    try:
+        bot_member = await _get_bot_member(bot, chat_id)
+    except ChatTitleError as exc:
+        return str(exc)
+    return _promote_block_reason(bot_member)
+
+
 async def _set_custom_title_with_retry(bot: Bot, chat_id: int, user_id: int, title: str) -> None:
     last_exc: BaseException | None = None
-    for delay in (0.0, 0.45, 0.9, 1.6):
+    for delay in (0.0, 0.45, 0.9, 1.6, 2.4):
         if delay:
             await asyncio.sleep(delay)
         try:
@@ -154,8 +240,7 @@ async def _set_custom_title_with_retry(bot: Bot, chat_id: int, user_id: int, tit
             return
         except TelegramBadRequest as exc:
             last_exc = exc
-            lowered = str(exc).lower()
-            if "not an administrator" in lowered or "user_not_participant" in lowered:
+            if _is_title_race_error(exc):
                 continue
             raise
     if last_exc is not None:
@@ -164,27 +249,84 @@ async def _set_custom_title_with_retry(bot: Bot, chat_id: int, user_id: int, tit
 
 async def _demote_member(bot: Bot, chat_id: int, user_id: int) -> None:
     """Снять админку (все права False = demote по Bot API)."""
-    await bot.promote_chat_member(
-        chat_id=chat_id,
-        user_id=user_id,
-        is_anonymous=False,
-        can_manage_chat=False,
-        can_delete_messages=False,
-        can_manage_video_chats=False,
-        can_restrict_members=False,
-        can_promote_members=False,
-        can_change_info=False,
-        can_invite_users=False,
-        can_pin_messages=False,
-        can_manage_topics=False,
-    )
+    await bot.promote_chat_member(chat_id=chat_id, user_id=user_id, **dict(_PROMOTE_FALSE))
+
+
+async def _promote_dummy(bot: Bot, chat_id: int, user_id: int, dummy_rights: list[str]) -> None:
+    if not dummy_rights:
+        raise ChatTitleError(
+            "боту нечем выдать титульную админку: кроме «добавлять администраторов» "
+            "дайте ещё безобидное право (видеочаты, закреп сообщений или приглашения)"
+        )
+    last_exc: BaseException | None = None
+    for right in dummy_rights:
+        try:
+            await bot.promote_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                **_title_only_promote_kwargs(right),
+            )
+            return
+        except TelegramBadRequest as exc:
+            last_exc = exc
+            if _is_promote_forbidden(exc):
+                continue
+            raise ChatTitleError(f"не вышло назначить админом ({_telegram_error_text(exc)})") from exc
+    raise ChatTitleError(
+        f"не вышло назначить админом ({_telegram_error_text(last_exc) if last_exc else 'RIGHT_FORBIDDEN'}). "
+        "боту нужно хотя бы одно своё право вроде видеочатов или закрепа"
+    ) from last_exc
+
+
+async def _reclaim_admin(bot: Bot, chat_id: int, user_id: int, dummy_rights: list[str]) -> None:
+    """Снять чужую админку и выдать свою — иначе Telegram не даёт сменить титул."""
+    try:
+        await _demote_member(bot, chat_id, user_id)
+    except TelegramBadRequest as exc:
+        raise ChatTitleError(
+            "админку выдавал не бот, снять её бот не может. "
+            "Снимите игрока с администраторов вручную и повторите команду"
+        ) from exc
+    await asyncio.sleep(0.9)
+    await _promote_dummy(bot, chat_id, user_id, dummy_rights)
+    await asyncio.sleep(0.8)
+
+
+async def _set_title_or_reclaim(
+    bot: Bot,
+    chat_id: int,
+    user_id: int,
+    title: str,
+    dummy_rights: list[str],
+) -> None:
+    try:
+        await _set_custom_title_with_retry(bot, chat_id, user_id, title)
+        return
+    except TelegramBadRequest as exc:
+        lowered = str(exc).lower()
+        can_reclaim = _is_custom_title_forbidden(exc) or "not an administrator" in lowered
+        if not can_reclaim:
+            raise ChatTitleError(f"титул не записался ({_telegram_error_text(exc)})") from exc
+        logger.info(
+            "Reclaiming admin for custom title user=%s chat=%s: %s",
+            user_id,
+            chat_id,
+            _telegram_error_text(exc),
+        )
+    await _reclaim_admin(bot, chat_id, user_id, dummy_rights)
+    try:
+        await _set_custom_title_with_retry(bot, chat_id, user_id, title)
+    except TelegramBadRequest as exc:
+        raise ChatTitleError(f"титул не записался ({_telegram_error_text(exc)})") from exc
 
 
 async def _promote_title_only(bot: Bot, chat_id: int, user_id: int, title: str) -> None:
     """Админ почти без прав + custom title. Канальные права не шлём — из-за них группа отвечает 400."""
-    reason = await _bot_can_promote(bot, chat_id)
+    bot_member = await _get_bot_member(bot, chat_id)
+    reason = _promote_block_reason(bot_member)
     if reason:
         raise ChatTitleError(reason)
+    dummy_rights = _pick_dummy_rights(bot_member)
 
     try:
         member = await bot.get_chat_member(chat_id, user_id)
@@ -197,21 +339,34 @@ async def _promote_title_only(bot: Bot, chat_id: int, user_id: int, title: str) 
     if status == "creator":
         raise ChatTitleError("это владелец чата, бот не может сменить его титул")
 
-    if status != "administrator":
-        # Один True-флаг обязателен, иначе Telegram считает это demote.
-        # Канальные can_post_* / can_*_stories в группах часто ломают весь запрос.
+    if status == "administrator":
         try:
-            await bot.promote_chat_member(
+            await bot.set_chat_administrator_custom_title(
                 chat_id=chat_id,
                 user_id=user_id,
-                can_invite_users=True,
+                custom_title=title[:16],
             )
+            return
         except TelegramBadRequest as exc:
-            raise ChatTitleError(f"не вышло назначить админом ({_telegram_error_text(exc)})") from exc
-    try:
-        await _set_custom_title_with_retry(bot, chat_id, user_id, title)
-    except TelegramBadRequest as exc:
-        raise ChatTitleError(f"титул не записался ({_telegram_error_text(exc)})") from exc
+            if not (_is_custom_title_forbidden(exc) or "not an administrator" in str(exc).lower()):
+                raise ChatTitleError(f"титул не записался ({_telegram_error_text(exc)})") from exc
+            logger.info(
+                "Admin title blocked user=%s chat=%s: %s — demote and re-promote",
+                user_id,
+                chat_id,
+                _telegram_error_text(exc),
+            )
+            await _reclaim_admin(bot, chat_id, user_id, dummy_rights)
+            try:
+                await _set_custom_title_with_retry(bot, chat_id, user_id, title)
+                return
+            except TelegramBadRequest as retry_exc:
+                raise ChatTitleError(
+                    f"титул не записался ({_telegram_error_text(retry_exc)})"
+                ) from retry_exc
+
+    await _promote_dummy(bot, chat_id, user_id, dummy_rights)
+    await _set_title_or_reclaim(bot, chat_id, user_id, title, dummy_rights)
 
 
 async def apply_pending_season_chat_titles(bot: Bot, storage: Storage) -> list[str]:

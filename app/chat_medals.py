@@ -15,6 +15,7 @@ from app.season_chat_titles import (
     _demote_member,
     _promote_title_only,
     _telegram_error_text,
+    zone_chat_label,
 )
 from app.storage import Storage
 
@@ -176,22 +177,34 @@ async def _apply_title_in_chats(
         return ["нет известных групп — напиши /start в нужном чате или сделай бота админом"]
     notes: list[str] = []
     ok = 0
+    fails = 0
     for chat_id in chat_ids:
+        label = zone_chat_label(chat_id)
         try:
             await _promote_title_only(bot, chat_id, telegram_id, title)
-            notes.append(f"ок: «{title}» в чате {chat_id}")
+            notes.append(f"ок: «{title}» — {label}")
             ok += 1
         except ChatTitleError as exc:
-            notes.append(f"нет: чат {chat_id} — {exc}")
+            text = str(exc)
+            if "игрока нет" in text.lower():
+                notes.append(f"пропуск: {label} — {exc}")
+            else:
+                notes.append(f"нет: {label} — {exc}")
+                fails += 1
         except Exception as exc:
             logger.exception("Failed to set title %r for %s in %s", title, telegram_id, chat_id)
-            notes.append(f"нет: чат {chat_id} — {_telegram_error_text(exc)}")
+            notes.append(f"нет: {label} — {_telegram_error_text(exc)}")
+            fails += 1
     if ok == 0:
-        notes.insert(
-            0,
-            "Титул в группах не встал нигде. Бот должен быть админом с правом "
-            "«добавлять администраторов», человек — участником чата.",
-        )
+        if fails:
+            notes.insert(
+                0,
+                "Титул в группах не встал. Telegram ставит плашку только админу, "
+                "которого повысил сам бот: нужно право «добавлять администраторов» "
+                "плюс видеочаты/закреп, человек — участник (не админ от другого человека).",
+            )
+        else:
+            notes.insert(0, "Человека нет ни в одном известном чате — титул ставить негде.")
     return notes
 
 

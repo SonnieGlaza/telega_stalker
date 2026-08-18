@@ -2158,7 +2158,16 @@ def run_smoke_check() -> None:
             sanitize_medal_title,
         )
         from app.player_medals import MEDAL_CHAT_TITLES, chat_title_for_player
-        from app.season_chat_titles import ZONE_COMMON_CHAT_ID, ZONE_FACTION_CHAT_IDS, _member_status
+        from app.season_chat_titles import (
+            ZONE_COMMON_CHAT_ID,
+            ZONE_FACTION_CHAT_IDS,
+            _is_custom_title_forbidden,
+            _is_title_race_error,
+            _member_status,
+            _pick_dummy_rights,
+            _title_only_promote_kwargs,
+            zone_chat_label,
+        )
 
         class _MemberStub:
             status = "member"
@@ -2171,6 +2180,39 @@ def run_smoke_check() -> None:
 
         assert _member_status(_MemberStub()) == "member"
         assert _member_status(_AdminStub()) == "administrator"
+        assert zone_chat_label(ZONE_COMMON_CHAT_ID) == "общий чат Зоны"
+        assert zone_chat_label(ZONE_FACTION_CHAT_IDS["Нейтралы"]) == "чат Нейтралы"
+
+        class _BotAdminInviteOnly:
+            status = "administrator"
+            can_manage_video_chats = False
+            can_pin_messages = False
+            can_invite_users = True
+            can_change_info = False
+
+        class _BotAdminNoDummy:
+            status = "administrator"
+            can_manage_video_chats = False
+            can_pin_messages = False
+            can_invite_users = False
+            can_change_info = False
+
+        class _BotCreator:
+            status = "creator"
+
+        assert _pick_dummy_rights(_BotAdminInviteOnly()) == ["can_invite_users"]
+        assert _pick_dummy_rights(_BotAdminNoDummy()) == []
+        assert _pick_dummy_rights(_BotCreator())[0] == "can_manage_video_chats"
+        kwargs = _title_only_promote_kwargs("can_manage_video_chats")
+        assert kwargs["can_manage_video_chats"] is True
+        assert kwargs["can_invite_users"] is False
+        assert _is_title_race_error(RuntimeError("not enough rights to change custom title of the user"))
+        assert _is_custom_title_forbidden(RuntimeError("Bad Request: not enough rights to change custom title of the user"))
+        assert not _is_custom_title_forbidden(RuntimeError("RIGHT_FORBIDDEN"))
+        from app.season_chat_titles import _is_promote_forbidden
+
+        assert _is_promote_forbidden(RuntimeError("RIGHT_FORBIDDEN"))
+        assert not _is_promote_forbidden(RuntimeError("not enough rights to change custom title of the user"))
 
         assert sanitize_medal_title("🔥Ветеран🔥") == "Ветеран"
         assert len(sanitize_medal_title("A" * 40)) == 16
