@@ -2686,10 +2686,18 @@ async def send_profile_snapshot(
     storage = get_storage()
     rank = character_rank_title(storage, player)
     rank_line = f"\nЗвание: {rank}" if rank else ""
+    medal_suffix = ""
+    try:
+        from app.player_medals import medals_nick_suffix, sync_player_medals
+
+        sync_player_medals(storage, player.telegram_id)
+        medal_suffix = medals_nick_suffix(storage, player.telegram_id)
+    except Exception:
+        medal_suffix = ""
     caption = (
-        f"Профиль сталкера {player.nickname}\n"
+        f"Профиль сталкера {h(player.nickname)}{medal_suffix}\n"
         f"ID: {player.player_uid}\n"
-        f"Фракция: {player.faction or 'не выбрана'}{rank_line}"
+        f"Фракция: {h(player.faction or 'не выбрана')}{rank_line}"
     )
     stats = storage.get_player_stats(player.telegram_id)
     rating = int(stats.get("rating_points", 0))

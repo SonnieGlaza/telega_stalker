@@ -461,6 +461,28 @@ def _ellipsize_text(
     return (current + suffix) if current else suffix
 
 
+def _player_name_with_medals(
+    draw: ImageDraw.ImageDraw,
+    nickname: str,
+    medals: str,
+    font: ImageFont.ImageFont,
+    max_width: int,
+) -> str:
+    prefix = "Игрок: "
+    medal_part = f" {medals.strip()}" if medals.strip() else ""
+    full = prefix + nickname + medal_part
+    if draw.textlength(full, font=font) <= max_width:
+        return full
+    medals_width = draw.textlength(medal_part, font=font)
+    nick_budget = max_width - draw.textlength(prefix, font=font) - medals_width
+    if nick_budget >= 24:
+        return prefix + _ellipsize_text(draw, nickname, font, int(nick_budget)) + medal_part
+    nick_fit = _ellipsize_text(draw, nickname, font, max(24, max_width // 3))
+    rest = max_width - draw.textlength(prefix + nick_fit + " ", font=font)
+    medals_fit = _ellipsize_text(draw, medals.strip(), font, max(20, int(rest)))
+    return prefix + nick_fit + (f" {medals_fit}" if medals_fit else "")
+
+
 def build_character_card(
     character: Character,
     *,
@@ -500,9 +522,17 @@ def build_character_card(
     )
 
     draw.rounded_rectangle((24, 108, 430, 676), radius=16, fill=(34, 36, 48), outline=(66, 68, 82), width=2)
+    medal_suffix = ""
+    if storage is not None:
+        try:
+            from app.player_medals import medals_nick_suffix
+
+            medal_suffix = medals_nick_suffix(storage, character.telegram_id)
+        except Exception:
+            medal_suffix = ""
     draw.text(
         (46, 132),
-        _ellipsize_text(draw, f"Игрок: {character.nickname}", subtitle_font, 350),
+        _player_name_with_medals(draw, character.nickname, medal_suffix, subtitle_font, 350),
         fill=(240, 240, 240),
         font=subtitle_font,
     )

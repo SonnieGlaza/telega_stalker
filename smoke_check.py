@@ -2294,6 +2294,7 @@ def run_smoke_check() -> None:
             format_rotating_tops,
             get_player_medal_keys,
             grant_medal,
+            medals_nick_suffix,
             refresh_exclusive_and_rotating_medals,
             stars_to_rub,
             sync_player_medals,
@@ -2304,6 +2305,30 @@ def run_smoke_check() -> None:
         assert "mentor" in get_player_medal_keys(storage, 111)
         assert chat_title_for_player(storage, 111) == "Наставник"
         assert resolve_group_title(storage, 111) == "Ветеран"
+        from app.game_logic import format_inventory
+        from app.profile_card import _player_name_with_medals, build_character_card
+
+        assert medals_nick_suffix(storage, 111).startswith(" ")
+        assert "👥" in medals_nick_suffix(storage, 111)
+        inv_text = format_inventory(storage.get_character(111, refresh_energy=False), storage=storage)
+        assert "👤 LeaderDuty" in inv_text
+        nick_line = next(line for line in inv_text.splitlines() if line.startswith("👤 "))
+        assert nick_line.index("LeaderDuty") < nick_line.index("👥")
+        card = build_character_card(storage.get_character(111, refresh_energy=False), storage=storage)
+        assert isinstance(card, (bytes, bytearray)) and len(card) > 100
+        from PIL import Image, ImageDraw, ImageFont
+
+        probe = Image.new("RGB", (400, 40))
+        probe_draw = ImageDraw.Draw(probe)
+        named = _player_name_with_medals(
+            probe_draw,
+            "LeaderDuty",
+            medals_nick_suffix(storage, 111),
+            ImageFont.load_default(),
+            350,
+        )
+        assert named.startswith("Игрок: LeaderDuty")
+        assert "👥" in named
         add_admin_medal_progress(storage, 111, "finder", 3)
         assert "finder" in get_player_medal_keys(storage, 111)
         add_admin_medal_progress(storage, 111, "idea", 5)

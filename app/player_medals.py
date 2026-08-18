@@ -232,12 +232,18 @@ def stars_to_rub(stars: int) -> float:
     return max(0, int(stars)) * STARS_TO_RUB
 
 
-def format_medals_profile_line(storage: Storage, telegram_id: int) -> str:
+def medals_nick_suffix(storage: Storage, telegram_id: int) -> str:
+    """Эмодзи медалей сразу после ника: ' 🛠 👥' или пусто."""
     keys = get_player_medal_keys(storage, telegram_id)
-    if not keys:
-        return ""
     emojis = " ".join(MEDAL_BY_KEY[key].emoji for key in keys if key in MEDAL_BY_KEY)
-    return f"🎖 {emojis}\n"
+    return f" {emojis}" if emojis else ""
+
+
+def format_medals_profile_line(storage: Storage, telegram_id: int) -> str:
+    suffix = medals_nick_suffix(storage, telegram_id)
+    if not suffix:
+        return ""
+    return f"🎖{suffix}\n"
 
 
 def format_medals_progress_lines(storage: Storage, telegram_id: int) -> list[str]:

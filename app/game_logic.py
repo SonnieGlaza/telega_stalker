@@ -5314,19 +5314,21 @@ def format_inventory(
     faction_line = f"Фракция: {character.faction or 'не выбрана'}"
     if rank_title:
         faction_line = f"Фракция: {character.faction} | Звание: {rank_title}"
+    medal_suffix = ""
     medal_line = ""
     if storage is not None:
         try:
-            from app.player_medals import format_medals_profile_line
+            from app.player_medals import medals_nick_suffix
             from app.chat_medals import format_medal_profile_line
 
-            medal_line = format_medals_profile_line(storage, character.telegram_id)
-            medal_line += format_medal_profile_line(storage, character.telegram_id)
+            medal_suffix = medals_nick_suffix(storage, character.telegram_id)
+            medal_line = format_medal_profile_line(storage, character.telegram_id)
         except Exception:
+            medal_suffix = ""
             medal_line = ""
     return (
         f"{craving_notice}"
-        f"👤 {h(character.nickname)} ({h(character.gender)})\n"
+        f"👤 {h(character.nickname)}{medal_suffix} ({h(character.gender)})\n"
         f"ID-адрес: {character.player_uid}\n"
         f"Telegram ID: {character.telegram_id}\n"
         f"{faction_line}\n"
