@@ -5796,7 +5796,8 @@ def consumable_effect_label(item_key: str) -> str:
         parts = [f"+{int(kit['heal'])} HP"]
         rad = int(kit.get("radiation") or 0)
         if rad:
-            parts.append(f"{rad} рад")
+            rad_text = f"−{abs(rad)} рад" if rad < 0 else f"+{rad} рад"
+            parts.append(rad_text)
         return ", ".join(parts)
     return CONSUMABLE_EFFECT_LABELS.get(key, "")
 
