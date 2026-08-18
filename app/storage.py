@@ -952,6 +952,8 @@ class Storage:
                 "DELETE FROM pending_registrations WHERE telegram_id = ?",
                 (telegram_id,),
             )
+        if not self.get_meta(f"player:joined:{int(telegram_id)}"):
+            self.set_meta(f"player:joined:{int(telegram_id)}", now_iso)
         self.save_snapshot()
         self.sync_gear_power(telegram_id)
 
@@ -988,6 +990,13 @@ class Storage:
             f"vendor:barkeep_tier:{tid}",
             f"vendor:medic_tier:{tid}",
             f"vendor:tech_tier:{tid}",
+            f"vendor_rep:barkeep:{tid}",
+            f"vendor_rep:medic:{tid}",
+            f"vendor_rep:tech:{tid}",
+            f"pmedals:{tid}",
+            f"pmedal_flags:{tid}",
+            f"player:joined:{tid}",
+            f"chat_medal:{tid}",
         ]
         like_prefixes = (
             f"contracts:daily_done:{tid}:",
@@ -2922,6 +2931,71 @@ class Storage:
         with self._connect() as conn:
             rows = conn.execute("SELECT telegram_id FROM characters").fetchall()
         return [int(row["telegram_id"]) for row in rows]
+
+    def total_stars_donated(self, telegram_id: int) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(stars_amount), 0) AS total
+                FROM topup_payments
+                WHERE telegram_id = ?
+                """,
+                (int(telegram_id),),
+            ).fetchone()
+        return int(row["total"] if row is not None else 0)
+
+    def top_stars_donor(self) -> int | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT telegram_id, SUM(stars_amount) AS total
+                FROM topup_payments
+                GROUP BY telegram_id
+                HAVING SUM(stars_amount) > 0
+                ORDER BY total DESC, telegram_id ASC
+                LIMIT 1
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        return int(row["telegram_id"])
+
+    def top_player_by_money(self) -> int | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT telegram_id
+                FROM characters
+                ORDER BY money DESC, telegram_id ASC
+                LIMIT 1
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        return int(row["telegram_id"])
+
+    def top_player_by_stat(self, stat_key: str) -> int | None:
+        allowed = {
+            "artifacts_found",
+            "rating_points",
+            "quests_completed",
+            "money_earned",
+        }
+        if stat_key not in allowed:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT telegram_id
+                FROM player_stats
+                WHERE {stat_key} > 0
+                ORDER BY {stat_key} DESC, telegram_id ASC
+                LIMIT 1
+                """,  # noqa: S608
+            ).fetchone()
+        if row is None:
+            return None
+        return int(row["telegram_id"])
 
     def list_players(self, limit: int = 200) -> list[dict[str, Any]]:
         safe_limit = max(1, min(500, int(limit)))

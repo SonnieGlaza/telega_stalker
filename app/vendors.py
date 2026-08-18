@@ -18,6 +18,33 @@ VENDOR_TITLES: dict[str, str] = {
     "tech": "Техник",
 }
 
+VENDOR_NAMES_BY_FACTION: dict[str, dict[str, str]] = {
+    "Свобода": {"barkeep": "Ганжа", "tech": "Дядька Яр", "medic": "Ашот"},
+    "Долг": {"barkeep": "Колобок", "tech": "Громов", "medic": "Митяй"},
+    "Бандиты": {"barkeep": "Боров", "tech": "Прозрачный", "medic": "Зуб"},
+    "Нейтралы": {"barkeep": "Суслов", "tech": "Фургон", "medic": "Спартак"},
+}
+
+VENDOR_FACTION_ROLE: dict[str, str] = {
+    "Свобода": "торговец Свободы",
+    "Долг": "торговец Долга",
+    "Бандиты": "торговец бандитов",
+    "Нейтралы": "торговец нейтралов",
+}
+
+VENDOR_REP_PREFIX: dict[str, str] = {
+    "barkeep": "vendor_rep:barkeep:",
+    "medic": "vendor_rep:medic:",
+    "tech": "vendor_rep:tech:",
+}
+VENDOR_REP_PER_LEVEL = 100
+VENDOR_REP_BY_DIFFICULTY: dict[str, int] = {
+    "easy": 2,
+    "hard": 3,
+    "heavy": 4,
+    "impossible": 5,
+}
+
 VENDOR_META_PREFIX: dict[str, str] = {
     "barkeep": "vendor:barkeep_tier:",
     "medic": "vendor:medic_tier:",
@@ -132,12 +159,62 @@ _TECH_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
 }
 
 
+def vendor_person_name(faction: str | None, vendor: str) -> str:
+    names = VENDOR_NAMES_BY_FACTION.get(str(faction or ""), {})
+    return names.get(vendor) or VENDOR_TITLES.get(vendor, vendor)
+
+
+def vendor_button_title(faction: str | None, vendor: str) -> str:
+    person = vendor_person_name(faction, vendor)
+    role = VENDOR_TITLES.get(vendor, vendor)
+    if person == role:
+        return role
+    return f"{person} · {role}"
+
+
+def vendor_quest_label(faction: str | None, vendor: str) -> str:
+    person = vendor_person_name(faction, vendor)
+    role = VENDOR_FACTION_ROLE.get(str(faction or ""), VENDOR_TITLES.get(vendor, vendor))
+    return f"{person} ({role})"
+
+
+def _vendor_rep_key(vendor: str, telegram_id: int) -> str:
+    return f"{VENDOR_REP_PREFIX[vendor]}{int(telegram_id)}"
+
+
+def get_vendor_reputation(storage: Storage, telegram_id: int, vendor: str) -> int:
+    if vendor not in VENDOR_REP_PREFIX:
+        return 0
+    raw = storage.get_meta(_vendor_rep_key(vendor, telegram_id))
+    try:
+        return max(0, int(raw or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def add_vendor_reputation(storage: Storage, telegram_id: int, vendor: str, amount: int) -> int:
+    if vendor not in VENDOR_REP_PREFIX or amount == 0:
+        return get_vendor_reputation(storage, telegram_id, vendor)
+    total = get_vendor_reputation(storage, telegram_id, vendor) + int(amount)
+    total = max(0, total)
+    storage.set_meta(_vendor_rep_key(vendor, telegram_id), str(total))
+    return total
+
+
+def reputation_to_tier(rep: int) -> int:
+    return max(1, min(VENDOR_TIER_MAX, 1 + int(rep) // VENDOR_REP_PER_LEVEL))
+
+
+def next_tier_reputation_need(current_tier: int) -> int:
+    return min(VENDOR_TIER_MAX - 1, max(1, int(current_tier))) * VENDOR_REP_PER_LEVEL
+
+
 def _vendor_meta_key(vendor: str, telegram_id: int) -> str:
     prefix = VENDOR_META_PREFIX[vendor]
     return f"{prefix}{int(telegram_id)}"
 
 
-def get_vendor_tier(storage: Storage, telegram_id: int, vendor: str) -> int:
+def get_stored_vendor_tier(storage: Storage, telegram_id: int, vendor: str) -> int:
     if vendor not in VENDOR_META_PREFIX:
         return 1
     raw = storage.get_meta(_vendor_meta_key(vendor, telegram_id))
@@ -148,6 +225,12 @@ def get_vendor_tier(storage: Storage, telegram_id: int, vendor: str) -> int:
     except (TypeError, ValueError):
         return 1
     return max(1, min(VENDOR_TIER_MAX, tier))
+
+
+def get_vendor_tier(storage: Storage, telegram_id: int, vendor: str) -> int:
+    stored = get_stored_vendor_tier(storage, telegram_id, vendor)
+    earned = reputation_to_tier(get_vendor_reputation(storage, telegram_id, vendor))
+    return max(stored, earned)
 
 
 def set_vendor_tier(storage: Storage, telegram_id: int, vendor: str, tier: int) -> None:
@@ -252,19 +335,33 @@ def apply_tech_repair_discount(
 
 def vendor_assortment_blurb(storage: Storage, telegram_id: int, vendor: str) -> str:
     title = VENDOR_TITLES.get(vendor, vendor)
+    character = storage.get_character(telegram_id, refresh_energy=False)
+    person = vendor_person_name(character.faction if character else None, vendor)
     tier = get_vendor_tier(storage, telegram_id, vendor)
+    rep = get_vendor_reputation(storage, telegram_id, vendor)
     label = VENDOR_STAGE_LABELS.get(vendor, {}).get(tier, f"этап {tier}")
-    lines = [f"{title}: этап ассортимента {tier}/{VENDOR_TIER_MAX} — {label}."]
+    lines = [
+        f"{person} ({title}): этап ассортимента {tier}/{VENDOR_TIER_MAX} — {label}.",
+        f"Авторитет: {rep}.",
+    ]
     if vendor == "tech":
         lines.append(f"Скидка на ремонт сейчас: {tech_repair_discount_percent(storage, telegram_id)}%.")
     if tier < VENDOR_TIER_MAX:
-        nxt = tier + 1
-        cost = int(VENDOR_UPGRADE_COST.get(vendor, {}).get(nxt, 0))
-        nxt_label = VENDOR_STAGE_LABELS.get(vendor, {}).get(nxt, f"этап {nxt}")
-        lines.append(f"Следующий этап ({nxt_label}) — {cost} RU.")
+        need = current_rep_need(tier)
+        lines.append(
+            f"Следующий этап — {need} авторитета "
+            f"(🟢+{VENDOR_REP_BY_DIFFICULTY['easy']} · "
+            f"🟡+{VENDOR_REP_BY_DIFFICULTY['hard']} · "
+            f"🟠+{VENDOR_REP_BY_DIFFICULTY['heavy']} · "
+            f"🔴+{VENDOR_REP_BY_DIFFICULTY['impossible']} за задание у этого торговца)."
+        )
     else:
         lines.append("Ассортимент на максимуме.")
     return "\n".join(lines)
+
+
+def current_rep_need(current_tier: int) -> int:
+    return max(1, min(VENDOR_TIER_MAX - 1, int(current_tier))) * VENDOR_REP_PER_LEVEL
 
 
 def upgrade_vendor_tier(storage: Storage, telegram_id: int, vendor: str) -> ActionResult:
@@ -281,32 +378,38 @@ def upgrade_vendor_tier(storage: Storage, telegram_id: int, vendor: str) -> Acti
     if blocked is not None:
         return blocked
     current = get_vendor_tier(storage, telegram_id, vendor)
-    title = VENDOR_TITLES[vendor]
+    person = vendor_person_name(character.faction, vendor)
     if current >= VENDOR_TIER_MAX:
         return ActionResult(
             False,
-            f"Ассортимент «{title}» уже максимальный "
+            f"Ассортимент «{person}» уже максимальный "
             f"(этап {VENDOR_TIER_MAX}/{VENDOR_TIER_MAX}).",
         )
-    nxt = current + 1
-    cost = int(VENDOR_UPGRADE_COST.get(vendor, {}).get(nxt, 0))
-    if cost <= 0:
-        return ActionResult(False, "Улучшение недоступно.")
-    if not storage.change_money(telegram_id, -cost):
-        return ActionResult(False, f"Недостаточно денег для улучшения «{title}» ({cost} RU).")
-    set_vendor_tier(storage, telegram_id, vendor, nxt)
-    label = VENDOR_STAGE_LABELS.get(vendor, {}).get(nxt, f"этап {nxt}")
+    rep = get_vendor_reputation(storage, telegram_id, vendor)
+    need = current_rep_need(current)
+    earned = reputation_to_tier(rep)
+    if earned <= get_stored_vendor_tier(storage, telegram_id, vendor) and earned <= current:
+        return ActionResult(
+            False,
+            f"Этапы «{person}» качаются авторитетом, не за RU. "
+            f"Нужно {need} очков (сейчас {rep}). Бери задания у этого торговца.",
+        )
+    set_vendor_tier(storage, telegram_id, vendor, max(current, earned))
+    shown = get_vendor_tier(storage, telegram_id, vendor)
+    label = VENDOR_STAGE_LABELS.get(vendor, {}).get(shown, f"этап {shown}")
     extra = ""
     if vendor == "tech":
-        extra = f"\nСкидка на ремонт: {TECH_REPAIR_DISCOUNT_PERCENT.get(nxt, 0)}%."
+        extra = f"\nСкидка на ремонт: {TECH_REPAIR_DISCOUNT_PERCENT.get(shown, 0)}%."
     return ActionResult(
         True,
-        f"«{title}»: ассортимент улучшен до этапа {nxt}/{VENDOR_TIER_MAX} (−{cost} RU).\n"
-        f"Теперь: {label}.{extra}",
-        payload={"vendor": vendor, "vendor_tier": nxt},
+        f"«{person}»: ассортимент открыт до этапа {shown}/{VENDOR_TIER_MAX} "
+        f"(авторитет {rep}).\nТеперь: {label}.{extra}",
+        payload={"vendor": vendor, "vendor_tier": shown},
     )
 
 
 def vendor_purge_meta_keys(telegram_id: int) -> list[str]:
     tid = int(telegram_id)
-    return [f"{prefix}{tid}" for prefix in VENDOR_META_PREFIX.values()]
+    keys = [f"{prefix}{tid}" for prefix in VENDOR_META_PREFIX.values()]
+    keys.extend(f"{prefix}{tid}" for prefix in VENDOR_REP_PREFIX.values())
+    return keys

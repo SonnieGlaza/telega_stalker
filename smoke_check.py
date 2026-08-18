@@ -146,7 +146,7 @@ def run_smoke_check() -> None:
         assert not again.ok
 
         # Economy / trader items.
-        from app.vendors import set_vendor_tier, get_vendor_tier, upgrade_vendor_tier, apply_tech_repair_discount
+        from app.vendors import set_vendor_tier, get_vendor_tier, apply_tech_repair_discount
 
         # На старте бармен/медик/техник — этап 1.
         assert get_vendor_tier(storage, 111, "barkeep") == 1
@@ -197,12 +197,12 @@ def run_smoke_check() -> None:
         assert not buy_item(storage, 111, "detector_otklik", amount=5).ok
         assert use_medkit(storage, 111).ok is False  # hp full
 
-        # Апгрейд медика с нуля.
+        # Апгрейд медика авторитетом, не за RU.
+        from app.vendors import add_vendor_reputation, get_vendor_reputation
+
         set_vendor_tier(storage, 222, "medic", 1)
-        storage.change_money(222, 80_000, skip_debt_collect=True)
-        assert upgrade_vendor_tier(storage, 222, "medic").ok
-        assert upgrade_vendor_tier(storage, 222, "medic").ok
-        assert upgrade_vendor_tier(storage, 222, "medic").ok
+        add_vendor_reputation(storage, 222, "medic", 300)
+        assert get_vendor_reputation(storage, 222, "medic") == 300
         assert get_vendor_tier(storage, 222, "medic") == 4
         assert buy_item(storage, 222, "medkit_science").ok
         # Скидка техника.
@@ -2151,6 +2151,48 @@ def run_smoke_check() -> None:
         assert len(sanitize_medal_title("A" * 40)) == 16
         assert save_chat_medal(storage, 111, "Ветеран") == "Ветеран"
         assert get_chat_medal(storage, 111) == "Ветеран"
+
+        from app.vendors import vendor_person_name, vendor_quest_label, VENDOR_REP_BY_DIFFICULTY
+        from app.game_logic import list_vendor_contracts_for_character
+        from app.keyboards import trader_keyboard, ratings_keyboard
+
+        assert vendor_person_name("Бандиты", "barkeep") == "Боров"
+        assert vendor_person_name("Свобода", "tech") == "Дядька Яр"
+        assert vendor_person_name("Долг", "medic") == "Митяй"
+        assert vendor_person_name("Нейтралы", "barkeep") == "Суслов"
+        assert "бандитов" in vendor_quest_label("Бандиты", "barkeep")
+        duty_player = storage.get_character(111, refresh_energy=False)
+        vendor_quests = list_vendor_contracts_for_character(duty_player, "barkeep")
+        assert len(vendor_quests) == 4
+        assert {item.difficulty for item in vendor_quests} == {"easy", "hard", "heavy", "impossible"}
+        assert VENDOR_REP_BY_DIFFICULTY["easy"] == 2
+        trader_names = [btn.text for row in trader_keyboard("Бандиты").inline_keyboard for btn in row]
+        assert any("Боров" in text for text in trader_names)
+        medal_data = [btn.callback_data for row in ratings_keyboard().inline_keyboard for btn in row]
+        assert "ratings:medals" in medal_data
+
+        from app.player_medals import (
+            add_admin_medal_progress,
+            get_player_medal_keys,
+            grant_medal,
+            refresh_exclusive_and_rotating_medals,
+            stars_to_rub,
+            sync_player_medals,
+        )
+
+        assert stars_to_rub(167) >= 500
+        add_admin_medal_progress(storage, 111, "mentor")
+        assert "mentor" in get_player_medal_keys(storage, 111)
+        add_admin_medal_progress(storage, 111, "finder", 3)
+        assert "finder" in get_player_medal_keys(storage, 111)
+        add_admin_medal_progress(storage, 111, "idea", 5)
+        assert "idea" in get_player_medal_keys(storage, 111)
+        storage.add_player_stat(111, "rating_points", 700)
+        sync_player_medals(storage, 111)
+        assert "beta" in get_player_medal_keys(storage, 111)
+        grant_medal(storage, 111, "top_all")
+        refresh_exclusive_and_rotating_medals(storage, force_rotating=True)
+        assert "richest" in get_player_medal_keys(storage, 111) or storage.top_player_by_money() != 111
 
         before_money = int(storage.get_character(111, refresh_energy=False).money)
         treasury_before = {

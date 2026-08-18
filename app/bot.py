@@ -1149,6 +1149,50 @@ async def admin_clear_medal(message: Message, bot: Bot, command: CommandObject) 
     )
 
 
+@router.message(Command("badge"))
+async def admin_set_badge(message: Message, command: CommandObject) -> None:
+    if not is_admin_user(message.from_user.id):
+        await message.answer("Команда только для администратора.")
+        return
+    raw = (command.args or "").strip().split()
+    if len(raw) < 2:
+        await message.answer(
+            "Игровые медали (значки в профиле):\n"
+            "/badge mentor [id|ник]\n"
+            "/badge finder [id|ник] [сколько багов]\n"
+            "/badge idea [id|ник] [сколько идей]\n"
+            "/badge developer [id|ник]\n"
+            "/badge sync — пересчитать авто-медали у всех"
+        )
+        return
+    kind = raw[0].strip().lower()
+    storage = get_storage()
+    if kind == "sync":
+        from app.player_medals import refresh_exclusive_and_rotating_medals
+
+        refresh_exclusive_and_rotating_medals(storage, force_rotating=True)
+        await message.answer("Медали пересчитаны.")
+        return
+    target = raw[1]
+    amount = 1
+    if len(raw) >= 3:
+        try:
+            amount = max(1, int(raw[2]))
+        except ValueError:
+            amount = 1
+    if target.isdigit():
+        telegram_id = int(target)
+    else:
+        telegram_id = storage.find_telegram_id_by_nickname(target)
+        if telegram_id is None:
+            await message.answer(f"Игрок «{h(target)}» не найден.")
+            return
+    from app.player_medals import add_admin_medal_progress
+
+    note = add_admin_medal_progress(storage, telegram_id, kind, amount)
+    await message.answer(f"id {telegram_id}: {note}")
+
+
 @router.message(Command("unstick"))
 async def admin_unstick_player(message: Message, bot: Bot, command: CommandObject) -> None:
     if not is_admin_user(message.from_user.id):
@@ -1525,6 +1569,12 @@ async def successful_payment_handler(message: Message) -> None:
     if not applied:
         await message.answer("Платеж успешен, но начисление не выполнено. Обратись к администратору.")
         return
+    try:
+        from app.player_medals import sync_player_medals
+
+        sync_player_medals(db, message.from_user.id)
+    except Exception:
+        logger.exception("Medal sync after topup failed")
     player = db.get_character(message.from_user.id, refresh_energy=False)
     if dest == "faction" and faction:
         treasury = 0
@@ -2827,7 +2877,7 @@ async def show_trader(message: Message) -> None:
         return
     await message.answer(
         _trader_text(message.from_user.id, "Торговая зона. Выбери специалиста:"),
-        reply_markup=trader_keyboard(),
+        reply_markup=trader_keyboard(player.faction),
     )
 
 
@@ -2916,10 +2966,11 @@ async def show_sell_menu(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "trade:menu:root")
 async def show_trade_root(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     await edit_menu_message(
         callback,
         _trader_text(callback.from_user.id, "Торговая зона. Выбери специалиста:"),
-        trader_keyboard(),
+        trader_keyboard(player.faction if player else None),
     )
 
 
@@ -3058,7 +3109,6 @@ async def vendor_upgrade_callback(callback: CallbackQuery) -> None:
     from app.vendors import (
         VENDOR_KEYS,
         VENDOR_TIER_MAX,
-        VENDOR_UPGRADE_COST,
         VENDOR_STAGE_LABELS,
         get_vendor_tier,
         upgrade_vendor_tier,
@@ -3083,9 +3133,12 @@ async def vendor_upgrade_callback(callback: CallbackQuery) -> None:
     body = vendor_assortment_blurb(storage, tid, vendor)
     if can_upgrade:
         nxt = tier + 1
-        cost = int(VENDOR_UPGRADE_COST.get(vendor, {}).get(nxt, 0))
         nxt_label = VENDOR_STAGE_LABELS.get(vendor, {}).get(nxt, f"этап {nxt}")
-        body += f"\n\nУлучшение до этапа {nxt}/{VENDOR_TIER_MAX} ({nxt_label}) — {cost} RU."
+        need = tier * 100
+        body += (
+            f"\n\nЭтап {nxt}/{VENDOR_TIER_MAX} ({nxt_label}) открывается за {need} авторитета "
+            f"(задания у этого торговца, не за RU)."
+        )
     await edit_menu_message(
         callback,
         _trader_text(tid, body),
@@ -3661,7 +3714,9 @@ def _quests_rules_text() -> str:
         "Первый ценный арт за сутки даёт +1000 RU к цене.\n"
         "🆘 Мини-ивенты по рации в общем чате: кнопка «Помочь» — зачистка мутантов "
         "на указанной локации (награда как за среднее задание).\n"
-        "🚚 Контрабанда — отдельный рейс с риском."
+        "🚚 Контрабанда — отдельный рейс с риском.\n"
+        "Торговцы группировки выдают старые 🟢🟡🟠🔴. Авторитет: 🟢+2 🟡+3 🟠+4 🔴+5, "
+        "100 очков — следующий этап ассортимента (не покупается за RU)."
     )
 
 
@@ -3680,7 +3735,7 @@ def _quests_compact_status(storage, player) -> str:
         if template and stage == "work":
             lines.append(f"Точка: «{template.work_location}»")
     else:
-        lines.append("Выбери контракт, поиск артефактов или контрабанду.")
+        lines.append("Выбери торговца: у каждого 🟢🟡🟠🔴 из старых заданий.")
     if daily_artifact_hunt_done_today(storage, player.telegram_id):
         lines.append("🗓 Ежедневный поиск арта: выполнен сегодня.")
     else:
@@ -3706,6 +3761,7 @@ def _quests_menu_payload(storage, player):
     at_home = player.location == home and not traveling
 
     contract_buttons: list[tuple[str, str]] = []
+    vendor_buttons: list[tuple[str, str]] = []
     show_work = False
     show_go_work = False
     work_location = ""
@@ -3723,30 +3779,16 @@ def _quests_menu_payload(storage, player):
         if stage == "return":
             show_go_home = player.location != home and not traveling
     elif at_home:
-        from app.game_logic import (
-            list_quest_contracts_for_character,
-            _has_transport,
-            get_daily_contract_keys,
-            get_weekly_contract_key,
-        )
+        from app.vendors import VENDOR_KEYS, vendor_quest_label
 
-        daily_keys = set(get_daily_contract_keys(storage))
-        weekly_key = get_weekly_contract_key(storage)
-        for template in list_quest_contracts_for_character(player):
-            if not _has_transport(player, template.min_transport):
-                continue
-            emoji = QUEST_DIFFICULTY_EMOJI.get(template.difficulty, "📋")
-            badge = ""
-            if template.key == weekly_key:
-                badge = "📅 "
-            elif template.key in daily_keys:
-                badge = "🗓 "
-            contract_buttons.append(
-                (f"{badge}{emoji} {template.title}", f"contract:accept:{template.key}")
+        for vendor in VENDOR_KEYS:
+            vendor_buttons.append(
+                (vendor_quest_label(player.faction, vendor), f"quests:vendor:{vendor}")
             )
 
     keyboard = quests_keyboard(
         contract_buttons=contract_buttons,
+        vendor_buttons=vendor_buttons,
         show_work=show_work,
         show_go_work=show_go_work,
         work_location=work_location,
@@ -3761,6 +3803,54 @@ def _quests_info_payload(storage, player) -> tuple[str, object]:
     overview = build_quest_overview(storage, player)
     text = f"{_quests_rules_text()}\n\n{overview}"
     return text, quests_info_keyboard()
+
+
+def _quests_vendor_payload(storage, player, vendor: str):
+    from app.game_logic import _has_transport, list_vendor_contracts_for_character
+    from app.vendors import (
+        VENDOR_KEYS,
+        VENDOR_REP_BY_DIFFICULTY,
+        get_vendor_reputation,
+        get_vendor_tier,
+        vendor_quest_label,
+    )
+
+    if vendor not in VENDOR_KEYS:
+        return _quests_menu_payload(storage, player)
+    label = vendor_quest_label(player.faction, vendor)
+    rep = get_vendor_reputation(storage, player.telegram_id, vendor)
+    tier = get_vendor_tier(storage, player.telegram_id, vendor)
+    lines = [
+        f"📋 {label}",
+        f"Авторитет: {rep} · этап ассортимента {tier}/4 (100 очков за уровень).",
+        "🟢+2 · 🟡+3 · 🟠+4 · 🔴+5. Этапы за авторитет, не за RU.",
+        "",
+    ]
+    home = faction_home_base(player.faction)
+    traveling = is_traveling(player)
+    at_home = player.location == home and not traveling
+    contract_buttons: list[tuple[str, str]] = []
+    if at_home and not storage.get_active_contract(player.telegram_id):
+        for template in list_vendor_contracts_for_character(player, vendor):
+            if not _has_transport(player, template.min_transport):
+                continue
+            emoji = QUEST_DIFFICULTY_EMOJI.get(template.difficulty, "📋")
+            gained = VENDOR_REP_BY_DIFFICULTY.get(template.difficulty, 0)
+            contract_buttons.append(
+                (
+                    f"{emoji} {template.title} (+{gained} авт.)",
+                    f"contract:accept:{vendor}:{template.key}",
+                )
+            )
+            lines.append(f"{emoji} {template.title}")
+    elif not at_home:
+        lines.append("Контракты выдают только на домашней базе.")
+    keyboard = quests_keyboard(
+        contract_buttons=contract_buttons,
+        vendor_buttons=[("⬅️ К торговцам", "contract:refresh")],
+        show_help=False,
+    )
+    return "\n".join(lines), keyboard
 
 
 @router.message(F.text == "📋 Задания")
@@ -3812,10 +3902,31 @@ async def quests_info_callback(callback: CallbackQuery) -> None:
     await edit_menu_message(callback, text, keyboard)
 
 
+@router.callback_query(F.data.startswith("quests:vendor:"))
+async def quests_vendor_callback(callback: CallbackQuery) -> None:
+    vendor = (callback.data or "").split(":")[-1]
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id)
+    if player is None or not player_ready(player):
+        await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
+        return
+    text, keyboard = _quests_vendor_payload(storage, player, vendor)
+    await edit_menu_message(callback, text, keyboard)
+
+
 @router.callback_query(F.data.startswith("contract:accept:"))
 async def accept_contract_callback(callback: CallbackQuery) -> None:
-    contract_key = (callback.data or "").split(":", maxsplit=2)[2]
-    result = accept_quest_contract(get_storage(), callback.from_user.id, contract_key)
+    parts = (callback.data or "").split(":")
+    vendor = None
+    contract_key = ""
+    if len(parts) >= 4 and parts[2] in {"barkeep", "medic", "tech"}:
+        vendor = parts[2]
+        contract_key = parts[3]
+    elif len(parts) >= 3:
+        contract_key = parts[2]
+    result = accept_quest_contract(
+        get_storage(), callback.from_user.id, contract_key, vendor=vendor
+    )
     await reply_action_result(callback, result.text)
     if result.ok:
         storage = get_storage()
@@ -5699,6 +5810,19 @@ async def show_achievements_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     text = build_achievements_overview(get_storage(), player.telegram_id)
+    await edit_menu_message(callback, text, None)
+
+
+@router.callback_query(F.data == "ratings:medals")
+async def show_medals_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    from app.player_medals import format_medals_overview, sync_player_medals
+
+    sync_player_medals(get_storage(), player.telegram_id)
+    text = format_medals_overview(get_storage(), player.telegram_id)
     await edit_menu_message(callback, text, None)
 
 
@@ -8451,6 +8575,12 @@ async def run_bot() -> None:
                         logger.exception("Season chat title apply failed")
             except Exception:
                 logger.exception("Rating season tick failed")
+            try:
+                from app.player_medals import refresh_exclusive_and_rotating_medals
+
+                refresh_exclusive_and_rotating_medals(get_storage())
+            except Exception:
+                logger.exception("Player medals tick failed")
             if zone_tick_counter["n"] % SURVIVAL_DEATH_CHECK_EVERY_TICKS == 0:
                 try:
                     await _push_offline_survival_deaths(bot, get_storage())

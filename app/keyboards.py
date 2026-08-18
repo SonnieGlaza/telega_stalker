@@ -85,6 +85,7 @@ def sortie_keyboard() -> ReplyKeyboardMarkup:
 def quests_keyboard(
     *,
     contract_buttons: list[tuple[str, str]] | None = None,
+    vendor_buttons: list[tuple[str, str]] | None = None,
     show_work: bool = False,
     show_go_work: bool = False,
     work_location: str = "",
@@ -102,6 +103,8 @@ def quests_keyboard(
         )
     if show_go_home:
         rows.append([InlineKeyboardButton(text="🏠 На базу", callback_data="contract:go_home")])
+    for label, callback_data in vendor_buttons or []:
+        rows.append([InlineKeyboardButton(text=label, callback_data=callback_data)])
     for label, callback_data in contract_buttons or []:
         rows.append([InlineKeyboardButton(text=label, callback_data=callback_data)])
     if show_cancel:
@@ -172,12 +175,14 @@ def smuggle_transport_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def trader_keyboard() -> InlineKeyboardMarkup:
+def trader_keyboard(faction: str | None = None) -> InlineKeyboardMarkup:
+    from app.vendors import vendor_button_title
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🍺 Бармен", callback_data="trade:vendor:barkeep")],
-            [InlineKeyboardButton(text="🩺 Медик", callback_data="trade:vendor:medic")],
-            [InlineKeyboardButton(text="🔧 Техник", callback_data="trade:vendor:tech")],
+            [InlineKeyboardButton(text=f"🍺 {vendor_button_title(faction, 'barkeep')}", callback_data="trade:vendor:barkeep")],
+            [InlineKeyboardButton(text=f"🩺 {vendor_button_title(faction, 'medic')}", callback_data="trade:vendor:medic")],
+            [InlineKeyboardButton(text=f"🔧 {vendor_button_title(faction, 'tech')}", callback_data="trade:vendor:tech")],
             [InlineKeyboardButton(text="🔴 Продажа", callback_data="trade:menu:sell")],
         ]
     )
@@ -294,7 +299,7 @@ def vendor_upgrade_keyboard(vendor: str, *, can_upgrade: bool) -> InlineKeyboard
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="⭐ Купить следующий этап",
+                    text="⭐ Открыть этап авторитетом",
                     callback_data=f"trade:upgrade:{vendor}:confirm",
                 )
             ]
@@ -1287,6 +1292,7 @@ def ratings_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Моя статистика", callback_data="ratings:stats")],
             [InlineKeyboardButton(text="🎖 Мои достижения", callback_data="ratings:achievements")],
+            [InlineKeyboardButton(text="🏅 Медали", callback_data="ratings:medals")],
             [InlineKeyboardButton(text="🏆 Рейтинг за всё время", callback_data="rating:alltime:page:0")],
             [InlineKeyboardButton(text="📅 Рейтинг за сезон", callback_data="rating:season:page:0")],
         ]

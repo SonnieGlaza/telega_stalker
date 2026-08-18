@@ -144,6 +144,28 @@ QUEST_CONTRACTS: dict[str, QuestContractTemplate] = {
     ),
 }
 
+# По одному старому контракту каждой сложности на торговца.
+VENDOR_CONTRACT_KEYS: dict[str, dict[str, str]] = {
+    "barkeep": {
+        "easy": "easy_dump",
+        "hard": "hard_forest",
+        "heavy": "heavy_boloto",
+        "impossible": "impossible_radar",
+    },
+    "medic": {
+        "easy": "easy_agroprom",
+        "hard": "hard_yantar",
+        "heavy": "heavy_yantar",
+        "impossible": "impossible_forest",
+    },
+    "tech": {
+        "easy": "easy_escort_dump",
+        "hard": "hard_escort_agroprom",
+        "heavy": "heavy_escort_valley",
+        "impossible": "impossible_radar",
+    },
+}
+
 CONTRACT_TURN_IN_BONUS_PERCENT = 10
 LOCATION_TYPE_RU_MULT: dict[str, float] = {
     "точка ресурсов": 1.1,
@@ -2112,6 +2134,12 @@ def process_rating_season(storage: Storage) -> str | None:
         return None
 
     top = storage.get_season_rating_leaderboard(limit=3)
+    try:
+        from app.player_medals import remember_season_podium
+
+        remember_season_podium(storage, int(season.get("id") or 0), top)
+    except Exception:
+        pass
     lines = [f"🏁 Сезон рейтинга #{season.get('id')} завершён!"]
     if top:
         medals = ["🥇", "🥈", "🥉"]
@@ -2881,6 +2909,34 @@ def list_quest_contracts_for_character(character: Character) -> list[QuestContra
     ]
 
 
+def list_vendor_contracts_for_character(
+    character: Character, vendor: str
+) -> list[QuestContractTemplate]:
+    """По одному контракту 🟢🟡🟠🔴 у торговца, минуя точку домашней базы."""
+    home = faction_home_base(character.faction)
+    preferred = VENDOR_CONTRACT_KEYS.get(vendor) or {}
+    out: list[QuestContractTemplate] = []
+    used: set[str] = set()
+    for difficulty in ("easy", "hard", "heavy", "impossible"):
+        key = preferred.get(difficulty)
+        template = QUEST_CONTRACTS.get(str(key or ""))
+        if template is None or template.work_location == home or template.key in used:
+            template = next(
+                (
+                    item
+                    for item in QUEST_CONTRACTS.values()
+                    if item.difficulty == difficulty
+                    and item.work_location != home
+                    and item.key not in used
+                ),
+                None,
+            )
+        if template is not None:
+            out.append(template)
+            used.add(template.key)
+    return out
+
+
 def _daily_key(now: datetime) -> str:
     return now.strftime("%Y-%m-%d")
 
@@ -3157,7 +3213,9 @@ def _location_contract_ru_mult(storage: Storage, location_name: str, faction: st
     return mult
 
 
-def accept_quest_contract(storage: Storage, telegram_id: int, contract_key: str) -> ActionResult:
+def accept_quest_contract(
+    storage: Storage, telegram_id: int, contract_key: str, *, vendor: str | None = None
+) -> ActionResult:
     character = storage.get_character(telegram_id)
     if character is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
@@ -3191,13 +3249,21 @@ def accept_quest_contract(storage: Storage, telegram_id: int, contract_key: str)
         need = _transport_requirement_text(template.min_transport).strip(" ()")
         return ActionResult(False, f"Для этого контракта {need or 'нужен транспорт'}.")
 
-    storage.set_active_contract(
-        telegram_id,
-        {"template_key": template.key, "stage": "work", "pending_reward": 0},
-    )
+    payload: dict[str, Any] = {"template_key": template.key, "stage": "work", "pending_reward": 0}
+    if vendor in {"barkeep", "medic", "tech"}:
+        payload["vendor"] = vendor
+    storage.set_active_contract(telegram_id, payload)
+    from app.vendors import vendor_person_name, VENDOR_REP_BY_DIFFICULTY
+
+    giver = ""
+    if vendor:
+        person = vendor_person_name(character.faction, vendor)
+        rep = int(VENDOR_REP_BY_DIFFICULTY.get(template.difficulty, 0))
+        giver = f"Заказчик: {person}. За успех: +{rep} авторитета.\n"
     return ActionResult(
         True,
         f"Контракт принят: «{template.title}».\n"
+        f"{giver}"
         f"Доберись до «{template.work_location}» и нажми «Выполнить работу» на точке.\n"
         f"Патроны, аптечки и энергия спишутся при старте вылазки, не при принятии.",
     )
@@ -3444,6 +3510,29 @@ def apply_contract_mission_success(
         extra = ""
     stash_text = _maybe_drop_stash(storage, telegram_id)
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    try:
+        from app.player_medals import sync_player_medals
+
+        sync_player_medals(storage, telegram_id)
+    except Exception:
+        pass
+    rep_note = ""
+    active = storage.get_active_contract(telegram_id) or {}
+    vendor = str(active.get("vendor") or "")
+    if vendor in {"barkeep", "medic", "tech"}:
+        from app.vendors import (
+            VENDOR_REP_BY_DIFFICULTY,
+            add_vendor_reputation,
+            get_vendor_tier,
+            vendor_person_name,
+        )
+
+        gained = int(VENDOR_REP_BY_DIFFICULTY.get(quest.key, 0))
+        if gained > 0:
+            total = add_vendor_reputation(storage, telegram_id, vendor, gained)
+            person = vendor_person_name(updated.faction, vendor)
+            tier_now = get_vendor_tier(storage, telegram_id, vendor)
+            rep_note = f"\nАвторитет «{person}»: +{gained} (всего {total}, этап {tier_now}/4)."
     mult_note = ""
     if ru_mult > 1.0:
         loc_part = ""
@@ -3456,7 +3545,7 @@ def apply_contract_mission_success(
         True,
         f"«{title}» выполнено на «{work_location}»!\n"
         f"Награда: {reward} RU{mult_note}, рейтинг +{rating_success}."
-        f"{extra}{stash_text}{durability_text}{achievements_text}{_maybe_help_event_reward(storage, telegram_id, title)}",
+        f"{extra}{stash_text}{durability_text}{achievements_text}{rep_note}{_maybe_help_event_reward(storage, telegram_id, title)}",
         payload={"reward": reward},
     )
 
@@ -5203,9 +5292,11 @@ def format_inventory(
     medal_line = ""
     if storage is not None:
         try:
+            from app.player_medals import format_medals_profile_line
             from app.chat_medals import format_medal_profile_line
 
-            medal_line = format_medal_profile_line(storage, character.telegram_id)
+            medal_line = format_medals_profile_line(storage, character.telegram_id)
+            medal_line += format_medal_profile_line(storage, character.telegram_id)
         except Exception:
             medal_line = ""
     return (
