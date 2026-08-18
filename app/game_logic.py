@@ -892,6 +892,22 @@ MEDKIT_EFFECTS: dict[str, dict[str, int]] = {
     "medkit_army": {"heal": 50, "radiation": 0},
     "medkit_science": {"heal": 75, "radiation": -15},
 }
+# Короткие приписки на витрине торгаша (аптечки собираются из MEDKIT_EFFECTS).
+CONSUMABLE_EFFECT_LABELS: dict[str, str] = {
+    "energy_drink": "+35 энергии",
+    "vodka": "−20 рад",
+    "antirad": "−50 рад",
+    "bread": "голод −10",
+    "sausage": "голод −20",
+    "stew": "голод −50",
+    "water_bottle": "жажда −10",
+    "mineral_water": "жажда −20",
+    "beard_tea": "жажда −50",
+    "ammo_pack": "в бой",
+    "diesel_can": "дизель +5",
+    "gasoline_can": "бензин +5",
+    "fuel_can": "дизель +5",
+}
 # Для заданий «Опасно»/«Невозможно» подходит любая аптечка (сначала обычная).
 MEDKIT_QUEST_KEYS: tuple[str, ...] = ("medkit", "medkit_army", "medkit_science")
 
@@ -5770,6 +5786,63 @@ def _telegram_button_title(text: str, *, limit: int = 64) -> str:
     if len(raw) <= limit:
         return raw
     return raw[: max(1, limit - 1)].rstrip() + "…"
+
+
+def consumable_effect_label(item_key: str) -> str:
+    """Что делает расходник: '+25 HP', '−20 рад' и т.п."""
+    key = normalize_shop_item_key(item_key)
+    kit = MEDKIT_EFFECTS.get(key)
+    if kit is not None:
+        parts = [f"+{int(kit['heal'])} HP"]
+        rad = int(kit.get("radiation") or 0)
+        if rad:
+            parts.append(f"{rad} рад")
+        return ", ".join(parts)
+    return CONSUMABLE_EFFECT_LABELS.get(key, "")
+
+
+def shop_consumable_button_title(item_key: str) -> str:
+    """Подпись расходника у торгаша: имя (эффект) · цена."""
+    key = normalize_shop_item_key(item_key)
+    item = SHOP_ITEMS.get(key)
+    if item is None:
+        return key
+    name = str(item["name"])
+    price = int(item["buy_price"])
+    effect = consumable_effect_label(key)
+    if key in {"diesel_can", "gasoline_can", "fuel_can"}:
+        return _telegram_button_title(f"{name} · {price}")
+    if effect:
+        return _telegram_button_title(f"{name} ({effect}) · {price}")
+    return _telegram_button_title(f"{name} · {price}")
+
+
+def consumable_buy_menu_text(
+    item_key: str,
+    *,
+    unit_price: int,
+    amount: int | None = None,
+    money: int | None = None,
+    confirm: bool = False,
+) -> str:
+    key = normalize_shop_item_key(item_key)
+    item = SHOP_ITEMS.get(key)
+    title = str(item["name"]) if item else key
+    effect = consumable_effect_label(key)
+    lines = [f"Покупка: {title}"]
+    if effect:
+        lines.append(f"Эффект: {effect}")
+    lines.append(f"Цена за 1 шт.: {unit_price} RU")
+    if amount is not None:
+        lines.append(f"Количество: ×{amount}")
+        lines.append(f"Итого: {unit_price * amount} RU")
+    if money is not None:
+        lines.append(f"Баланс: {money:,} RU")
+    if amount is None:
+        lines.append("Выбери количество: 1 / 5 / 10.")
+    elif confirm:
+        lines.append("\nПодтвердить покупку?")
+    return "\n".join(lines)
 
 
 def shop_weapon_button_title(item_key: str) -> str:

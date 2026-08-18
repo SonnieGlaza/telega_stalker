@@ -309,6 +309,7 @@ def vendor_upgrade_keyboard(vendor: str, *, can_upgrade: bool) -> InlineKeyboard
 
 
 BUY_CONSUMABLE_AMOUNTS: tuple[int, ...] = (1, 5, 10, 25)
+BUY_QTY_ROW_AMOUNTS: tuple[int, ...] = (1, 5, 10)
 
 
 def _filter_shop_rows(
@@ -337,17 +338,19 @@ def trader_buy_consumables_keyboard(
 def barkeep_food_keyboard(
     *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
 ) -> InlineKeyboardMarkup:
+    from app.game_logic import shop_consumable_button_title
+
     catalog = [
-        ("Энергетик (от 250)", "buyqty:energy_drink", "energy_drink"),
-        ("Водка (от 150)", "buyqty:vodka", "vodka"),
-        ("Хлеб (от 50)", "buyqty:bread", "bread"),
-        ("Колбаса (от 100)", "buyqty:sausage", "sausage"),
-        ("Тушёнка (от 250)", "buyqty:stew", "stew"),
-        ("Вода (от 50)", "buyqty:water_bottle", "water_bottle"),
-        ("Минералка (от 100)", "buyqty:mineral_water", "mineral_water"),
-        ("Чай Бороды (от 250)", "buyqty:beard_tea", "beard_tea"),
-        ("Дизель +5 (от 450)", "buyqty:diesel_can", "diesel_can"),
-        ("Бензин +5 (от 225)", "buyqty:gasoline_can", "gasoline_can"),
+        (shop_consumable_button_title("energy_drink"), "buyqty:energy_drink", "energy_drink"),
+        (shop_consumable_button_title("vodka"), "buyqty:vodka", "vodka"),
+        (shop_consumable_button_title("bread"), "buyqty:bread", "bread"),
+        (shop_consumable_button_title("sausage"), "buyqty:sausage", "sausage"),
+        (shop_consumable_button_title("stew"), "buyqty:stew", "stew"),
+        (shop_consumable_button_title("water_bottle"), "buyqty:water_bottle", "water_bottle"),
+        (shop_consumable_button_title("mineral_water"), "buyqty:mineral_water", "mineral_water"),
+        (shop_consumable_button_title("beard_tea"), "buyqty:beard_tea", "beard_tea"),
+        (shop_consumable_button_title("diesel_can"), "buyqty:diesel_can", "diesel_can"),
+        (shop_consumable_button_title("gasoline_can"), "buyqty:gasoline_can", "gasoline_can"),
     ]
     items = _filter_shop_rows(catalog, unlocked_keys)
     return _trader_page_keyboard(
@@ -362,11 +365,13 @@ def barkeep_food_keyboard(
 def medic_buy_keyboard(
     *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
 ) -> InlineKeyboardMarkup:
+    from app.game_logic import shop_consumable_button_title
+
     catalog = [
-        ("Аптечка (от 260)", "buyqty:medkit", "medkit"),
-        ("Армейская аптечка (от 450)", "buyqty:medkit_army", "medkit_army"),
-        ("Антирад (от 400)", "buyqty:antirad", "antirad"),
-        ("Научная аптечка (от 600)", "buyqty:medkit_science", "medkit_science"),
+        (shop_consumable_button_title("medkit"), "buyqty:medkit", "medkit"),
+        (shop_consumable_button_title("medkit_army"), "buyqty:medkit_army", "medkit_army"),
+        (shop_consumable_button_title("antirad"), "buyqty:antirad", "antirad"),
+        (shop_consumable_button_title("medkit_science"), "buyqty:medkit_science", "medkit_science"),
     ]
     items = _filter_shop_rows(catalog, unlocked_keys)
     return _trader_page_keyboard(
@@ -384,21 +389,47 @@ def buy_item_qty_keyboard(
     unit_price: int,
     back_callback: str,
     back_text: str,
-    buy_prefix: str = "buy",
+    ask_prefix: str = "askbuy",
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    qty_row: list[InlineKeyboardButton] = []
+    extra: list[list[InlineKeyboardButton]] = []
     for amount in BUY_CONSUMABLE_AMOUNTS:
-        total = unit_price * amount
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"×{amount} — {total} RU",
-                    callback_data=f"{buy_prefix}:{item_key}:{amount}",
-                )
-            ]
+        btn = InlineKeyboardButton(
+            text=f"×{amount}",
+            callback_data=f"{ask_prefix}:{item_key}:{amount}",
         )
+        if amount in BUY_QTY_ROW_AMOUNTS:
+            qty_row.append(btn)
+        else:
+            extra.append([btn])
+    if qty_row:
+        rows.append(qty_row)
+    rows.extend(extra)
     rows.append([InlineKeyboardButton(text=back_text, callback_data=back_callback)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def buy_item_confirm_keyboard(
+    item_key: str,
+    *,
+    amount: int,
+    total_price: int,
+    back_callback: str,
+    back_text: str,
+    buy_prefix: str = "buy",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"✅ Подтвердить ×{amount} — {total_price} RU",
+                    callback_data=f"{buy_prefix}:{item_key}:{amount}",
+                )
+            ],
+            [InlineKeyboardButton(text=back_text, callback_data=back_callback)],
+        ]
+    )
 
 
 def trader_buy_consumable_qty_keyboard(item_key: str, *, unit_price: int, title: str) -> InlineKeyboardMarkup:
@@ -411,6 +442,9 @@ def trader_buy_consumable_qty_keyboard(item_key: str, *, unit_price: int, title:
     elif item_key == "ammo_pack":
         back_callback = "trade:barkeep:weapons:0"
         back_text = "⬅️ Назад к оружию"
+    elif item_key == "stash_case":
+        back_callback = "trade:barkeep:gear:0"
+        back_text = "⬅️ Назад к прочему"
     else:
         back_callback = "trade:barkeep:food:0"
         back_text = "⬅️ Назад к бармену"
@@ -419,6 +453,19 @@ def trader_buy_consumable_qty_keyboard(item_key: str, *, unit_price: int, title:
         unit_price=unit_price,
         back_callback=back_callback,
         back_text=back_text,
+    )
+
+
+def trader_buy_consumable_confirm_keyboard(
+    item_key: str, *, amount: int, unit_price: int
+) -> InlineKeyboardMarkup:
+    return buy_item_confirm_keyboard(
+        item_key,
+        amount=amount,
+        total_price=unit_price * amount,
+        back_callback=f"buyqty:{item_key}",
+        back_text="⬅️ К количеству",
+        buy_prefix="buy",
     )
 
 
@@ -753,10 +800,10 @@ def trader_buy_armor_keyboard(
 def trader_buy_weapons_keyboard(
     *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
 ) -> InlineKeyboardMarkup:
-    from app.game_logic import shop_weapon_button_title
+    from app.game_logic import shop_consumable_button_title, shop_weapon_button_title
 
     catalog = [
-        ("Патроны (от 120)", "buyqty:ammo_pack", "ammo_pack"),
+        (shop_consumable_button_title("ammo_pack"), "buyqty:ammo_pack", "ammo_pack"),
         (shop_weapon_button_title("weapon_pm"), "buy:weapon_pm", "weapon_pm"),
         (shop_weapon_button_title("weapon_fort12"), "buy:weapon_fora12", "weapon_fort12"),
         (shop_weapon_button_title("weapon_sawedoff"), "buy:weapon_sawedoff", "weapon_sawedoff"),

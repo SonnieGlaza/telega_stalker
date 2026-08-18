@@ -1519,6 +1519,36 @@ def run_smoke_check() -> None:
         bike_label = shop_gear_button_title("bicycle")
         assert "×" in bike_label and "нагр." in bike_label
         assert "арт." in shop_gear_button_title("detector_otklik")
+        from app.game_logic import consumable_buy_menu_text, consumable_effect_label, shop_consumable_button_title
+
+        medkit_label = shop_consumable_button_title("medkit")
+        assert "+25 HP" in medkit_label and "260" in medkit_label
+        vodka_label = shop_consumable_button_title("vodka")
+        assert "−20 рад" in vodka_label and "150" in vodka_label
+        assert consumable_effect_label("medkit_science") == "+75 HP, −15 рад"
+        assert "голод −10" in shop_consumable_button_title("bread")
+        prompt = consumable_buy_menu_text("medkit", unit_price=260, amount=5, money=5000, confirm=True)
+        assert "Эффект: +25 HP" in prompt and "Итого: 1300 RU" in prompt and "Подтвердить" in prompt
+        from app.keyboards import buy_item_confirm_keyboard, buy_item_qty_keyboard, medic_buy_keyboard
+
+        medic_texts = [btn.text for row in medic_buy_keyboard().inline_keyboard for btn in row]
+        assert any("+25 HP" in t for t in medic_texts)
+        assert any("−50 рад" in t for t in medic_texts)
+        qty_kb = buy_item_qty_keyboard(
+            "medkit", unit_price=260, back_callback="trade:medic:buy:0", back_text="назад"
+        )
+        qty_data = [btn.callback_data for row in qty_kb.inline_keyboard for btn in row]
+        assert "askbuy:medkit:1" in qty_data
+        assert "askbuy:medkit:5" in qty_data
+        assert "askbuy:medkit:10" in qty_data
+        confirm_kb = buy_item_confirm_keyboard(
+            "medkit",
+            amount=5,
+            total_price=1300,
+            back_callback="buyqty:medkit",
+            back_text="назад",
+        )
+        assert confirm_kb.inline_keyboard[0][0].callback_data == "buy:medkit:5"
         fora_label = shop_weapon_button_title("weapon_fort12")
         assert "сила 3" in fora_label and "3000" in fora_label
         sawed_label = shop_weapon_button_title("weapon_sawedoff")
