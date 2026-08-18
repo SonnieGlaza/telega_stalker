@@ -2388,6 +2388,10 @@ def run_smoke_check() -> None:
         assert "Артефактов найдено" in tops_text
         assert "LeaderDuty" in tops_text
         assert "id 111" in tops_text
+        assert "&lt;" not in tops_text
+        from app.bot import _send_badge_tops
+
+        assert "parse_mode=None" in inspect.getsource(_send_badge_tops)
         from app.game_logic import build_achievements_overview
 
         achievements_text = build_achievements_overview(storage, 111)

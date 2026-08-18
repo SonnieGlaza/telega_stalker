@@ -1249,10 +1249,7 @@ async def _send_badge_tops(message: Message, storage: Storage | None = None) -> 
         logger.exception("badge top failed")
         await message.answer(f"Не смог собрать топ: {exc}", parse_mode=None)
         return
-    try:
-        await message.answer(text)
-    except TelegramBadRequest:
-        await message.answer(text, parse_mode=None)
+    await message.answer(text, parse_mode=None)
 
 
 @router.message(Command("badge"), F.chat.type == "private")
@@ -1275,7 +1272,7 @@ async def admin_set_badge(message: Message, bot: Bot, command: CommandObject) ->
         return
     kind = raw[0].strip().lower()
     storage = get_storage()
-    from app.player_medals import BADGE_TOP_KINDS, format_rotating_tops
+    from app.player_medals import BADGE_TOP_KINDS
 
     if kind in BADGE_TOP_KINDS:
         await _send_badge_tops(message, storage)
@@ -2746,7 +2743,23 @@ async def send_profile_snapshot(
     )
     stats = storage.get_player_stats(player.telegram_id)
     rating = int(stats.get("rating_points", 0))
-    image_bytes = build_character_card(player, rating_points=rating, storage=storage)
+    try:
+        image_bytes = build_character_card(player, rating_points=rating, storage=storage)
+    except Exception:
+        logger.exception("Failed to build profile card for %s", player.telegram_id)
+        if message is not None:
+            await message.answer(caption, reply_markup=reply_markup)
+            return
+        target_bot = bot
+        target_chat = chat_id
+        if target_bot is None or target_chat is None:
+            return
+        await target_bot.send_message(
+            chat_id=target_chat,
+            text=caption,
+            reply_markup=reply_markup,
+        )
+        return
     image = BufferedInputFile(image_bytes, filename=f"{player.player_uid}.png")
     if message is not None:
         await message.answer_photo(photo=image, caption=caption, reply_markup=reply_markup)

@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.html_utils import html_safe as h
 from app.storage import Storage, utc_now
 
 logger = logging.getLogger(__name__)
@@ -382,7 +381,7 @@ def _top_player_label(row: dict[str, Any] | None, telegram_id: int | None = None
     if row is not None:
         nick = str(row.get("nickname") or "").strip() or "без ника"
         tid = int(row.get("telegram_id") or 0)
-        return f"{h(nick)} (id {tid})"
+        return f"{nick} (id {tid})"
     if telegram_id:
         return f"id {int(telegram_id)}"
     return "никого"
@@ -425,7 +424,7 @@ def format_rotating_tops(storage: Storage, *, limit: int = 5) -> str:
             return "никого"
         player = storage.get_character(tid, refresh_energy=False)
         nick = str(getattr(player, "nickname", "") or "").strip() or "без ника"
-        return f"{h(nick)} (id {tid})"
+        return f"{nick} (id {tid})"
 
     def block(title: str, rows: list[dict[str, Any]], value_fmt, error: str | None) -> str:
         if error:
