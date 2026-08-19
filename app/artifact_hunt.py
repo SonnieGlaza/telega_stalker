@@ -1000,7 +1000,9 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
                 from app.tactical_combat import STALE_TURN_MESSAGE
                 return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
             effect_text, dead = _check_active_anomaly_effects(session, storage, telegram_id)
-            if not _save_hunt_if_turn_ok(storage, telegram_id, session, session.turn_seq):
+            seq2 = session.turn_seq
+            session.turn_seq = seq2 + 1
+            if not _save_hunt_if_turn_ok(storage, telegram_id, session, seq2):
                 from app.tactical_combat import STALE_TURN_MESSAGE
                 return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
             if dead:
@@ -1087,7 +1089,9 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             payload={"hunt_active": False, "hunt_done": True},
         )
 
-    if not _save_hunt_if_turn_ok(storage, telegram_id, session, session.turn_seq):
+    seq2 = session.turn_seq
+    session.turn_seq = seq2 + 1
+    if not _save_hunt_if_turn_ok(storage, telegram_id, session, seq2):
         from app.tactical_combat import STALE_TURN_MESSAGE
         return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
     player = storage.get_character(telegram_id, refresh_energy=False) or player
@@ -1147,9 +1151,6 @@ def shoot_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> A
         from app.tactical_combat import STALE_TURN_MESSAGE
         return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
 
-    if not _save_hunt_if_turn_ok(storage, telegram_id, session, session.turn_seq):
-        from app.tactical_combat import STALE_TURN_MESSAGE
-        return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = _render_for_player(storage, telegram_id, session, player)
     return ActionResult(

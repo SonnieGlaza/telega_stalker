@@ -2264,7 +2264,7 @@ async def process_gender(callback: CallbackQuery, state: FSMContext, bot: Bot) -
     await state.clear()
     uid_line = f"\nТвой ID в Зоне: {saved.player_uid}" if saved else ""
     await callback.message.answer(
-        f"Персонаж создан: {nickname} ({gender}).{uid_line}{referral_note}\nВыбери сторону:",
+        f"Персонаж создан: {h(nickname)} ({gender}).{uid_line}{referral_note}\nВыбери сторону:",
         reply_markup=faction_keyboard(),
     )
     await safe_callback_answer(callback)
