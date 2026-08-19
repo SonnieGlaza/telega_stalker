@@ -38,6 +38,10 @@ _QUEST_GRID_CELL_PX = 108
 HUNT_ANOMALY_ICON_DIAMETER = round(MISSION_ICON_GRID_DIAMETER * HUNT_GRID_CELL_PX / _QUEST_GRID_CELL_PX)
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 HUNT_META_PREFIX = "artifact_hunt:"
 HUNT_ACTIVE_IDS_META = "artifact_hunt:active_ids"
 HUNT_IDLE_HOURS = 4
@@ -47,6 +51,14 @@ HUNT_RAD_EVERY_STEPS = 2
 HUNT_RAD_PER_TICK = 1
 HUNT_MINUTE_MOVES = 6
 HUNT_RAD_PER_MINUTE = 5
+MAX_ANOMALIES_ON_FIELD = 12
+ANOMALY_SEARCH_BONUS_PER_ANOMALY = 1
+
+ELECTRA_HP_DAMAGE = 25
+ZHARKA_HP_DAMAGE_PER_TURN = 8
+ZHARKA_THIRST_PER_TURN = 12
+GRAVI_ESCAPE_CHANCE = 0.40
+HOLODEC_RESPAWN_DELAY = 1
 
 # Лучший детектор → меньше кружков до находки.
 DETECTOR_CIRCLES_NEEDED: dict[str, int] = {
@@ -62,6 +74,11 @@ MOVE_DELTAS: dict[str, tuple[int, int]] = {
     "left": (-1, 0),
     "right": (1, 0),
 }
+
+DIAG_DELTAS: list[tuple[int, int]] = [
+    (-1, -1), (1, -1), (-1, 1), (1, 1),
+    (0, -1), (0, 1), (-1, 0), (1, 0),
+]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "DejaVuSans.ttf"
@@ -233,6 +250,34 @@ def _draw_signal_screen(
 
 
 @dataclass
+class ActiveAnomaly:
+    kind: str  # "electra", "zharka", "gravi", "holodec"
+    pos: tuple[int, int]
+    hidden: bool = False  # gravi: visible only after stepping; holodec: hiding
+    cooldown: int = 0  # holodec: turns until re-appear
+    deactivated: bool = False  # zharka: shot → becomes static anomaly
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "pos": list(self.pos),
+            "hidden": self.hidden,
+            "cooldown": self.cooldown,
+            "deactivated": self.deactivated,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> ActiveAnomaly:
+        return cls(
+            kind=str(raw.get("kind") or "electra"),
+            pos=(int(raw["pos"][0]), int(raw["pos"][1])),
+            hidden=bool(raw.get("hidden", False)),
+            cooldown=int(raw.get("cooldown") or 0),
+            deactivated=bool(raw.get("deactivated", False)),
+        )
+
+
+@dataclass
 class HuntSession:
     location: str
     detector_key: str
@@ -249,9 +294,11 @@ class HuntSession:
     max_moves: int = HUNT_MAX_MOVES
     turn_seq: int = 0
     started_at: str | None = None
+    active_anomalies: list[ActiveAnomaly] | None = None
+    gravi_trapped: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "location": self.location,
             "detector_key": self.detector_key,
             "detector_name": self.detector_name,
@@ -267,10 +314,17 @@ class HuntSession:
             "max_moves": self.max_moves,
             "turn_seq": self.turn_seq,
             "started_at": self.started_at,
+            "gravi_trapped": self.gravi_trapped,
         }
+        if self.active_anomalies is not None:
+            d["active_anomalies"] = [a.to_dict() for a in self.active_anomalies]
+        return d
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> HuntSession:
+        active = None
+        if "active_anomalies" in raw and raw["active_anomalies"] is not None:
+            active = [ActiveAnomaly.from_dict(a) for a in raw["active_anomalies"]]
         return cls(
             location=str(raw.get("location") or ""),
             detector_key=str(raw.get("detector_key") or ""),
@@ -287,6 +341,8 @@ class HuntSession:
             max_moves=int(raw.get("max_moves") or HUNT_MAX_MOVES),
             turn_seq=int(raw.get("turn_seq") or 0),
             started_at=raw.get("started_at"),
+            active_anomalies=active,
+            gravi_trapped=bool(raw.get("gravi_trapped", False)),
         )
 
 
@@ -506,6 +562,222 @@ def _cells_adjacent_to_any(
     return list(candidates)
 
 
+def _all_occupied(session: HuntSession) -> set[tuple[int, int]]:
+    occupied: set[tuple[int, int]] = {session.player, session.artifact}
+    occupied.update(session.anomalies)
+    if session.active_anomalies:
+        for a in session.active_anomalies:
+            occupied.add(a.pos)
+    return occupied
+
+
+def _total_anomaly_count(session: HuntSession) -> int:
+    n = len(session.anomalies)
+    if session.active_anomalies:
+        n += len(session.active_anomalies)
+    return n
+
+
+def _anomaly_search_bonus(session: HuntSession) -> int:
+    return min(_total_anomaly_count(session), MAX_ANOMALIES_ON_FIELD) * ANOMALY_SEARCH_BONUS_PER_ANOMALY
+
+
+def _spawn_active_anomalies(grid: int, forbidden: set[tuple[int, int]], anomaly_n: int) -> list[ActiveAnomaly]:
+    active: list[ActiveAnomaly] = []
+    kinds = ["electra", "zharka", "gravi", "holodec"]
+    count = max(1, anomaly_n // 3)
+    for _ in range(count):
+        kind = random.choice(kinds)
+        cell = _random_free_cell(grid, forbidden)
+        hidden = kind in ("gravi", "holodec")
+        active.append(ActiveAnomaly(kind=kind, pos=cell, hidden=hidden))
+        forbidden.add(cell)
+    return active
+
+
+def _move_electra(a: ActiveAnomaly, grid: int, occupied: set[tuple[int, int]]) -> None:
+    candidates = []
+    for dx, dy in DIAG_DELTAS:
+        nx, ny = a.pos[0] + dx, a.pos[1] + dy
+        if 0 <= nx < grid and 0 <= ny < grid and (nx, ny) not in occupied:
+            candidates.append((nx, ny))
+    if candidates:
+        a.pos = random.choice(candidates)
+
+
+def _zharka_affected_cells(a: ActiveAnomaly, grid: int) -> set[tuple[int, int]]:
+    if a.deactivated:
+        return set()
+    cells: set[tuple[int, int]] = set()
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            nx, ny = a.pos[0] + dx, a.pos[1] + dy
+            if 0 <= nx < grid and 0 <= ny < grid:
+                cells.add((nx, ny))
+    return cells
+
+
+def _tick_active_anomalies(session: HuntSession) -> list[str]:
+    """Двигает активные аномалии и возвращает лог-строки событий."""
+    if not session.active_anomalies:
+        return []
+    notes: list[str] = []
+    occupied = _all_occupied(session)
+    for a in session.active_anomalies:
+        if a.cooldown > 0:
+            a.cooldown -= 1
+            if a.cooldown == 0 and a.kind == "holodec":
+                new_pos = _random_free_cell(session.grid, occupied)
+                a.pos = new_pos
+                a.hidden = True
+                occupied.add(new_pos)
+            continue
+        if a.kind == "electra" and not a.deactivated:
+            _move_electra(a, session.grid, occupied)
+    return notes
+
+
+def _check_active_anomaly_effects(
+    session: HuntSession,
+    storage: Storage,
+    telegram_id: int,
+) -> tuple[str | None, bool]:
+    """Проверяет эффекты активных аномалий на позиции игрока.
+    Возвращает (текст_эффекта, dead).
+    """
+    if not session.active_anomalies:
+        return None, False
+    px, py = session.player
+    notes: list[str] = []
+    dead = False
+
+    for a in list(session.active_anomalies):
+        if a.cooldown > 0 or a.deactivated:
+            continue
+
+        if a.kind == "electra" and a.pos == (px, py):
+            storage.change_health(telegram_id, -ELECTRA_HP_DAMAGE)
+            dropped = _electra_drop_items(storage, telegram_id)
+            session.active_anomalies.remove(a)
+            drop_text = f", выбило: {', '.join(dropped)}" if dropped else ""
+            notes.append(f"⚡ Электра! −{ELECTRA_HP_DAMAGE} HP{drop_text}.")
+            a.hidden = False
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if player and player.health <= 0:
+                dead = True
+
+        elif a.kind == "zharka" and not a.deactivated:
+            affected = _zharka_affected_cells(a, session.grid)
+            if (px, py) in affected:
+                storage.change_health(telegram_id, -ZHARKA_HP_DAMAGE_PER_TURN)
+                storage.adjust_survival(telegram_id, thirst_delta=ZHARKA_THIRST_PER_TURN)
+                notes.append(f"🔥 Жарка жжёт! −{ZHARKA_HP_DAMAGE_PER_TURN} HP, жажда +{ZHARKA_THIRST_PER_TURN}.")
+                player = storage.get_character(telegram_id, refresh_energy=False)
+                if player and player.health <= 0:
+                    dead = True
+
+        elif a.kind == "gravi" and a.pos == (px, py):
+            a.hidden = False
+            if not session.gravi_trapped:
+                session.gravi_trapped = True
+                notes.append("🌀 Гравитационная аномалия! Ты застрял.")
+            if random.random() < GRAVI_ESCAPE_CHANCE:
+                session.gravi_trapped = False
+                notes.append("🌀 Вырвался из грави!")
+            else:
+                notes.append("🌀 Не можешь выбраться (40% шанс).")
+
+        elif a.kind == "holodec" and a.pos == (px, py):
+            a.hidden = False
+            dead = True
+            notes.append("🟢 Холодец! Мгновенная смерть.")
+
+    text = "\n".join(notes) if notes else None
+    return text, dead
+
+
+def _electra_drop_items(storage: Storage, telegram_id: int) -> list[str]:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return []
+    consumables = ["medkit", "medkit_army", "medkit_science", "antirad", "energy_drink", "stew", "water"]
+    droppable = [(k, v) for k, v in player.inventory.items() if k in consumables and int(v) > 0]
+    if not droppable:
+        return []
+    dropped: list[str] = []
+    n = random.randint(1, min(3, len(droppable)))
+    chosen = random.sample(droppable, min(n, len(droppable)))
+    for key, qty in chosen:
+        lose = random.randint(1, min(2, int(qty)))
+        storage.remove_item(telegram_id, key, lose)
+        label = ITEM_LABELS.get(key, key)
+        dropped.append(f"{label} x{lose}")
+    return dropped
+
+
+def _shoot_active_anomaly(
+    session: HuntSession,
+    storage: Storage,
+    telegram_id: int,
+    direction: str,
+    weapon_range: int,
+) -> str | None:
+    """Стрельба по активной аномалии в заданном направлении. Возвращает лог или None."""
+    delta = MOVE_DELTAS.get(direction)
+    if delta is None:
+        return None
+    px, py = session.player
+    for step in range(1, weapon_range + 1):
+        tx, ty = px + delta[0] * step, py + delta[1] * step
+        if not (0 <= tx < session.grid and 0 <= ty < session.grid):
+            break
+        for a in list(session.active_anomalies or []):
+            if a.pos != (tx, ty) or a.cooldown > 0:
+                continue
+
+            if a.kind == "electra":
+                session.active_anomalies.remove(a)
+                _zone_response_spawn(session)
+                return "⚡ Электра уничтожена выстрелом."
+
+            elif a.kind == "zharka" and not a.deactivated:
+                a.deactivated = True
+                session.anomalies.append(a.pos)
+                _zone_response_spawn(session)
+                return "🔥 Жарка деактивирована — стала обычной аномалией."
+
+            elif a.kind == "holodec":
+                occupied = _all_occupied(session)
+                a.cooldown = HOLODEC_RESPAWN_DELAY
+                a.hidden = True
+                _zone_response_spawn(session)
+                return "🟢 Холодец спрятался — появится через 1 ход."
+
+            elif a.kind == "gravi":
+                session.active_anomalies.remove(a)
+                session.anomalies.append(a.pos)
+                if session.gravi_trapped:
+                    session.gravi_trapped = False
+                _zone_response_spawn(session)
+                return "🌀 Грави уничтожена выстрелом."
+
+    return None
+
+
+def _zone_response_spawn(session: HuntSession) -> None:
+    """Ответ Зоны: при уничтожении аномалии — спавн новой, если не достигнут лимит."""
+    if _total_anomaly_count(session) >= MAX_ANOMALIES_ON_FIELD:
+        return
+    occupied = _all_occupied(session)
+    kinds = ["electra", "zharka", "gravi", "holodec"]
+    kind = random.choice(kinds)
+    cell = _random_free_cell(session.grid, occupied)
+    hidden = kind in ("gravi", "holodec")
+    if session.active_anomalies is None:
+        session.active_anomalies = []
+    session.active_anomalies.append(ActiveAnomaly(kind=kind, pos=cell, hidden=hidden))
+
+
 def artifact_beside_anomaly(session: HuntSession) -> bool:
     """Артефакт на соседней с аномалией клетке (для тестов и отладки)."""
     anomaly_set = set(session.anomalies)
@@ -531,6 +803,7 @@ def _build_session(character: Character, detector_key: str, detector_name: str) 
     else:
         artifact = _random_free_cell(grid, forbidden)
     circles_needed = DETECTOR_CIRCLES_NEEDED.get(detector_key, 5)
+    active = _spawn_active_anomalies(grid, forbidden, anomaly_n)
     session = HuntSession(
         location=character.location,
         detector_key=detector_key,
@@ -544,6 +817,7 @@ def _build_session(character: Character, detector_key: str, detector_name: str) 
         steps=0,
         rad_gained=0,
         started_at=_utc_now().isoformat(),
+        active_anomalies=active,
     )
     # Стартовый замер сигнала на месте появления.
     session.circles_filled = min(
@@ -566,7 +840,12 @@ def hunt_status_caption(session: HuntSession, character: Character | None = None
             f"HP {character.health}/{effective_max_health(character)} · "
             f"☢ {character.radiation} · ⚡ {character.energy}"
         )
-    lines.append("Аномалия = смерть. Схрон не трогают.")
+    active_n = len(session.active_anomalies) if session.active_anomalies else 0
+    bonus = _anomaly_search_bonus(session)
+    lines.append(f"Аномалий: {len(session.anomalies)} обычных + {active_n} активных · бонус поиска +{bonus}%")
+    if session.gravi_trapped:
+        lines.append("🌀 Застрял в гравитационной аномалии!")
+    lines.append("Стрельба: ↑↓←→ для уничтожения активных аномалий.")
     return "\n".join(lines)
 
 
@@ -648,6 +927,7 @@ def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) ->
         if key == session.detector_key:
             base_chance = chance
             break
+    base_chance += _anomaly_search_bonus(session)
     art_key = roll_location_artifact_drop(session.location, base_chance)
     survival_text = _apply_active_survival(storage, telegram_id)
     spawn_hint = describe_location_artifact_spawns(session.location)
@@ -709,9 +989,38 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             },
         )
 
+    if session.gravi_trapped:
+        if random.random() < GRAVI_ESCAPE_CHANCE:
+            session.gravi_trapped = False
+        else:
+            session.moves += 1
+            expected_seq = session.turn_seq
+            session.turn_seq = expected_seq + 1
+            _tick_active_anomalies(session)
+            if not _save_hunt_if_turn_ok(storage, telegram_id, session, expected_seq):
+                from app.tactical_combat import STALE_TURN_MESSAGE
+                return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
+            effect_text, dead = _check_active_anomaly_effects(session, storage, telegram_id)
+            save_hunt_session(storage, telegram_id, session)
+            if dead:
+                clear_hunt_session(storage, telegram_id)
+                storage.change_health(telegram_id, -10_000)
+                from app.game_logic import remember_death_cause
+                remember_death_cause(storage, telegram_id, "anomaly")
+                cause = effect_text or "Аномалия убила."
+                return ActionResult(False, cause, payload={"hunt_active": False, "hunt_dead": True, "death_cause": "anomaly"})
+            player = storage.get_character(telegram_id, refresh_energy=False) or player
+            image = _render_for_player(storage, telegram_id, session, player)
+            msg = "🌀 Не удалось вырваться из грави."
+            if effect_text:
+                msg += "\n" + effect_text
+            return ActionResult(False, msg, payload={"hunt_image": image, "hunt_active": True, "caption": hunt_status_caption(session, player)})
+
     session.player = (nx, ny)
     session.moves += 1
     session.steps += 1
+
+    _tick_active_anomalies(session)
 
     rad_add = 0
     if session.steps % HUNT_RAD_EVERY_STEPS == 0:
@@ -753,6 +1062,18 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             },
         )
 
+    effect_text, effect_dead = _check_active_anomaly_effects(session, storage, telegram_id)
+    if effect_dead:
+        clear_hunt_session(storage, telegram_id)
+        storage.change_health(telegram_id, -10_000)
+        from app.game_logic import remember_death_cause
+        remember_death_cause(storage, telegram_id, "anomaly")
+        cause = effect_text or "Аномалия убила."
+        return ActionResult(
+            False, cause,
+            payload={"hunt_active": False, "hunt_dead": True, "death_cause": "anomaly"},
+        )
+
     if session.circles_filled >= session.circles_needed:
         return _finish_success(storage, telegram_id, session)
 
@@ -766,11 +1087,14 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             payload={"hunt_active": False, "hunt_done": True},
         )
 
+    save_hunt_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = _render_for_player(storage, telegram_id, session, player)
     note = f"Сигнал +{gain}." if gain else "Тишина в эфире."
     if rad_add:
         note += f" Рад +{rad_add}."
+    if effect_text:
+        note += "\n" + effect_text
     return ActionResult(
         True,
         note,
@@ -779,6 +1103,57 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             "hunt_active": True,
             "caption": hunt_status_caption(session, player),
             "move_note": note,
+        },
+    )
+
+
+def shoot_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
+    """Стрельба по активной аномалии на поле поиска артефактов."""
+    session = get_hunt_session(storage, telegram_id)
+    if session is None:
+        return ActionResult(False, "Сначала начни поиск артефактов.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        clear_hunt_session(storage, telegram_id)
+        return ActionResult(False, _dead_block_text())
+
+    weapon = (player.equipment or {}).get("weapon", "Нож")
+    from app.tactical_combat import weapon_range as _weapon_range
+    w_range = _weapon_range(weapon)
+
+    if not session.active_anomalies:
+        image = _render_for_player(storage, telegram_id, session, player)
+        return ActionResult(False, "На поле нет активных аномалий.", payload={
+            "hunt_image": image, "hunt_active": True,
+            "caption": hunt_status_caption(session, player),
+        })
+
+    shot_result = _shoot_active_anomaly(session, storage, telegram_id, direction, w_range)
+    if shot_result is None:
+        image = _render_for_player(storage, telegram_id, session, player)
+        return ActionResult(False, "Промах — в этом направлении нет активных аномалий.", payload={
+            "hunt_image": image, "hunt_active": True,
+            "caption": hunt_status_caption(session, player),
+        })
+
+    session.moves += 1
+    expected_seq = session.turn_seq
+    session.turn_seq = expected_seq + 1
+    if not _save_hunt_if_turn_ok(storage, telegram_id, session, expected_seq):
+        from app.tactical_combat import STALE_TURN_MESSAGE
+        return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
+
+    save_hunt_session(storage, telegram_id, session)
+    player = storage.get_character(telegram_id, refresh_energy=False) or player
+    image = _render_for_player(storage, telegram_id, session, player)
+    return ActionResult(
+        True, shot_result,
+        payload={
+            "hunt_image": image, "hunt_active": True,
+            "caption": hunt_status_caption(session, player),
+            "move_note": shot_result,
         },
     )
 
@@ -882,6 +1257,57 @@ def _paste_anomaly_icon(canvas: Image.Image, cx: int, cy: int, *, diameter: int 
         canvas.paste(token, (cx - diameter // 2, cy - diameter // 2), mask)
         return
     _draw_glow_orb_layer(canvas, cx, cy, 28, (255, 120, 40))
+
+
+_ACTIVE_ANOMALY_COLORS: dict[str, tuple[int, int, int]] = {
+    "electra": (100, 180, 255),
+    "zharka": (255, 100, 30),
+    "gravi": (180, 120, 255),
+    "holodec": (60, 220, 100),
+}
+
+_ACTIVE_ANOMALY_LABELS: dict[str, str] = {
+    "electra": "⚡",
+    "zharka": "🔥",
+    "gravi": "🌀",
+    "holodec": "🟢",
+}
+
+
+def _draw_active_anomaly_on_field(
+    canvas: Image.Image,
+    cx: int,
+    cy: int,
+    anomaly: ActiveAnomaly,
+    cell_size: int,
+) -> None:
+    color = _ACTIVE_ANOMALY_COLORS.get(anomaly.kind, (200, 200, 200))
+    radius = cell_size // 3
+
+    if anomaly.kind == "zharka" and not anomaly.deactivated:
+        overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        od = ImageDraw.Draw(overlay)
+        field_r = cell_size + cell_size // 2
+        od.ellipse(
+            (cx - field_r, cy - field_r, cx + field_r, cy + field_r),
+            fill=(255, 60, 10, 28),
+        )
+        canvas.alpha_composite(overlay)
+
+    _draw_glow_orb_layer(canvas, cx, cy, radius, color)
+
+    draw = ImageDraw.Draw(canvas)
+    label = _ACTIVE_ANOMALY_LABELS.get(anomaly.kind, "?")
+    try:
+        from app.image_text import render_emoji_glyph
+        glyph = render_emoji_glyph(label, cell_size // 3)
+        if glyph is not None:
+            canvas.paste(glyph, (cx - glyph.size[0] // 2, cy - glyph.size[1] // 2), glyph)
+            return
+    except Exception:
+        pass
+    font = _load_font(max(14, cell_size // 4))
+    draw.text((cx, cy), label, fill=(255, 255, 255), font=font, anchor="mm")
 
 
 def _paste_circle(
@@ -1036,6 +1462,14 @@ def render_hunt_frame(
         cx = margin + ax * cell + cell // 2
         cy = margin + ay * cell + cell // 2
         _paste_anomaly_icon(canvas, cx, cy)
+
+    if session.active_anomalies:
+        for a in session.active_anomalies:
+            if a.hidden or a.cooldown > 0:
+                continue
+            acx = margin + a.pos[0] * cell + cell // 2
+            acy = margin + a.pos[1] * cell + cell // 2
+            _draw_active_anomaly_on_field(canvas, acx, acy, a, cell)
 
     # Близкий арт — бледный пинг на поле.
     if session.circles_filled >= max(1, session.circles_needed - 1):

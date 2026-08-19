@@ -39,6 +39,7 @@ from app.artifact_hunt import (
     move_artifact_hunt,
     process_hunt_timeouts,
     render_hunt_for_player,
+    shoot_artifact_hunt,
     start_artifact_hunt,
 )
 from app.quest_mission import (
@@ -6308,6 +6309,25 @@ async def artifact_hunt_callback(callback: CallbackQuery) -> None:
                 image_bytes=image,
                 caption=hunt_status_caption(session, player),
             )
+            return
+
+        if action.startswith("shoot:"):
+            shoot_dir = action.removeprefix("shoot:").strip()
+            if shoot_dir not in {"up", "down", "left", "right"}:
+                await callback.answer("Неизвестное направление.", show_alert=True)
+                return
+            result = shoot_artifact_hunt(storage, telegram_id, shoot_dir)
+            payload = result.payload or {}
+            image = payload.get("hunt_image")
+            if image:
+                await _send_or_edit_hunt_frame(
+                    callback,
+                    image_bytes=image,
+                    caption=str(payload.get("caption") or ""),
+                    note=str(payload.get("move_note") or result.text),
+                )
+            else:
+                await reply_action_result(callback, result.text)
             return
 
         if action not in {"up", "down", "left", "right"}:

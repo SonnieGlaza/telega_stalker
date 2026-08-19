@@ -470,6 +470,12 @@ def artifact_hunt_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="➡️ Вправо", callback_data="hunt:right"),
             ],
             [
+                InlineKeyboardButton(text="🔫⬆", callback_data="hunt:shoot:up"),
+                InlineKeyboardButton(text="🔫⬅", callback_data="hunt:shoot:left"),
+                InlineKeyboardButton(text="🔫⬇", callback_data="hunt:shoot:down"),
+                InlineKeyboardButton(text="🔫➡", callback_data="hunt:shoot:right"),
+            ],
+            [
                 InlineKeyboardButton(text="🏃 Свалить", callback_data="hunt:leave"),
                 InlineKeyboardButton(text="🔄 Обновить", callback_data="hunt:refresh"),
             ],
