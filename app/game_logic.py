@@ -8,6 +8,7 @@ from math import dist
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from app.faction_ranks import (
     leader_title,
@@ -1048,6 +1049,7 @@ CONTRACT_WEEKLY_DONE_META_PREFIX = "contracts:weekly_done:"
 
 RATING_SEASON_META_KEY = "rating_season"
 RATING_SEASON_LENGTH_DAYS = 14
+MSK_TZ = ZoneInfo("Europe/Moscow")
 
 FACTION_HOME_BASE: dict[str, str] = {
     "Долг": "Росток",
@@ -2100,6 +2102,50 @@ def get_rating_season(storage: Storage, now: datetime | None = None) -> dict[str
 def _season_days_left(season: dict[str, Any], now: datetime) -> int:
     ends_at = _parse_meta_datetime(str(season.get("ends_at") or ""), now)
     return max(0, int((ends_at - now).total_seconds() // 86400))
+
+
+def _format_season_datetime(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    msk = dt.astimezone(MSK_TZ)
+    utc = dt.astimezone(timezone.utc)
+    return f"{msk.strftime('%d.%m.%Y %H:%M')} МСК ({utc.strftime('%d.%m.%Y %H:%M')} UTC)"
+
+
+def _season_time_left(ends_at: datetime, now: datetime) -> tuple[int, int, int]:
+    remaining_sec = max(0, int((ends_at - now).total_seconds()))
+    days = remaining_sec // 86400
+    hours = (remaining_sec % 86400) // 3600
+    minutes = (remaining_sec % 3600) // 60
+    return days, hours, minutes
+
+
+def build_season_schedule_text(storage: Storage, now: datetime | None = None) -> str:
+    """Точное время начала/конца текущего сезонного рейтинга."""
+    now = now or datetime.now(timezone.utc)
+    season = get_rating_season(storage, now)
+    started_at = _parse_meta_datetime(str(season.get("started_at") or ""), now)
+    ends_at = _parse_meta_datetime(
+        str(season.get("ends_at") or ""),
+        now + timedelta(days=RATING_SEASON_LENGTH_DAYS),
+    )
+    days_left, hours_left, minutes_left = _season_time_left(ends_at, now)
+    if days_left == hours_left == minutes_left == 0 and now >= ends_at:
+        left_line = "Сезон уже должен завершиться — бот закроет его в ближайшую минуту."
+    else:
+        left_line = f"Осталось: {days_left} дн. {hours_left} ч. {minutes_left} мин."
+
+    lines = [
+        f"📅 Сезонный рейтинг #{season.get('id')}",
+        f"Длительность: {RATING_SEASON_LENGTH_DAYS} дней.",
+        f"Начался: {_format_season_datetime(started_at)}",
+        f"Закончится: {_format_season_datetime(ends_at)}",
+        left_line,
+        "",
+        "После окончания топ-3 получит награды, очки сезона обнулятся и начнётся новый сезон.",
+        "Топ сезона: 📟 КПК → 🏆 Рейтинг → 📅 Рейтинг за сезон.",
+    ]
+    return "\n".join(lines)
 
 
 def _season_reward_blurb() -> str:

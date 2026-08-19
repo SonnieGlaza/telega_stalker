@@ -1668,6 +1668,13 @@ def run_smoke_check() -> None:
         assert "Сезонный рейтинг" in season_text
         assert "Чемпион Зоны" in season_text
         assert "#1" in season_text or "1." in season_text
+        from app.game_logic import build_season_schedule_text
+
+        schedule_text = build_season_schedule_text(storage)
+        assert "Закончится:" in schedule_text
+        assert "МСК" in schedule_text
+        assert "UTC" in schedule_text
+        assert "Осталось:" in schedule_text
 
         season = get_rating_season(storage)
         past_season = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()

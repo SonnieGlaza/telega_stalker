@@ -182,6 +182,7 @@ from app.game_logic import (
     build_raids_overview,
     build_rating_overview,
     build_season_rating_overview,
+    build_season_schedule_text,
     build_rating_menu_text,
     BULK_BUY_ITEM_KEYS,
     SHOP_ITEMS,
@@ -465,6 +466,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="start", description="Начать или войти"),
         BotCommand(command="menu", description="Главное меню"),
         BotCommand(command="info", description="Справка по игре"),
+        BotCommand(command="season", description="Когда кончится сезон рейтинга"),
         BotCommand(command="top", description="Топ по деньгам и артам"),
         BotCommand(command="cancel", description="Отменить ввод"),
         BotCommand(command="pay", description="Перевод RU по id или нику"),
@@ -1486,6 +1488,7 @@ def _build_info_text(player: Character) -> str:
         "• /menu — главное меню.\n"
         "• /cancel — отменить ввод суммы/количества.\n"
         "• /info — эта справка.\n"
+        "• /season — когда закончится сезонный рейтинг (дата и время).\n"
         f"• /pay [id|ник] [сумма] — перевод (комиссия {TRANSFER_FEE_PERCENT}%).\n"
         "• /дуэль [id|ник] — вызвать на дуэль (ID в КПК → Игроки).\n"
         f"  Проигравший: HP опускается до {DUEL_LOSER_HP_REMAINING}, "
@@ -1549,6 +1552,11 @@ async def show_info(message: Message, state: FSMContext, bot: Bot) -> None:
         return
     await state.clear()
     await message.answer(_build_info_text(player))
+
+
+@router.message(Command("season"), F.chat.type == "private")
+async def cmd_season(message: Message) -> None:
+    await message.answer(build_season_schedule_text(get_storage()), parse_mode=None)
 
 
 @router.callback_query(F.data.startswith("topup:"))
