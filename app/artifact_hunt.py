@@ -747,7 +747,6 @@ def _shoot_active_anomaly(
                 return "🔥 Жарка деактивирована — стала обычной аномалией."
 
             elif a.kind == "holodec":
-                occupied = _all_occupied(session)
                 a.cooldown = HOLODEC_RESPAWN_DELAY
                 a.hidden = True
                 _zone_response_spawn(session)
@@ -1001,7 +1000,9 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
                 from app.tactical_combat import STALE_TURN_MESSAGE
                 return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
             effect_text, dead = _check_active_anomaly_effects(session, storage, telegram_id)
-            save_hunt_session(storage, telegram_id, session)
+            if not _save_hunt_if_turn_ok(storage, telegram_id, session, session.turn_seq):
+                from app.tactical_combat import STALE_TURN_MESSAGE
+                return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
             if dead:
                 clear_hunt_session(storage, telegram_id)
                 storage.change_health(telegram_id, -10_000)
@@ -1042,7 +1043,6 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
     if rad_add > 0:
         storage.adjust_survival(telegram_id, radiation_delta=rad_add)
         session.rad_gained += rad_add
-        save_hunt_session(storage, telegram_id, session)
 
     if session.player in set(session.anomalies):
         clear_hunt_session(storage, telegram_id)
@@ -1087,7 +1087,9 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             payload={"hunt_active": False, "hunt_done": True},
         )
 
-    save_hunt_session(storage, telegram_id, session)
+    if not _save_hunt_if_turn_ok(storage, telegram_id, session, session.turn_seq):
+        from app.tactical_combat import STALE_TURN_MESSAGE
+        return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = _render_for_player(storage, telegram_id, session, player)
     note = f"Сигнал +{gain}." if gain else "Тишина в эфире."
@@ -1145,7 +1147,9 @@ def shoot_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> A
         from app.tactical_combat import STALE_TURN_MESSAGE
         return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
 
-    save_hunt_session(storage, telegram_id, session)
+    if not _save_hunt_if_turn_ok(storage, telegram_id, session, session.turn_seq):
+        from app.tactical_combat import STALE_TURN_MESSAGE
+        return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = _render_for_player(storage, telegram_id, session, player)
     return ActionResult(
