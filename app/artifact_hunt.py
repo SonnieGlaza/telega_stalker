@@ -1126,8 +1126,8 @@ def shoot_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> A
         return ActionResult(False, _dead_block_text())
 
     weapon = (player.equipment or {}).get("weapon", "Нож")
-    from app.tactical_combat import weapon_range as _weapon_range
-    w_range = _weapon_range(weapon)
+    from app.tactical_combat import weapon_shoot_range
+    w_range = weapon_shoot_range(weapon)
 
     if not session.active_anomalies:
         image = _render_for_player(storage, telegram_id, session, player)
