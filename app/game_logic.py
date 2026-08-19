@@ -2078,6 +2078,17 @@ def _add_rating(storage: Storage, telegram_id: int, amount: int) -> None:
         storage.add_player_stat(telegram_id, "season_rating", amount)
 
 
+def set_season_end(storage: Storage, ends_at: datetime) -> dict[str, Any]:
+    """Принудительно задать дату окончания текущего сезона."""
+    now = datetime.now(timezone.utc)
+    season = get_rating_season(storage, now)
+    if ends_at.tzinfo is None:
+        ends_at = ends_at.replace(tzinfo=timezone.utc)
+    season["ends_at"] = ends_at.isoformat()
+    storage.set_meta(RATING_SEASON_META_KEY, json.dumps(season, ensure_ascii=False))
+    return season
+
+
 def get_rating_season(storage: Storage, now: datetime | None = None) -> dict[str, Any]:
     """Текущий рейтинговый сезон; создаёт первый сезон при первом обращении."""
     now = now or datetime.now(timezone.utc)

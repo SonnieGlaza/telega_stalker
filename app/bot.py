@@ -183,6 +183,8 @@ from app.game_logic import (
     build_rating_overview,
     build_season_rating_overview,
     build_season_schedule_text,
+    set_season_end,
+    MSK_TZ,
     build_rating_menu_text,
     BULK_BUY_ITEM_KEYS,
     SHOP_ITEMS,
@@ -1557,6 +1559,43 @@ async def show_info(message: Message, state: FSMContext, bot: Bot) -> None:
 @router.message(Command("season"), F.chat.type == "private")
 async def cmd_season(message: Message) -> None:
     await message.answer(build_season_schedule_text(get_storage()), parse_mode=None)
+
+
+@router.message(Command("setseason"), F.chat.type == "private")
+async def cmd_set_season(message: Message, command: CommandObject) -> None:
+    if not is_admin_user(message.from_user.id):
+        await message.answer("Команда только для администратора.")
+        return
+    raw = (command.args or "").strip()
+    if not raw:
+        await message.answer(
+            "Укажи дату окончания сезона (МСК).\n"
+            "Формат: /setseason ДД.ММ.ГГГГ ЧЧ:ММ\n"
+            "Пример: /setseason 22.08.2026 00:00",
+            parse_mode=None,
+        )
+        return
+    from datetime import datetime as _dt
+
+    for fmt in ("%d.%m.%Y %H:%M", "%Y-%m-%d %H:%M", "%d.%m.%Y"):
+        try:
+            parsed = _dt.strptime(raw, fmt)
+            break
+        except ValueError:
+            continue
+    else:
+        await message.answer(
+            "Не могу разобрать дату. Формат: ДД.ММ.ГГГГ ЧЧ:ММ\nПример: /setseason 22.08.2026 00:00",
+            parse_mode=None,
+        )
+        return
+    ends_msk = parsed.replace(tzinfo=MSK_TZ)
+    season = set_season_end(get_storage(), ends_msk)
+    text = (
+        f"Сезон #{season.get('id')} теперь закончится:\n"
+        f"{build_season_schedule_text(get_storage())}"
+    )
+    await message.answer(text, parse_mode=None)
 
 
 @router.callback_query(F.data.startswith("topup:"))
