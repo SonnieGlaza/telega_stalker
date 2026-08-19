@@ -206,7 +206,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "antirad": {"name": "Антирад", "buy_price": 400, "sell_price": 130},
     "bread": {"name": "Хлеб", "buy_price": 50, "sell_price": 16},
     "sausage": {"name": "Колбаса", "buy_price": 100, "sell_price": 33},
-    "stew": {"name": "Тушенка", "buy_price": 250, "sell_price": 83},
+    "stew": {"name": "Тушёнка", "buy_price": 250, "sell_price": 83},
     "water_bottle": {"name": "Бутылка воды", "buy_price": 50, "sell_price": 16},
     "mineral_water": {"name": "Минералка", "buy_price": 100, "sell_price": 33},
     "beard_tea": {"name": "Чай Бороды", "buy_price": 250, "sell_price": 83},
@@ -425,7 +425,7 @@ ITEM_LABELS = {
     "antirad": "Антирад",
     "bread": "Хлеб",
     "sausage": "Колбаса",
-    "stew": "Тушенка",
+    "stew": "Тушёнка",
     "water_bottle": "Бутылка воды",
     "mineral_water": "Минералка",
     "beard_tea": "Чай Бороды",
@@ -2073,6 +2073,12 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
 def _add_rating(storage: Storage, telegram_id: int, amount: int) -> None:
     if amount == 0:
         return
+    if amount < 0:
+        current = storage.get_player_stats(telegram_id).get("rating_points", 0)
+        if int(current) + amount < 0:
+            amount = -int(current)
+        if amount == 0:
+            return
     storage.add_player_stat(telegram_id, "rating_points", amount)
     if amount > 0:
         storage.add_player_stat(telegram_id, "season_rating", amount)
@@ -3424,7 +3430,7 @@ def admin_set_player_faction(
     else:
         found = storage.find_telegram_id_by_nickname(raw)
         if found is None:
-            return ActionResult(False, f"Игрок «{raw}» не найден.")
+            return ActionResult(False, f"Игрок «{h(raw)}» не найден.")
         telegram_id = found
 
     player = storage.get_character(telegram_id, refresh_energy=False)
@@ -3928,7 +3934,7 @@ def use_stew(storage: Storage, telegram_id: int) -> ActionResult:
         telegram_id,
         "stew",
         hunger_delta=-50,
-        text="Ты съел тушенку. Голод снижен на 50.",
+        text="Ты съел тушёнку. Голод снижен на 50.",
     )
 
 
@@ -5098,10 +5104,11 @@ def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult
     _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     target_label = "Оружие" if target == "weapon" else "Броня"
+    repaired = "отремонтировано" if target == "weapon" else "отремонтирована"
     discount_note = f" (−{discount_pct}% у техника)" if discount_pct > 0 else ""
     return ActionResult(
         True,
-        f"{target_label} «{item_name}» полностью отремонтировано за {price} RU{discount_note}.{achievements_text}",
+        f"{target_label} «{item_name}» полностью {repaired} за {price} RU{discount_note}.{achievements_text}",
     )
 
 
@@ -8158,7 +8165,7 @@ def garage_withdraw_fuel(storage: Storage, telegram_id: int, fuel_type: str) -> 
     changer = storage.change_gasoline if fuel_type == "gasoline" else storage.change_diesel
     if not changer(telegram_id, amount):
         return ActionResult(False, "Не удалось получить топливо.")
-    garage[fuel_type] -= 1
+    garage[fuel_type] = max(0, garage.get(fuel_type, 0) - 1)
     _set_faction_garage(storage, player.faction, garage)
     return ActionResult(
         True,

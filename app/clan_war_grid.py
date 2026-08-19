@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import random
 import uuid
 from dataclasses import dataclass, field
@@ -46,6 +47,8 @@ from app.tactical_combat import (
     weapon_shoot_range,
 )
 from app.tactical_hp import apply_tactical_medkit_spend, finalize_group_tactical_hp, plan_tactical_medkit
+
+logger = logging.getLogger(__name__)
 
 CWAR_GRID_SIZE = 9
 CWAR_TURN_SECONDS = 10
@@ -490,7 +493,7 @@ def _end_session(
                         fp["session_id"] = fresh.session_id
                         return ActionResult(result.ok, result.text, payload=fp)
                 except Exception:
-                    pass
+                    logger.exception("Failed to re-read finished clan war session %s", session.session_id)
             return ActionResult(False, STALE_TURN_MESSAGE)
     else:
         save_cwar_session(storage, session)

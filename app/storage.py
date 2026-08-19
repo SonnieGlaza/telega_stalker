@@ -1093,6 +1093,7 @@ class Storage:
             conn.execute("DELETE FROM player_stats WHERE telegram_id = ?", (tid,))
             conn.execute("DELETE FROM referrals WHERE invitee_id = ?", (tid,))
             conn.execute("DELETE FROM referrals WHERE referrer_id = ?", (tid,))
+            conn.execute("DELETE FROM topup_payments WHERE telegram_id = ?", (tid,))
             conn.execute("DELETE FROM pending_registrations WHERE telegram_id = ?", (tid,))
             conn.execute("DELETE FROM characters WHERE telegram_id = ?", (tid,))
         self._purge_player_meta_keys(tid)
@@ -2078,7 +2079,7 @@ class Storage:
                 if scores[cause] >= SURVIVAL_CRITICAL_NEED:
                     remember_death_cause(self, telegram_id, cause)
             except Exception:
-                pass
+                logger.exception("Failed to record survival death cause for %s", telegram_id)
 
     def adjust_survival(
         self,
@@ -2135,7 +2136,7 @@ class Storage:
                 if scores[cause] >= SURVIVAL_CRITICAL_NEED:
                     remember_death_cause(self, telegram_id, cause)
             except Exception:
-                pass
+                logger.exception("Failed to record adjust_survival death cause for %s", telegram_id)
         return True
 
     def set_survival_needs(
@@ -4289,7 +4290,7 @@ class Storage:
                     (DEFAULT_RANK_KEY, faction_name),
                 )
         except Exception:
-            pass
+            logger.exception("Failed to backfill default faction ranks")
         rows = conn.execute(
             "SELECT telegram_id, equipment_json FROM characters"
         ).fetchall()

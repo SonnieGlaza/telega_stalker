@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import random
 import uuid
 from dataclasses import dataclass, field
@@ -38,6 +39,8 @@ from app.tactical_combat import (
     weapon_shoot_range,
 )
 from app.mutant_assets import pick_mutant_kind
+
+logger = logging.getLogger(__name__)
 from app.tactical_hp import apply_tactical_medkit_spend, plan_tactical_medkit, sync_session_hp_to_db
 from app.enemy_hud import draw_enemy_hud, hud_slots_from_kinds
 from app.tactical_render import (
@@ -388,7 +391,7 @@ def _end_duel(
                             },
                         )
                 except Exception:
-                    pass
+                    logger.exception("Failed to re-read finished duel session %s", session.duel_id)
             return ActionResult(False, STALE_TURN_MESSAGE)
     else:
         save_duel_session(storage, session)

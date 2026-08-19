@@ -440,7 +440,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 GROUP_CHAT_TYPES = frozenset({"group", "supergroup"})
-GROUP_CHAT_ALLOWED_COMMANDS = frozenset({"/start", "/menu", "/badge", "/top"})
+GROUP_CHAT_ALLOWED_COMMANDS = frozenset({"/start", "/menu", "/badge", "/top", "/info", "/season"})
 GROUP_CHAT_LINK_BUTTON_TEXT = "🔗 Ссылка на бота"
 
 
@@ -981,7 +981,7 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject,
                 except NicknameTakenError:
                     await state.set_state(Registration.nickname)
                     await message.answer(
-                        f"Черновик найден, но прозвище «{nickname}» уже занято.\n"
+                        f"Черновик найден, но прозвище «{h(nickname)}» уже занято.\n"
                         "Введи другое прозвище:"
                     )
                     return
@@ -989,7 +989,7 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject,
                     logger.exception("Failed to resume character create for user %s", telegram_id)
                     await state.set_state(Registration.gender)
                     await message.answer(
-                        f"Нашёл черновик: {nickname} ({gender}).\n"
+                        f"Нашёл черновик: {h(nickname)} ({gender}).\n"
                         "Не удалось завершить создание автоматически. Нажми пол ещё раз:",
                         reply_markup=gender_keyboard(),
                     )
@@ -1003,14 +1003,14 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject,
                 await state.clear()
                 uid_line = f"\nТвой ID в Зоне: {saved.player_uid}"
                 await message.answer(
-                    f"Персонаж восстановлен: {nickname} ({gender}).{uid_line}"
+                    f"Персонаж восстановлен: {h(nickname)} ({gender}).{uid_line}"
                     f"{referral_note}\nВыбери сторону:",
                     reply_markup=faction_keyboard(),
                 )
                 return
             await state.set_state(Registration.gender)
             await message.answer(
-                f"Нашёл сохранённое прозвище: {nickname}.\nВыбери пол персонажа:",
+                f"Нашёл сохранённое прозвище: {h(nickname)}.\nВыбери пол персонажа:",
                 reply_markup=gender_keyboard(),
             )
             return
@@ -1030,7 +1030,7 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject,
         await message.answer(
             "Telegram-бот-игра в стиле S.T.A.L.K.E.R., где это не просто "
             "«нажал кнопку — получил ответ», а целый живой мир с прогрессом игрока.\n\n"
-            "Что в нем есть:\n\n"
+            "Что в нём есть:\n\n"
             "👥 Группировки: можно вступать, назначать лидеров, договариваться о союзе или объявлять войну.\n"
             "⚔️ Рейды и военные лобби: игроки собираются командой и вместе атакуют точки.\n"
             "🛒 Рынок между игроками: вещи можно выставлять лотами, а не только продавать боту.\n"
@@ -1038,11 +1038,11 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject,
             "🔫 Снаряжение с износом: оружие и броня теряют прочность, и это влияет на цену продажи.\n"
             "💎 Поиск артефактов: тактическая охота на сетке (нужен детектор в инвентаре).\n"
             "❤️ Смерть и респавн: если персонаж «падает», нужно восстанавливаться по правилам игры.\n\n"
-            f"Если ты готов, то назови свое имя!{referral_hello}"
+            f"Если ты готов, то назови своё имя!{referral_hello}"
         )
         return
     # Defensive fallback (should be unreachable).
-    await message.answer("Сбой проверки аккаунта. Попробуй /start еще раз.")
+    await message.answer("Сбой проверки аккаунта. Попробуй /start ещё раз.")
 
 
 @router.message(Command("menu"), F.chat.type == "private")
@@ -2220,7 +2220,7 @@ async def process_gender(callback: CallbackQuery, state: FSMContext, bot: Bot) -
         db.clear_pending_registration(callback.from_user.id)
         if player_ready(existing):
             await callback.message.answer(
-                f"Персонаж уже есть: {existing.nickname}.",
+                f"Персонаж уже есть: {h(existing.nickname)}.",
                 reply_markup=main_menu_keyboard(),
             )
         else:
@@ -2517,6 +2517,21 @@ DEAD_BYPASS_MESSAGE_COMMANDS = frozenset({
     "/fixme",
     "/починить",
     "/cancel",
+    "/badge",
+    "/top",
+    "/season",
+    "/setseason",
+    "/deleteplayer",
+    "/give",
+    "/setfaction",
+    "/unstick",
+    "/dbstatus",
+    "/dbsave",
+    "/export_players",
+    "/migrate_db",
+    "/medal",
+    "/settravel",
+    "/broadcast",
 })
 
 
@@ -2667,7 +2682,7 @@ class DeadPlayerMenuMiddleware(BaseMiddleware):
             return await handler(event, data)
         text = (event.text or "").strip()
         if text:
-            cmd = text.split(maxsplit=1)[0].casefold()
+            cmd = text.split(maxsplit=1)[0].split("@")[0].casefold()
             if cmd in DEAD_BYPASS_MESSAGE_COMMANDS:
                 return await handler(event, data)
         storage = get_storage()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import random
 import uuid
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ from app.game_logic import (
 )
 from app.storage import Storage
 from app.tactical_hp import sync_session_hp_to_db
+
+logger = logging.getLogger(__name__)
 from app.tactical_combat import (
     MOVE_DELTAS,
     NPC_MOVE_CHANCE,
@@ -431,7 +434,7 @@ def _end_session(
                         fp["message_id"] = fresh.message_id
                         return ActionResult(result.ok, result.text, payload=fp)
                 except Exception:
-                    pass
+                    logger.exception("Failed to re-read finished arena session %s", session.session_id)
             return ActionResult(False, STALE_TURN_MESSAGE)
     else:
         save_arena_session(storage, session)

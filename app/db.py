@@ -61,7 +61,7 @@ def is_dml(sql: str) -> bool:
 def rewrite_sql_for_postgres(sql: str) -> str:
     text = sql.strip()
     text = text.replace("MAX(0,", "GREATEST(0,")
-    text = AUTOINCREMENT_RE.sub("SERIAL PRIMARY KEY", text)
+    text = AUTOINCREMENT_RE.sub("BIGSERIAL PRIMARY KEY", text)
 
     if INSERT_OR_IGNORE_RE.match(text):
         text = INSERT_OR_IGNORE_RE.sub("INSERT INTO ", text, count=1)
