@@ -273,7 +273,14 @@ def _finalize_duel_rewards(storage: Storage, winner_id: int, loser_id: int) -> t
     money_taken = min(money_taken, DUEL_LOSER_MONEY_CAP)
     if money_taken > 0:
         if storage.change_money(loser_id, -money_taken):
-            storage.change_money(winner_id, money_taken)
+            if not storage.change_money(winner_id, money_taken):
+                if not storage.change_money(loser_id, money_taken):
+                    logger.exception(
+                        "Failed to refund duel stake %s RU to loser %s after winner credit failed",
+                        money_taken,
+                        loser_id,
+                    )
+                money_taken = 0
         else:
             money_taken = 0
     _add_rating(storage, winner_id, RATING_REWARD["duel_win"])
@@ -734,7 +741,9 @@ def duel_forfeit(storage: Storage, telegram_id: int) -> ActionResult:
     winner_id = session.opponent_of(telegram_id)
     player = storage.get_character(telegram_id, refresh_energy=False)
     note = f"{h(player.nickname) if player else telegram_id} сдался."
-    return _end_duel(storage, session, winner_id, telegram_id, note)
+    return _end_duel(
+        storage, session, winner_id, telegram_id, note, expected_seq=session.turn_seq
+    )
 
 
 def process_duel_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult]]:

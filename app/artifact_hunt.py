@@ -919,7 +919,6 @@ def abandon_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
 
 
 def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) -> ActionResult:
-    clear_hunt_session(storage, telegram_id)
     player = storage.get_character(telegram_id, refresh_energy=False)
     base_chance = 17
     for key, _name, chance in ARTIFACT_DETECTORS:
@@ -931,6 +930,7 @@ def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) ->
     survival_text = _apply_active_survival(storage, telegram_id)
     spawn_hint = describe_location_artifact_spawns(session.location)
     if art_key is None:
+        clear_hunt_session(storage, telegram_id)
         return ActionResult(
             True,
             f"Сигнал пойман на «{session.location}», но арт сорвался в аномалию.\n"
@@ -946,9 +946,10 @@ def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) ->
     from app.game_logic import daily_artifact_hunt_done_today, mark_daily_artifact_hunt_done, DAILY_ARTIFACT_HUNT_BONUS_RU
 
     if art_key not in ARTIFACT_JUNK_KEYS and not daily_artifact_hunt_done_today(storage, telegram_id):
-        storage.change_money(telegram_id, DAILY_ARTIFACT_HUNT_BONUS_RU)
         mark_daily_artifact_hunt_done(storage, telegram_id)
+        storage.change_money(telegram_id, DAILY_ARTIFACT_HUNT_BONUS_RU)
         bonus_note = f"\n🗓 Ежедневный поиск: +{DAILY_ARTIFACT_HUNT_BONUS_RU} RU к цене арта."
+    clear_hunt_session(storage, telegram_id)
     return ActionResult(
         True,
         f"Арт найден на «{session.location}»!\n"
@@ -1150,6 +1151,19 @@ def shoot_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> A
     if not _save_hunt_if_turn_ok(storage, telegram_id, session, expected_seq):
         from app.tactical_combat import STALE_TURN_MESSAGE
         return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
+
+    if session.circles_filled >= session.circles_needed:
+        return _finish_success(storage, telegram_id, session)
+
+    if session.moves >= session.max_moves:
+        clear_hunt_session(storage, telegram_id)
+        return ActionResult(
+            False,
+            f"Время вылазки вышло на «{session.location}».\n"
+            f"Сигнал {session.circles_filled}/{session.circles_needed}, арт не взят.\n"
+            f"Рад за вылазку +{session.rad_gained}.",
+            payload={"hunt_active": False, "hunt_done": True},
+        )
 
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = _render_for_player(storage, telegram_id, session, player)

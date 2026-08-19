@@ -1117,7 +1117,7 @@ def rgrid_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
         return result
     session.hp[str(telegram_id)] = new_hp
     session.medkits_used[str(telegram_id)] = True
-    medkit_text = f"{player.nickname}, использует аптечку."
+    medkit_text = f"{h(player.nickname)}, использует аптечку."
     session.log.append(medkit_text)
     _advance(session)
     done = _after_player_turn(storage, session)
@@ -1186,19 +1186,20 @@ def rgrid_revive_ally(storage: Storage, telegram_id: int, target_id: int) -> Act
     if med is None:
         return ActionResult(False, "Нужна аптечка в инвентаре.")
     med_label, med_key = med
+    if _spend_inventory_medkit(storage, telegram_id, med_key) is None:
+        return ActionResult(False, "Не удалось списать аптечку.")
     max_hp = effective_max_health(target)
     revived_hp = max(1, int(max_hp * 0.4))
     session.hp[str(target_id)] = revived_hp
-    note = f"{actor.nickname} поднял {target.nickname} ({med_label}): HP {revived_hp}."
+    note = f"{h(actor.nickname)} поднял {h(target.nickname)} ({med_label}): HP {revived_hp}."
     session.log.append(note)
     _advance(session)
     done = _after_player_turn(storage, session)
     if done:
         return done
     if not _save_turn(storage, session, turn_seq):
+        storage.add_item(telegram_id, med_key, 1)
         return ActionResult(False, STALE_TURN_MESSAGE)
-    if _spend_inventory_medkit(storage, telegram_id, med_key) is None:
-        return ActionResult(False, "Не удалось списать аптечку.")
     return ActionResult(True, note, payload={"rgrid_active": True})
 
 
@@ -1293,7 +1294,7 @@ def rgrid_status_caption(storage: Storage, session: RaidGridSession, viewer_id: 
         lines.append(f"Захват: {session.capture_progress}/{RAID_CAPTURE_TURNS}")
     for pid in session.player_ids[:5]:
         ch = storage.get_character(pid, refresh_energy=False)
-        name = ch.nickname if ch else str(pid)
+        name = h(ch.nickname) if ch else str(pid)
         hp = session.hp.get(str(pid), 0)
         mark = " ◀" if pid == active_pid else ""
         if pid == viewer_id:
@@ -1301,7 +1302,7 @@ def rgrid_status_caption(storage: Storage, session: RaidGridSession, viewer_id: 
         lines.append(f"{name}{mark}: HP {hp}")
     lines.append("🔷 синяя клетка на карте = вы")
     if session.log:
-        lines.append(session.log[-1][:80])
+        lines.append(h(session.log[-1][:80]))
     return "\n".join(lines)
 
 

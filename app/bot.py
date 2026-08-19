@@ -5450,7 +5450,7 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
                 try:
                     await callback.message.answer(text, reply_markup=keyboard)
                 except Exception:
-                    pass
+                    logger.exception("Failed to send quest menu after mission for %s", telegram_id)
             return
 
         image = payload.get("mission_image")
