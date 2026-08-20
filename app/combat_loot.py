@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import random
 
-from app.game_logic import ITEM_LABELS, ActionResult
+from app.game_logic import ITEM_LABELS
 from app.storage import Storage
 
+# Мутанты роняют части тел / биоматериал — не человеческий хабар.
 MUTANT_LOOT_TABLE: tuple[tuple[str, int, int], ...] = (
-    ("medkit", 24, 1),
-    ("ammo_pack", 28, 1),
-    ("diesel_can", 10, 1),
-    ("sausage", 10, 1),
-    ("vodka", 8, 1),
+    ("mutant_tail", 22, 1),
+    ("mutant_claw", 20, 1),
+    ("mutant_fang", 18, 1),
+    ("mutant_eye", 14, 1),
+    ("mutant_hide", 12, 1),
+    ("mutant_tendril", 8, 1),
 )
 NPC_LOOT_TABLE: tuple[tuple[str, int, int], ...] = (
     ("medkit", 22, 1),

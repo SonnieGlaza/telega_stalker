@@ -225,6 +225,7 @@ MUTANT_NAME_OPENERS: dict[str, str] = {
     "pseudodog": "Псевдопёс",
     "bloodsucker": "Кровосос",
     "flesh": "Плоть",
+    "controller": "Контролёр",
 }
 
 NPC_NAME_OPENERS: dict[str, str] = {
@@ -243,6 +244,7 @@ MUTANT_NAME_INSTRUMENTAL: dict[str, str] = {
     "pseudodog": "с Псевдопсом",
     "bloodsucker": "с Кровососом",
     "flesh": "с Плотью",
+    "controller": "с Контролёром",
 }
 
 NPC_NAME_INSTRUMENTAL: dict[str, str] = {

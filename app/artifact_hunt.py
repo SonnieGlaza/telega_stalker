@@ -1328,18 +1328,19 @@ def _paste_circle(
     token = token.convert("RGBA").resize((diameter, diameter), Image.Resampling.LANCZOS)
     mask = Image.new("L", (diameter, diameter), 0)
     ImageDraw.Draw(mask).ellipse((1, 1, diameter - 2, diameter - 2), fill=255)
-    ring = Image.new("RGBA", (diameter + ring_width * 2, diameter + ring_width * 2), (0, 0, 0, 0))
-    rd = ImageDraw.Draw(ring)
-    outer = diameter + ring_width * 2 - 1
-    rd.ellipse((0, 0, outer, outer), outline=(*ring_color, 255), width=ring_width)
-    # Мягкое свечение кольца.
-    glow = Image.new("RGBA", ring.size, (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow)
-    gd.ellipse((2, 2, outer - 2, outer - 2), outline=(*ring_color, 70), width=ring_width + 4)
-    ox = cx - ring.size[0] // 2
-    oy = cy - ring.size[1] // 2
-    canvas.alpha_composite(glow, (ox, oy))
-    canvas.alpha_composite(ring, (ox, oy))
+    if ring_width > 0:
+        ring = Image.new("RGBA", (diameter + ring_width * 2, diameter + ring_width * 2), (0, 0, 0, 0))
+        rd = ImageDraw.Draw(ring)
+        outer = diameter + ring_width * 2 - 1
+        rd.ellipse((0, 0, outer, outer), outline=(*ring_color, 255), width=ring_width)
+        # Мягкое свечение кольца.
+        glow = Image.new("RGBA", ring.size, (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glow)
+        gd.ellipse((2, 2, outer - 2, outer - 2), outline=(*ring_color, 70), width=ring_width + 4)
+        ox = cx - ring.size[0] // 2
+        oy = cy - ring.size[1] // 2
+        canvas.alpha_composite(glow, (ox, oy))
+        canvas.alpha_composite(ring, (ox, oy))
     canvas.paste(token, (cx - diameter // 2, cy - diameter // 2), mask)
 
 

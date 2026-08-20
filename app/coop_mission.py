@@ -52,6 +52,30 @@ COOP_GRID_SIZE = 6
 COOP_TURN_SECONDS = 10
 COOP_ENERGY_COST = 14
 
+# Типы кооп-миссий (выбор лидером группы до старта).
+COOP_MISSION_TYPES: dict[str, dict[str, str]] = {
+    "collect": {
+        "title": "Сбор образцов",
+        "desc": "Соберите отмеченные цели на поле и выживите.",
+    },
+    "scout": {
+        "title": "Разведка",
+        "desc": "Одна точка разведки — отметьте её и держитесь вместе.",
+    },
+    "loot": {
+        "title": "Поиск хабара",
+        "desc": "Несколько тайников на карте — соберите все.",
+    },
+    "clear_mutant": {
+        "title": "Зачистка мутантов",
+        "desc": "Уничтожьте всех мутантов на поле.",
+    },
+    "clear_marauder": {
+        "title": "Зачистка мародёров",
+        "desc": "Уничтожьте всех НПС-мародёров на поле.",
+    },
+}
+
 LOBBY_PREFIX = "coop:lobby:"
 SESSION_PREFIX = "coop:session:"
 PLAYER_PREFIX = "coop:player:"
@@ -144,6 +168,7 @@ class CoopLobby:
     host_id: int
     member_ids: list[int]
     location: str
+    mission_kind: str = "collect"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -151,15 +176,20 @@ class CoopLobby:
             "host_id": self.host_id,
             "member_ids": list(self.member_ids),
             "location": self.location,
+            "mission_kind": self.mission_kind,
         }
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> CoopLobby:
+        kind = str(raw.get("mission_kind") or "collect")
+        if kind not in COOP_MISSION_TYPES:
+            kind = "collect"
         return cls(
             lobby_id=str(raw.get("lobby_id") or ""),
             host_id=int(raw.get("host_id") or 0),
             member_ids=[int(x) for x in (raw.get("member_ids") or [])],
             location=str(raw.get("location") or "Кордон"),
+            mission_kind=kind,
         )
 
 
@@ -195,6 +225,7 @@ class CoopMissionSession:
     log: list[str] = field(default_factory=list)
     message_ids: dict[str, int] = field(default_factory=dict)
     grid: int = COOP_GRID_SIZE
+    mission_kind: str = "collect"
 
     def active_player(self) -> int:
         from app.tactical_roster import resolve_active_player
@@ -240,10 +271,14 @@ class CoopMissionSession:
             "log": self.log[-14:],
             "message_ids": {str(k): int(v) for k, v in self.message_ids.items()},
             "grid": self.grid,
+            "mission_kind": self.mission_kind,
         }
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> CoopMissionSession:
+        kind = str(raw.get("mission_kind") or "collect")
+        if kind not in COOP_MISSION_TYPES:
+            kind = "collect"
         return cls(
             session_id=str(raw.get("session_id") or ""),
             lobby_id=str(raw.get("lobby_id") or ""),
@@ -277,6 +312,7 @@ class CoopMissionSession:
             log=[str(x) for x in (raw.get("log") or [])],
             message_ids={str(k): int(v) for k, v in (raw.get("message_ids") or {}).items()},
             grid=int(raw.get("grid") or COOP_GRID_SIZE),
+            mission_kind=kind,
         )
 
 
@@ -499,21 +535,38 @@ def coop_menu_text(storage: Storage, telegram_id: int) -> str:
             ch = storage.get_character(pid, refresh_energy=False)
             names.append(h(ch.nickname) if ch else str(pid))
         host_mark = " (лидер)" if lobby.host_id == telegram_id else ""
+        mission = COOP_MISSION_TYPES.get(lobby.mission_kind, COOP_MISSION_TYPES["collect"])
         return (
             f"👥 Группа кооп-вылазки на «{lobby.location}»{host_mark}.\n"
+            f"Миссия: {mission['title']} — {mission['desc']}\n"
             f"Участники ({len(lobby.member_ids)}/{COOP_MAX_PLAYERS}): {', '.join(names)}.\n"
             f"Энергия при старте: {COOP_ENERGY_COST} у каждого.\n"
-            "Лидер запускает вылазку, когда все готовы."
+            "Лидер выбирает тип миссии и запускает вылазку, когда все готовы."
         )
     return (
         f"👥 Кооп-вылазка (до {COOP_MAX_PLAYERS} игроков).\n"
         f"Локация: «{player.location}».\n"
         f"Пошаговое поле: ход {COOP_TURN_SECONDS} сек, аномалии, мутанты и НПС-мародёры.\n"
+        f"Типы миссий: сбор, разведка, хабар, зачистка мутантов/мародёров.\n"
         f"Стоимость: {COOP_ENERGY_COST} энергии.\n"
         "Игроки на поле — со своими скинами, погибшие не получают награду.\n"
         "У каждого бойца 1 аптечка из инвентаря; раненого напарника (0 HP) эвакуируют на старт.\n"
         "Создай группу или присоединись к открытой."
     )
+
+
+def set_coop_lobby_mission(storage: Storage, host_id: int, mission_kind: str) -> ActionResult:
+    lobby = get_coop_lobby_by_player(storage, host_id)
+    if lobby is None:
+        return ActionResult(False, "Кооп-группа не найдена.")
+    if lobby.host_id != host_id:
+        return ActionResult(False, "Тип миссии выбирает только лидер группы.")
+    if mission_kind not in COOP_MISSION_TYPES:
+        return ActionResult(False, "Неизвестный тип миссии.")
+    lobby.mission_kind = mission_kind
+    save_coop_lobby(storage, lobby)
+    info = COOP_MISSION_TYPES[mission_kind]
+    return ActionResult(True, f"Миссия группы: {info['title']}.\n{info['desc']}")
 
 
 def create_coop_lobby(storage: Storage, telegram_id: int) -> ActionResult:
@@ -538,6 +591,7 @@ def create_coop_lobby(storage: Storage, telegram_id: int) -> ActionResult:
         host_id=telegram_id,
         member_ids=[telegram_id],
         location=player.location,
+        mission_kind="collect",
     )
     save_coop_lobby(storage, lobby)
     _register_open_lobby(storage, lobby_id)
@@ -641,7 +695,11 @@ def _save_if_turn_ok(storage: Storage, session: CoopMissionSession, expected_seq
 
 
 def _build_coop_map(session: CoopMissionSession) -> None:
+    from app.enemy_hud import default_hp_for_kind
+    from app.mutant_assets import ensure_single_controller, mutant_field_warnings
+
     grid = session.grid
+    kind = session.mission_kind if session.mission_kind in COOP_MISSION_TYPES else "collect"
     start = _free_cell(grid, set())
     session.start = start
     forbidden: set[tuple[int, int]] = {start}
@@ -652,29 +710,61 @@ def _build_coop_map(session: CoopMissionSession) -> None:
             cell = _free_cell(grid, forbidden)
             session.set_pos(pid, cell)
             forbidden.add(cell)
-    obj_n = 2 + len(session.player_ids)
-    for _ in range(obj_n):
+
+    danger = LOCATION_DANGER.get(session.location, 2)
+    if kind in {"clear_mutant", "clear_marauder"}:
+        pass
+    elif kind == "scout":
         cell = _free_cell(grid, forbidden)
         session.objectives.append(cell)
         forbidden.add(cell)
-    danger = LOCATION_DANGER.get(session.location, 2)
+    elif kind == "loot":
+        for _ in range(2 + (1 if danger >= 3 else 0)):
+            cell = _free_cell(grid, forbidden)
+            session.objectives.append(cell)
+            forbidden.add(cell)
+    else:
+        obj_n = 2 + len(session.player_ids)
+        for _ in range(obj_n):
+            cell = _free_cell(grid, forbidden)
+            session.objectives.append(cell)
+            forbidden.add(cell)
+
     for _ in range(2 + danger):
         cell = _free_cell(grid, forbidden)
         session.hazards.append(cell)
         forbidden.add(cell)
-    for _ in range(2 + max(1, danger // 2)):
+
+    mut_n = 2 + max(1, danger // 2)
+    if kind == "clear_mutant":
+        mut_n += 2
+    elif kind == "clear_marauder":
+        mut_n = max(1, mut_n - 1)
+    for _ in range(mut_n):
         cell = _free_cell(grid, forbidden)
         session.enemies.append(cell)
-        session.enemy_kinds.append(pick_mutant_kind())
-        session.enemy_hp.append(random.randint(10, 18))
+        mk = pick_mutant_kind(allow_controller="controller" not in session.enemy_kinds)
+        session.enemy_kinds.append(mk)
+        session.enemy_hp.append(default_hp_for_kind(mk))
         forbidden.add(cell)
+    session.enemy_kinds = ensure_single_controller(session.enemy_kinds)
+    session.enemy_hp = [default_hp_for_kind(k) for k in session.enemy_kinds]
+
     npc_n = 1 if danger < 3 else 2
+    if kind == "clear_marauder":
+        npc_n += 2
+    elif kind == "clear_mutant":
+        npc_n = max(0, npc_n - 1)
     for _ in range(npc_n):
         cell = _free_cell(grid, forbidden)
         session.npcs.append(cell)
-        session.npc_kinds.append(pick_npc_kind())
-        session.npc_hp.append(random.randint(12, 20))
+        nk = pick_npc_kind()
+        session.npc_kinds.append(nk)
+        session.npc_hp.append(default_hp_for_kind(nk))
         forbidden.add(cell)
+
+    for note in mutant_field_warnings(session.enemy_kinds):
+        session.log.append(note)
 
 
 def _combat_damage(location: str, character: Character) -> int:
@@ -749,6 +839,26 @@ def _move_npcs(session: CoopMissionSession) -> None:
     session.npcs = _move_hostile_group(session, session.npcs)
 
 
+
+def _run_hostile_phase(session: CoopMissionSession, storage: Storage) -> None:
+    """Ход мутантов/НПС + пассив контролёра."""
+    from app.mutant_assets import apply_controller_aura_to_hp_map
+
+    _move_enemies(session)
+    _move_npcs(session)
+    session.log.extend(_enemy_attacks(session, storage))
+    session.log.extend(_npc_attacks(session, storage))
+    session.log.extend(
+        apply_controller_aura_to_hp_map(
+            session.hp,
+            session.player_ids,
+            session.enemy_kinds,
+            death_causes=session.death_causes,
+            death_killers=session.death_killers,
+        )
+    )
+
+
 def _hostile_attacks(
     session: CoopMissionSession,
     storage: Storage,
@@ -806,6 +916,10 @@ def _maybe_radio_chatter(session: CoopMissionSession, storage: Storage) -> None:
 
 
 def _objectives_complete(session: CoopMissionSession) -> bool:
+    if session.mission_kind == "clear_mutant":
+        return len(session.enemies) == 0
+    if session.mission_kind == "clear_marauder":
+        return len(session.npcs) == 0
     return len(session.collected) >= len(session.objectives) and len(session.objectives) > 0
 
 
@@ -998,6 +1112,7 @@ def start_coop_mission(storage: Storage, host_id: int) -> ActionResult:
         turn_order=list(lobby.member_ids),
         active_index=0,
         turn_deadline=_deadline_iso(),
+        mission_kind=lobby.mission_kind if lobby.mission_kind in COOP_MISSION_TYPES else "collect",
     )
     _build_coop_map(session)
     for pid in lobby.member_ids:
@@ -1006,16 +1121,26 @@ def start_coop_mission(storage: Storage, host_id: int) -> ActionResult:
             session.hp[str(pid)] = int(ch.health)
             session.medkits_used[str(pid)] = False
     first = storage.get_character(session.active_player(), refresh_energy=False)
+    mission = COOP_MISSION_TYPES.get(session.mission_kind, COOP_MISSION_TYPES["collect"])
     session.log.append(
-        f"Кооп на «{session.location}»: {len(session.player_ids)} сталкеров. "
+        f"Кооп «{mission['title']}» на «{session.location}»: {len(session.player_ids)} сталкеров. "
         f"Первый ход — {h(first.nickname) if first else session.active_player()}."
     )
     clear_coop_lobby(storage, lobby)
     save_coop_session(storage, session)
     register_active_coop(storage, session_id)
+    goal_txt = (
+        f"мутантов: {len(session.enemies)}"
+        if session.mission_kind == "clear_mutant"
+        else (
+            f"мародёров: {len(session.npcs)}"
+            if session.mission_kind == "clear_marauder"
+            else f"целей: {len(session.objectives)}"
+        )
+    )
     return ActionResult(
         True,
-        f"Кооп-вылазка началась! Ход {COOP_TURN_SECONDS} сек. Цели: {len(session.objectives)}.",
+        f"Кооп-вылазка «{mission['title']}» началась! Ход {COOP_TURN_SECONDS} сек. {goal_txt}.",
         payload={"coop_started": True, "session_id": session_id, "notify_all": session.player_ids},
     )
 
@@ -1139,10 +1264,7 @@ def coop_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
         return _finish_success(storage, session)
 
     _advance_turn(session)
-    _move_enemies(session)
-    _move_npcs(session)
-    session.log.extend(_enemy_attacks(session, storage))
-    session.log.extend(_npc_attacks(session, storage))
+    _run_hostile_phase(session, storage)
     _maybe_radio_chatter(session, storage)
     wipe = _check_team_wipe(storage, session)
     if wipe:
@@ -1230,10 +1352,7 @@ def coop_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     if _objectives_complete(session):
         return _finish_success(storage, session)
     _advance_turn(session)
-    _move_enemies(session)
-    _move_npcs(session)
-    session.log.extend(_enemy_attacks(session, storage))
-    session.log.extend(_npc_attacks(session, storage))
+    _run_hostile_phase(session, storage)
     _maybe_radio_chatter(session, storage)
     wipe = _check_team_wipe(storage, session)
     if wipe:
@@ -1267,10 +1386,7 @@ def coop_use_medkit(storage: Storage, telegram_id: int) -> ActionResult:
     session.medkits_used[str(telegram_id)] = True
     session.log.append(f"{h(player.nickname)} использовал аптечку.")
     _advance_turn(session)
-    _move_enemies(session)
-    _move_npcs(session)
-    session.log.extend(_enemy_attacks(session, storage))
-    session.log.extend(_npc_attacks(session, storage))
+    _run_hostile_phase(session, storage)
     _maybe_radio_chatter(session, storage)
     wipe = _check_team_wipe(storage, session)
     if wipe:
@@ -1325,10 +1441,7 @@ def coop_evacuate(storage: Storage, telegram_id: int) -> ActionResult:
     downed_name = h(downed_char.nickname) if downed_char else str(downed_id)
     session.log.append(f"🦺 {h(player.nickname)} взвалил {downed_name} на плечи и тащит на точку старта.")
     _advance_turn(session)
-    _move_enemies(session)
-    _move_npcs(session)
-    session.log.extend(_enemy_attacks(session, storage))
-    session.log.extend(_npc_attacks(session, storage))
+    _run_hostile_phase(session, storage)
     _maybe_radio_chatter(session, storage)
     wipe = _check_team_wipe(storage, session)
     if wipe:
@@ -1385,10 +1498,7 @@ def process_coop_turn_timeouts(storage: Storage) -> list[tuple[int, ActionResult
         turn_seq = session.turn_seq
         session.log.append(f"Тайм-аут хода {h(player.nickname) if player else active}.")
         _advance_turn(session)
-        _move_enemies(session)
-        _move_npcs(session)
-        session.log.extend(_enemy_attacks(session, storage))
-        session.log.extend(_npc_attacks(session, storage))
+        _run_hostile_phase(session, storage)
         _maybe_radio_chatter(session, storage)
         wipe = _check_team_wipe(storage, session)
         if wipe:
@@ -1419,11 +1529,18 @@ def coop_status_caption(session: CoopMissionSession, storage: Storage, viewer_id
 
     active_pid = session.active_player()
     active_name = format_player_name(storage, active_pid, html=True)
-    left_obj = len(session.objectives) - len(session.collected)
+    mission = COOP_MISSION_TYPES.get(session.mission_kind, COOP_MISSION_TYPES["collect"])
+    if session.mission_kind == "clear_mutant":
+        goal_line = f"Зачистка мутантов: осталось {len(session.enemies)}"
+    elif session.mission_kind == "clear_marauder":
+        goal_line = f"Зачистка мародёров: осталось {len(session.npcs)}"
+    else:
+        left_obj = len(session.objectives) - len(session.collected)
+        goal_line = f"Цели: {len(session.collected)}/{len(session.objectives)} (осталось {left_obj})"
     lines = [
-        f"👥 Кооп · «{session.location}»",
+        f"👥 Кооп · {mission['title']} · «{session.location}»",
         f"Ход: {h(active_name)} ({COOP_TURN_SECONDS} сек)",
-        f"Цели: {len(session.collected)}/{len(session.objectives)} (осталось {left_obj})",
+        goal_line,
         f"Мутанты: {len(session.enemies)} · НПС: {len(session.npcs)} · Аномалии: {len(session.hazards)}",
     ]
     if session.enemy_hp:

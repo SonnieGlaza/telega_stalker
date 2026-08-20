@@ -411,9 +411,17 @@ def _spawn_hostiles(
         cell = _pick_spawn_cell(cover_opts, forbidden) or _free_cell(session.grid, forbidden)
         session.hostiles.append(cell)
         session.hostile_types.append("mutant")
-        session.hostile_kinds.append(pick_mutant_kind())
+        session.hostile_kinds.append(pick_mutant_kind(allow_controller="controller" not in session.hostile_kinds))
         session.hostile_weapons.append("")
         forbidden.add(cell)
+    # Не больше одного контролёра на рейд.
+    from app.mutant_assets import ensure_single_controller
+
+    mut_idxs = [i for i, t in enumerate(session.hostile_types) if t == "mutant"]
+    mut_kinds = [session.hostile_kinds[i] for i in mut_idxs]
+    fixed = ensure_single_controller(mut_kinds)
+    for i, kind in zip(mut_idxs, fixed):
+        session.hostile_kinds[i] = kind
 
 
 def _apply_cover_on_base(session: RaidGridSession) -> None:
@@ -1013,6 +1021,22 @@ def _advance(session: RaidGridSession) -> None:
 
 def _after_player_turn(storage: Storage, session: RaidGridSession) -> ActionResult | None:
     session.log.extend(_hostile_turn(storage, session))
+    from app.mutant_assets import apply_controller_aura_to_hp_map
+
+    mutant_kinds = [
+        session.hostile_kinds[i]
+        for i, t in enumerate(session.hostile_types)
+        if t == "mutant" and i < len(session.hostile_kinds)
+    ]
+    session.log.extend(
+        apply_controller_aura_to_hp_map(
+            session.hp,
+            session.player_ids,
+            mutant_kinds,
+            death_causes=session.death_causes,
+            death_killers=session.death_killers,
+        )
+    )
     return _check_end(storage, session)
 
 

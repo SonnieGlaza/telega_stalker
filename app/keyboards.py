@@ -1487,16 +1487,35 @@ def arena_grid_keyboard(*, medkit_available: bool) -> InlineKeyboardMarkup:
     )
 
 
-def coop_menu_keyboard(*, in_lobby: bool, is_host: bool, lobby_id: str | None = None) -> InlineKeyboardMarkup:
+def coop_menu_keyboard(
+    *,
+    in_lobby: bool,
+    is_host: bool,
+    lobby_id: str | None = None,
+    mission_kind: str | None = None,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if in_lobby and lobby_id:
         if is_host:
+            rows.append([InlineKeyboardButton(text="🎯 Тип миссии", callback_data="coop:missions")])
             rows.append([InlineKeyboardButton(text="▶️ Начать вылазку", callback_data=f"coop:start:{lobby_id}")])
         rows.append([InlineKeyboardButton(text="🚪 Выйти из группы", callback_data="coop:leave")])
     else:
         rows.append([InlineKeyboardButton(text="➕ Создать группу", callback_data="coop:create")])
         rows.append([InlineKeyboardButton(text="🔍 Найти группу", callback_data="coop:list")])
     rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="coop:refresh")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def coop_mission_pick_keyboard() -> InlineKeyboardMarkup:
+    from app.coop_mission import COOP_MISSION_TYPES
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for key, info in COOP_MISSION_TYPES.items():
+        rows.append(
+            [InlineKeyboardButton(text=info["title"], callback_data=f"coop:mission:{key}")]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="coop:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

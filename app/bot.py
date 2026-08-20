@@ -143,6 +143,7 @@ from app.coop_mission import (
     process_coop_turn_timeouts,
     render_coop_frame,
     save_coop_session,
+    set_coop_lobby_mission,
     start_coop_mission,
 )
 from app.config import load_settings
@@ -410,6 +411,7 @@ from app.keyboards import (
     coop_menu_keyboard,
     coop_lobby_list_keyboard,
     coop_mission_keyboard,
+    coop_mission_pick_keyboard,
     war_lobby_keyboard,
     war_transfer_keyboard,
     market_lots_keyboard,
@@ -6915,6 +6917,36 @@ async def coop_callback(callback: CallbackQuery, bot: Bot) -> None:
                 callback,
                 coop_menu_text(storage, telegram_id),
                 coop_menu_keyboard(in_lobby=True, is_host=True, lobby_id=lobby.lobby_id if lobby else None),
+            )
+            return
+
+        if action == "missions":
+            lobby = get_coop_lobby_by_player(storage, telegram_id)
+            if lobby is None or lobby.host_id != telegram_id:
+                await reply_action_result(callback, "Тип миссии выбирает только лидер группы.")
+                return
+            await edit_menu_message(
+                callback,
+                "Выбери тип кооп-миссии:",
+                coop_mission_pick_keyboard(),
+            )
+            return
+
+        if action.startswith("mission:"):
+            mission_kind = action.removeprefix("mission:").strip()
+            result = set_coop_lobby_mission(storage, telegram_id, mission_kind)
+            if not result.ok:
+                await reply_action_result(callback, result.text)
+                return
+            lobby = get_coop_lobby_by_player(storage, telegram_id)
+            await edit_menu_message(
+                callback,
+                f"{result.text}\n\n{coop_menu_text(storage, telegram_id)}",
+                coop_menu_keyboard(
+                    in_lobby=lobby is not None,
+                    is_host=True,
+                    lobby_id=lobby.lobby_id if lobby else None,
+                ),
             )
             return
 

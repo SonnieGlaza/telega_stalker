@@ -4,8 +4,12 @@ import random
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PIL import Image
+
+if TYPE_CHECKING:
+    from app.storage import Storage
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MUTANTS_DIR = PROJECT_ROOT / "assets" / "mutants"
@@ -24,13 +28,117 @@ MUTANT_SPRITES: dict[str, str] = {
     "pseudodog": "Псевдособака",
     "bloodsucker": "Кровосос",
     "flesh": "Плоть",
+    "controller": "Контролёр",
 }
 
 MUTANT_SPRITE_KEYS: tuple[str, ...] = tuple(MUTANT_SPRITES.keys())
 
+# Веса спавна: контролёр реже обычных тварей.
+MUTANT_SPAWN_WEIGHTS: dict[str, int] = {
+    "blind_dog": 26,
+    "tushkano": 22,
+    "pseudodog": 18,
+    "bloodsucker": 14,
+    "flesh": 14,
+    "controller": 6,
+}
 
-def pick_mutant_kind() -> str:
-    return random.choice(MUTANT_SPRITE_KEYS)
+CONTROLLER_AURA_DAMAGE = 3
+
+
+def pick_mutant_kind(*, allow_controller: bool = True) -> str:
+    pool = [
+        (key, weight)
+        for key, weight in MUTANT_SPAWN_WEIGHTS.items()
+        if allow_controller or key != "controller"
+    ]
+    if not pool:
+        return "blind_dog"
+    keys, weights = zip(*pool)
+    return random.choices(list(keys), weights=list(weights), k=1)[0]
+
+
+def ensure_single_controller(kinds: list[str]) -> list[str]:
+    """Не больше одного контролёра в группе мутантов."""
+    seen = False
+    out: list[str] = []
+    for kind in kinds:
+        if kind == "controller":
+            if seen:
+                out.append(pick_mutant_kind(allow_controller=False))
+                continue
+            seen = True
+        out.append(kind)
+    return out
+
+
+def controller_on_field(kinds: list[str] | tuple[str, ...] | None) -> bool:
+    return bool(kinds) and "controller" in kinds
+
+
+def bloodsucker_on_field(kinds: list[str] | tuple[str, ...] | None) -> bool:
+    return bool(kinds) and "bloodsucker" in kinds
+
+
+def mutant_field_warnings(kinds: list[str] | tuple[str, ...] | None) -> list[str]:
+    notes: list[str] = []
+    if bloodsucker_on_field(kinds):
+        notes.append("⚠️ На локации Кровосос — иконка без обводки, целиться сложнее.")
+    if controller_on_field(kinds):
+        notes.append(
+            f"🧠 Контролёр на поле: каждый ход все живые −{CONTROLLER_AURA_DAMAGE} HP, пока его не убить."
+        )
+    return notes
+
+
+def apply_controller_aura_to_hp_map(
+    hp: dict[str, int],
+    player_ids: list[int],
+    enemy_kinds: list[str] | tuple[str, ...] | None,
+    *,
+    death_causes: dict[str, str] | None = None,
+    death_killers: dict[str, str] | None = None,
+) -> list[str]:
+    """Пассив контролёра: −HP всем живым за ход. Мутирует hp in-place."""
+    if not controller_on_field(enemy_kinds):
+        return []
+    touched = False
+    for pid in player_ids:
+        key = str(pid)
+        cur = int(hp.get(key, 0) or 0)
+        if cur <= 0:
+            continue
+        nxt = max(0, cur - CONTROLLER_AURA_DAMAGE)
+        hp[key] = nxt
+        touched = True
+        if nxt <= 0:
+            if death_causes is not None:
+                death_causes[key] = "mutant"
+            if death_killers is not None:
+                death_killers[key] = "Контролёр"
+    if not touched:
+        return []
+    return [f"🧠 Контролёр давит разум: все живые −{CONTROLLER_AURA_DAMAGE} HP."]
+
+
+def apply_controller_aura_db(
+    storage: Storage,
+    telegram_ids: list[int],
+    enemy_kinds: list[str] | tuple[str, ...] | None,
+) -> list[str]:
+    """Пассив контролёра для режимов, где HP в БД (квестовые вылазки)."""
+    if not controller_on_field(enemy_kinds):
+        return []
+    touched = False
+    for tid in telegram_ids:
+        ch = storage.get_character(int(tid), refresh_energy=False)
+        if ch is None or int(ch.health) <= 0:
+            continue
+        storage.change_health(int(tid), -CONTROLLER_AURA_DAMAGE)
+        touched = True
+    if not touched:
+        return []
+    return [f"🧠 Контролёр давит разум: −{CONTROLLER_AURA_DAMAGE} HP."]
 
 
 @lru_cache(maxsize=32)

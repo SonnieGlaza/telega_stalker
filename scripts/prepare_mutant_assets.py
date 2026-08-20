@@ -2,7 +2,7 @@
 """Подготовка спрайтов мутантов для grid-миссий и карточек PDA.
 
 Кладите исходники в assets/mutants/source/ (png/jpg/webp):
-  blind_dog, tushkano, pseudodog, bloodsucker, flesh
+  blind_dog, tushkano, pseudodog, bloodsucker, flesh, controller
 
 Запуск:
   python3 scripts/prepare_mutant_assets.py

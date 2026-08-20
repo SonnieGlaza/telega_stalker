@@ -170,11 +170,20 @@ def paste_mutant_sprite(
     key = kind or pick_mutant_kind()
     sprite = mutant_sprite_image(key)
     if sprite is not None:
+        if key == "bloodsucker":
+            # Плотнее иконка, без красной обводки — «полупрозрачный» силуэт клетки.
+            r, g, b, a = sprite.split()
+            a = a.point(lambda p: min(255, int(p * 1.25) + 48) if p > 0 else 0)
+            sprite = Image.merge("RGBA", (r, g, b, a))
+            _paste_circle(canvas, sprite, cx, cy, diameter, ring_color=ring_color, ring_width=0)
+            return
         ring = (255, 120, 80) if wave else ring_color
         _paste_circle(canvas, sprite, cx, cy, diameter, ring_color=ring, ring_width=2)
         return
     color = (180, 60, 40) if wave else (50, 90, 45)
     outline = (255, 120, 80) if wave else (120, 200, 80)
+    if key == "bloodsucker":
+        outline = color
     r = diameter // 2 - 4
     draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=color, outline=outline, width=2)
 

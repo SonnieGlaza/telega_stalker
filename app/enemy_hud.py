@@ -26,6 +26,7 @@ HP_BY_KIND: dict[str, int] = {
     "pseudodog": 22,
     "bloodsucker": 28,
     "flesh": 18,
+    "controller": 32,
     "maloy": 16,
     "bandit": 18,
     "mercenary": 22,
@@ -309,6 +310,7 @@ def _fallback_portrait(kind: str, is_npc: bool, size: int) -> Image.Image:
         "tushkano": (110, 95, 70),
         "bloodsucker": (72, 78, 62),
         "flesh": (150, 110, 100),
+        "controller": (48, 42, 70),
     }.get(kind, (88, 74, 54))
     d.ellipse((m, m + 4, size - m, size - m), fill=fur)
     # Уши.
@@ -327,6 +329,11 @@ def _fallback_portrait(kind: str, is_npc: bool, size: int) -> Image.Image:
         d.ellipse((m + 4, m + 2, size - m - 4, size * 3 // 5), fill=(80, 90, 70))
         d.ellipse((size // 3, size // 3, size // 3 + 6, size // 3 + 10), fill=(40, 20, 20))
         d.ellipse((size * 3 // 5, size // 3, size * 3 // 5 + 6, size // 3 + 10), fill=(40, 20, 20))
+    elif kind == "controller":
+        d.ellipse((m, m // 2, size - m, size - m), fill=(48, 42, 70))
+        d.ellipse((size * 3 // 8, size * 3 // 8, size * 5 // 8, size * 5 // 8), fill=(20, 16, 28))
+        d.ellipse((size * 42 // 100, size * 45 // 100, size * 48 // 100, size * 52 // 100), fill=(180, 80, 255))
+        d.ellipse((size * 55 // 100, size * 45 // 100, size * 61 // 100, size * 52 // 100), fill=(180, 80, 255))
     else:
         d.ellipse((size // 3, size // 3, size // 3 + 7, size // 3 + 6), fill=(20, 16, 12))
         d.ellipse((size * 3 // 5, size // 3, size * 3 // 5 + 7, size // 3 + 6), fill=(20, 16, 12))

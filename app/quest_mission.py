@@ -489,11 +489,14 @@ def _spawn_mutants(
     enemies: list[tuple[int, int]],
     kinds: list[str],
 ) -> None:
+    from app.mutant_assets import ensure_single_controller
+
     for _ in range(max(0, n)):
         cell = _free_cell(grid, forbidden)
         enemies.append(cell)
-        kinds.append(pick_mutant_kind())
+        kinds.append(pick_mutant_kind(allow_controller="controller" not in kinds))
         forbidden.add(cell)
+    kinds[:] = ensure_single_controller(kinds)
 
 
 def _spawn_npcs(
@@ -737,7 +740,11 @@ def _maybe_npc_shots(
     return notes, max(0, player.health - new_hp)
 
 
-def _maybe_move_hostiles(session: QuestMissionSession) -> list[str]:
+def _maybe_move_hostiles(
+    session: QuestMissionSession,
+    storage: Storage | None = None,
+    telegram_id: int | None = None,
+) -> list[str]:
     notes: list[str] = []
     chase = _mutants_chase_player(session)
     session.enemies, session.enemy_kinds, mut_moved = _move_hostile_units(
@@ -757,6 +764,10 @@ def _maybe_move_hostiles(session: QuestMissionSession) -> list[str]:
             notes.append(f"Мутанты сдвинулись ({mut_moved}).")
     if npc_moved:
         notes.append(f"НПС сдвинулись ({npc_moved}).")
+    if storage is not None and telegram_id is not None:
+        from app.mutant_assets import apply_controller_aura_db
+
+        notes.extend(apply_controller_aura_db(storage, [telegram_id], session.enemy_kinds))
     return notes
 
 
@@ -1141,13 +1152,19 @@ def start_or_resume_quest_mission(
             "\nПодопечный (голубое кольцо) идёт за тобой клетка в клетку. "
             "Доведи его до точки B — если его схватят или он погибнет, контракт сорван."
         )
+    from app.mutant_assets import mutant_field_warnings
+
+    warn_block = ""
+    warns = mutant_field_warnings(session.enemy_kinds)
+    if warns:
+        warn_block = "\n" + "\n".join(warns)
     return ActionResult(
         True,
         f"Вылазка: «{template.title}» на «{template.work_location}».\n"
         f"{KIND_LABELS.get(template.mission_kind, template.mission_kind)}. "
         f"Энергия −{quest.energy_cost}.\n"
         f"Угрозы ({template.difficulty}): {threat_txt}."
-        f"{escort_hint}\n"
+        f"{escort_hint}{warn_block}\n"
         "Зелёная обводка — ты и цели (собери их). Красная — враги. Аномалии без обводки.\n"
         "Дойди до целей и вернись на старт (зелёная рамка клетки).\n"
         "НПС с шансом 50% сдвигаются случайно. "
@@ -1205,7 +1222,7 @@ def use_mission_medkit(storage: Storage, telegram_id: int) -> ActionResult:
         )
     expected_seq = session.turn_seq
     notes: list[str] = []
-    notes.extend(_maybe_move_hostiles(session))
+    notes.extend(_maybe_move_hostiles(session, storage, telegram_id))
     shot_notes, shot_damage = _maybe_npc_shots(storage, telegram_id, session, player)
     notes.extend(shot_notes)
     pending_damage = shot_damage
@@ -1366,7 +1383,7 @@ def _complete_quest_turn_after_action(
         if dead is not None:
             death_result = dead
 
-    notes.extend(_maybe_move_hostiles(session))
+    notes.extend(_maybe_move_hostiles(session, storage, telegram_id))
     shot_notes, shot_damage = _maybe_npc_shots(storage, telegram_id, session, player)
     notes.extend(shot_notes)
     pending_damage += shot_damage
