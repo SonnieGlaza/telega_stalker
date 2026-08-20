@@ -6819,7 +6819,9 @@ def withdraw_from_faction_treasury(storage: Storage, telegram_id: int, amount: i
         )
     if not storage.withdraw_faction_treasury(player.faction, amount):
         return ActionResult(False, "В казне недостаточно денег для вывода.")
-    storage.change_money(telegram_id, amount)
+    if not storage.change_money(telegram_id, amount):
+        storage.change_faction_treasury(player.faction, amount)
+        return ActionResult(False, "Не удалось зачислить деньги на баланс.")
     return ActionResult(True, f"Из казны {player.faction} выведено {amount} RU в твой баланс.")
 
 
@@ -8039,7 +8041,7 @@ def approve_garage_rental_request(storage: Storage, approver_id: int, request_id
 
     player_id = int(entry.get("player_id") or 0)
     vehicle_key = str(entry.get("vehicle_key") or "")
-    nickname = str(entry.get("player_nickname") or "?")
+    nickname = h(str(entry.get("player_nickname") or "?"))
     result = _issue_garage_vehicle(
         storage,
         player_id,
@@ -8069,7 +8071,7 @@ def deny_garage_rental_request(storage: Storage, approver_id: int, request_id: s
         return ActionResult(False, "Запрос не найден или уже обработан.")
     if str(entry.get("faction") or "") != approver.faction:
         return ActionResult(False, "Это запрос другой группировки.")
-    nickname = str(entry.get("player_nickname") or "?")
+    nickname = h(str(entry.get("player_nickname") or "?"))
     vehicle_key = str(entry.get("vehicle_key") or "")
     entries = [
         item for item in _load_garage_rental_requests(storage) if str(item.get("id") or "") != request_id
@@ -8090,7 +8092,7 @@ def build_garage_rental_requests_overview(storage: Storage, telegram_id: int) ->
         return f"📋 Запросы на аренду «{player.faction}»: пусто."
     lines = [f"📋 Запросы на аренду «{player.faction}» ({len(requests)}):"]
     for entry in requests:
-        nickname = str(entry.get("player_nickname") or "?")
+        nickname = h(str(entry.get("player_nickname") or "?"))
         vehicle = _vehicle_label_for_key(str(entry.get("vehicle_key") or ""))
         lines.append(f"• {nickname} — {vehicle}")
     lines.append("\nПодтверди или отклони запрос кнопками ниже.")
