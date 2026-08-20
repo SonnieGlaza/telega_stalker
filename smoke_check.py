@@ -2473,6 +2473,79 @@ def run_smoke_check() -> None:
         assert donors and int(donors[0]["telegram_id"]) == 111
         assert int(donors[0]["value"]) >= 6
 
+        # Live ETA «В пути» — один message_id, без дублей при гонке tick + старт поездки.
+        import asyncio
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from app import bot as bot_mod
+        from app.game_logic import travel_status_text
+
+        traveler = storage.get_character(111, refresh_energy=False)
+        assert traveler is not None
+        if traveler.travel_destination:
+            # Дождаться/сбросить активный переход, если остался от прошлых шагов.
+            past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+            with storage._connect() as conn:
+                conn.execute(
+                    "UPDATE characters SET travel_arrives_at = ? WHERE telegram_id = ?",
+                    (past, 111),
+                )
+            storage.resolve_travel_if_due(111)
+        travel_ok = travel_to(storage, 111, "Рыжий лес", transport_mode="foot")
+        if not travel_ok.ok:
+            travel_ok = travel_to(storage, 111, "Кордон", transport_mode="foot")
+        assert travel_ok.ok, travel_ok.text
+        traveler = storage.get_character(111, refresh_energy=False)
+        assert traveler is not None and traveler.travel_destination
+        status = travel_status_text(traveler)
+        assert status is not None and "Осталось ехать" in status
+
+        bot_mod._travel_eta_locks.clear()
+        storage.delete_meta("travel_eta_msg:111")
+        send_count = {"n": 0}
+
+        class _FakeSent:
+            def __init__(self, mid: int):
+                self.message_id = mid
+
+        async def _fake_send(chat_id, text, **_kwargs):
+            send_count["n"] += 1
+            await asyncio.sleep(0.015)
+            return _FakeSent(9000 + send_count["n"])
+
+        async def _fake_edit(*, chat_id, message_id, text, **_kwargs):
+            await asyncio.sleep(0.005)
+            return True
+
+        fake_bot = MagicMock()
+        fake_bot.send_message = AsyncMock(side_effect=_fake_send)
+        fake_bot.edit_message_text = AsyncMock(side_effect=_fake_edit)
+
+        async def _race():
+            # Имитация: старт поездки + секундный tick одновременно.
+            await asyncio.gather(
+                bot_mod.publish_travel_live_eta(fake_bot, 111),
+                bot_mod.upsert_travel_eta_message(fake_bot, 111, status),
+                bot_mod.upsert_travel_eta_message(fake_bot, 111, status + "\n."),
+                bot_mod.publish_travel_live_eta(fake_bot, 111),
+            )
+
+        with patch.object(bot_mod, "get_storage", return_value=storage):
+            asyncio.run(_race())
+
+        assert send_count["n"] == 1, f"expected one ETA send, got {send_count['n']}"
+        mid = storage.get_meta("travel_eta_msg:111")
+        assert mid is not None
+        # clear meta не должен выкидывать лок из словаря (иначе снова дубли).
+        lock_before = bot_mod._travel_eta_lock(111)
+        bot_mod.clear_travel_eta_message_id(storage, 111)
+        assert bot_mod._travel_eta_locks.get(111) is lock_before
+        assert storage.get_meta("travel_eta_msg:111") is None
+        await_finish = asyncio.run(bot_mod.finish_travel_eta_message(storage, 111))
+        assert await_finish is None
+        assert 111 not in bot_mod._travel_eta_locks
+
 
 if __name__ == "__main__":
     run_smoke_check()

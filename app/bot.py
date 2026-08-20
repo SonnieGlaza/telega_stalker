@@ -532,12 +532,15 @@ def set_travel_eta_message_id(storage: Storage, telegram_id: int, message_id: in
 
 
 def clear_travel_eta_message_id(storage: Storage, telegram_id: int) -> None:
+    """Сбросить id live-сообщения ETA. Лок не трогаем — иначе гонка с upsert даёт дубли «В пути»."""
     storage.delete_meta(_travel_eta_msg_key(telegram_id))
-    _release_travel_eta_lock(telegram_id)
 
 
 async def upsert_travel_eta_message(bot: Bot, telegram_id: int, text: str) -> None:
-    """Создать или отредактировать live-сообщение о времени в пути."""
+    """Создать или отредактировать live-сообщение о времени в пути.
+
+    Всегда один активный message_id на игрока: правка под локом, без параллельных send.
+    """
     storage = get_storage()
     clean = (text or "").strip()
     if not clean:
@@ -555,7 +558,8 @@ async def upsert_travel_eta_message(bot: Bot, telegram_id: int, text: str) -> No
                 logger.debug("Travel ETA edit failed for %s: %s", telegram_id, exc)
             except Exception:
                 logger.debug("Travel ETA edit error for %s", telegram_id, exc_info=True)
-            clear_travel_eta_message_id(storage, telegram_id)
+            # Только meta: лок уже удерживаем, pop ломает взаимное исключение.
+            storage.delete_meta(_travel_eta_msg_key(telegram_id))
         try:
             sent = await bot.send_message(telegram_id, clean)
             set_travel_eta_message_id(storage, telegram_id, sent.message_id)
@@ -571,6 +575,13 @@ async def publish_travel_live_eta(bot: Bot, telegram_id: int) -> None:
     status = travel_status_with_smuggle(storage, telegram_id) or travel_status_text(player)
     if status:
         await upsert_travel_eta_message(bot, telegram_id, status)
+
+
+async def finish_travel_eta_message(storage: Storage, telegram_id: int) -> None:
+    """После прибытия: сбросить meta и освободить лок (под локом, без гонок)."""
+    async with _travel_eta_lock(telegram_id):
+        storage.delete_meta(_travel_eta_msg_key(telegram_id))
+    _release_travel_eta_lock(telegram_id)
 
 
 def _is_stale_callback_error(exc: TelegramBadRequest) -> bool:
@@ -5515,7 +5526,6 @@ async def smuggle_mission_callback(callback: CallbackQuery) -> None:
 
         if payload.get("mission_travel_started"):
             await reply_action_result(callback, result.text, bot=callback.bot)
-            clear_travel_eta_message_id(storage, telegram_id)
             await publish_travel_live_eta(callback.bot, telegram_id)
             return
 
@@ -5571,7 +5581,6 @@ async def contract_travel_work_callback(callback: CallbackQuery, bot: Bot) -> No
         await callback.message.answer(action_result_text(telegram_id, result.text))
     else:
         await bot.send_message(telegram_id, action_result_text(telegram_id, result.text))
-    clear_travel_eta_message_id(storage, telegram_id)
     await publish_travel_live_eta(bot, telegram_id)
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is not None:
@@ -5611,7 +5620,6 @@ async def contract_go_home_callback(callback: CallbackQuery, bot: Bot) -> None:
         await callback.message.answer(action_result_text(telegram_id, result.text))
     else:
         await bot.send_message(telegram_id, action_result_text(telegram_id, result.text))
-    clear_travel_eta_message_id(storage, telegram_id)
     await publish_travel_live_eta(bot, telegram_id)
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is not None:
@@ -7054,8 +7062,8 @@ async def travel_status_callback(callback: CallbackQuery) -> None:
         await callback.answer(status, show_alert=True)
         return
     await safe_callback_answer(callback)
-    if callback.message:
-        await callback.message.answer(status)
+    # Не шлём второе «В пути» — обновляем тот же live-таймер.
+    await upsert_travel_eta_message(callback.bot, callback.from_user.id, status)
 
 
 @router.callback_query(F.data == "travel:back")
@@ -7125,7 +7133,6 @@ async def travel_go_callback(callback: CallbackQuery, bot: Bot) -> None:
         await callback.message.answer(action_result_text(callback.from_user.id, result.text))
     else:
         await bot.send_message(callback.from_user.id, action_result_text(callback.from_user.id, result.text))
-    clear_travel_eta_message_id(get_storage(), callback.from_user.id)
     await publish_travel_live_eta(bot, callback.from_user.id)
 
 
@@ -8890,7 +8897,7 @@ async def run_bot() -> None:
                         await upsert_travel_eta_message(bot, user_id, arrival_body)
                     except Exception:
                         logger.debug("Failed travel arrival ETA edit for %s", user_id)
-                    clear_travel_eta_message_id(storage, user_id)
+                    await finish_travel_eta_message(storage, user_id)
             except Exception:
                 logger.exception("Travel live arrival tick failed")
             try:
