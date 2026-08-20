@@ -4,23 +4,24 @@ from __future__ import annotations
 
 import random
 
-from app.game_logic import ITEM_LABELS, ActionResult
+from app.game_logic import ITEM_LABELS
 from app.storage import Storage
 
+# Шансы уменьшены в 3 раза относительно старых таблиц (~80%/92% → ~27%/31%).
 MUTANT_LOOT_TABLE: tuple[tuple[str, int, int], ...] = (
-    ("medkit", 24, 1),
-    ("ammo_pack", 28, 1),
-    ("diesel_can", 10, 1),
-    ("sausage", 10, 1),
-    ("vodka", 8, 1),
+    ("medkit", 8, 1),
+    ("ammo_pack", 9, 1),
+    ("diesel_can", 3, 1),
+    ("sausage", 3, 1),
+    ("vodka", 3, 1),
 )
 NPC_LOOT_TABLE: tuple[tuple[str, int, int], ...] = (
-    ("medkit", 22, 1),
-    ("ammo_pack", 30, 1),
-    ("diesel_can", 12, 1),
-    ("gasoline_can", 10, 1),
-    ("antirad", 8, 1),
-    ("bread", 10, 1),
+    ("medkit", 7, 1),
+    ("ammo_pack", 10, 1),
+    ("diesel_can", 4, 1),
+    ("gasoline_can", 3, 1),
+    ("antirad", 3, 1),
+    ("bread", 3, 1),
 )
 
 

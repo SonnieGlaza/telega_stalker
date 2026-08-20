@@ -344,7 +344,7 @@ class Storage:
                     row.get("gender") or "Мужской",
                     row.get("faction"),
                     row.get("faction_rank"),
-                    int(row.get("money", 1400)),
+                    int(row.get("money", 3000)),
                     int(row.get("energy", 100)),
                     int(row.get("max_energy", 100)),
                     row.get("energy_updated_at") or now_iso,
@@ -605,7 +605,7 @@ class Storage:
                     gender TEXT NOT NULL,
                     faction TEXT,
                     faction_rank TEXT,
-                    money INTEGER NOT NULL DEFAULT 1400,
+                    money INTEGER NOT NULL DEFAULT 3000,
                     energy INTEGER NOT NULL DEFAULT 100,
                     max_energy INTEGER NOT NULL DEFAULT 100,
                     energy_updated_at TEXT NOT NULL,
@@ -613,7 +613,7 @@ class Storage:
                     gear_power INTEGER NOT NULL DEFAULT 2,
                     location TEXT NOT NULL DEFAULT 'База новичков',
                     inventory_json TEXT NOT NULL DEFAULT '{}',
-                    equipment_json TEXT NOT NULL DEFAULT '{"weapon":"Нож","armor":"Куртка новичка","weapon_durability":100,"armor_durability":100}',
+                    equipment_json TEXT NOT NULL DEFAULT '{"weapon":"ПМ","armor":"Куртка новичка","weapon_durability":100,"armor_durability":100}',
                     truck_owned INTEGER NOT NULL DEFAULT 0,
                     truck_durability INTEGER NOT NULL DEFAULT 0,
                     niva_durability INTEGER NOT NULL DEFAULT 0,
@@ -862,11 +862,12 @@ class Storage:
             self._ensure_player_stats_rows(conn)
 
     def create_character(self, telegram_id: int, nickname: str, gender: str) -> None:
+        from app.game_logic import STARTING_EQUIPMENT_JSON, STARTING_INVENTORY, STARTING_MONEY_RU
+
         player_uid = build_player_uid(telegram_id)
         now_iso = utc_now().isoformat()
-        default_equipment = (
-            '{"weapon":"Нож","armor":"Куртка новичка","weapon_durability":100,"armor_durability":100}'
-        )
+        default_equipment = STARTING_EQUIPMENT_JSON
+        starter_inventory = json.dumps(STARTING_INVENTORY, ensure_ascii=False)
         nick = (nickname or "").strip()
         gen = (gender or "").strip()
         if not nick:
@@ -921,12 +922,23 @@ class Storage:
                             radiation, hunger, thirst, needs_updated_at, survival_damage_at
                         ) VALUES(
                             ?, ?, 'classic', ?, ?,
-                            1400, 100, 100, ?, 100, 2, 'База новичков',
-                            '{}', ?, 0, 0, 0, 0,
+                            ?, 100, 100, ?, 100, 2, 'База новичков',
+                            ?, ?, 0, 0, 0, 0,
                             0, 0, 0, ?, ?
                         )
                         """,
-                        (telegram_id, player_uid, nick, gen, now_iso, default_equipment, now_iso, now_iso),
+                        (
+                            telegram_id,
+                            player_uid,
+                            nick,
+                            gen,
+                            int(STARTING_MONEY_RU),
+                            now_iso,
+                            starter_inventory,
+                            default_equipment,
+                            now_iso,
+                            now_iso,
+                        ),
                     )
                     if conn.backend == "postgres":
                         conn.release_savepoint("sp_create_character")
@@ -4400,7 +4412,7 @@ class Storage:
             gender=str(Storage._row_get(row, "gender") or "Мужской"),
             faction=Storage._row_get(row, "faction"),
             faction_rank=Storage._row_get(row, "faction_rank"),
-            money=_as_int(Storage._row_get(row, "money"), 1400),
+            money=_as_int(Storage._row_get(row, "money"), 3000),
             energy=_as_int(Storage._row_get(row, "energy"), 100),
             max_energy=_as_int(Storage._row_get(row, "max_energy"), 100),
             health=_as_int(Storage._row_get(row, "health"), 100),

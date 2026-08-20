@@ -75,6 +75,14 @@ def run_smoke_check() -> None:
         storage.create_character(111, "LeaderDuty", "Мужской")
         storage.create_character(222, "WingmanDuty", "Мужской")
         storage.create_character(333, "LeaderBandit", "Женский")
+        from app.game_logic import STARTING_MONEY_RU
+
+        starter0 = storage.get_character(111, refresh_energy=False)
+        assert starter0 is not None
+        assert int(starter0.money) == STARTING_MONEY_RU
+        assert starter0.equipment.get("weapon") == "ПМ"
+        assert int(starter0.inventory.get("medkit", 0)) >= 2
+        assert int(starter0.inventory.get("vodka", 0)) >= 2
         storage.set_faction(111, "Долг")
         storage.set_faction(222, "Долг")
         storage.set_faction(333, "Бандиты")
@@ -135,11 +143,13 @@ def run_smoke_check() -> None:
         referral = apply_referral_rewards(storage, 444, 111)
         assert referral.ok, referral.text
         newbie = storage.get_character(444, refresh_energy=False)
+        # Стартовый набор + реферальный пак.
         assert newbie.inventory.get("stew") == 2
         assert newbie.inventory.get("antirad") == 1
-        assert newbie.inventory.get("water_bottle") == 1
-        assert newbie.inventory.get("medkit") == 1
+        assert int(newbie.inventory.get("water_bottle") or 0) >= 1
+        assert int(newbie.inventory.get("medkit") or 0) >= 1
         assert newbie.inventory.get("weapon_pm", 0) == 0
+        assert newbie.equipment.get("weapon") == "ПМ"
         after_money = storage.get_character(111, refresh_energy=False).money
         assert after_money == before_money + REFERRAL_INVITER_BONUS_RU
         again = apply_referral_rewards(storage, 444, 111)
@@ -150,6 +160,7 @@ def run_smoke_check() -> None:
 
         # На старте бармен/медик/техник — этап 1.
         assert get_vendor_tier(storage, 111, "barkeep") == 1
+        storage.change_money(111, 50_000)
         assert buy_item(storage, 111, "detector_otklik").ok
         assert buy_item(storage, 111, "medkit").ok
         assert not buy_item(storage, 111, "weapon_gauss").ok
@@ -161,9 +172,9 @@ def run_smoke_check() -> None:
         set_vendor_tier(storage, 333, "barkeep", 4)
         set_vendor_tier(storage, 111, "medic", 4)
         set_vendor_tier(storage, 111, "tech", 4)
-        storage.change_money(111, 100000)
+        storage.change_money(111, 1000000)
         assert buy_item(storage, 111, "truck").ok
-        storage.change_money(222, 20000)
+        storage.change_money(222, 200000)
         assert buy_item(storage, 222, "niva").ok
         from datetime import datetime, timedelta, timezone
 
@@ -218,7 +229,7 @@ def run_smoke_check() -> None:
         assert canonical_sell_item_key("armor_sunrise") == canonical_sell_item_key("armor_zarya")
         assert canonical_sell_item_key("armor_bulat") == canonical_sell_item_key("armor_berill5m")
 
-        storage.change_money(111, 50000)
+        storage.change_money(111, 600_000)
         assert buy_item(storage, 111, "armor_zarya").ok
         assert buy_item(storage, 111, "armor_exo").ok
         player = storage.get_character(111, refresh_energy=False)
@@ -1494,7 +1505,7 @@ def run_smoke_check() -> None:
         assert get_vendor_tier(storage, 111, "barkeep") == 4
         assert "weapon_gauss" in unlocked_vendor_item_keys("barkeep", 4)
         assert "weapon_raccoon" in unlocked_vendor_item_keys("barkeep", 4)
-        storage.change_money(111, 300_000, skip_debt_collect=True)
+        storage.change_money(111, 3_000_000, skip_debt_collect=True)
         buy_n = buy_item(storage, 111, "armor_nosorog")
         assert buy_n.ok, buy_n.text
         buy_g = buy_item(storage, 111, "weapon_gauss")
@@ -1515,20 +1526,26 @@ def run_smoke_check() -> None:
         )
 
         pm_label = shop_weapon_button_title("weapon_pm")
-        assert "сила 2" in pm_label and "д." in pm_label and "2000" in pm_label
+        assert "сила 2" in pm_label and "д." in pm_label and "10000" in pm_label
         leather_label = shop_armor_button_title("armor_leather")
-        assert "сила 2" in leather_label and "2000" in leather_label
+        assert "сила 2" in leather_label and "10000" in leather_label
         assert "−1" in leather_label and "блок 3%" in leather_label
         bike_label = shop_gear_button_title("bicycle")
         assert "×" in bike_label and "нагр." in bike_label
         assert "арт." in shop_gear_button_title("detector_otklik")
         fora_label = shop_weapon_button_title("weapon_fort12")
-        assert "сила 3" in fora_label and "3000" in fora_label
+        assert "сила 3" in fora_label and "15000" in fora_label
         sawed_label = shop_weapon_button_title("weapon_sawedoff")
-        assert "сила 3" in sawed_label and "1800" in sawed_label
-        assert int(SHOP_ITEMS["weapon_pm"]["buy_price"]) == 2000
-        assert int(SHOP_ITEMS["weapon_fort12"]["buy_price"]) == 3000
-        assert int(SHOP_ITEMS["weapon_sawedoff"]["buy_price"]) == 1800
+        assert "сила 3" in sawed_label and "9000" in sawed_label
+        assert int(SHOP_ITEMS["weapon_pm"]["buy_price"]) == 10000
+        assert int(SHOP_ITEMS["weapon_fort12"]["buy_price"]) == 15000
+        assert int(SHOP_ITEMS["weapon_sawedoff"]["buy_price"]) == 9000
+        assert int(SHOP_ITEMS["bicycle"]["buy_price"]) == 10500
+        assert int(SHOP_ITEMS["niva"]["buy_price"]) == 100000
+        assert int(SHOP_ITEMS["truck"]["buy_price"]) == 500000
+        assert int(SHOP_ITEMS["detector_otklik"]["buy_price"]) == 3000
+        assert int(SHOP_ITEMS["detector_medved"]["buy_price"]) == 40000
+        assert int(SHOP_ITEMS["medkit"]["buy_price"]) == 1300
         assert WEAPON_RATING_BY_NAME["ПМ"] == 2
         assert WEAPON_RATING_BY_NAME["Фора-12"] == 3
         assert WEAPON_RATING_BY_NAME["Обрез"] == 3
@@ -1572,8 +1589,8 @@ def run_smoke_check() -> None:
             "nosorog_gauss" in storage.get_player_achievement_keys(111)
         )
         assert "armor_nosorog" in SHOP_ITEMS
-        assert int(SHOP_ITEMS["armor_nosorog"]["buy_price"]) == 90000
-        assert int(SHOP_ITEMS["weapon_gauss"]["buy_price"]) == 90000
+        assert int(SHOP_ITEMS["armor_nosorog"]["buy_price"]) == 900000
+        assert int(SHOP_ITEMS["weapon_gauss"]["buy_price"]) == 900000
         assert int(SHOP_ITEMS["armor_upgrade"]["buy_price"]) == 5000
         assert "rank:menu" in callbacks
         assert "war:section:scenario" in callbacks
