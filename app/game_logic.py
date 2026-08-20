@@ -287,6 +287,64 @@ SEASON_RANK_REWARDS: dict[int, tuple[tuple[str, str], ...]] = {
 }
 SEASON_REWARD_ITEM_KEYS: frozenset[str] = frozenset(SEASON_REWARD_WEAPONS) | frozenset(SEASON_REWARD_ARMOR)
 
+# --- Экономика: множители цен покупки/продажи ---
+# T1 (бармен этап 1): ×5; остальное оружие/броня: ×10.
+_T1_GEAR_KEYS: frozenset[str] = frozenset(
+    {
+        "weapon_pm",
+        "weapon_fort12",
+        "weapon_sawedoff",
+        "armor_leather",
+    }
+)
+_FOOD_CONSUMABLE_KEYS: frozenset[str] = frozenset(
+    {
+        "bread",
+        "sausage",
+        "stew",
+        "water_bottle",
+        "mineral_water",
+        "beard_tea",
+        "energy_drink",
+        "vodka",
+    }
+)
+_MEDKIT_KEYS: frozenset[str] = frozenset(
+    {
+        "medkit",
+        "medkit_army",
+        "medkit_science",
+        "antirad",
+    }
+)
+
+
+def _scale_item_prices(item: dict[str, int | str], mult: int) -> None:
+    if mult == 1:
+        return
+    if "buy_price" in item:
+        item["buy_price"] = int(item["buy_price"]) * mult
+    if "sell_price" in item:
+        item["sell_price"] = int(item["sell_price"]) * mult
+
+
+for _key, _item in ARMOR_CATALOG.items():
+    _scale_item_prices(_item, 5 if _key in _T1_GEAR_KEYS else 10)
+for _key, _item in WEAPON_CATALOG.items():
+    _scale_item_prices(_item, 5 if _key in _T1_GEAR_KEYS else 10)
+
+# Еда/аптечки ×5; велик ×3; машины ×10; Отклик ×3; прочие детекторы ×10.
+_scale_item_prices(SHOP_ITEMS["bicycle"], 3)
+_scale_item_prices(SHOP_ITEMS["niva"], 10)
+_scale_item_prices(SHOP_ITEMS["truck"], 10)
+_scale_item_prices(SHOP_ITEMS["detector_otklik"], 3)
+_scale_item_prices(SHOP_ITEMS["detector_medved"], 10)
+_scale_item_prices(SHOP_ITEMS["detector_veles"], 10)
+_scale_item_prices(SHOP_ITEMS["detector_svarog"], 10)
+for _key in _FOOD_CONSUMABLE_KEYS | _MEDKIT_KEYS:
+    if _key in SHOP_ITEMS:
+        _scale_item_prices(SHOP_ITEMS[_key], 5)
+
 # Legacy callback alias used in keyboards.
 WEAPON_CATALOG["weapon_fora12"] = WEAPON_CATALOG["weapon_fort12"]
 ARMOR_CATALOG["armor_sunrise"] = ARMOR_CATALOG["armor_zarya"]
@@ -1141,7 +1199,6 @@ TRAVEL_ENERGY_FOOT = 16
 TRAVEL_ENERGY_BICYCLE = 11
 TRAVEL_ENERGY_NIVA = 12
 TRAVEL_ENERGY_TRUCK = 8
-STARTING_MONEY_RU = 1400
 TOPUP_RATE_RU_PER_STAR = 150
 CONTRACT_CANCEL_PENALTY_RU = 50
 CONTRACT_CANCEL_RATING_PENALTY = 1
@@ -1336,6 +1393,19 @@ REFERRAL_STARTER_PACK: tuple[tuple[str, int], ...] = (
     ("water_bottle", 1),
     ("medkit", 1),
 )
+
+# Стартовый набор нового сталкера (деньги + экип + расходники).
+STARTING_MONEY_RU = 3000
+STARTING_EQUIPMENT_JSON = (
+    '{"weapon":"ПМ","armor":"Куртка новичка","weapon_durability":100,"armor_durability":100}'
+)
+STARTING_INVENTORY: dict[str, int] = {
+    "medkit": 2,
+    "vodka": 2,
+    "bread": 2,
+    "sausage": 1,
+    "water_bottle": 2,
+}
 
 
 def parse_referral_payload(raw: str | None) -> int | None:

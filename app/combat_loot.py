@@ -8,21 +8,23 @@ from app.game_logic import ITEM_LABELS
 from app.storage import Storage
 
 # Мутанты роняют части тел / биоматериал — не человеческий хабар.
+# Шансы уменьшены в 3 раза относительно таблицы частей (~94% → ~31%).
 MUTANT_LOOT_TABLE: tuple[tuple[str, int, int], ...] = (
-    ("mutant_tail", 22, 1),
-    ("mutant_claw", 20, 1),
-    ("mutant_fang", 18, 1),
-    ("mutant_eye", 14, 1),
-    ("mutant_hide", 12, 1),
-    ("mutant_tendril", 8, 1),
+    ("mutant_tail", 7, 1),
+    ("mutant_claw", 7, 1),
+    ("mutant_fang", 6, 1),
+    ("mutant_eye", 5, 1),
+    ("mutant_hide", 4, 1),
+    ("mutant_tendril", 3, 1),
 )
+# Шансы уменьшены в 3 раза относительно старых таблиц (~92% → ~30%).
 NPC_LOOT_TABLE: tuple[tuple[str, int, int], ...] = (
-    ("medkit", 22, 1),
-    ("ammo_pack", 30, 1),
-    ("diesel_can", 12, 1),
-    ("gasoline_can", 10, 1),
-    ("antirad", 8, 1),
-    ("bread", 10, 1),
+    ("medkit", 7, 1),
+    ("ammo_pack", 10, 1),
+    ("diesel_can", 4, 1),
+    ("gasoline_can", 3, 1),
+    ("antirad", 3, 1),
+    ("bread", 3, 1),
 )
 
 
