@@ -6638,6 +6638,11 @@ def _steal_faction_garage(storage: Storage, target_faction: str, attacker_factio
         durs = list(garage.get(durs_key) or [])
         dur = durs.pop(0) if durs else 100
         garage[durs_key] = durs
+        owners_key = f"{vehicle_key}_owners"
+        owners = [int(x) for x in (garage.get(owners_key) or [])]
+        if owners:
+            owners.pop(0)
+            garage[owners_key] = owners
         garage[vehicle_key] = count - 1
         attacker_durs = list(attacker_garage.get(durs_key) or [])
         attacker_durs.append(dur)
@@ -8049,6 +8054,8 @@ def get_faction_garage(storage: Storage, faction: str) -> dict[str, Any]:
     data: dict[str, Any] = {key: 0 for key in FACTION_GARAGE_KEYS}
     data["niva_durs"] = []
     data["truck_durs"] = []
+    data["niva_owners"] = []
+    data["truck_owners"] = []
     raw = storage.get_meta(_faction_garage_meta_key(faction))
     if raw:
         try:
@@ -8071,12 +8078,26 @@ def get_faction_garage(storage: Storage, faction: str) -> dict[str, Any]:
                         except (TypeError, ValueError):
                             continue
                 data[dur_key] = cleaned
+            for owners_key in ("niva_owners", "truck_owners"):
+                raw_owners = parsed.get(owners_key) or []
+                cleaned_owners: list[int] = []
+                if isinstance(raw_owners, list):
+                    for item in raw_owners:
+                        try:
+                            cleaned_owners.append(int(item))
+                        except (TypeError, ValueError):
+                            continue
+                data[owners_key] = cleaned_owners
     # Старые записи без списка прочности — считаем 100%.
     for kind, dur_key in (("niva", "niva_durs"), ("truck", "truck_durs")):
         durs = list(data.get(dur_key) or [])
         while len(durs) < int(data.get(kind) or 0):
             durs.append(100)
         data[dur_key] = durs[: int(data.get(kind) or 0)]
+    # Владельцы не длиннее числа машин (хвост от старых багов обрезаем).
+    for kind, owners_key in (("niva", "niva_owners"), ("truck", "truck_owners")):
+        owners = list(data.get(owners_key) or [])
+        data[owners_key] = owners[: int(data.get(kind) or 0)]
     return data
 
 
@@ -8092,6 +8113,17 @@ def _set_faction_garage(storage: Storage, faction: str, data: dict[str, Any]) ->
                 except (TypeError, ValueError):
                     continue
         payload[dur_key] = cleaned
+    for owners_key in ("niva_owners", "truck_owners"):
+        raw_owners = data.get(owners_key) or []
+        cleaned_owners: list[int] = []
+        if isinstance(raw_owners, list):
+            for item in raw_owners:
+                try:
+                    cleaned_owners.append(int(item))
+                except (TypeError, ValueError):
+                    continue
+        count_key = "niva" if owners_key.startswith("niva") else "truck"
+        payload[owners_key] = cleaned_owners[: int(payload.get(count_key) or 0)]
     storage.set_meta(_faction_garage_meta_key(faction), json.dumps(payload, ensure_ascii=False))
 
 
@@ -8245,17 +8277,30 @@ def _issue_garage_vehicle(
     garage[vehicle_key] = int(garage.get(vehicle_key, 0) or 0) - 1
     durs_key = _vehicle_durs_key(vehicle_key)
     durs = list(garage.get(durs_key) or [])
-    dur = durs.pop(0) if durs else 100
+    owners_key = f"{vehicle_key}_owners"
+    owners = [int(x) for x in (garage.get(owners_key) or [])]
+    reclaim = int(telegram_id) in owners
+    if reclaim:
+        idx = owners.index(int(telegram_id))
+        owners.pop(idx)
+        if 0 <= idx < len(durs):
+            dur = durs.pop(idx)
+        else:
+            dur = durs.pop(0) if durs else 100
+        garage[owners_key] = owners
+    else:
+        dur = durs.pop(0) if durs else 100
     garage[durs_key] = durs
     _set_faction_garage(storage, player.faction, garage)
 
-    _schedule_garage_vehicle_rental(
-        storage,
-        vehicle_key=vehicle_key,
-        dur=dur,
-        faction=player.faction,
-        player_id=telegram_id,
-    )
+    if not reclaim:
+        _schedule_garage_vehicle_rental(
+            storage,
+            vehicle_key=vehicle_key,
+            dur=dur,
+            faction=player.faction,
+            player_id=telegram_id,
+        )
     if vehicle_key == "niva":
         storage.set_niva_owned(telegram_id)
         storage.set_niva_durability(telegram_id, dur)
@@ -8265,6 +8310,14 @@ def _issue_garage_vehicle(
     storage.set_bound_transport(telegram_id, vehicle_key)
 
     extra = f"\n{approver_note}" if approver_note else ""
+    if reclaim:
+        return ActionResult(
+            True,
+            f"{_vehicle_label_for_key(vehicle_key)} возвращена тебе из гаража "
+            f"(прочность {dur}%) — без аренды, это твоя техника.\n"
+            f"{fuel_note}\n"
+            f"В гараже осталось: {garage[vehicle_key]} шт.{extra}",
+        )
     return ActionResult(
         True,
         f"{_vehicle_label_for_key(vehicle_key)} из гаража закреплена за тобой "
@@ -8497,7 +8550,9 @@ def build_faction_garage_overview(storage: Storage, faction: str) -> str:
         "Сдать канистру можно из своего запаса топлива; забрать — с 5 ранга (или лидеру).\n"
         f"Ранги 1–4 — запрос на аренду; 5+ — выдача или подтверждение запроса.\n"
         f"При выдаче топливо берётся из гаража; если канистр пуст — платишь сам.\n"
-        f"Нива/грузовик — аренда {GARAGE_VEHICLE_RENTAL_MINUTES} мин; перед сдачей грузовика — полный ремонт.\n"
+        f"Своя сданная техника возвращается без аренды; чужая/общая — аренда "
+        f"{GARAGE_VEHICLE_RENTAL_MINUTES} мин.\n"
+        "Перед сдачей арендованного грузовика — полный ремонт.\n"
         "На арендованной технике нельзя слезть и идти пешком."
     )
 
@@ -8572,10 +8627,14 @@ def garage_deposit_niva(storage: Storage, telegram_id: int) -> ActionResult:
     durs = list(garage.get("niva_durs") or [])
     durs.append(dur)
     garage["niva_durs"] = durs
+    owners = [int(x) for x in (garage.get("niva_owners") or [])]
+    owners.append(int(telegram_id))
+    garage["niva_owners"] = owners
     _set_faction_garage(storage, player.faction, garage)
     return ActionResult(
         True,
-        f"Нива сдана в гараж «{player.faction}» (прочность {dur}%). В гараже: {garage['niva']} шт.",
+        f"Нива сдана в гараж «{player.faction}» (прочность {dur}%). В гараже: {garage['niva']} шт.\n"
+        f"Забрать обратно можно без аренды (кнопка «Забрать Ниву»).",
     )
 
 
@@ -8613,10 +8672,14 @@ def garage_deposit_truck(storage: Storage, telegram_id: int) -> ActionResult:
     durs = list(garage.get("truck_durs") or [])
     durs.append(dur)
     garage["truck_durs"] = durs
+    owners = [int(x) for x in (garage.get("truck_owners") or [])]
+    owners.append(int(telegram_id))
+    garage["truck_owners"] = owners
     _set_faction_garage(storage, player.faction, garage)
     return ActionResult(
         True,
-        f"Грузовик сдан в гараж «{player.faction}» (прочность {dur}%). В гараже: {garage['truck']} шт.",
+        f"Грузовик сдан в гараж «{player.faction}» (прочность {dur}%). В гараже: {garage['truck']} шт.\n"
+        f"Забрать обратно можно без аренды (кнопка «Забрать грузовик»).",
     )
 
 

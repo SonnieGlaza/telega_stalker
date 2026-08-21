@@ -21,7 +21,8 @@ from app.storage import Storage
 MONOLITH_FACTION = "Монолит"
 MONOLITH_BASE = "ЧАЭС"
 MONOLITH_JOIN_MINUTES = 15
-MONOLITH_PERCENT_WIN = 90  # шанс победы Монолита при авто-исходе
+# Авто-исход без живых Монолита: 90% в пользу защитников стороны.
+DEFENDER_PERCENT_WIN = 90
 
 PENDING_META = "monolith_war:pending"
 
@@ -159,13 +160,18 @@ def format_monolith_war_call(pending: dict[str, Any]) -> str:
             f"☢ <b>Штурм базы Монолита</b>\n"
             f"«{host}» идёт на «{loc}».\n"
             f"У Монолита {mins} мин: вступить в бой или послать ботов.\n"
-            f"Если никто не зайдёт — исход 90/10 (авто)."
+            f"Без живых Монолита — авто 90/10 <b>в пользу защитников</b>."
         )
     return (
         f"☢ <b>Вылазка Монолита</b>\n"
         f"Цель: «{loc}». Окно {mins} мин на подключение бойцов.\n"
-        f"Можно послать ботов. Без живых Монолита — исход 90/10."
+        f"Можно послать ботов. Без живых Монолита — авто 90/10 "
+        f"<b>в пользу защитников</b> точки."
     )
+
+
+def format_monolith_war_resolve_html(text: str) -> str:
+    return f"☢ <b>Исход боя Монолита</b>\n{h(str(text or '').strip())}"
 
 
 def monolith_war_status_line(storage: Storage) -> str | None:
@@ -246,8 +252,8 @@ def _refund_energy(storage: Storage, ids: list[int], amount: int) -> None:
         storage.restore_energy(tid, amount)
 
 
-def _percent_roll_monolith_wins() -> bool:
-    return random.randint(1, 100) <= MONOLITH_PERCENT_WIN
+def _percent_roll_defenders_win() -> bool:
+    return random.randint(1, 100) <= DEFENDER_PERCENT_WIN
 
 
 def _pay_attackers_success(storage: Storage, attacker_ids: list[int], host_faction: str, location: str) -> str:
@@ -265,7 +271,7 @@ def _pay_attackers_success(storage: Storage, attacker_ids: list[int], host_facti
         paid += 1
     storage.set_location_control(location, host_faction)
     return (
-        f"Процентный исход (10%): «{location}» захвачена «{host_faction}». "
+        f"Процентный исход: «{location}» захвачена «{host_faction}». "
         f"Награда хоста: {paid} бойц. ×{WAR_SUCCESS_PAY_RU} RU."
     )
 
@@ -380,26 +386,28 @@ def resolve_pending_monolith_war(storage: Storage, *, force: bool = False) -> di
             "member_ids": fight_ids,
         }
 
-    # Нет людей Монолита → процентный исход 90/10 (боты или пустой ответ).
+    # Нет людей Монолита → процентный исход 90/10 в пользу защитников.
     from app.game_logic import WAR_LOBBY_ENERGY_COST
 
-    monolith_wins = _percent_roll_monolith_wins()
+    defenders_win = _percent_roll_defenders_win()
+    # mode=defend: Монолит — защитники; mode=attack: защитники — держатели точки.
+    monolith_wins = defenders_win if mode == "defend" else (not defenders_win)
     clear_pending_monolith_war(storage)
 
     if mode == "defend":
         if monolith_wins:
-            storage.finish_war_lobby(war_id, "failed", "Монолит удержал базу (90%)")
+            storage.finish_war_lobby(war_id, "failed", "Монолит удержал базу (90% защитникам)")
             text = _fail_attackers(
                 storage,
                 attacker_ids,
                 location,
-                f"Авто-исход 90/10: Монолит удержал «{location}»"
+                f"Авто-исход 90/10 (защитники): Монолит удержал «{location}»"
                 + (" с ботами." if bots_sent else "."),
             )
             return {"kind": "percent", "text": text, "notify_ids": notify_ids, "monolith_wins": True}
         storage.finish_war_lobby(war_id, "success", f"Пробита оборона Монолита (10%): {host_faction}")
         text = _pay_attackers_success(storage, attacker_ids, host_faction, location)
-        text = f"Авто-исход 90/10 (крит 10%): {text}"
+        text = f"Авто-исход 90/10 (крит атакующим 10%): {text}"
         return {"kind": "percent", "text": text, "notify_ids": notify_ids, "monolith_wins": False}
 
     # Атака без людей: нужны посланные боты, иначе откат.
@@ -413,21 +421,21 @@ def resolve_pending_monolith_war(storage: Storage, *, force: bool = False) -> di
         return {"kind": "percent", "text": text, "notify_ids": notify_ids, "monolith_wins": False}
 
     if monolith_wins:
-        storage.finish_war_lobby(war_id, "success", "Монолит взял точку (90%)")
+        storage.finish_war_lobby(war_id, "success", "Монолит взял точку (крит атаке 10%)")
         if attacker_ids:
             text = _pay_attackers_success(storage, attacker_ids, MONOLITH_FACTION, location)
         else:
             storage.set_location_control(location, MONOLITH_FACTION)
-            text = f"Процентный исход (90%): «{location}» взята Монолитом (боты ×{bot_count})."
+            text = f"Процентный исход (крит атаке 10%): «{location}» взята Монолитом (боты ×{bot_count})."
         text = f"Авто-исход 90/10: {text}"
         return {"kind": "percent", "text": text, "notify_ids": notify_ids, "monolith_wins": True}
 
-    storage.finish_war_lobby(war_id, "failed", "Атака Монолита провалена (10%)")
+    storage.finish_war_lobby(war_id, "failed", "Атака Монолита отбита защитниками (90%)")
     text = _fail_attackers(
         storage,
         attacker_ids or energy_spent,
         location,
-        "Авто-исход 90/10: атака Монолита сорвалась (10%).",
+        "Авто-исход 90/10: защитники удержали точку, атака Монолита сорвалась.",
     )
     return {"kind": "percent", "text": text, "notify_ids": notify_ids, "monolith_wins": False}
 

@@ -467,6 +467,14 @@ def run_smoke_check() -> None:
         storage.add_item(111, "ammo_pack", 5)
         heli_join = join_special_event(storage, 111)
         assert heli_join.ok, heli_join.text
+        from app.quest_mission import get_mission_session as _get_heli_session
+
+        heli_sess = _get_heli_session(storage, 111)
+        assert heli_sess is not None
+        assert heli_sess.kind == "clear_marauder"
+        assert not heli_sess.enemies, "вертушка не должна спавнить мутантов"
+        assert heli_sess.npcs, "вертушка должна спавнить военных"
+        assert all(k == "soldier" for k in heli_sess.npc_kinds)
         heli_loot = complete_special_event_objective(
             storage, 111, title=f"Обломки вертушки: {heli['location']}"
         )
@@ -519,6 +527,7 @@ def run_smoke_check() -> None:
         from app.special_events import special_events_status_line
 
         assert "прочность" in special_events_status_line(storage)
+        assert "псевдогигант" in str(giant.get("call_text") or "").lower()
         assert "нескольких смертей" not in str(giant.get("call_text") or "")
         assert "HP" not in str(giant.get("call_text") or "")
         _clear_mission()
@@ -731,6 +740,7 @@ def run_smoke_check() -> None:
         assert repaired_before.ok, repaired_before.text
         deposited = garage_deposit_truck(storage, 111)
         assert deposited.ok, deposited.text
+        assert "без аренды" in deposited.text.lower() or "обратно" in deposited.text.lower()
         foot_travel = travel_to(storage, 111, "Болото")
         assert foot_travel.ok, foot_travel.text
         assert "пешком" in foot_travel.text.lower()
@@ -746,9 +756,19 @@ def run_smoke_check() -> None:
         storage.change_money(111, 5000)
         withdrawn = garage_withdraw_truck(storage, 111)
         assert withdrawn.ok, withdrawn.text
+        assert "без аренды" in withdrawn.text.lower() or "твоя техника" in withdrawn.text.lower()
+        from app.game_logic import GARAGE_VEHICLE_RENTALS_META
+        import json as _json
+
+        rentals_raw = storage.get_meta(GARAGE_VEHICLE_RENTALS_META) or "[]"
+        assert not any(
+            int(e.get("player_id") or 0) == 111 and e.get("vehicle_key") == "truck"
+            for e in _json.loads(rentals_raw)
+        )
         after_repair = storage.get_character(111, refresh_energy=False)
         assert after_repair is not None
         assert after_repair.truck_durability == 100
+        assert after_repair.truck_owned
 
         storage.change_money(111, 10_000)
         upgraded = upgrade_armor(storage, 111)

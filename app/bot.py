@@ -7375,6 +7375,17 @@ async def war_lobby_section_callback(callback: CallbackQuery, bot: Bot) -> None:
     await _show_war_lobby_menu(callback, bot)
 
 
+async def _announce_monolith_to_common_chat(bot: Bot, html: str) -> None:
+    """Объявление окна/исхода Монолита в общий чат Зоны."""
+    from aiogram.enums import ParseMode
+    from app.season_chat_titles import ZONE_COMMON_CHAT_ID
+
+    try:
+        await bot.send_message(ZONE_COMMON_CHAT_ID, html, parse_mode=ParseMode.HTML)
+    except Exception:
+        logger.exception("Failed to post monolith war announce to common chat")
+
+
 @router.callback_query(F.data == "war:section:monolith_attack")
 async def war_monolith_attack_section_callback(callback: CallbackQuery) -> None:
     from app.monolith_war import MONOLITH_FACTION
@@ -7395,7 +7406,8 @@ async def war_monolith_attack_section_callback(callback: CallbackQuery) -> None:
     await edit_menu_message(
         callback,
         "☢ Атака Монолита\n"
-        "Выбери цель. Откроется окно 15 мин: можно вступить самому или оставить ботов (исход 90/10).\n"
+        "Выбери цель. Откроется окно 15 мин: можно вступить самому или оставить ботов "
+        "(авто 90/10 в пользу защитников).\n"
         "Команда: /monolith_attack [локация]",
         monolith_attack_targets_keyboard(targets),
     )
@@ -7426,6 +7438,8 @@ async def monolith_war_attack_callback(callback: CallbackQuery, bot: Bot) -> Non
             )
         except Exception:
             logger.debug("Failed monolith attack notify to %s", uid)
+    if pending is not None:
+        await _announce_monolith_to_common_chat(bot, html)
     await _refresh_war_lobby_menu(callback, bot)
 
 
@@ -7479,6 +7493,8 @@ async def monolith_attack_command(message: Message, bot: Bot, command: CommandOb
             )
         except Exception:
             logger.debug("Failed monolith attack cmd notify to %s", uid)
+    if pending is not None:
+        await _announce_monolith_to_common_chat(bot, html)
 
 
 async def _show_war_lobby_menu(callback: CallbackQuery, bot: Bot) -> None:
@@ -7589,6 +7605,8 @@ async def war_lobby_launch_callback(callback: CallbackQuery, bot: Bot) -> None:
                 )
             except Exception:
                 logger.debug("Failed monolith war notify to %s", uid)
+        if pending is not None:
+            await _announce_monolith_to_common_chat(bot, html)
         await reply_action_result(callback, result.text)
         await _refresh_war_lobby_menu(callback, bot)
         return
@@ -7619,7 +7637,7 @@ async def monolith_war_bots_callback(callback: CallbackQuery, bot: Bot) -> None:
 
 @router.callback_query(F.data == "monolith_war:start")
 async def monolith_war_start_callback(callback: CallbackQuery, bot: Bot) -> None:
-    from app.monolith_war import force_start_monolith_war
+    from app.monolith_war import force_start_monolith_war, format_monolith_war_resolve_html
 
     storage = get_storage()
     result = force_start_monolith_war(storage, callback.from_user.id)
@@ -7633,6 +7651,7 @@ async def monolith_war_start_callback(callback: CallbackQuery, bot: Bot) -> None
             await bot.send_message(int(uid), text)
         except Exception:
             logger.debug("Failed monolith war force-start notify to %s", uid)
+    await _announce_monolith_to_common_chat(bot, format_monolith_war_resolve_html(text))
     if outcome.get("kind") == "tactical":
         session = outcome.get("session")
         if session is not None:
@@ -9140,7 +9159,10 @@ async def run_bot() -> None:
             except Exception:
                 logger.exception("Special event cycle tick failed")
             try:
-                from app.monolith_war import process_monolith_war_cycle
+                from app.monolith_war import (
+                    format_monolith_war_resolve_html,
+                    process_monolith_war_cycle,
+                )
 
                 mono_payload = process_monolith_war_cycle(get_storage())
                 if mono_payload:
@@ -9151,6 +9173,9 @@ async def run_bot() -> None:
                             await bot.send_message(int(uid), text)
                         except Exception:
                             logger.debug("Failed monolith war resolve notify to %s", uid)
+                    await _announce_monolith_to_common_chat(
+                        bot, format_monolith_war_resolve_html(text)
+                    )
                     if mono_payload.get("kind") == "tactical":
                         session = mono_payload.get("session")
                         if session is not None:

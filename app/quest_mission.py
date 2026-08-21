@@ -121,6 +121,15 @@ KIND_LABELS: dict[str, str] = {
     "escort": "Сопровождение",
 }
 
+
+def _mission_kind_label(kind: str, title: str = "") -> str:
+    title_l = str(title or "").lower()
+    if "вертушк" in title_l or str(title or "").startswith("Обломки вертушки"):
+        return "Зачистка военных"
+    if str(title or "").startswith("Гигант:"):
+        return "Охота на псевдогиганта"
+    return KIND_LABELS.get(kind, kind)
+
 HOSTILE_MOVE_CHANCE = 0.5
 # Мутанты преследуют игрока (не заходя на его клетку) на 🟠/🔴 и в контрабанде.
 MUTANT_CHASE_DIFFICULTIES = frozenset({"heavy", "impossible"})
@@ -436,7 +445,9 @@ def _difficulty_threat_flags(difficulty: str, kind: str) -> tuple[bool, bool, bo
     if kind == "clear_mutant":
         mutants = True
     if kind == "clear_marauder":
+        # Зачистка людей: только НПС, без мутантов (даже на hard/heavy).
         npcs = True
+        mutants = False
     return anom, mutants, npcs
 
 
@@ -568,6 +579,9 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
     want_anom, want_mut, want_npc = _difficulty_threat_flags(difficulty, kind)
     base_n = 2 + max(0, danger // 2)
     giant_hunt = "Гигант" in str(template.title or "")
+    heli_crash = "вертушк" in str(template.title or "").lower() or str(template.title or "").startswith(
+        "Обломки вертушки"
+    )
     monolith_escort = "пленн" in str(template.title or "").lower() or "Монолит" in str(
         template.title or ""
     )
@@ -619,6 +633,8 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
                         enemy_kinds[i] = "zombie"
         if want_npc:
             npc_n = base_n + (1 if kind == "clear_marauder" else 0)
+            if heli_crash:
+                npc_n = max(npc_n, base_n + 2)
             _spawn_npcs(
                 npc_n,
                 grid,
@@ -626,8 +642,12 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
                 npcs,
                 npc_kinds,
                 npc_weapons,
-                marauder=kind == "clear_marauder" or want_npc,
+                marauder=False if heli_crash else (kind == "clear_marauder" or want_npc),
             )
+            if heli_crash and npc_kinds:
+                # Охрана обломков — только военные.
+                for i in range(len(npc_kinds)):
+                    npc_kinds[i] = "soldier"
 
     return QuestMissionSession(
         contract_key=template.key,
@@ -1000,7 +1020,7 @@ def _render_for_player(storage: Storage, telegram_id: int, session: QuestMission
 
 
 def mission_status_caption(session: QuestMissionSession, character: Character | None = None) -> str:
-    kind_label = KIND_LABELS.get(session.kind, session.kind)
+    kind_label = _mission_kind_label(session.kind, session.title)
     lines = [
         f"📋 {session.title}",
         f"{kind_label} · «{session.location}»",
@@ -1022,7 +1042,10 @@ def mission_status_caption(session: QuestMissionSession, character: Character | 
     if session.kind == "clear_mutant":
         lines.append(f"Зачистка: мутанты осталось {len(session.enemies)}")
     elif session.kind == "clear_marauder":
-        lines.append(f"Зачистка: НПС осталось {len(session.npcs)}")
+        if "вертушк" in str(session.title or "").lower():
+            lines.append(f"Зачистка: военных осталось {len(session.npcs)}")
+        else:
+            lines.append(f"Зачистка: НПС осталось {len(session.npcs)}")
     elif session.kind == "escort":
         status = "жив, следует за тобой" if session.escort_alive else "потерян"
         lines.append(f"Подопечный: {status}")
@@ -1062,7 +1085,18 @@ _SPECIAL_EVENT_KEY_PREFIXES: tuple[str, ...] = (
 
 def _is_special_event_mission(session: QuestMissionSession) -> bool:
     key = str(session.contract_key or "")
-    return any(key.startswith(prefix) for prefix in _SPECIAL_EVENT_KEY_PREFIXES)
+    if any(key.startswith(prefix) for prefix in _SPECIAL_EVENT_KEY_PREFIXES):
+        return True
+    title = str(session.title or "")
+    return (
+        title.startswith("Гигант:")
+        or title.startswith("Обломки вертушки")
+        or title.startswith("Поиск прохода в шторме")
+        or title.startswith("Логово бандитов")
+        or title.startswith("Дуэль: Тёмный сталкер")
+        or title.startswith("Спасение пленного")
+        or title.startswith("Колонна Монолита")
+    )
 
 
 def _finish_success(storage: Storage, telegram_id: int, session: QuestMissionSession) -> ActionResult:
@@ -1072,7 +1106,8 @@ def _finish_success(storage: Storage, telegram_id: int, session: QuestMissionSes
     is_help = _is_help_event_mission(session)
     is_special = _is_special_event_mission(session)
     is_ephemeral = is_help or is_special
-    if quest is None or (template is None and not is_ephemeral):
+    # Эфемерные миссии (помощь / особые события) не обязаны быть в QUEST_CONTRACTS.
+    if template is None and not is_ephemeral:
         storage.set_active_contract(telegram_id, None)
         return ActionResult(False, "Контракт повреждён после миссии.")
     if quest is None:
@@ -1206,7 +1241,7 @@ def start_or_resume_quest_mission(
     return ActionResult(
         True,
         f"Вылазка: «{template.title}» на «{template.work_location}».\n"
-        f"{KIND_LABELS.get(template.mission_kind, template.mission_kind)}. "
+        f"{_mission_kind_label(template.mission_kind, template.title)}. "
         f"Энергия −{quest.energy_cost}.\n"
         f"Угрозы ({template.difficulty}): {threat_txt}."
         f"{escort_hint}{warn_block}\n"
@@ -1988,7 +2023,12 @@ def render_mission_frame(
     small = _load_font(14)
     loc_font = title_font if len(session.location) <= 14 else _load_font(18)
     draw.text((pl + 18, pt + 128), session.location, fill=(245, 245, 245), font=loc_font)
-    draw.text((pl + 18, pt + 158), KIND_LABELS.get(session.kind, session.kind), fill=(180, 200, 150), font=body)
+    draw.text(
+        (pl + 18, pt + 158),
+        _mission_kind_label(session.kind, session.title),
+        fill=(180, 200, 150),
+        font=body,
+    )
 
     y = pt + 190
     if session.kind == "clear_mutant":

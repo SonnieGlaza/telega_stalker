@@ -316,8 +316,8 @@ def _build_giant(now: datetime) -> dict[str, Any]:
         "location": loc,
         "title": "Гигант",
         "call_text": (
-            f"Гигант терроризирует «{loc}» уже несколько часов. "
-            "Урон по площади, на помощь зовёт бюреров и зомбированных. "
+            f"Псевдогигант терроризирует «{loc}» уже несколько часов. "
+            "Бьёт по площади, на помощь зовёт бюреров и зомбированных. "
             f"Можно возродиться и продолжить охоту (~{GIANT_DURATION_MINUTES} мин)."
         ),
         "started_at": now.isoformat(),
@@ -473,7 +473,7 @@ def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
         _save_event(storage, event)
         return ActionResult(
             True,
-            f"Ты у обломков на «{loc}». Зачисти охрану — хабар военный.",
+            f"Ты у обломков на «{loc}». Зачисти военных — хабар с вертушки.",
             payload=result.payload,
         )
 
@@ -923,7 +923,7 @@ def special_event_button_label(storage: Storage) -> str | None:
         "bandit_blockade": "🔫 Штурмовать логово бандитов",
         "dark_stalker": "🕶 Вызвать Тёмного сталкера",
         "monolith_rescue": "⛓ Спасти пленного на Заводе",
-        "giant": "👹 Атаковать Гиганта",
+        "giant": "👹 Атаковать псевдогиганта",
         "monolith_march": "☢ Перехватить колонну Монолита",
     }.get(kind)
 
