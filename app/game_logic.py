@@ -626,6 +626,10 @@ ARTIFACT_NAME_TO_INVENTORY: dict[str, str] = {
 }
 # Ценные арты (квесты/рейды) и полный список ключей.
 ARTIFACT_DROP_KEYS = ("artifact", "artifact_power", "artifact_vitality", "artifact_antirad")
+ARTIFACT_EQUIP_SLOT_KEYS: tuple[str, ...] = ("artifact", "artifact_2", "artifact_3")
+MAX_ARTIFACT_EQUIP_SLOTS = 3
+# База ячеек от тира брони (тайник/ассортимент): T1–T2 без артов, T3=1, T4+=2.
+ARTIFACT_BASE_SLOTS_BY_ARMOR_TIER: dict[int, int] = {1: 0, 2: 0, 3: 1, 4: 2, 5: 2}
 ARTIFACT_JUNK_KEYS = (
     "artifact_junk_slime",
     "artifact_junk_bolt",
@@ -1524,19 +1528,91 @@ def _durability_penalty(percent: int, max_penalty: int) -> int:
 
 def _equipped_artifact_names(character: Character) -> list[str]:
     names: list[str] = []
-    for key in ("artifact", "artifact_2"):
+    for key in ARTIFACT_EQUIP_SLOT_KEYS:
         name = str(character.equipment.get(key, "Нет") or "Нет")
         if name and name != "Нет":
             names.append(name)
     return names
 
 
-def has_extra_artifact_slot(character: Character) -> bool:
+def armor_gear_tier(armor_name: str) -> int:
+    """Тир брони для ячеек артов (1–5), по таблице тайника."""
+    name = str(armor_name or "").strip()
+    if not name or name == "Куртка новичка":
+        return 1
+    for tier, keys in STASH_ARMOR_BY_TIER.items():
+        for key in keys:
+            meta = ARMOR_CATALOG.get(key)
+            if meta is not None and str(meta.get("name")) == name:
+                return int(tier)
+    # Legacy / сезонные.
+    if name in {"ПСЗ-7 «Долг»", "Усиленный бронекостюм"}:
+        return 3
+    if name in {"Костюм «Чемпион Зоны»", "Бронекостюм «Бронза сезона»", "Штурмовой экзоскелет"}:
+        return 4 if name != "Костюм «Чемпион Зоны»" else 5
+    if name == "Бронежилет сталкера":
+        return 2
+    return 1
+
+
+def armor_base_artifact_slots(armor_name: str) -> int:
+    """Базовые ячейки артов от брони: T1–T2=0, T3=1, T4+=2."""
+    return int(ARTIFACT_BASE_SLOTS_BY_ARMOR_TIER.get(armor_gear_tier(armor_name), 0))
+
+
+def has_purchased_artifact_slot_upgrade(character: Character) -> bool:
+    """Куплена ли у техника доп. ячейка (+1 к базе брони)."""
+    raw_upgrade = character.equipment.get("artifact_slot_upgrade")
+    try:
+        if int(raw_upgrade or 0) >= 1:
+            return True
+    except (TypeError, ValueError):
+        pass
+    # Legacy: раньше artifact_slots=2 означало купленный апгрейд.
     raw = character.equipment.get("artifact_slots")
     try:
         return int(raw or 1) >= 2
     except (TypeError, ValueError):
         return False
+
+
+def has_extra_artifact_slot(character: Character) -> bool:
+    """Совместимость: True, если доп. ячейка у техника уже куплена."""
+    return has_purchased_artifact_slot_upgrade(character)
+
+
+def max_artifact_slots(character: Character) -> int:
+    """Сколько артов можно надеть: база брони + апгрейд техника, макс. 3."""
+    armor_name = str(character.equipment.get("armor", "Куртка новичка") or "Куртка новичка")
+    base = armor_base_artifact_slots(armor_name)
+    bonus = 1 if has_purchased_artifact_slot_upgrade(character) else 0
+    return max(0, min(MAX_ARTIFACT_EQUIP_SLOTS, base + bonus))
+
+
+def has_any_equipped_artifact(character: Character) -> bool:
+    return any(
+        str(character.equipment.get(key, "Нет") or "Нет") not in ("", "Нет")
+        for key in ARTIFACT_EQUIP_SLOT_KEYS
+    )
+
+
+def _trim_equipped_artifacts_to_cap(
+    storage: Storage,
+    telegram_id: int,
+    character: Character,
+) -> list[str]:
+    """Снять лишние арты сверх лимита ячеек (с конца). Возвращает снятые имена."""
+    cap = max_artifact_slots(character)
+    removed: list[str] = []
+    for idx, key in enumerate(ARTIFACT_EQUIP_SLOT_KEYS):
+        name = str(character.equipment.get(key, "Нет") or "Нет")
+        if not name or name == "Нет":
+            continue
+        if idx < cap:
+            continue
+        _unequip_artifact_to_inventory(storage, telegram_id, name, slot=key)
+        removed.append(name)
+    return removed
 
 
 def equipment_power(character: Character) -> int:
@@ -4563,15 +4639,22 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
             f"{achievements_text}",
         )
     if item_key == "artifact_slot":
-        if has_extra_artifact_slot(character):
+        if has_purchased_artifact_slot_upgrade(character):
             storage.change_money(telegram_id, total_price)
             return ActionResult(False, "Дополнительная ячейка артефакта уже установлена.")
-        storage.update_equipment_fields(telegram_id, {"artifact_slots": 2})
+        storage.update_equipment_fields(
+            telegram_id,
+            {"artifact_slot_upgrade": 1, "artifact_slots": 2},
+        )
         storage.add_player_stat(telegram_id, "trades_done", 1)
         _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
+        updated = storage.get_character(telegram_id, refresh_energy=False)
+        slots_now = max_artifact_slots(updated) if updated is not None else 1
         return ActionResult(
             True,
-            "Техник поставил доп. ячейку под артефакт. Теперь можно экипировать два арта.",
+            "Техник поставил доп. ячейку под артефакт (+1 к ячейкам брони).\n"
+            f"Сейчас доступно ячеек: {slots_now}/{MAX_ARTIFACT_EQUIP_SLOTS} "
+            "(T1–T2: 0, T3: 1, T4+: 2, улучшение: +1).",
         )
 
     storage.add_item(telegram_id, item_key, qty)
@@ -4992,9 +5075,22 @@ def build_equip_root_text(character: Character) -> tuple[str, list[tuple[str, st
     """Корневое меню экипировки: текущая снаряга + категории."""
     weapon = str(character.equipment.get("weapon", "Нож"))
     armor = str(character.equipment.get("armor", "Куртка новичка"))
-    artifact = str(character.equipment.get("artifact", "Нет") or "Нет")
-    artifact_2 = str(character.equipment.get("artifact_2", "Нет") or "Нет")
-    extra_slot = has_extra_artifact_slot(character)
+    slots_cap = max_artifact_slots(character)
+    art_lines: list[str] = []
+    for idx, key in enumerate(ARTIFACT_EQUIP_SLOT_KEYS, start=1):
+        if idx > max(slots_cap, 1):
+            # Показываем хотя бы схему лимита, если слотов 0 — одной строкой ниже.
+            break
+        name = str(character.equipment.get(key, "Нет") or "Нет")
+        note = f" ({_artifact_bonus_short(name)})" if name and name != "Нет" else ""
+        art_lines.append(f"💎 Артефакт {idx}: {name}{note}")
+    if slots_cap <= 0:
+        art_block = "💎 Артефакты: нет ячеек (нужна броня T3+)"
+    else:
+        art_block = "\n".join(art_lines)
+    armor_tier = armor_gear_tier(armor)
+    base_slots = armor_base_artifact_slots(armor)
+    upgrade_mark = "+1 техник" if has_purchased_artifact_slot_upgrade(character) else "без апгрейда"
     w_count = len(list_equippable_weapons(character))
     a_count = len(list_equippable_armor(character))
     art_count = len(list_equippable_artifacts(character))
@@ -5003,13 +5099,6 @@ def build_equip_root_text(character: Character) -> tuple[str, list[tuple[str, st
         ("armor", EQUIP_SLOT_LABELS["armor"], a_count),
         ("artifact", EQUIP_SLOT_LABELS["artifact"], art_count),
     ]
-    art_note = ""
-    if artifact and artifact != "Нет":
-        art_note = f" ({_artifact_bonus_short(artifact)})"
-    art2_line = ""
-    if extra_slot:
-        note2 = f" ({_artifact_bonus_short(artifact_2)})" if artifact_2 and artifact_2 != "Нет" else ""
-        art2_line = f"\n💎 Артефакт 2: {artifact_2}{note2}"
     defense = armor_defense(character)
     flat_mit = armor_flat_mitigation(character)
     block = armor_block_chance(character)
@@ -5031,8 +5120,10 @@ def build_equip_root_text(character: Character) -> tuple[str, list[tuple[str, st
         "Выбери категорию, затем предмет из инвентаря.\n"
         f"Сила снаряги: {equipment_power(character)}\n\n"
         f"🔫 Оружие: {weapon}\n"
-        f"🦺 Броня: {armor}{defense_line}\n"
-        f"💎 Артефакт: {artifact}{art_note}{art2_line}\n\n"
+        f"🦺 Броня: {armor} (T{armor_tier}){defense_line}\n"
+        f"{art_block}\n"
+        f"Ячейки артов: {slots_cap}/{MAX_ARTIFACT_EQUIP_SLOTS} "
+        f"(броня T{armor_tier} → {base_slots}, {upgrade_mark})\n\n"
         f"В инвентаре: оружие {w_count}, броня {a_count}, арты {art_count}."
     )
     return text, menu_items
@@ -5116,15 +5207,18 @@ def unequip_artifact(storage: Storage, telegram_id: int) -> ActionResult:
     blocked = _reject_if_player_busy(storage, telegram_id)
     if blocked is not None:
         return blocked
-    extra = str(player.equipment.get("artifact_2", "Нет") or "Нет")
-    if extra and extra != "Нет":
-        _unequip_artifact_to_inventory(storage, telegram_id, extra, slot="artifact_2")
-        return ActionResult(True, f"Снят артефакт из 2-й ячейки: {extra}. Он вернулся в инвентарь.")
-    equipped = str(player.equipment.get("artifact", "Нет") or "Нет")
-    if not equipped or equipped == "Нет":
-        return ActionResult(False, "Артефакт не экипирован.")
-    _unequip_artifact_to_inventory(storage, telegram_id, equipped)
-    return ActionResult(True, f"Снят артефакт: {equipped}. Он вернулся в инвентарь.")
+    # Снимаем с последней занятой ячейки.
+    for idx in range(len(ARTIFACT_EQUIP_SLOT_KEYS), 0, -1):
+        key = ARTIFACT_EQUIP_SLOT_KEYS[idx - 1]
+        name = str(player.equipment.get(key, "Нет") or "Нет")
+        if name and name != "Нет":
+            _unequip_artifact_to_inventory(storage, telegram_id, name, slot=key)
+            suffix = f" из {idx}-й ячейки" if idx > 1 else ""
+            return ActionResult(
+                True,
+                f"Снят артефакт{suffix}: {name}. Он вернулся в инвентарь.",
+            )
+    return ActionResult(False, "Артефакт не экипирован.")
 
 
 def equip_weapon(storage: Storage, telegram_id: int, item_key: str) -> ActionResult:
@@ -5180,11 +5274,22 @@ def equip_armor(storage: Storage, telegram_id: int, item_key: str) -> ActionResu
         storage.add_item(telegram_id, old_key, 1)
     returned = _return_armor_upgrades_to_inventory(storage, telegram_id, player)
     storage.set_equipment_item(telegram_id, "armor", armor_name)
+    refreshed = storage.get_character(telegram_id, refresh_energy=False)
+    trimmed: list[str] = []
+    if refreshed is not None:
+        trimmed = _trim_equipped_artifacts_to_cap(storage, telegram_id, refreshed)
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     note = ""
     if returned > 0:
         note = f" Улучшения брони сняты в инвентарь (×{returned}) — установи на новую броню."
-    return ActionResult(True, f"Экипирована броня: {armor_name}.{note}{achievements_text}")
+    if trimmed:
+        note += f" Лишние арты сняты в инвентарь: {', '.join(trimmed)}."
+    slots_now = max_artifact_slots(refreshed) if refreshed is not None else 0
+    return ActionResult(
+        True,
+        f"Экипирована броня: {armor_name} "
+        f"(ячейки артов: {slots_now}/{MAX_ARTIFACT_EQUIP_SLOTS}).{note}{achievements_text}",
+    )
 
 
 def repair_gear(storage: Storage, telegram_id: int, target: str) -> ActionResult:
@@ -5360,32 +5465,38 @@ def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = No
         return ActionResult(False, "У тебя нет этого артефакта в инвентаре.")
 
     artifact_name = ARTIFACT_INVENTORY_TO_NAME[chosen_key]
-    slot1 = str(player.equipment.get("artifact", "Нет") or "Нет")
-    slot2 = str(player.equipment.get("artifact_2", "Нет") or "Нет")
-    extra = has_extra_artifact_slot(player)
-    if artifact_name in {slot1, slot2}:
+    cap = max_artifact_slots(player)
+    if cap <= 0:
+        return ActionResult(
+            False,
+            "На этой броне нет ячеек под артефакты.\n"
+            "Нужна броня T3 (1 ячейка) или T4+ (2 ячейки); улучшение у техника даёт ещё +1 (макс. 3).",
+        )
+
+    equipped_names = [
+        str(player.equipment.get(key, "Нет") or "Нет") for key in ARTIFACT_EQUIP_SLOT_KEYS[:cap]
+    ]
+    if artifact_name in equipped_names:
         return ActionResult(False, f"{artifact_name} уже экипирован.")
 
     if not storage.remove_item(telegram_id, chosen_key, 1):
         return ActionResult(False, "У тебя нет этого артефакта в инвентаре.")
 
-    target_slot = "artifact"
-    if extra and (not slot1 or slot1 == "Нет"):
-        target_slot = "artifact"
-    elif extra and (not slot2 or slot2 == "Нет"):
-        target_slot = "artifact_2"
-    elif extra:
-        # Обе ячейки заняты — меняем первую, старый арт в инвентарь.
-        if slot1 and slot1 != "Нет":
-            old_key = ARTIFACT_NAME_TO_INVENTORY.get(slot1)
-            if old_key is not None:
-                storage.add_item(telegram_id, old_key, 1)
-        target_slot = "artifact"
+    target_slot = ARTIFACT_EQUIP_SLOT_KEYS[0]
+    for idx in range(cap):
+        key = ARTIFACT_EQUIP_SLOT_KEYS[idx]
+        cur = str(player.equipment.get(key, "Нет") or "Нет")
+        if not cur or cur == "Нет":
+            target_slot = key
+            break
     else:
-        if slot1 and slot1 != "Нет":
-            old_key = ARTIFACT_NAME_TO_INVENTORY.get(slot1)
+        # Все доступные ячейки заняты — меняем первую, старый арт в инвентарь.
+        old_name = equipped_names[0]
+        if old_name and old_name != "Нет":
+            old_key = ARTIFACT_NAME_TO_INVENTORY.get(old_name)
             if old_key is not None:
                 storage.add_item(telegram_id, old_key, 1)
+        target_slot = ARTIFACT_EQUIP_SLOT_KEYS[0]
 
     storage.set_equipment_item(telegram_id, target_slot, artifact_name)
     storage.sync_gear_power(telegram_id)
@@ -5417,9 +5528,11 @@ def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = No
         bonus_parts.append("без доп. бонуса")
 
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+    slot_idx = ARTIFACT_EQUIP_SLOT_KEYS.index(target_slot) + 1
     return ActionResult(
         True,
-        f"Экипирован {artifact_name}. Бонус: {', '.join(bonus_parts)}.{achievements_text}",
+        f"Экипирован {artifact_name} (ячейка {slot_idx}/{cap}). "
+        f"Бонус: {', '.join(bonus_parts)}.{achievements_text}",
     )
 
 

@@ -290,34 +290,74 @@ def run_smoke_check() -> None:
         from app.game_logic import (
             DAILY_ARTIFACT_HUNT_BONUS_RU,
             daily_artifact_hunt_done_today,
+            equip_armor,
             equip_artifact,
             has_extra_artifact_slot,
+            max_artifact_slots,
             mark_daily_artifact_hunt_done,
             unequip_artifact,
         )
 
+        # Стартовая куртка T1 — без ячеек артов.
+        assert max_artifact_slots(storage.get_character(111, refresh_energy=False)) == 0
         assert not has_extra_artifact_slot(storage.get_character(111, refresh_energy=False))
-        storage.change_money(111, 20000)
+        storage.change_money(111, 200_000)
+        set_vendor_tier(storage, 111, "tech", 2)
         slot_buy = buy_item(storage, 111, "artifact_slot")
         assert slot_buy.ok, slot_buy.text
         assert has_extra_artifact_slot(storage.get_character(111, refresh_energy=False))
+        # T1 броня + апгрейд техника = 1 ячейка.
+        assert max_artifact_slots(storage.get_character(111, refresh_energy=False)) == 1
         slot_again = buy_item(storage, 111, "artifact_slot")
         assert not slot_again.ok
 
+        # T3 броня → 1 база + апгрейд = 2; T4 → 2+1 = 3.
+        storage.add_item(111, "armor_seva", 1)
+        assert equip_armor(storage, 111, "armor_seva").ok
+        assert max_artifact_slots(storage.get_character(111, refresh_energy=False)) == 2
+        storage.add_item(111, "armor_exo", 1)
+        assert equip_armor(storage, 111, "armor_exo").ok
+        assert max_artifact_slots(storage.get_character(111, refresh_energy=False)) == 3
+
         storage.add_item(111, "artifact", 1)
         storage.add_item(111, "artifact_power", 1)
+        storage.add_item(111, "artifact_vitality", 1)
         eq1 = equip_artifact(storage, 111, "artifact")
         eq2 = equip_artifact(storage, 111, "artifact_power")
+        eq3 = equip_artifact(storage, 111, "artifact_vitality")
         assert eq1.ok, eq1.text
         assert eq2.ok, eq2.text
+        assert eq3.ok, eq3.text
         equipped = storage.get_character(111, refresh_energy=False)
         assert equipped.equipment.get("artifact") not in {"", "Нет", None}
         assert equipped.equipment.get("artifact_2") not in {"", "Нет", None}
-        un2 = unequip_artifact(storage, 111)
-        assert un2.ok, un2.text
+        assert equipped.equipment.get("artifact_3") not in {"", "Нет", None}
+        # Даунгрейд брони снимает лишние арты.
+        storage.add_item(111, "armor_leather", 1)
+        down = equip_armor(storage, 111, "armor_leather")
+        assert down.ok, down.text
+        after_down = storage.get_character(111, refresh_energy=False)
+        assert max_artifact_slots(after_down) == 1
+        filled = sum(
+            1
+            for k in ("artifact", "artifact_2", "artifact_3")
+            if str(after_down.equipment.get(k, "Нет") or "Нет") not in ("", "Нет")
+        )
+        assert filled == 1
+        # Вернём T4 для дальнейших тестов и снимем арты.
+        storage.add_item(111, "armor_exo", 1)
+        assert equip_armor(storage, 111, "armor_exo").ok
+        while True:
+            un = unequip_artifact(storage, 111)
+            if not un.ok:
+                break
         after_un = storage.get_character(111, refresh_energy=False)
-        assert after_un.equipment.get("artifact") not in {"", "Нет", None}
+        assert after_un.equipment.get("artifact") in {"", "Нет", None}
         assert after_un.equipment.get("artifact_2") in {"", "Нет", None}
+        assert after_un.equipment.get("artifact_3") in {"", "Нет", None}
+        # Вернём лёгкую броню без смягчения — дальше smoke проверяет апгрейды на −1 урона.
+        storage.set_equipment_item(111, "armor", "Куртка новичка")
+        storage.update_equipment_fields(111, {"armor_upgrade_level": 0})
 
         assert not daily_artifact_hunt_done_today(storage, 111)
         mark_daily_artifact_hunt_done(storage, 111)

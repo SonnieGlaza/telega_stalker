@@ -2248,6 +2248,7 @@ class Storage:
                     art_names = [
                         str(equipment.get("artifact") or "").strip(),
                         str(equipment.get("artifact_2") or "").strip(),
+                        str(equipment.get("artifact_3") or "").strip(),
                     ]
                     has_zone_artifact = any(n in ARTIFACT_ENERGY_REGEN_NAMES for n in art_names)
                     has_antirad_artifact = any(n in ARTIFACT_RAD_CLEANSE_NAMES for n in art_names)

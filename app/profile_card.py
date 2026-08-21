@@ -702,6 +702,12 @@ def build_character_card(
             bits.append(f"апгрейд −{defense}")
         equipment_lines.append("Защита: " + " · ".join(bits))
     equipment_lines.append(f"Артефакт: {artifact_name}")
+    art2 = str(equipment.get("artifact_2", "Нет") or "Нет")
+    art3 = str(equipment.get("artifact_3", "Нет") or "Нет")
+    if art2 not in ("", "Нет"):
+        equipment_lines.append(f"Арт 2: {art2}")
+    if art3 not in ("", "Нет"):
+        equipment_lines.append(f"Арт 3: {art3}")
     _draw_text_block(
         draw=draw,
         x=480,
@@ -710,7 +716,7 @@ def build_character_card(
         lines=equipment_lines,
         header_font=small_font,
         body_font=small_font,
-        max_lines=4,
+        max_lines=6,
         max_width=300,
     )
     _draw_text_block(

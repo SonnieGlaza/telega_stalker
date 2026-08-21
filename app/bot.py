@@ -3755,7 +3755,8 @@ async def equip_slot_page_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     text, safe_slot, safe_page, total_pages, options = build_equip_slot_page(player, slot, page)
-    equipped_art = str(player.equipment.get("artifact", "Нет") or "Нет")
+    from app.game_logic import has_any_equipped_artifact
+
     await edit_menu_message(
         callback,
         text,
@@ -3764,7 +3765,7 @@ async def equip_slot_page_callback(callback: CallbackQuery) -> None:
             page=safe_page,
             total_pages=total_pages,
             options=options,
-            can_unequip_artifact=safe_slot == "artifact" and equipped_art not in ("", "Нет"),
+            can_unequip_artifact=safe_slot == "artifact" and has_any_equipped_artifact(player),
         ),
     )
 
@@ -3794,7 +3795,8 @@ async def equip_put_callback(callback: CallbackQuery) -> None:
     if player is None:
         return
     text, safe_slot, safe_page, total_pages, options = build_equip_slot_page(player, slot, 0)
-    equipped_art = str(player.equipment.get("artifact", "Нет") or "Нет")
+    from app.game_logic import has_any_equipped_artifact
+
     if callback.message is not None:
         try:
             await callback.message.edit_text(
@@ -3804,7 +3806,7 @@ async def equip_put_callback(callback: CallbackQuery) -> None:
                     page=safe_page,
                     total_pages=total_pages,
                     options=options,
-                    can_unequip_artifact=safe_slot == "artifact" and equipped_art not in ("", "Нет"),
+                    can_unequip_artifact=safe_slot == "artifact" and has_any_equipped_artifact(player),
                 ),
             )
         except TelegramBadRequest:
@@ -3822,6 +3824,8 @@ async def unequip_artifact_callback(callback: CallbackQuery) -> None:
     if player is None:
         return
     text, safe_slot, safe_page, total_pages, options = build_equip_slot_page(player, "artifact", 0)
+    from app.game_logic import has_any_equipped_artifact
+
     if callback.message is not None:
         try:
             await callback.message.edit_text(
@@ -3831,7 +3835,7 @@ async def unequip_artifact_callback(callback: CallbackQuery) -> None:
                     page=safe_page,
                     total_pages=total_pages,
                     options=options,
-                    can_unequip_artifact=False,
+                    can_unequip_artifact=has_any_equipped_artifact(player),
                 ),
             )
         except TelegramBadRequest:
@@ -3846,7 +3850,8 @@ async def equip_artifact_legacy_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     text, safe_slot, safe_page, total_pages, options = build_equip_slot_page(player, "artifact", 0)
-    equipped_art = str(player.equipment.get("artifact", "Нет") or "Нет")
+    from app.game_logic import has_any_equipped_artifact
+
     await edit_menu_message(
         callback,
         text,
@@ -3855,7 +3860,7 @@ async def equip_artifact_legacy_callback(callback: CallbackQuery) -> None:
             page=safe_page,
             total_pages=total_pages,
             options=options,
-            can_unequip_artifact=equipped_art not in ("", "Нет"),
+            can_unequip_artifact=has_any_equipped_artifact(player),
         ),
     )
 
