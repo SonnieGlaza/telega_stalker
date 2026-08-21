@@ -2642,6 +2642,14 @@ def _achievement_rules() -> tuple[AchievementRule, ...]:
             check=lambda _, char: _owns_top_gear_set(char),
         ),
         AchievementRule(
+            key="radio_help_50",
+            title="Рука помощи",
+            description="Окажи помощь по рации 50 раз",
+            reward_ru=1500,
+            reward_rating=80,
+            check=lambda stats, _: stats.get("radio_helps", 0) >= 50,
+        ),
+        AchievementRule(
             key="achievements_10",
             title="Коллекционер медалей",
             description="Открой 10 достижений",
@@ -2759,6 +2767,7 @@ def build_character_stats_overview(storage: Storage, telegram_id: int) -> str:
         f"🏛 Вражеских баз захвачено: {stats['enemy_bases_captured']}\n"
         f"💰 Денег накоплено: {stats['money_earned']} RU\n"
         f"🔮 Артефактов найдено: {stats['artifacts_found']}\n"
+        f"📡 Помощей по рации: {stats.get('radio_helps', 0)}\n"
         f"☠️ Смертей: {stats['deaths']}\n\n"
         f"⭐ Рейтинг: {stats['rating_points']}\n"
         f"🏅 Достижений: {stats['achievements_unlocked']}"
@@ -3738,7 +3747,11 @@ def _maybe_help_event_reward(storage: Storage, telegram_id: int, title: str) -> 
         from app.mini_events import complete_help_event_if_helper
 
         extra = complete_help_event_if_helper(storage, telegram_id)
-        return f"\n{extra}" if extra else ""
+        if not extra:
+            return ""
+        # Счётчик помощи обновляется после основного unlock — проверяем ещё раз.
+        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+        return f"\n{extra}{achievements_text}"
     except Exception:
         return ""
 

@@ -345,6 +345,22 @@ def run_smoke_check() -> None:
         thanks = thanks_text({"helper_names": ["Старый"], "helper_factions": ["Долг"], "thanks_speaker": "Группа учёных"})
         assert "Старый" in thanks and "Долг" in thanks
 
+        from app.mini_events import complete_help_event_if_helper
+        from app.game_logic import ACHIEVEMENT_BY_KEY, _progress_and_unlock_achievements
+
+        assert ACHIEVEMENT_BY_KEY["radio_help_50"].title == "Рука помощи"
+        help_event = dict(event)
+        help_event["helpers"] = [111]
+        help_event["done_helpers"] = []
+        storage.set_meta("help_event:active", __import__("json").dumps(help_event, ensure_ascii=False))
+        assert complete_help_event_if_helper(storage, 111) == "Помощь по рации засчитана."
+        assert storage.get_player_stats(111)["radio_helps"] == 1
+        storage.add_player_stat(111, "radio_helps", 49)
+        assert storage.get_player_stats(111)["radio_helps"] == 50
+        radio_ach = _progress_and_unlock_achievements(storage, 111)
+        assert "Рука помощи" in radio_ach
+        assert "radio_help_50" in storage.get_player_achievement_keys(111)
+
         from app.combat_loot import grant_combat_loot
 
         loot_note = grant_combat_loot(storage, 111, npc=False)

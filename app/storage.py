@@ -501,8 +501,8 @@ class Storage:
                 INSERT OR REPLACE INTO player_stats(
                     telegram_id, quests_completed, quests_failed, raids_completed, raids_failed,
                     wars_won, enemy_bases_captured, smuggling_success, trades_done, money_earned, artifacts_found,
-                    deaths, rating_points, achievements_unlocked, season_rating
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    deaths, rating_points, achievements_unlocked, season_rating, radio_helps
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(row.get("telegram_id")),
@@ -520,6 +520,7 @@ class Storage:
                     int(row.get("rating_points", 0)),
                     int(row.get("achievements_unlocked", 0)),
                     int(row.get("season_rating", 0)),
+                    int(row.get("radio_helps", 0)),
                 ),
             )
         for row in player_achievements:
@@ -796,7 +797,8 @@ class Storage:
                     deaths INTEGER NOT NULL DEFAULT 0,
                     rating_points INTEGER NOT NULL DEFAULT 0,
                     achievements_unlocked INTEGER NOT NULL DEFAULT 0,
-                    season_rating INTEGER NOT NULL DEFAULT 0
+                    season_rating INTEGER NOT NULL DEFAULT 0,
+                    radio_helps INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -2560,6 +2562,7 @@ class Storage:
             "rating_points": "rating_points",
             "achievements_unlocked": "achievements_unlocked",
             "season_rating": "season_rating",
+            "radio_helps": "radio_helps",
         }
         column = allowed_columns.get(stat_key)
         if column is None or delta == 0:
@@ -2580,7 +2583,7 @@ class Storage:
                 """
                 SELECT quests_completed, quests_failed, raids_completed, raids_failed, wars_won,
                        enemy_bases_captured, smuggling_success, trades_done, money_earned, artifacts_found, deaths,
-                       rating_points, achievements_unlocked, season_rating
+                       rating_points, achievements_unlocked, season_rating, radio_helps
                 FROM player_stats
                 WHERE telegram_id = ?
                 """,
@@ -2602,6 +2605,7 @@ class Storage:
                 "rating_points": 0,
                 "achievements_unlocked": 0,
                 "season_rating": 0,
+                "radio_helps": 0,
             }
         return {
             "quests_completed": int(row["quests_completed"]),
@@ -2618,6 +2622,7 @@ class Storage:
             "rating_points": int(row["rating_points"]),
             "achievements_unlocked": int(row["achievements_unlocked"]),
             "season_rating": int(row["season_rating"] or 0),
+            "radio_helps": int(row["radio_helps"] or 0),
         }
 
     def unlock_player_achievement(self, telegram_id: int, achievement_key: str) -> bool:
@@ -4060,6 +4065,10 @@ class Storage:
             (
                 "season_rating",
                 "ALTER TABLE player_stats ADD COLUMN season_rating INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "radio_helps",
+                "ALTER TABLE player_stats ADD COLUMN radio_helps INTEGER NOT NULL DEFAULT 0",
             ),
         ]
         for col_name, ddl in add_columns:

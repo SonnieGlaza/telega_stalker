@@ -209,6 +209,7 @@ def complete_help_event_if_helper(storage: Storage, telegram_id: int) -> str | N
     done.add(telegram_id)
     event["done_helpers"] = list(done)
     _save_event(storage, event)
+    storage.add_player_stat(telegram_id, "radio_helps", 1)
     return "Помощь по рации засчитана."
 
 
