@@ -558,8 +558,7 @@ def run_smoke_check() -> None:
         join_m = join_monolith_war(storage, 111)
         assert join_m.ok, join_m.text
         bots = send_monolith_bots(storage, 111)
-        # Лидер может быть не назначен — тогда ок; иначе нужен лидер.
-        assert bots.ok or "лидер" in bots.text.lower()
+        assert bots.ok, bots.text
         pending = dict(pending)
         pending["expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
         # Сбрасываем людей, чтобы проверить процентный исход.
@@ -583,7 +582,16 @@ def run_smoke_check() -> None:
         storage.restore_energy(444, 100)
         atk = start_monolith_attack(storage, 444, "Свалка")
         assert atk.ok, atk.text
+        # Корректно закрываем окно/лобби, не оставляя war_lobbies in_progress.
+        forced = resolve_pending_monolith_war(storage, force=True)
+        assert forced is not None
         storage.set_meta("monolith_war:pending", "")
+
+        # Марш Монолита не целится в ЧАЭС.
+        from app.special_events import MARCH_TARGET_BASES
+
+        assert "ЧАЭС" not in MARCH_TARGET_BASES
+        assert "Росток" in MARCH_TARGET_BASES
 
         # Сброс особого события, чтобы не мешать дальнейшим smoke-переходам.
         storage.set_meta("special_event:active", "")

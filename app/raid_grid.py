@@ -548,10 +548,16 @@ def _bot_shooters(session: RaidGridSession) -> tuple[list[tuple[int, int]], list
     return positions, weapons
 
 
-def _hostile_damage(weapon: str, *, bot_tier: int = 1, defense_bonus: int = 0) -> int:
+def _hostile_damage(
+    weapon: str,
+    *,
+    bot_tier: int = 1,
+    defense_bonus: int = 0,
+    faction: str | None = None,
+) -> int:
     tier = max(1, int(bot_tier))
     base = max(4, weapon_shoot_range(weapon) * 3 + random.randint(0, 4))
-    armor_name = bot_armor_for_tier(tier)
+    armor_name = bot_armor_for_tier(tier, faction=faction)
     armor_bonus = ARMOR_RATING_BY_NAME.get(armor_name, 0) // 3
     return base + armor_bonus + max(0, int(defense_bonus))
 
@@ -625,6 +631,7 @@ def _hostile_turn(storage: Storage, session: RaidGridSession) -> list[str]:
                     weapon,
                     bot_tier=session.raid_bot_tier,
                     defense_bonus=session.defense_bonus,
+                    faction=session.target_faction,
                 ),
             )
         )

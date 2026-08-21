@@ -7913,14 +7913,25 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
             energy_spent_ids=spent_ids,
         )
         if defer_mode == "attack" and host_faction == MONOLITH_FACTION:
-            # Авто-посылка ботов, если людей меньше минимума.
-            if len(active) < WAR_MIN_FACTION_MEMBERS:
-                from app.monolith_war import save_pending_monolith_war
+            # Боты всегда в деле при атаке Монолита (и при полном лобби, и при доборе).
+            from app.monolith_war import save_pending_monolith_war
 
-                bots = get_faction_bots(storage, MONOLITH_FACTION)
-                pending["bots_sent"] = True
-                pending["bot_count"] = int(bots.get("count") or 0)
-                save_pending_monolith_war(storage, pending)
+            bots = get_faction_bots(storage, MONOLITH_FACTION)
+            pending["bots_sent"] = True
+            pending["bot_count"] = int(bots.get("count") or 0)
+            # Кто уже в лобби и списал энергию — сразу в monolith_ids (не нужно жать «вступить» ещё раз).
+            names: list[str] = []
+            mono_ids: list[int] = []
+            for tid in member_id_list:
+                ch = storage.get_character(tid, refresh_energy=False)
+                if ch is None or ch.faction != MONOLITH_FACTION:
+                    continue
+                mono_ids.append(tid)
+                names.append(str(ch.nickname))
+            pending["monolith_ids"] = mono_ids
+            pending["helper_names"] = names  # legacy key ignored
+            pending["monolith_names"] = names
+            save_pending_monolith_war(storage, pending)
         monolith_ids = storage.list_faction_member_ids(MONOLITH_FACTION)
         mode_ru = "оборона базы" if defer_mode == "defend" else "атака"
         return WarLobbyResult(

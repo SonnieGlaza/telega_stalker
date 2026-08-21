@@ -302,6 +302,11 @@ def resolve_pending_monolith_war(storage: Storage, *, force: bool = False) -> di
     _save_pending(storage, pending)
 
     notify_ids = list(dict.fromkeys(attacker_ids + monolith_ids))
+    # Если кто-то уже нажал «вступить» — подтягиваем и тех, кто списал энергию при запуске лобби.
+    # Чистая атака ботами (/monolith_attack без join) остаётся на 90/10.
+    if mode == "attack" and monolith_ids:
+        monolith_ids = _pull_monolith_energy_spenders(storage, monolith_ids, energy_spent)
+        notify_ids = list(dict.fromkeys(notify_ids + monolith_ids))
     humans_ready = len(monolith_ids) > 0
 
     # Живые монолитовцы → тактическое поле.

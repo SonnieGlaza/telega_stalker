@@ -56,7 +56,9 @@ GIANT_LOCATIONS: tuple[str, ...] = (
 )
 
 MARCH_TARGET_BASES: tuple[str, ...] = tuple(
-    dict.fromkeys(FACTION_HOME_BASE.values())
+    base
+    for base in dict.fromkeys(FACTION_HOME_BASE.values())
+    if base != "ЧАЭС"
 )
 
 EVENT_KINDS: tuple[str, ...] = (
