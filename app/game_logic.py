@@ -3817,19 +3817,28 @@ def apply_contract_mission_success(
 
 
 def _maybe_help_event_reward(storage: Storage, telegram_id: int, title: str) -> str:
-    if not str(title).startswith("Помощь:"):
-        return ""
-    try:
-        from app.mini_events import complete_help_event_if_helper
+    notes: list[str] = []
+    if str(title).startswith("Помощь:"):
+        try:
+            from app.mini_events import complete_help_event_if_helper
 
-        extra = complete_help_event_if_helper(storage, telegram_id)
-        if not extra:
-            return ""
-        # Счётчик помощи обновляется после основного unlock — проверяем ещё раз.
-        achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
-        return f"\n{extra}{achievements_text}"
+            extra = complete_help_event_if_helper(storage, telegram_id)
+            if extra:
+                achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
+                notes.append(f"{extra}{achievements_text}")
+        except Exception:
+            pass
+    try:
+        from app.special_events import complete_special_event_objective
+
+        special = complete_special_event_objective(storage, telegram_id, title=title)
+        if special:
+            notes.append(special)
     except Exception:
+        pass
+    if not notes:
         return ""
+    return "\n" + "\n".join(notes)
 
 
 def apply_contract_mission_fail(
@@ -4554,9 +4563,27 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
             return ActionResult(False, f"За раз можно купить не больше {BULK_BUY_MAX_QTY} шт.")
 
     total_price = unit_price * qty
+    from app.special_events import BLOCKADE_STOCK_KEYS, get_shop_stock, consume_shop_stock
+
+    if item_key in BLOCKADE_STOCK_KEYS:
+        stock = get_shop_stock(storage)
+        if stock is not None and item_key in stock and int(stock.get(item_key, 0)) < qty:
+            left = int(stock.get(item_key, 0))
+            return ActionResult(
+                False,
+                f"Поставки перебиты бандитами: товара мало (осталось {left}). "
+                "Зачисти логово, чтобы открыть поставки.",
+            )
+
     if not storage.change_money(telegram_id, -total_price):
         need_txt = f"{total_price} RU" if qty > 1 else f"покупки: {title}"
         return ActionResult(False, f"Недостаточно денег для {need_txt}.")
+
+    if item_key in BLOCKADE_STOCK_KEYS:
+        stock_err = consume_shop_stock(storage, item_key, qty)
+        if stock_err:
+            storage.change_money(telegram_id, total_price)
+            return ActionResult(False, stock_err)
 
     if item_key == "truck":
         storage.set_truck_owned(telegram_id)
@@ -5847,6 +5874,16 @@ def travel_to(
         return ActionResult(False, busy)
     if character.location == destination:
         return ActionResult(False, f"Ты уже находишься в локации «{destination}».")
+
+    from app.special_events import travel_blocked_by_special_event
+
+    storm_block = travel_blocked_by_special_event(
+        storage,
+        from_location=str(character.location),
+        to_location=str(destination),
+    )
+    if storm_block:
+        return ActionResult(False, storm_block)
 
     locations = {loc["name"]: loc for loc in storage.get_locations()}
     if destination not in locations:
@@ -9614,16 +9651,20 @@ def build_events_overview(storage: Storage) -> str:
     storage.delete_expired_map_events()
     events = storage.get_map_events()
     emission_status = build_emission_status(storage)
+    from app.special_events import special_events_status_line
+
+    special_line = special_events_status_line(storage)
     if not events:
         return (
             f"{emission_status}\n\n"
+            f"Особое: {special_line}\n\n"
             "Активных событий на карте нет. Зона затихла.\n"
             "Новые события появляются сами через некоторое время."
         )
 
     now = datetime.now(timezone.utc)
     by_location = {loc["name"]: int(loc["npc_power"]) for loc in storage.get_locations()}
-    lines = [emission_status, "", "Активные события Зоны:"]
+    lines = [emission_status, "", f"Особое: {special_line}", "", "Активные события Зоны:"]
     for event in events:
         location = str(event.get("location"))
         expires_at = _safe_fromiso(str(event.get("expires_at", "")))

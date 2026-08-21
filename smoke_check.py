@@ -385,6 +385,88 @@ def run_smoke_check() -> None:
         thanks = thanks_text({"helper_names": ["Старый"], "helper_factions": ["Долг"], "thanks_speaker": "Группа учёных"})
         assert "Старый" in thanks and "Долг" in thanks
 
+        from app.special_events import (
+            SPECIAL_EVENT_NEXT_META,
+            complete_special_event_objective,
+            get_active_special_event,
+            get_shop_stock,
+            join_special_event,
+            process_special_event_cycle,
+            start_special_event,
+            travel_blocked_by_special_event,
+        )
+        from app.quest_mission import clear_mission_session
+
+        def _clear_mission() -> None:
+            clear_mission_session(storage, 111)
+            storage.set_active_contract(111, None)
+
+        storage.set_meta(SPECIAL_EVENT_NEXT_META, datetime.now(timezone.utc).isoformat())
+        # Форсируем виды событий по одному.
+        storm = start_special_event(storage, kind="anomaly_storm")
+        assert storm["kind"] == "anomaly_storm"
+        assert travel_blocked_by_special_event(
+            storage, from_location="Кордон", to_location="Свалка"
+        )
+        storage.set_location(111, "Кордон")
+        storm_join = join_special_event(storage, 111)
+        assert storm_join.ok, storm_join.text
+        storm_done = complete_special_event_objective(
+            storage, 111, title="Поиск прохода в шторме"
+        )
+        assert storm_done and "Проход" in storm_done
+        assert travel_blocked_by_special_event(
+            storage, from_location="Кордон", to_location="Свалка"
+        ) is None
+        _clear_mission()
+
+        bandits = start_special_event(storage, kind="bandit_blockade")
+        assert get_shop_stock(storage) is not None
+        assert get_shop_stock(storage).get("vodka", 0) == 2
+        loc_b = str(bandits["location"])
+        storage.set_location(111, loc_b)
+        # Уйти с локации нельзя.
+        assert travel_blocked_by_special_event(
+            storage, from_location=loc_b, to_location="Кордон"
+        )
+        # Прийти на штурм можно.
+        assert travel_blocked_by_special_event(
+            storage, from_location="Кордон", to_location=loc_b
+        ) is None
+        dens = int(bandits["dens_left"])
+        for i in range(dens):
+            note = complete_special_event_objective(
+                storage, 111, title=f"Логово бандитов: {loc_b}"
+            )
+            assert note
+        assert get_shop_stock(storage) is None
+        _clear_mission()
+
+        heli = start_special_event(storage, kind="heli_crash")
+        storage.set_location(111, str(heli["location"]))
+        storage.add_item(111, "ammo_pack", 5)
+        heli_join = join_special_event(storage, 111)
+        assert heli_join.ok, heli_join.text
+        heli_loot = complete_special_event_objective(
+            storage, 111, title=f"Обломки вертушки: {heli['location']}"
+        )
+        assert heli_loot and "800" in heli_loot
+        _clear_mission()
+
+        dark = start_special_event(storage, kind="dark_stalker")
+        storage.set_location(111, str(dark["location"]))
+        storage.add_item(111, "ammo_pack", 5)
+        dark_join = join_special_event(storage, 111)
+        assert dark_join.ok, dark_join.text
+        _clear_mission()
+
+        # Сброс особого события, чтобы не мешать дальнейшим smoke-переходам.
+        storage.set_meta("special_event:active", "")
+        storage.set_meta("shop:stock:consumables", "")
+        storage.restore_energy(111, 100)
+        storage.restore_energy(222, 100)
+        storage.restore_energy(333, 100)
+
         from app.mini_events import complete_help_event_if_helper
         from app.game_logic import ACHIEVEMENT_BY_KEY, _progress_and_unlock_achievements
 
@@ -877,6 +959,8 @@ def run_smoke_check() -> None:
         assert build_economy_overview(storage, 111)
 
         # Raids.
+        storage.restore_energy(111, 100)
+        storage.restore_energy(222, 100)
         raid_create = create_or_join_faction_raid(storage, 111, "Янтарь")
         assert raid_create.ok, raid_create.text
         raid_join = create_or_join_faction_raid(storage, 222, "Янтарь")

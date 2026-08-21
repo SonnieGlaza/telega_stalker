@@ -92,6 +92,8 @@ def quests_keyboard(
     show_go_home: bool = False,
     show_cancel: bool = False,
     show_help: bool = False,
+    show_special: bool = False,
+    special_label: str | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if show_work:
@@ -112,6 +114,15 @@ def quests_keyboard(
     rows.append([InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")])
     if show_help:
         rows.append([InlineKeyboardButton(text="🆘 Помочь по рации", callback_data="help_event:join")])
+    if show_special:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=special_label or "📡 Особое событие",
+                    callback_data="special_event:join",
+                )
+            ]
+        )
     rows.append([InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:menu")])
     rows.append(
         [

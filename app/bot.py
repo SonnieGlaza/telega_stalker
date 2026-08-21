@@ -4015,6 +4015,10 @@ def _quests_compact_status(storage, player) -> str:
         lines.append(
             f"📡 Рация: {event.get('speaker')} на «{event.get('location')}» — 15 мин."
         )
+    from app.special_events import get_active_special_event, special_events_status_line
+
+    if get_active_special_event(storage) is not None:
+        lines.append(f"⚠ {special_events_status_line(storage)}")
     if is_traveling(player):
         lines.append("⏱ Ты в пути — таймер в отдельном сообщении.")
     return "\n".join(lines)
@@ -4022,6 +4026,10 @@ def _quests_compact_status(storage, player) -> str:
 
 def _quests_menu_payload(storage, player):
     from app.mini_events import help_event_is_joinable
+    from app.special_events import (
+        special_event_button_label,
+        special_event_is_joinable,
+    )
 
     active = storage.get_active_contract(player.telegram_id)
     home = faction_home_base(player.faction)
@@ -4054,6 +4062,7 @@ def _quests_menu_payload(storage, player):
                 (vendor_quest_label(player.faction, vendor), f"quests:vendor:{vendor}")
             )
 
+    show_special = special_event_is_joinable(storage, player.telegram_id)
     keyboard = quests_keyboard(
         contract_buttons=contract_buttons,
         vendor_buttons=vendor_buttons,
@@ -4063,6 +4072,8 @@ def _quests_menu_payload(storage, player):
         show_go_home=show_go_home,
         show_cancel=show_cancel,
         show_help=help_event_is_joinable(storage, player.telegram_id),
+        show_special=show_special,
+        special_label=special_event_button_label(storage) if show_special else None,
     )
     return _quests_compact_status(storage, player), keyboard
 
@@ -5373,6 +5384,25 @@ async def help_event_join_callback(callback: CallbackQuery) -> None:
 
     storage = get_storage()
     result = join_help_event(storage, callback.from_user.id)
+    payload = result.payload or {}
+    image = payload.get("mission_image")
+    if image and payload.get("mission_active"):
+        await _send_or_edit_quest_mission_frame(
+            callback,
+            image_bytes=image,
+            caption=str(payload.get("caption") or result.text),
+            note=result.text,
+        )
+        return
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "special_event:join")
+async def special_event_join_callback(callback: CallbackQuery) -> None:
+    from app.special_events import join_special_event
+
+    storage = get_storage()
+    result = join_special_event(storage, callback.from_user.id)
     payload = result.payload or {}
     image = payload.get("mission_image")
     if image and payload.get("mission_active"):
@@ -8878,6 +8908,32 @@ async def run_bot() -> None:
                         logger.exception("Failed to post help event to common chat")
             except Exception:
                 logger.exception("Help event cycle tick failed")
+            try:
+                from app.special_events import (
+                    format_special_call_html,
+                    format_special_resolve_html,
+                    process_special_event_cycle,
+                )
+                from app.season_chat_titles import ZONE_COMMON_CHAT_ID
+
+                special_payload = process_special_event_cycle(get_storage())
+                if special_payload:
+                    event = special_payload.get("event") or {}
+                    html = (
+                        format_special_call_html(event)
+                        if special_payload.get("kind") == "call"
+                        else format_special_resolve_html(str(special_payload.get("text") or ""))
+                    )
+                    try:
+                        await bot.send_message(
+                            ZONE_COMMON_CHAT_ID,
+                            html,
+                            parse_mode=ParseMode.HTML,
+                        )
+                    except Exception:
+                        logger.exception("Failed to post special event to common chat")
+            except Exception:
+                logger.exception("Special event cycle tick failed")
             try:
                 season_message = process_rating_season(get_storage())
                 if season_message:
