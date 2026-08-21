@@ -750,10 +750,6 @@ class Registration(StatesGroup):
 
 # Получатели /поддержка: юзернеймы разработчиков (+ все ADMIN_IDS).
 SUPPORT_CONTACT_USERNAMES: tuple[str, ...] = ("potych", "Andreyteacher1")
-SUPPORT_CONTACT_LINKS = (
-    "https://t.me/potych",
-    "https://t.me/Andreyteacher1",
-)
 SUPPORT_MESSAGE_MAX_LEN = 3500
 
 TREASURY_CUSTOM_MIN_RU = 1
@@ -6097,18 +6093,11 @@ async def _deliver_support_ticket(bot: Bot, message: Message, body: str) -> None
         except Exception:
             logger.exception("Failed to deliver support ticket to %s", uid)
 
-    links = "\n".join(f"• {link}" for link in SUPPORT_CONTACT_LINKS)
     if delivered > 0:
-        await message.answer(
-            "Сообщение отправлено разработчикам.\n"
-            "Можно также написать напрямую:\n"
-            f"{links}"
-        )
+        await message.answer("Сообщение отправлено разработчикам.")
     else:
         await message.answer(
-            "Не удалось доставить сообщение через бота (админы ещё не писали боту).\n"
-            "Напиши напрямую:\n"
-            f"{links}"
+            "Не удалось доставить сообщение. Попробуй позже или напиши админу в чате Зоны."
         )
 
 
