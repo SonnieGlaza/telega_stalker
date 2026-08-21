@@ -419,6 +419,7 @@ from app.keyboards import (
     exchange_lots_keyboard,
     exchange_custom_select_keyboard,
     war_sections_keyboard,
+    monolith_attack_targets_keyboard,
     players_factions_keyboard,
     players_faction_page_keyboard,
     ratings_keyboard,
@@ -2538,6 +2539,7 @@ DEAD_BYPASS_MESSAGE_COMMANDS = frozenset({
     "/deleteplayer",
     "/give",
     "/setfaction",
+    "/monolith_attack",
     "/unstick",
     "/dbstatus",
     "/dbsave",
@@ -7224,6 +7226,12 @@ async def handle_travel_legacy(callback: CallbackQuery) -> None:
     await travel_pick_destination(callback)
 
 
+def _war_sections_markup_for(player: Character | None):
+    from app.monolith_war import MONOLITH_FACTION
+
+    return war_sections_keyboard(monolith=bool(player and player.faction == MONOLITH_FACTION))
+
+
 @router.message(F.text == "⚔️ Война")
 async def show_war(message: Message) -> None:
     player = ensure_character(message)
@@ -7238,15 +7246,19 @@ async def show_war(message: Message) -> None:
         await message.answer("Сначала выбери группировку.")
         return
 
-    await message.answer("Раздел войны: выбери нужный блок.", reply_markup=war_sections_keyboard())
+    await message.answer(
+        "Раздел войны: выбери нужный блок.",
+        reply_markup=_war_sections_markup_for(player),
+    )
 
 
 @router.callback_query(F.data == "war:section:root")
 async def war_root_section_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
     await edit_menu_message(
         callback,
         "Раздел войны: выбери нужный блок.",
-        war_sections_keyboard(),
+        _war_sections_markup_for(player),
     )
 
 
@@ -7301,7 +7313,7 @@ async def war_ncap_section_callback(callback: CallbackQuery) -> None:
         await edit_menu_message(
             callback,
             "Сейчас нет нейтральных точек для захвата.",
-            war_sections_keyboard(),
+            _war_sections_markup_for(player),
         )
         return
     await edit_menu_message(
@@ -7328,7 +7340,7 @@ async def war_transfer_section_callback(callback: CallbackQuery) -> None:
             callback,
             f"Передача доступна только на точке под контролем «{player.faction}».\n"
             f"Сейчас ты на «{loc_name}».",
-            war_sections_keyboard(),
+            _war_sections_markup_for(player),
         )
         return
     allies = sorted(storage.list_faction_alliances(player.faction))
@@ -7336,7 +7348,7 @@ async def war_transfer_section_callback(callback: CallbackQuery) -> None:
         await edit_menu_message(
             callback,
             f"Точка «{loc_name}» под вашим контролем, но нет союзников для передачи.",
-            war_sections_keyboard(),
+            _war_sections_markup_for(player),
         )
         return
     await edit_menu_message(
@@ -7354,6 +7366,100 @@ async def war_lobby_section_callback(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
         return
     await _show_war_lobby_menu(callback, bot)
+
+
+@router.callback_query(F.data == "war:section:monolith_attack")
+async def war_monolith_attack_section_callback(callback: CallbackQuery) -> None:
+    from app.monolith_war import MONOLITH_FACTION
+
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction != MONOLITH_FACTION:
+        await callback.answer("Раздел только для Монолита.", show_alert=True)
+        return
+    targets = list_assaultable_locations(storage, MONOLITH_FACTION)
+    if not targets:
+        await edit_menu_message(
+            callback,
+            "Нет целей для атаки Монолита.",
+            _war_sections_markup_for(player),
+        )
+        return
+    await edit_menu_message(
+        callback,
+        "☢ Атака Монолита\n"
+        "Выбери цель. Откроется окно 15 мин: можно вступить самому или оставить ботов (исход 90/10).\n"
+        "Команда: /monolith_attack [локация]",
+        monolith_attack_targets_keyboard(targets),
+    )
+
+
+@router.callback_query(F.data.startswith("monolith_war:attack:"))
+async def monolith_war_attack_callback(callback: CallbackQuery, bot: Bot) -> None:
+    from app.monolith_war import format_monolith_war_call, get_pending_monolith_war, start_monolith_attack
+    from aiogram.enums import ParseMode
+
+    location = (callback.data or "").removeprefix("monolith_war:attack:").strip()
+    result = start_monolith_attack(get_storage(), callback.from_user.id, location)
+    await reply_action_result(callback, result.text)
+    if not result.ok:
+        return
+    storage = get_storage()
+    pending = get_pending_monolith_war(storage)
+    html = format_monolith_war_call(pending) if pending else result.text
+    notify = set((result.payload or {}).get("monolith_notify_ids") or [])
+    for uid in notify:
+        try:
+            await bot.send_message(int(uid), html, parse_mode=ParseMode.HTML)
+        except Exception:
+            logger.debug("Failed monolith attack notify to %s", uid)
+    await _refresh_war_lobby_menu(callback, bot)
+
+
+@router.message(Command("monolith_attack"), F.chat.type == "private")
+async def monolith_attack_command(message: Message, bot: Bot, command: CommandObject) -> None:
+    """Атака Монолита: /monolith_attack Росток — для бойца Монолита или админа в Монолите."""
+    from app.monolith_war import (
+        MONOLITH_FACTION,
+        format_monolith_war_call,
+        get_pending_monolith_war,
+        start_monolith_attack,
+    )
+    from aiogram.enums import ParseMode
+
+    storage = get_storage()
+    player = storage.get_character(message.from_user.id, refresh_energy=False)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if player.faction != MONOLITH_FACTION and not is_admin_user(message.from_user.id):
+        await message.answer("Команда для бойцов Монолита (или админа в Монолите).")
+        return
+    if player.faction != MONOLITH_FACTION:
+        await message.answer("Сначала /setfaction … Монолит, потом атака.")
+        return
+    loc = (command.args or "").strip()
+    if not loc:
+        targets = list_assaultable_locations(storage, MONOLITH_FACTION)
+        names = ", ".join(str(t["name"]) for t in targets)
+        await message.answer(
+            "Использование: /monolith_attack [локация]\n"
+            f"Пример: /monolith_attack Росток\n"
+            f"Цели: {names or '—'}\n"
+            "Либо: ⚔️ Война → ☢ Атака Монолита"
+        )
+        return
+    result = start_monolith_attack(storage, message.from_user.id, loc)
+    await message.answer(result.text)
+    if not result.ok:
+        return
+    pending = get_pending_monolith_war(storage)
+    html = format_monolith_war_call(pending) if pending else result.text
+    for uid in (result.payload or {}).get("monolith_notify_ids") or []:
+        try:
+            await bot.send_message(int(uid), html, parse_mode=ParseMode.HTML)
+        except Exception:
+            logger.debug("Failed monolith attack cmd notify to %s", uid)
 
 
 async def _show_war_lobby_menu(callback: CallbackQuery, bot: Bot) -> None:

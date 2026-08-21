@@ -432,3 +432,93 @@ def filter_travel_locations_for_faction(
     if faction == MONOLITH_FACTION:
         return locations
     return [loc for loc in locations if str(loc.get("name") or "") != MONOLITH_BASE]
+
+
+def start_monolith_attack(
+    storage: Storage,
+    telegram_id: int,
+    location_name: str,
+) -> ActionResult:
+    """Одна кнопка/команда: Монолит объявляет атаку на точку (окно 15 мин + боты)."""
+    from app.faction_bots import get_faction_bots
+    from app.game_logic import (
+        WAR_LOBBY_ENERGY_COST,
+        _location_is_friendly_to_faction,
+        list_assaultable_locations,
+    )
+    from app.player_busy import player_busy_reason
+
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа.")
+    if player.faction != MONOLITH_FACTION:
+        return ActionResult(False, "Атаку Монолита может начать только боец Монолита.")
+    if player.health <= 0:
+        return ActionResult(False, "Мёртвый монолитовец атаку не объявит.")
+    busy = player_busy_reason(storage, telegram_id)
+    if busy:
+        return ActionResult(False, busy)
+    if get_pending_monolith_war(storage) is not None:
+        return ActionResult(False, "Уже идёт окно боя Монолита. Дождись исхода.")
+
+    loc_name = str(location_name or "").strip()
+    target = storage.get_location(loc_name)
+    if target is None:
+        assaultable = list_assaultable_locations(storage, MONOLITH_FACTION)
+        names = ", ".join(str(x["name"]) for x in assaultable[:12])
+        return ActionResult(
+            False,
+            f"Локация «{loc_name}» не найдена.\nДоступно: {names or '—'}",
+        )
+    if _location_is_friendly_to_faction(storage, target, MONOLITH_FACTION):
+        return ActionResult(False, f"«{loc_name}» уже своя или союзническая.")
+
+    open_lobby = storage.get_open_war_lobby_for_faction(MONOLITH_FACTION)
+    if open_lobby is not None:
+        return ActionResult(
+            False,
+            f"У Монолита уже открыто лобби #{open_lobby['id']} на «{open_lobby['location']}».",
+        )
+
+    bots = get_faction_bots(storage, MONOLITH_FACTION)
+    bot_count = int(bots.get("count") or 0)
+    if bot_count < 1:
+        return ActionResult(
+            False,
+            "Нет ботов Монолита. Набери хотя бы одного в казне ГП.",
+        )
+
+    if not storage.spend_energy(telegram_id, WAR_LOBBY_ENERGY_COST):
+        return ActionResult(
+            False,
+            f"Недостаточно энергии (нужно {WAR_LOBBY_ENERGY_COST}).",
+        )
+
+    war_id = storage.create_war_lobby(MONOLITH_FACTION, loc_name, telegram_id)
+    pending = begin_monolith_war_window(
+        storage,
+        war_id=war_id,
+        location_name=loc_name,
+        host_faction=MONOLITH_FACTION,
+        attacker_ids=[telegram_id],
+        mode="attack",
+        energy_spent_ids=[telegram_id],
+    )
+    pending["bots_sent"] = True
+    pending["bot_count"] = bot_count
+    save_pending_monolith_war(storage, pending)
+
+    monolith_ids = storage.list_faction_member_ids(MONOLITH_FACTION)
+    return ActionResult(
+        True,
+        (
+            f"☢ Монолит объявил атаку на «{loc_name}».\n"
+            f"Окно {MONOLITH_JOIN_MINUTES} мин: вступи в бой или жди авто 90/10 с ботами (×{bot_count})."
+        ),
+        payload={
+            "monolith_pending": True,
+            "monolith_notify_ids": [int(x) for x in monolith_ids],
+            "location": loc_name,
+            "war_id": war_id,
+        },
+    )

@@ -316,8 +316,7 @@ def _build_giant(now: datetime) -> dict[str, Any]:
         "call_text": (
             f"Гигант терроризирует «{loc}» уже несколько часов. "
             "Урон по площади, на помощь зовёт бюреров и зомбированных. "
-            "Новички могут срубить его ценой нескольких смертей; ветераны быстрее. "
-            f"HP {GIANT_MAX_HP}. Можно возродиться и продолжить (~{GIANT_DURATION_MINUTES} мин)."
+            f"Можно возродиться и продолжить охоту (~{GIANT_DURATION_MINUTES} мин)."
         ),
         "started_at": now.isoformat(),
         "expires_at": (now + timedelta(minutes=GIANT_DURATION_MINUTES)).isoformat(),
@@ -638,7 +637,7 @@ def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(
             True,
             (
-                f"Гигант на «{loc}» (HP {hp}/{event.get('boss_hp_max', GIANT_MAX_HP)}). "
+                f"Гигант на «{loc}». "
                 f"Аура −{aura} HP. Бюреры и зомби рвутся на помощь — сила снаряги {power}."
             ),
             payload=result.payload,
@@ -775,12 +774,12 @@ def complete_special_event_objective(
             _save_event(storage, event)
             nick = player.nickname if player else str(telegram_id)
             return (
-                f"Добивающий удар (−{chip} HP)! Гигант пал на «{event.get('location')}» "
+                f"Добивающий удар! Гигант пал на «{event.get('location')}» "
                 f"({nick}). +{400 + power * 50} RU."
             )
         return (
-            f"Гигант получил −{chip} HP (сила {power}). "
-            f"Осталось {hp}/{event.get('boss_hp_max', GIANT_MAX_HP)}. +{400 + power * 50} RU."
+            f"Гигант получил удар (сила {power}). Охота продолжается. "
+            f"+{400 + power * 50} RU."
         )
 
     if kind == "monolith_march" and title_l.startswith("Колонна Монолита"):
@@ -859,8 +858,7 @@ def resolve_expired_special_event(storage: Storage) -> dict[str, Any] | None:
             text = f"Гигант повержен на «{event.get('location')}»."
         else:
             text = (
-                f"Гигант ушёл в глубь Зоны с «{event.get('location')}» "
-                f"(оставалось HP {hp}). Ещё вернётся."
+                f"Гигант ушёл в глубь Зоны с «{event.get('location')}». Ещё вернётся."
             )
     elif kind == "monolith_march":
         hits = int(event.get("ambush_hits") or 0)
@@ -937,7 +935,7 @@ def special_events_status_line(storage: Storage) -> str:
     if kind == "bandit_blockade":
         extra = f" · логовищ {event.get('dens_left')}/{event.get('dens_total')}"
     if kind == "giant":
-        extra = f" · HP {event.get('boss_hp')}/{event.get('boss_hp_max')}"
+        extra = ""
     if kind == "monolith_march":
         extra = (
             f" · → «{event.get('target_base')}» "

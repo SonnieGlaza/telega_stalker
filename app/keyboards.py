@@ -1027,15 +1027,38 @@ def war_transfer_keyboard(allies: list[str], location_name: str) -> InlineKeyboa
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def war_sections_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📘 Правила и дипломатия", callback_data="war:section:scenario")],
-            [InlineKeyboardButton(text="🎯 Захват нейтральных точек", callback_data="war:section:ncap")],
-            [InlineKeyboardButton(text="🎁 Передача точки союзнику", callback_data="war:section:transfer")],
-            [InlineKeyboardButton(text="🪖 Военные лобби (мин. 5 бойцов)", callback_data="war:section:lobby")],
-        ]
-    )
+def war_sections_keyboard(*, monolith: bool = False) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="📘 Правила и дипломатия", callback_data="war:section:scenario")],
+        [InlineKeyboardButton(text="🎯 Захват нейтральных точек", callback_data="war:section:ncap")],
+        [InlineKeyboardButton(text="🎁 Передача точки союзнику", callback_data="war:section:transfer")],
+        [InlineKeyboardButton(text="🪖 Военные лобби (мин. 5 бойцов)", callback_data="war:section:lobby")],
+    ]
+    if monolith:
+        rows.insert(
+            0,
+            [InlineKeyboardButton(text="☢ Атака Монолита", callback_data="war:section:monolith_attack")],
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def monolith_attack_targets_keyboard(
+    locations: list[dict[str, str | int | None]],
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for location in locations:
+        name = str(location["name"])
+        owner = location.get("controlled_by") or "нейтрал"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"☢ Атака: {name} [{owner}]",
+                    callback_data=f"monolith_war:attack:{name}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="war:section:root")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def faction_group_keyboard(

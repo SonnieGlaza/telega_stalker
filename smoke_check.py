@@ -489,10 +489,12 @@ def run_smoke_check() -> None:
         chip_note = complete_special_event_objective(
             storage, 111, title=f"Гигант: охота на {giant['location']}"
         )
-        assert chip_note and "HP" in chip_note
+        assert chip_note and "Гигант" in chip_note
         active_giant = get_active_special_event(storage)
         assert active_giant is not None
         assert int(active_giant["boss_hp"]) < 100
+        assert "нескольких смертей" not in str(giant.get("call_text") or "")
+        assert "HP" not in str(giant.get("call_text") or "")
         _clear_mission()
 
         storage.restore_energy(111, 100)
@@ -572,6 +574,16 @@ def run_smoke_check() -> None:
         # Вернём 111 в Долг для дальнейших smoke-тестов.
         admin_set_player_faction(storage, target="111", faction="Долг")
         storage.set_faction_leader("Долг", 111)
+
+        # Кнопка/команда атаки Монолита.
+        from app.monolith_war import start_monolith_attack
+
+        storage.create_character(444, "MonoLead", "Мужской")
+        admin_set_player_faction(storage, target="444", faction=MONOLITH_FACTION)
+        storage.restore_energy(444, 100)
+        atk = start_monolith_attack(storage, 444, "Свалка")
+        assert atk.ok, atk.text
+        storage.set_meta("monolith_war:pending", "")
 
         # Сброс особого события, чтобы не мешать дальнейшим smoke-переходам.
         storage.set_meta("special_event:active", "")
