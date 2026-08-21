@@ -1817,6 +1817,8 @@ def run_smoke_check() -> None:
         assert "upgrade:artifact_slot" in callbacks
         assert "help_event:join" in callbacks
         assert "special_event:join" in callbacks
+        assert "monolith_war:join" in callbacks
+        assert "monolith_war:start" in callbacks
         assert "coop:shoot:up" in callbacks
         assert "equip:upgrade:install" in callbacks
         assert "equip:upgrade:remove" in callbacks
