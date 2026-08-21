@@ -480,6 +480,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="respawn", description="Респавн, если мёртв"),
         BotCommand(command="fixme", description="Сброс зависшей вылазки"),
         BotCommand(command="sbor", description="Сбор группировки (лидер)"),
+        BotCommand(command="support", description="Поддержка — написать админу"),
     ]
     await bot.set_my_commands(private_commands, scope=BotCommandScopeDefault())
     await bot.set_my_commands(
@@ -744,7 +745,16 @@ class Registration(StatesGroup):
     treasury_withdraw_custom = State()
     warehouse_deposit_custom = State()
     warehouse_withdraw_custom = State()
+    support_message = State()
 
+
+# Получатели /поддержка: юзернеймы разработчиков (+ все ADMIN_IDS).
+SUPPORT_CONTACT_USERNAMES: tuple[str, ...] = ("potych", "Andreyteacher1")
+SUPPORT_CONTACT_LINKS = (
+    "https://t.me/potych",
+    "https://t.me/Andreyteacher1",
+)
+SUPPORT_MESSAGE_MAX_LEN = 3500
 
 TREASURY_CUSTOM_MIN_RU = 1
 TREASURY_CUSTOM_MAX_RU = 1_000_000
@@ -1519,7 +1529,8 @@ def _build_info_text(player: Character) -> str:
         f"−{DUEL_LOSER_MONEY_PERCENT}% денег (макс. {DUEL_LOSER_MONEY_CAP} RU).\n"
         "• /respawn — респавн, если мёртв.\n"
         "• /fixme — сброс зависшей вылазки/боя без респавна.\n"
-        "• /сбор [текст] — оповестить бойцов (только лидер группировки).\n\n"
+        "• /сбор [текст] — оповестить бойцов (только лидер группировки).\n"
+        "• /поддержка [текст] — написать разработчикам (@potych, @Andreyteacher1).\n\n"
         "Механики:\n"
         "• 🗺 Переходы: 1 игровая минута ≈ 10 сек реально;\n"
         f"  пешком ×1, велосипед ×{TRAVEL_SPEED_BICYCLE:g}, "
@@ -2555,6 +2566,9 @@ DEAD_BYPASS_MESSAGE_COMMANDS = frozenset({
     "/medal",
     "/settravel",
     "/broadcast",
+    "/support",
+    "/podderzhka",
+    "/поддержка",
 })
 
 
@@ -6012,6 +6026,120 @@ async def faction_broadcast_command(message: Message, bot: Bot) -> None:
     parts = (message.text or "").split(maxsplit=1)
     custom = parts[1].strip() if len(parts) > 1 else None
     await _send_faction_broadcast(message, bot, custom_text=custom)
+
+
+async def _resolve_support_recipient_ids(bot: Bot) -> list[int]:
+    """ADMIN_IDS + @potych / @Andreyteacher1 (если бот может их резолвить)."""
+    ids: list[int] = []
+    seen: set[int] = set()
+    for uid in admin_ids:
+        value = int(uid)
+        if value > 0 and value not in seen:
+            seen.add(value)
+            ids.append(value)
+    for username in SUPPORT_CONTACT_USERNAMES:
+        try:
+            chat = await bot.get_chat("@" + username)
+            uid = int(getattr(chat, "id", 0) or 0)
+        except Exception:
+            logger.debug("Support username lookup failed for @%s", username, exc_info=True)
+            continue
+        if uid > 0 and uid not in seen:
+            seen.add(uid)
+            ids.append(uid)
+    return ids
+
+
+def _format_support_ticket(
+    *,
+    sender_id: int,
+    nickname: str,
+    username: str | None,
+    body: str,
+) -> str:
+    uname = f"@{username}" if username else "—"
+    return (
+        "🆘 <b>Обращение в поддержку</b>\n"
+        f"От: {h(nickname)} (id <code>{sender_id}</code>, {h(uname)})\n"
+        f"Текст:\n{h(body)}"
+    )
+
+
+async def _deliver_support_ticket(bot: Bot, message: Message, body: str) -> None:
+    text = (body or "").strip()
+    if not text:
+        await message.answer(
+            "Напиши текст обращения после команды или одним сообщением.\n"
+            "Пример: /поддержка не работает переход на Янтарь"
+            f"{FSM_CANCEL_HINT}"
+        )
+        return
+    if len(text) > SUPPORT_MESSAGE_MAX_LEN:
+        await message.answer(
+            f"Слишком длинное сообщение (макс. {SUPPORT_MESSAGE_MAX_LEN} символов). Сократи текст."
+        )
+        return
+
+    player = get_storage().get_character(message.from_user.id, refresh_energy=False)
+    nickname = player.nickname if player is not None else (message.from_user.full_name or "Игрок")
+    ticket = _format_support_ticket(
+        sender_id=message.from_user.id,
+        nickname=str(nickname),
+        username=message.from_user.username,
+        body=text,
+    )
+    recipients = await _resolve_support_recipient_ids(bot)
+    delivered = 0
+    for uid in recipients:
+        try:
+            await bot.send_message(uid, ticket, parse_mode="HTML")
+            delivered += 1
+        except Exception:
+            logger.exception("Failed to deliver support ticket to %s", uid)
+
+    links = "\n".join(f"• {link}" for link in SUPPORT_CONTACT_LINKS)
+    if delivered > 0:
+        await message.answer(
+            "Сообщение отправлено разработчикам.\n"
+            "Можно также написать напрямую:\n"
+            f"{links}"
+        )
+    else:
+        await message.answer(
+            "Не удалось доставить сообщение через бота (админы ещё не писали боту).\n"
+            "Напиши напрямую:\n"
+            f"{links}"
+        )
+
+
+@router.message(Command("поддержка"), F.chat.type == "private")
+@router.message(Command("support"), F.chat.type == "private")
+@router.message(Command("podderzhka"), F.chat.type == "private")
+async def support_command(message: Message, state: FSMContext, bot: Bot, command: CommandObject) -> None:
+    body = (command.args or "").strip()
+    if body:
+        await state.clear()
+        await _deliver_support_ticket(bot, message, body)
+        return
+    await state.set_state(Registration.support_message)
+    await message.answer(
+        "Напиши одним сообщением, что случилось (баг / вопрос / идея).\n"
+        "Сообщение уйдёт разработчикам (@potych, @Andreyteacher1)."
+        f"{FSM_CANCEL_HINT}"
+    )
+
+
+@router.message(Registration.support_message, F.chat.type == "private")
+async def process_support_message(message: Message, state: FSMContext, bot: Bot) -> None:
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Нужен текст обращения. Или /cancel.")
+        return
+    if text.startswith("/"):
+        await message.answer("Сейчас ждём текст обращения. Отмена: /cancel.")
+        return
+    await state.clear()
+    await _deliver_support_ticket(bot, message, text)
 
 
 def _extract_broadcast_body(raw_command_text: str) -> str | None:
