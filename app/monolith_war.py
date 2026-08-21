@@ -84,14 +84,36 @@ def should_defer_war_for_monolith(
     host_faction: str,
     location_name: str,
 ) -> str | None:
-    """Вернуть режим 'defend' | 'attack' если нужен 15‑мин таймер Монолита."""
+    """Вернуть режим 'defend' | 'attack' если нужен 15‑мин таймер Монолита.
+
+    None = обычный штурм. 'blocked' = уже идёт окно Монолита — нельзя параллелить.
+    """
     if get_pending_monolith_war(storage) is not None:
-        return None  # уже ждём
+        return "blocked"
     if location_controlled_by_monolith(storage, location_name) and host_faction != MONOLITH_FACTION:
         return "defend"
     if host_faction == MONOLITH_FACTION:
         return "attack"
     return None
+
+
+def _pull_monolith_energy_spenders(
+    storage: Storage,
+    monolith_ids: list[int],
+    energy_spent: list[int],
+) -> list[int]:
+    """Если кто-то вступил в тактику — тянем в бой и тех, кто уже списал энергию на атаку."""
+    out = list(monolith_ids)
+    seen = set(out)
+    for tid in energy_spent:
+        if tid in seen:
+            continue
+        ch = storage.get_character(tid, refresh_energy=False)
+        if ch is None or ch.faction != MONOLITH_FACTION or ch.health <= 0:
+            continue
+        out.append(tid)
+        seen.add(tid)
+    return out
 
 
 def begin_monolith_war_window(
@@ -120,7 +142,7 @@ def begin_monolith_war_window(
         "expires_at": (now + timedelta(minutes=MONOLITH_JOIN_MINUTES)).isoformat(),
         "resolved": False,
     }
-    # Людей не префиллим: даже лидер жмёт «вступить», иначе при одних ботах — 90/10.
+    # Людей не префиллим: «вступить» даёт тактику; иначе при ботах — 90/10.
     _save_pending(storage, pending)
     # Лобби помечаем in_progress, чтобы не запускали второй раз.
     storage.start_war_lobby_assault(war_id)
@@ -208,11 +230,6 @@ def send_monolith_bots(storage: Storage, telegram_id: int) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction != MONOLITH_FACTION:
         return ActionResult(False, "Посылать ботов может только Монолит.")
-    leader_id = storage.get_faction_leader_id(MONOLITH_FACTION)
-    if leader_id is None or int(leader_id) != telegram_id:
-        # Админ-игроки Монолита тоже могут — если лидер не назначен, пускаем любого монолита.
-        if leader_id is not None:
-            return ActionResult(False, "Посылать ботов может лидер Монолита.")
     bots = get_faction_bots(storage, MONOLITH_FACTION)
     count = int(bots.get("count") or 3)
     pending["bots_sent"] = True
@@ -293,7 +310,7 @@ def resolve_pending_monolith_war(storage: Storage, *, force: bool = False) -> di
         from app.game_logic import WAR_LOBBY_ENERGY_COST
 
         if mode == "defend":
-            # Монолит играет на сетке; провал отдаёт точку захватчикам.
+            # Боты Монолита не спавним как врагов на сетке — они только для 90/10.
             result, session = start_clan_war_grid(
                 storage,
                 war_id=war_id,
@@ -302,7 +319,7 @@ def resolve_pending_monolith_war(storage: Storage, *, force: bool = False) -> di
                 player_ids=monolith_ids,
                 monolith_defense=True,
                 invader_faction=host_faction,
-                extra_defenders=bot_count if bots_sent else 0,
+                extra_defenders=0,
             )
             clear_pending_monolith_war(storage)
             if not result.ok or session is None:
@@ -318,7 +335,7 @@ def resolve_pending_monolith_war(storage: Storage, *, force: bool = False) -> di
                 "text": (
                     f"Монолит вступил в бой за «{location}» "
                     f"({len(monolith_ids)} чел."
-                    + (f", +{bot_count} ботов" if bots_sent else "")
+                    + (f"; боты держали периметр до входа" if bots_sent else "")
                     + "). Тактическое поле!"
                 ),
                 "notify_ids": notify_ids,
@@ -326,13 +343,14 @@ def resolve_pending_monolith_war(storage: Storage, *, force: bool = False) -> di
                 "member_ids": monolith_ids,
             }
 
-        # Атака Монолита людьми → обычный штурм.
+        # Атака Монолита людьми → тянем и тех, кто списал энергию на объявление атаки.
+        fight_ids = _pull_monolith_energy_spenders(storage, monolith_ids, energy_spent)
         result, session = start_clan_war_grid(
             storage,
             war_id=war_id,
             location_name=location,
             host_faction=MONOLITH_FACTION,
-            player_ids=monolith_ids,
+            player_ids=fight_ids,
             extra_defenders=0,
         )
         clear_pending_monolith_war(storage)
@@ -348,13 +366,13 @@ def resolve_pending_monolith_war(storage: Storage, *, force: bool = False) -> di
             "kind": "tactical",
             "text": (
                 f"Монолит штурмует «{location}» "
-                f"({len(monolith_ids)} чел."
-                + (f", боты в резерве ×{bot_count}" if bots_sent else "")
+                f"({len(fight_ids)} чел."
+                + (f", боты в поддержке ×{bot_count}" if bots_sent else "")
                 + ")."
             ),
-            "notify_ids": notify_ids,
+            "notify_ids": list(dict.fromkeys(notify_ids + fight_ids)),
             "session": session,
-            "member_ids": monolith_ids,
+            "member_ids": fight_ids,
         }
 
     # Нет людей Монолита → процентный исход 90/10 (боты или пустой ответ).

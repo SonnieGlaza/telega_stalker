@@ -436,6 +436,9 @@ def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
     event = get_active_special_event(storage)
     if event is None:
         return ActionResult(False, "Сейчас нет особого события Зоны.")
+    expires = _parse_iso(str(event.get("expires_at") or ""), _utc_now())
+    if expires <= _utc_now():
+        return ActionResult(False, "Окно события уже закрылось.")
     kind = str(event.get("kind") or "")
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
@@ -611,11 +614,6 @@ def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
         from app.game_logic import equipment_power, effective_max_health
 
         power = max(1, equipment_power(player))
-        # Урон вокруг: при подходе теряешь HP (нельзя только китить издалека).
-        aura = random.randint(4, 10)
-        max_hp = effective_max_health(player)
-        if player.health > aura:
-            storage.change_health(telegram_id, -aura, max_health=max_hp)
         diff = "heavy" if power >= 12 else "hard"
         ammo = int(player.inventory.get("ammo_pack", 0))
         med = int(player.inventory.get("medkit", 0)) + int(player.inventory.get("medkit_army", 0))
@@ -629,16 +627,27 @@ def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
             return_home=False,
             mission_kind="clear_mutant",
         )
+        from app.quest_mission import get_mission_session
+
+        was_active = get_mission_session(storage, telegram_id) is not None
         result = start_or_resume_quest_mission(storage, telegram_id, template, QUESTS[diff])
         if not result.ok:
             return result
+        # Аура только при новом старте миссии, не при resume и не при фейле.
+        aura = 0
+        if not was_active:
+            aura = random.randint(4, 10)
+            max_hp = effective_max_health(player)
+            if player.health > aura:
+                storage.change_health(telegram_id, -aura, max_health=max_hp)
         _append_helper(event, telegram_id, str(player.nickname))
         _save_event(storage, event)
+        aura_note = f" Аура сняла {aura} здоровья." if aura else ""
         return ActionResult(
             True,
             (
-                f"Гигант на «{loc}». "
-                f"Аура −{aura} HP. Бюреры и зомби рвутся на помощь — сила снаряги {power}."
+                f"Гигант на «{loc}».{aura_note} "
+                f"Бюреры и зомби рвутся на помощь — сила снаряги {power}."
             ),
             payload=result.payload,
         )

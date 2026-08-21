@@ -7702,6 +7702,15 @@ def create_or_join_war_lobby(storage: Storage, telegram_id: int, location_name: 
         return ActionResult(False, "Локация не найдена.")
     if _location_is_friendly_to_faction(storage, location, player.faction):
         return ActionResult(False, "Нельзя штурмовать свою или союзническую точку.")
+    from app.monolith_war import get_pending_monolith_war, monolith_war_status_line
+
+    pending = get_pending_monolith_war(storage)
+    if pending is not None:
+        line = monolith_war_status_line(storage) or "идёт окно боя Монолита"
+        return ActionResult(
+            False,
+            f"Сейчас нельзя открыть новое лобби: {line}. Дождись исхода.",
+        )
     open_lobby = find_open_war_lobby_for_character(storage, player)
     if open_lobby is None:
         for ally in storage.list_faction_alliances(player.faction):
@@ -7878,13 +7887,22 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
         host_faction=host_faction,
         location_name=location_name,
     )
+    if defer_mode == "blocked":
+        from app.monolith_war import monolith_war_status_line
+
+        line = monolith_war_status_line(storage) or "идёт окно боя Монолита"
+        _refund_spent_energy(storage, spent_ids, WAR_LOBBY_ENERGY_COST)
+        return WarLobbyResult(
+            False,
+            f"Нельзя запустить штурм параллельно: {line}. Энергия возвращена.",
+        )
     # Монолит может выйти с ботами, даже если людей меньше минимума.
     if defer_mode is None and host_faction == MONOLITH_FACTION:
         bots = get_faction_bots(storage, MONOLITH_FACTION)
         if len(active) + int(bots.get("count") or 0) >= WAR_MIN_FACTION_MEMBERS:
             defer_mode = "attack"
 
-    if defer_mode is not None:
+    if defer_mode in {"defend", "attack"}:
         pending = begin_monolith_war_window(
             storage,
             war_id=war_id,

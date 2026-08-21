@@ -440,6 +440,12 @@ def _finalize_success(storage: Storage, session: ClanWarGridSession) -> ActionRe
             storage.add_player_stat(pid, "money_earned", WAR_SUCCESS_PAY_RU)
             _add_rating(storage, pid, RATING_REWARD["war_success"])
             paid += 1
+        # Захватчики получают штраф рейтинга как при обычном провале штурма.
+        invader_ids = storage.get_war_lobby_member_ids(session.war_id)
+        for pid in invader_ids:
+            if pid in session.player_ids:
+                continue
+            _add_rating(storage, pid, -RATING_REWARD["war_fail"])
         text = (
             f"🏆 Монолит удержал «{session.location_name}»!\n"
             f"Штурм «{session.invader_faction or '?'}» отбит.\n"
@@ -508,10 +514,27 @@ def _finalize_fail(storage: Storage, session: ClanWarGridSession, reason: str) -
         )
         for pid in session.player_ids:
             _add_rating(storage, pid, -RATING_REWARD["war_fail"])
+        # Захватчики получают награду за успешный штурм.
+        paid = 0
+        invader_ids = storage.get_war_lobby_member_ids(session.war_id)
+        for pid in invader_ids:
+            if pid in session.player_ids:
+                continue
+            ch = storage.get_character(pid, refresh_energy=False)
+            if ch is None or ch.health <= 0:
+                continue
+            if str(ch.faction or "") != session.invader_faction:
+                continue
+            storage.add_player_stat(pid, "wars_won", 1)
+            storage.change_money(pid, WAR_SUCCESS_PAY_RU)
+            storage.add_player_stat(pid, "money_earned", WAR_SUCCESS_PAY_RU)
+            _add_rating(storage, pid, RATING_REWARD["war_success"])
+            paid += 1
         text = (
             f"💀 Монолит потерял «{session.location_name}».\n"
             f"{reason}\n"
-            f"Контроль у «{session.invader_faction}». −{RATING_REWARD['war_fail']} рейтинга защитникам."
+            f"Контроль у «{session.invader_faction}». "
+            f"Награда штурму: {paid}×{WAR_SUCCESS_PAY_RU} RU."
         )
         return ActionResult(
             False,
