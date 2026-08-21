@@ -3701,6 +3701,7 @@ def apply_contract_mission_success(
             VENDOR_TIER_MAX,
             add_vendor_reputation,
             get_vendor_tier,
+            reputation_progress_label,
             vendor_person_name,
         )
 
@@ -3711,7 +3712,7 @@ def apply_contract_mission_success(
             tier_now = get_vendor_tier(storage, telegram_id, vendor)
             rep_note = (
                 f"\nАвторитет «{person}»: +{gained} "
-                f"(всего {total}, этап {tier_now}/{VENDOR_TIER_MAX})."
+                f"({reputation_progress_label(total)}, этап {tier_now}/{VENDOR_TIER_MAX})."
             )
     mult_note = ""
     if ru_mult > 1.0:
