@@ -345,6 +345,10 @@ for _key in _FOOD_CONSUMABLE_KEYS | _MEDKIT_KEYS:
     if _key in SHOP_ITEMS:
         _scale_item_prices(SHOP_ITEMS[_key], 5)
 
+# Обрез сильнее ПМ — фиксируем цену выше ПМ (после T1×5).
+WEAPON_CATALOG["weapon_sawedoff"]["buy_price"] = 17000
+WEAPON_CATALOG["weapon_sawedoff"]["sell_price"] = 8160
+
 # Legacy callback alias used in keyboards.
 WEAPON_CATALOG["weapon_fora12"] = WEAPON_CATALOG["weapon_fort12"]
 ARMOR_CATALOG["armor_sunrise"] = ARMOR_CATALOG["armor_zarya"]
@@ -393,7 +397,7 @@ WEAPON_RATING_BY_NAME: dict[str, int] = {
     "СВДм-2": 9,
     "РП-74": 9,
     "Енот": 9,
-    "Гаусс-пушка": 9,
+    "Гаусс-пушка": 10,
     "РПК «Чемпион Зоны»": 10,
     "ВСС «Серебряный сталкер»": 9,
 }
@@ -885,10 +889,10 @@ TRADER_WEAPON_TIER_MAX = 5
 TRADER_WEAPON_TIER_META_PREFIX = "trader:weapon_tier:"
 # Стоимость перехода на этот этап (с предыдущего).
 TRADER_WEAPON_TIER_UPGRADE_COST: dict[int, int] = {
-    2: 12000,
-    3: 30000,
-    4: 75000,
-    5: 120000,
+    2: 120_000,
+    3: 300_000,
+    4: 750_000,
+    5: 1_200_000,
 }
 TRADER_WEAPON_STAGE_LABELS: dict[int, str] = {
     1: "T1 — пистолеты и обрезы",
@@ -1087,7 +1091,7 @@ EXCHANGE_SELL_FEE_PERCENT = 30
 TRADER_EQUIPMENT_SELL_RATE = 1 / 3
 RESOURCE_POINT_INCOME_PER_HOUR = 60
 BASE_POINT_INCOME_PER_HOUR = 25
-BASE_FORTIFY_COST_RU = 10_000
+BASE_FORTIFY_COST_RU = 100_000
 BASE_FORTIFY_POWER_BONUS = 1
 POINTS_INCOME_META_KEY = "points_income_last_at"
 POINTS_INCOME_MAX_HOURS = 16
@@ -3694,6 +3698,7 @@ def apply_contract_mission_success(
     if vendor in {"barkeep", "medic", "tech"}:
         from app.vendors import (
             VENDOR_REP_BY_DIFFICULTY,
+            VENDOR_TIER_MAX,
             add_vendor_reputation,
             get_vendor_tier,
             vendor_person_name,
@@ -3704,7 +3709,10 @@ def apply_contract_mission_success(
             total = add_vendor_reputation(storage, telegram_id, vendor, gained)
             person = vendor_person_name(updated.faction, vendor)
             tier_now = get_vendor_tier(storage, telegram_id, vendor)
-            rep_note = f"\nАвторитет «{person}»: +{gained} (всего {total}, этап {tier_now}/4)."
+            rep_note = (
+                f"\nАвторитет «{person}»: +{gained} "
+                f"(всего {total}, этап {tier_now}/{VENDOR_TIER_MAX})."
+            )
     mult_note = ""
     if ru_mult > 1.0:
         loc_part = ""
@@ -6060,7 +6068,10 @@ def shop_weapon_button_title(item_key: str) -> str:
 
 
 def shop_armor_button_title(item_key: str) -> str:
-    """Подпись кнопки брони: имя · сила · смягчение · блок% · цена."""
+    """Подпись кнопки брони: имя · цена · сила · смягчение · блок%.
+
+    Цена сразу после имени — иначе на узких клиентах обрезается хвост кнопки.
+    """
     key = normalize_shop_item_key(item_key)
     item = ARMOR_CATALOG.get(key) or SHOP_ITEMS.get(key)
     if item is None:
@@ -6071,7 +6082,7 @@ def shop_armor_button_title(item_key: str) -> str:
     mit = int(ARMOR_MITIGATION_BY_NAME.get(name, 0))
     block = int(ARMOR_BLOCK_CHANCE_BY_NAME.get(name, 0))
     return _telegram_button_title(
-        f"{name} · сила {power} · −{mit} · блок {block}% · {price}"
+        f"{name} · {price} · сила {power} · −{mit} · б{block}%"
     )
 
 

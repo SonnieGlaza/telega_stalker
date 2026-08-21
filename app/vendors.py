@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.storage import Storage
 
-VENDOR_TIER_MAX = 4
+VENDOR_TIER_MAX = 5
 
 VENDOR_KEYS = ("barkeep", "medic", "tech")
 
@@ -36,7 +36,8 @@ VENDOR_REP_PREFIX: dict[str, str] = {
     "medic": "vendor_rep:medic:",
     "tech": "vendor_rep:tech:",
 }
-VENDOR_REP_PER_LEVEL = 100
+# Пороги авторитета для этапов 2/3/4/5 (этап 1 с нуля).
+VENDOR_REP_THRESHOLDS: tuple[int, ...] = (200, 1000, 5000, 20000)
 VENDOR_REP_BY_DIFFICULTY: dict[str, int] = {
     "easy": 2,
     "hard": 3,
@@ -56,23 +57,26 @@ VENDOR_STAGE_LABELS: dict[str, dict[int, str]] = {
         2: "+ T2, Нива, «Медведь», колбаса/минералка",
         3: "+ T3, броня среднего класса, «Велес», спальник, тушёнка",
         4: "+ T4/T5, Гаусс и Енот, экзо/Носорог, «Сварог», грузовик",
+        5: "ассортимент на максимуме (как этап 4)",
     },
     "medic": {
         1: "обычная аптечка",
         2: "+ армейская аптечка",
         3: "+ антирад",
         4: "+ научная аптечка",
+        5: "ассортимент на максимуме (как этап 4)",
     },
     "tech": {
         1: "улучшение брони, скидка на ремонт 2%",
         2: "доп. ячейка артефакта, скидка на ремонт 4%",
         3: "новых товаров нет — скидка на ремонт 6%",
-        4: "новых товаров нет — скидка на ремонт 8% (максимум)",
+        4: "новых товаров нет — скидка на ремонт 8%",
+        5: "скидка на ремонт 8% (максимум)",
     },
 }
 
 # Скидка техника на ремонт по этапу.
-TECH_REPAIR_DISCOUNT_PERCENT: dict[int, int] = {1: 2, 2: 4, 3: 6, 4: 8}
+TECH_REPAIR_DISCOUNT_PERCENT: dict[int, int] = {1: 2, 2: 4, 3: 6, 4: 8, 5: 8}
 
 # Добавки ассортимента бармена по этапам (накопительно).
 _BARKEEP_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
@@ -134,6 +138,7 @@ _BARKEEP_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
         "detector_svarog",
         "truck",
     ),
+    5: (),
 }
 
 _MEDIC_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
@@ -141,6 +146,7 @@ _MEDIC_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
     2: ("medkit_army",),
     3: ("antirad",),
     4: ("medkit_science",),
+    5: (),
 }
 
 _TECH_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
@@ -148,6 +154,7 @@ _TECH_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
     2: ("artifact_slot",),
     3: (),
     4: (),
+    5: (),
 }
 
 
@@ -194,7 +201,29 @@ def add_vendor_reputation(storage: Storage, telegram_id: int, vendor: str, amoun
 
 
 def reputation_to_tier(rep: int) -> int:
-    return max(1, min(VENDOR_TIER_MAX, 1 + int(rep) // VENDOR_REP_PER_LEVEL))
+    tier = 1
+    for threshold in VENDOR_REP_THRESHOLDS:
+        if int(rep) >= int(threshold):
+            tier += 1
+        else:
+            break
+    return max(1, min(VENDOR_TIER_MAX, tier))
+
+
+def next_rep_threshold(rep: int) -> int | None:
+    """Следующий порог авторитета или None, если уже максимум."""
+    for threshold in VENDOR_REP_THRESHOLDS:
+        if int(rep) < int(threshold):
+            return int(threshold)
+    return None
+
+
+def reputation_progress_label(rep: int) -> str:
+    """Короткая строка прогресса, например «100/1000»."""
+    need = next_rep_threshold(rep)
+    if need is None:
+        return f"{int(rep)}/{VENDOR_REP_THRESHOLDS[-1]}"
+    return f"{int(rep)}/{need}"
 
 
 def _vendor_meta_key(vendor: str, telegram_id: int) -> str:
@@ -330,7 +359,7 @@ def vendor_assortment_blurb(storage: Storage, telegram_id: int, vendor: str) -> 
     label = VENDOR_STAGE_LABELS.get(vendor, {}).get(tier, f"этап {tier}")
     lines = [
         f"{person} ({title}): этап ассортимента {tier}/{VENDOR_TIER_MAX} — {label}.",
-        f"Авторитет: {rep}.",
+        f"Авторитет: {reputation_progress_label(rep)}.",
     ]
     if vendor == "tech":
         lines.append(f"Скидка на ремонт сейчас: {tech_repair_discount_percent(storage, telegram_id)}%.")
@@ -349,7 +378,9 @@ def vendor_assortment_blurb(storage: Storage, telegram_id: int, vendor: str) -> 
 
 
 def current_rep_need(current_tier: int) -> int:
-    return max(1, min(VENDOR_TIER_MAX - 1, int(current_tier))) * VENDOR_REP_PER_LEVEL
+    """Порог авторитета для открытия следующего этапа."""
+    idx = max(0, min(len(VENDOR_REP_THRESHOLDS) - 1, int(current_tier) - 1))
+    return int(VENDOR_REP_THRESHOLDS[idx])
 
 
 def vendor_purge_meta_keys(telegram_id: int) -> list[str]:

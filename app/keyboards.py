@@ -1084,10 +1084,12 @@ def faction_group_keyboard(
             ]
         )
     if is_leader:
+        from app.game_logic import BASE_FORTIFY_COST_RU
+
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🛡 Укрепить базу (10000 RU из казны)",
+                    text=f"🛡 Укрепить базу ({BASE_FORTIFY_COST_RU} RU из казны)",
                     callback_data="faction:base:fortify",
                 )
             ]

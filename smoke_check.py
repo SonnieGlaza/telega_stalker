@@ -109,13 +109,14 @@ def run_smoke_check() -> None:
         bandit_rank = assign_faction_rank(storage, 333, 333, "r1")
         assert not bandit_rank.ok
 
-        # Faction base fortification (+1 defense per 10000 RU from treasury).
+        # Faction base fortification (+1 defense per fortify cost from treasury).
         from app.game_logic import upgrade_faction_base, BASE_FORTIFY_COST_RU
 
         duty_base = faction_home_base("Долг")
         assert int(storage.get_location(duty_base).get("defense_bonus") or 0) == 0
         denied_fortify = upgrade_faction_base(storage, 222)
         assert not denied_fortify.ok
+        storage.change_faction_treasury("Долг", BASE_FORTIFY_COST_RU * 3)
         before_treasury = next(f for f in storage.get_factions() if f["name"] == "Долг")["treasury"]
         fortify = upgrade_faction_base(storage, 111)
         assert fortify.ok, fortify.text
@@ -212,8 +213,8 @@ def run_smoke_check() -> None:
         from app.vendors import add_vendor_reputation, get_vendor_reputation
 
         set_vendor_tier(storage, 222, "medic", 1)
-        add_vendor_reputation(storage, 222, "medic", 300)
-        assert get_vendor_reputation(storage, 222, "medic") == 300
+        add_vendor_reputation(storage, 222, "medic", 5000)
+        assert get_vendor_reputation(storage, 222, "medic") == 5000
         assert get_vendor_tier(storage, 222, "medic") == 4
         assert buy_item(storage, 222, "medkit_science").ok
         # Скидка техника.
@@ -1529,17 +1530,19 @@ def run_smoke_check() -> None:
         assert "сила 2" in pm_label and "д." in pm_label and "10000" in pm_label
         leather_label = shop_armor_button_title("armor_leather")
         assert "сила 2" in leather_label and "10000" in leather_label
-        assert "−1" in leather_label and "блок 3%" in leather_label
+        assert "−1" in leather_label and ("б3%" in leather_label or "блок 3%" in leather_label)
+        # Цена сразу после имени — не в хвосте, который режет клиент.
+        assert leather_label.index("10000") < leather_label.index("сила")
         bike_label = shop_gear_button_title("bicycle")
         assert "×" in bike_label and "нагр." in bike_label
         assert "арт." in shop_gear_button_title("detector_otklik")
         fora_label = shop_weapon_button_title("weapon_fort12")
         assert "сила 3" in fora_label and "15000" in fora_label
         sawed_label = shop_weapon_button_title("weapon_sawedoff")
-        assert "сила 3" in sawed_label and "9000" in sawed_label
+        assert "сила 3" in sawed_label and "17000" in sawed_label
         assert int(SHOP_ITEMS["weapon_pm"]["buy_price"]) == 10000
         assert int(SHOP_ITEMS["weapon_fort12"]["buy_price"]) == 15000
-        assert int(SHOP_ITEMS["weapon_sawedoff"]["buy_price"]) == 9000
+        assert int(SHOP_ITEMS["weapon_sawedoff"]["buy_price"]) == 17000
         assert int(SHOP_ITEMS["bicycle"]["buy_price"]) == 10500
         assert int(SHOP_ITEMS["niva"]["buy_price"]) == 100000
         assert int(SHOP_ITEMS["truck"]["buy_price"]) == 500000
@@ -1550,8 +1553,23 @@ def run_smoke_check() -> None:
         assert WEAPON_RATING_BY_NAME["Фора-12"] == 3
         assert WEAPON_RATING_BY_NAME["Обрез"] == 3
         assert WEAPON_RATING_BY_NAME["Енот"] == 9
-        assert WEAPON_RATING_BY_NAME["Гаусс-пушка"] == 9
+        assert WEAPON_RATING_BY_NAME["Гаусс-пушка"] == 10
         assert ARMOR_RATING_BY_NAME["Носорог"] == 9
+        from app.game_logic import BASE_FORTIFY_COST_RU, TRADER_WEAPON_TIER_UPGRADE_COST
+        from app.vendors import VENDOR_REP_THRESHOLDS, reputation_progress_label, reputation_to_tier
+
+        assert BASE_FORTIFY_COST_RU == 100_000
+        assert TRADER_WEAPON_TIER_UPGRADE_COST[2] == 120_000
+        assert TRADER_WEAPON_TIER_UPGRADE_COST[5] == 1_200_000
+        assert VENDOR_REP_THRESHOLDS == (200, 1000, 5000, 20000)
+        assert reputation_to_tier(0) == 1
+        assert reputation_to_tier(199) == 1
+        assert reputation_to_tier(200) == 2
+        assert reputation_to_tier(1000) == 3
+        assert reputation_to_tier(5000) == 4
+        assert reputation_to_tier(20000) == 5
+        assert reputation_progress_label(100) == "100/200"
+        assert reputation_progress_label(250) == "250/1000"
         from app.tactical_combat import weapon_shoot_range
 
         assert ARMOR_BLOCK_CHANCE_BY_NAME["Кожаная куртка"] == 3

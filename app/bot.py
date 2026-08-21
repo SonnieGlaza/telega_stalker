@@ -3979,7 +3979,7 @@ def _quests_rules_text() -> str:
         "на указанной локации (награда как за среднее задание).\n"
         "🚚 Контрабанда — отдельный рейс с риском.\n"
         "Торговцы группировки выдают старые 🟢🟡🟠🔴. Авторитет: 🟢+2 🟡+3 🟠+4 🔴+5, "
-        "100 очков — следующий этап ассортимента (не покупается за RU)."
+        "пороги этапов 200/1000/5000/20000 (не покупается за RU)."
     )
 
 
@@ -4073,8 +4073,10 @@ def _quests_vendor_payload(storage, player, vendor: str):
     from app.vendors import (
         VENDOR_KEYS,
         VENDOR_REP_BY_DIFFICULTY,
+        VENDOR_TIER_MAX,
         get_vendor_reputation,
         get_vendor_tier,
+        reputation_progress_label,
         vendor_quest_label,
     )
 
@@ -4085,7 +4087,7 @@ def _quests_vendor_payload(storage, player, vendor: str):
     tier = get_vendor_tier(storage, player.telegram_id, vendor)
     lines = [
         f"📋 {label}",
-        f"Авторитет: {rep} · этап ассортимента {tier}/4 (100 очков за уровень).",
+        f"Авторитет: {reputation_progress_label(rep)} · этап ассортимента {tier}/{VENDOR_TIER_MAX}.",
         "🟢+2 · 🟡+3 · 🟠+4 · 🔴+5. Этапы за авторитет, не за RU.",
         "",
     ]
@@ -7232,7 +7234,7 @@ async def war_scenario_section_callback(callback: CallbackQuery) -> None:
         "• В рейде: 1 аптечка, «💊 Поднять» раненого; «🏳 Сдаться» — провал для всех.\n"
         "• Нельзя штурмовать свои и союзнические точки.\n"
         "• При успехе лобби контроль получает группировка-хост.\n"
-        "• Укрепление базы: 10000 RU из казны, +1 защитник и +1 урон за уровень в штурме.\n"
+        "• Укрепление базы: 100000 RU из казны, +1 защитник и +1 урон за уровень в штурме.\n"
         "• Казна и склад — в «👥 Группировка».\n"
     )
     await edit_menu_message(
