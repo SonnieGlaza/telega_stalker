@@ -460,6 +460,61 @@ def run_smoke_check() -> None:
         assert dark_join.ok, dark_join.text
         _clear_mission()
 
+        # Волна 2: пленник / Гигант / колонна Монолита.
+        assert "Завод" in {loc["name"] for loc in storage.get_locations()}
+        storage.restore_energy(111, 100)
+        rescue = start_special_event(storage, kind="monolith_rescue")
+        assert rescue["kind"] == "monolith_rescue" and rescue["location"] == "Завод"
+        storage.set_location(111, "Завод")
+        storage.add_item(111, "ammo_pack", 5)
+        storage.add_item(111, "medkit", 2)
+        rescue_join = join_special_event(storage, 111)
+        assert rescue_join.ok, rescue_join.text
+        rescue_note = complete_special_event_objective(
+            storage, 111, title="Спасение пленного: Завод"
+        )
+        assert rescue_note and "Пленник" in rescue_note
+        _clear_mission()
+
+        storage.restore_energy(111, 100)
+        giant = start_special_event(storage, kind="giant")
+        assert giant["kind"] == "giant"
+        assert int(giant["boss_hp"]) == 100
+        storage.set_location(111, str(giant["location"]))
+        storage.add_item(111, "ammo_pack", 5)
+        storage.add_item(111, "medkit", 2)
+        giant_join = join_special_event(storage, 111)
+        assert giant_join.ok, giant_join.text
+        assert "Гигант" in giant_join.text
+        chip_note = complete_special_event_objective(
+            storage, 111, title=f"Гигант: охота на {giant['location']}"
+        )
+        assert chip_note and "HP" in chip_note
+        active_giant = get_active_special_event(storage)
+        assert active_giant is not None
+        assert int(active_giant["boss_hp"]) < 100
+        _clear_mission()
+
+        storage.restore_energy(111, 100)
+        march = start_special_event(storage, kind="monolith_march")
+        assert march["kind"] == "monolith_march"
+        assert march["location"] == "Радар"
+        assert march.get("target_base")
+        storage.set_location(111, "Радар")
+        storage.add_item(111, "ammo_pack", 5)
+        storage.add_item(111, "medkit", 2)
+        march_join = join_special_event(storage, 111)
+        assert march_join.ok, march_join.text
+        need = int(march["hits_needed"])
+        for _ in range(need):
+            note = complete_special_event_objective(
+                storage, 111, title="Колонна Монолита: перехват"
+            )
+            assert note
+        done_march = get_active_special_event(storage)
+        assert done_march is None or done_march.get("resolved")
+        _clear_mission()
+
         # Сброс особого события, чтобы не мешать дальнейшим smoke-переходам.
         storage.set_meta("special_event:active", "")
         storage.set_meta("shop:stock:consumables", "")

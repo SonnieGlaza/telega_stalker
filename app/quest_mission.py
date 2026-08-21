@@ -565,13 +565,29 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
     # Угрозы — строго по сложности (+ добор для зачисток / эскорта).
     want_anom, want_mut, want_npc = _difficulty_threat_flags(difficulty, kind)
     base_n = 2 + max(0, danger // 2)
+    giant_hunt = "Гигант" in str(template.title or "")
+    monolith_escort = "пленн" in str(template.title or "").lower() or "Монолит" in str(
+        template.title or ""
+    )
     if kind == "escort":
         # Аномалии всегда; вокруг — мутанты ИЛИ T1-НПС.
-        anom_n = base_n + 1
+        anom_n = base_n + 1 + (2 if monolith_escort else 0)
         _spawn_n(anom_n, grid, forbidden, hazards)
-        host_n = base_n
-        if random.random() < 0.5:
+        host_n = base_n + (2 if monolith_escort else 0)
+        # Спасение пленного — плотные атаки: мутанты + мародёры Монолита.
+        if monolith_escort or random.random() < 0.5:
             _spawn_mutants(host_n, grid, forbidden, enemies, enemy_kinds)
+            if monolith_escort:
+                _spawn_npcs(
+                    max(2, host_n // 2),
+                    grid,
+                    forbidden,
+                    npcs,
+                    npc_kinds,
+                    npc_weapons,
+                    marauder=True,
+                    weapon_pool=QUEST_ESCORT_NPC_WEAPONS,
+                )
         else:
             _spawn_npcs(
                 host_n,
@@ -589,7 +605,16 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
             _spawn_n(anom_n, grid, forbidden, hazards)
         if want_mut:
             mut_n = base_n + (1 if kind == "clear_mutant" else 0)
+            if giant_hunt:
+                mut_n += 3
             _spawn_mutants(mut_n, grid, forbidden, enemies, enemy_kinds)
+            if giant_hunt and enemy_kinds:
+                # Помощники Гиганта: пара бюреров + зомбированные.
+                for i in range(len(enemy_kinds)):
+                    if i < 2:
+                        enemy_kinds[i] = "burer"
+                    elif i < 5:
+                        enemy_kinds[i] = "zombie"
         if want_npc:
             npc_n = base_n + (1 if kind == "clear_marauder" else 0)
             _spawn_npcs(

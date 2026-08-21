@@ -29,18 +29,28 @@ MUTANT_SPRITES: dict[str, str] = {
     "bloodsucker": "Кровосос",
     "flesh": "Плоть",
     "controller": "Контролёр",
+    "burer": "Бюрер",
+    "zombie": "Зомбированный",
 }
 
 MUTANT_SPRITE_KEYS: tuple[str, ...] = tuple(MUTANT_SPRITES.keys())
 
-# Веса спавна: контролёр реже обычных тварей.
+# Нет отдельных PNG — рисуем ближайшим спрайтом.
+MUTANT_SPRITE_FALLBACKS: dict[str, str] = {
+    "burer": "controller",
+    "zombie": "flesh",
+}
+
+# Веса спавна: контролёр/бюрер реже обычных тварей.
 MUTANT_SPAWN_WEIGHTS: dict[str, int] = {
-    "blind_dog": 26,
-    "tushkano": 22,
-    "pseudodog": 18,
-    "bloodsucker": 14,
-    "flesh": 14,
-    "controller": 6,
+    "blind_dog": 24,
+    "tushkano": 20,
+    "pseudodog": 16,
+    "bloodsucker": 12,
+    "flesh": 12,
+    "zombie": 8,
+    "controller": 5,
+    "burer": 3,
 }
 
 CONTROLLER_AURA_DAMAGE = 3
@@ -144,7 +154,8 @@ def apply_controller_aura_db(
 @lru_cache(maxsize=32)
 def load_mutant_grid_sprite(kind: str) -> bytes | None:
     """PNG 88×88 для отрисовки на поле миссии."""
-    path = MUTANTS_GRID_DIR / f"{kind}.png"
+    resolved = MUTANT_SPRITE_FALLBACKS.get(kind, kind)
+    path = MUTANTS_GRID_DIR / f"{resolved}.png"
     if not path.is_file():
         return None
     return path.read_bytes()
@@ -153,7 +164,8 @@ def load_mutant_grid_sprite(kind: str) -> bytes | None:
 @lru_cache(maxsize=32)
 def load_mutant_card_sprite(kind: str) -> bytes | None:
     """PNG 256×256 для карточек/PDA (будущие задания)."""
-    path = MUTANTS_CARD_DIR / f"{kind}.png"
+    resolved = MUTANT_SPRITE_FALLBACKS.get(kind, kind)
+    path = MUTANTS_CARD_DIR / f"{resolved}.png"
     if not path.is_file():
         return None
     return path.read_bytes()

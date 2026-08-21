@@ -847,6 +847,7 @@ class Storage:
                     ("Темная долина", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                     ("Рыжий лес", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                     ("Радар", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
+                    ("Завод", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                 ],
             )
             # Для существующих БД фиксируем базовые владельцы и типы ключевых точек.

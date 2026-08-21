@@ -1,7 +1,7 @@
-"""Особые события Зоны: вертушка, шторм, бандиты, тёмный сталкер.
+"""Особые события Зоны.
 
-Волна 1 — на существующем движке (рация / clear / travel / shop meta).
-Тяжёлые сценарии (Завод, Монолит, Гигант, зомби-волны) — отдельно.
+Волна 1: вертушка, шторм, бандиты, тёмный сталкер.
+Волна 2: спасение пленного (Завод), Гигант, колонна Монолита.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import random
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.game_logic import ActionResult, QuestContractTemplate, QUESTS, h
+from app.game_logic import ActionResult, QuestContractTemplate, QUESTS, FACTION_HOME_BASE, h
 from app.storage import Storage
 
 SPECIAL_EVENT_META = "special_event:active"
@@ -21,6 +21,17 @@ SHOP_STOCK_META = "shop:stock:consumables"
 SPECIAL_EVENT_INTERVAL_MIN_MINUTES = 50
 SPECIAL_EVENT_INTERVAL_MAX_MINUTES = 110
 SPECIAL_EVENT_DURATION_MINUTES = 20
+
+GIANT_DURATION_MINUTES = 150
+GIANT_MAX_HP = 100
+GIANT_BASE_CHIP = 8
+GIANT_POWER_CHIP_MULT = 2
+
+MARCH_DURATION_MINUTES = 35
+MARCH_HITS_NEEDED = 3
+MARCH_BASE_PRESSURE = 12
+
+RESCUE_DURATION_MINUTES = 30
 
 # Расходники, которые «заканчиваются» при блокаде бандитов.
 BLOCKADE_STOCK_KEYS: tuple[str, ...] = ("medkit", "vodka", "sausage")
@@ -36,11 +47,26 @@ SPECIAL_LOCATIONS: tuple[str, ...] = (
     "Радар",
 )
 
+GIANT_LOCATIONS: tuple[str, ...] = (
+    "Рыжий лес",
+    "Темная долина",
+    "Янтарь",
+    "Свалка",
+    "Болото",
+)
+
+MARCH_TARGET_BASES: tuple[str, ...] = tuple(
+    dict.fromkeys(FACTION_HOME_BASE.values())
+)
+
 EVENT_KINDS: tuple[str, ...] = (
     "heli_crash",
     "anomaly_storm",
     "bandit_blockade",
     "dark_stalker",
+    "monolith_rescue",
+    "giant",
+    "monolith_march",
 )
 
 
@@ -169,6 +195,17 @@ def _minutes_left(event: dict[str, Any]) -> int:
     return max(0, int((expires - _utc_now()).total_seconds() // 60))
 
 
+def _append_helper(event: dict[str, Any], telegram_id: int, nickname: str) -> None:
+    helpers = [int(x) for x in (event.get("helpers") or [])]
+    if telegram_id in helpers:
+        return
+    helpers.append(telegram_id)
+    names = list(event.get("helper_names") or [])
+    names.append(str(nickname))
+    event["helpers"] = helpers
+    event["helper_names"] = names
+
+
 def _build_heli_crash(location: str, now: datetime) -> dict[str, Any]:
     return {
         "id": now.strftime("%Y%m%d%H%M%S"),
@@ -248,6 +285,75 @@ def _build_dark_stalker(location: str, now: datetime) -> dict[str, Any]:
     }
 
 
+def _build_monolith_rescue(now: datetime) -> dict[str, Any]:
+    loc = "Завод"
+    return {
+        "id": now.strftime("%Y%m%d%H%M%S"),
+        "kind": "monolith_rescue",
+        "location": loc,
+        "title": "Пленник Монолита",
+        "call_text": (
+            f"Наш брат-сталкер в плену у Монолита на «{loc}». "
+            "Нужно вызволить и провести под плотными атаками — пригодятся танки. "
+            f"Окно ~{RESCUE_DURATION_MINUTES} мин."
+        ),
+        "started_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=RESCUE_DURATION_MINUTES)).isoformat(),
+        "helpers": [],
+        "helper_names": [],
+        "rescued_by": [],
+        "resolved": False,
+    }
+
+
+def _build_giant(now: datetime) -> dict[str, Any]:
+    loc = random.choice(GIANT_LOCATIONS)
+    return {
+        "id": now.strftime("%Y%m%d%H%M%S"),
+        "kind": "giant",
+        "location": loc,
+        "title": "Гигант",
+        "call_text": (
+            f"Гигант терроризирует «{loc}» уже несколько часов. "
+            "Урон по площади, на помощь зовёт бюреров и зомбированных. "
+            "Новички могут срубить его ценой нескольких смертей; ветераны быстрее. "
+            f"HP {GIANT_MAX_HP}. Можно возродиться и продолжить (~{GIANT_DURATION_MINUTES} мин)."
+        ),
+        "started_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=GIANT_DURATION_MINUTES)).isoformat(),
+        "helpers": [],
+        "helper_names": [],
+        "boss_hp": GIANT_MAX_HP,
+        "boss_hp_max": GIANT_MAX_HP,
+        "resolved": False,
+    }
+
+
+def _build_monolith_march(now: datetime) -> dict[str, Any]:
+    target = random.choice(MARCH_TARGET_BASES)
+    origin = "Радар"
+    return {
+        "id": now.strftime("%Y%m%d%H%M%S"),
+        "kind": "monolith_march",
+        "location": origin,
+        "target_base": target,
+        "title": "Колонна Монолита",
+        "call_text": (
+            f"Группа Монолита замечена у «{origin}», движется к базе «{target}». "
+            "У них гаусс-пушки — бьют через всю карту по прямой, сквозь аномалии. "
+            "Можно перехватить колонну на Радаре или ждать удара по базе. "
+            f"Нужно {MARCH_HITS_NEEDED} успешных стычки (~{MARCH_DURATION_MINUTES} мин)."
+        ),
+        "started_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=MARCH_DURATION_MINUTES)).isoformat(),
+        "helpers": [],
+        "helper_names": [],
+        "ambush_hits": 0,
+        "hits_needed": MARCH_HITS_NEEDED,
+        "resolved": False,
+    }
+
+
 def start_special_event(storage: Storage, *, kind: str | None = None) -> dict[str, Any]:
     now = _utc_now()
     picked = kind or random.choice(EVENT_KINDS)
@@ -264,6 +370,12 @@ def start_special_event(storage: Storage, *, kind: str | None = None) -> dict[st
         )
     elif picked == "dark_stalker":
         event = _build_dark_stalker(location, now)
+    elif picked == "monolith_rescue":
+        event = _build_monolith_rescue(now)
+    elif picked == "giant":
+        event = _build_giant(now)
+    elif picked == "monolith_march":
+        event = _build_monolith_march(now)
     else:
         event = _build_heli_crash(location, now)
     _save_event(storage, event)
@@ -279,6 +391,9 @@ def format_special_call_html(event: dict[str, Any]) -> str:
         "anomaly_storm": "🌪",
         "bandit_blockade": "🔫",
         "dark_stalker": "🕶",
+        "monolith_rescue": "⛓",
+        "giant": "👹",
+        "monolith_march": "☢",
     }.get(kind, "📡")
     return f"{emoji} <b>{title}</b>\n{body}"
 
@@ -304,11 +419,18 @@ def special_event_is_joinable(storage: Storage, telegram_id: int) -> bool:
         return int(event.get("dens_left") or 0) > 0
     if kind == "dark_stalker":
         return True
+    if kind == "monolith_rescue":
+        rescued = {int(x) for x in (event.get("rescued_by") or [])}
+        return int(telegram_id) not in rescued
+    if kind == "giant":
+        return int(event.get("boss_hp") or 0) > 0
+    if kind == "monolith_march":
+        return int(event.get("ambush_hits") or 0) < int(event.get("hits_needed") or MARCH_HITS_NEEDED)
     return False
 
 
 def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
-    """Вступить в активное особое событие (вертушка / шторм / бандиты / дуэль)."""
+    """Вступить в активное особое событие."""
     from app.player_busy import player_busy_reason
     from app.quest_mission import start_or_resume_quest_mission
 
@@ -343,11 +465,7 @@ def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
         result = start_or_resume_quest_mission(storage, telegram_id, template, QUESTS["hard"])
         if not result.ok:
             return result
-        helpers.append(telegram_id)
-        names = list(event.get("helper_names") or [])
-        names.append(str(player.nickname))
-        event["helpers"] = helpers
-        event["helper_names"] = names
+        _append_helper(event, telegram_id, str(player.nickname))
         _save_event(storage, event)
         return ActionResult(
             True,
@@ -358,8 +476,6 @@ def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
     if kind == "anomaly_storm":
         if event.get("passages_open"):
             return ActionResult(False, "Проходы уже открыты — можно ехать.")
-        loc = str(event.get("location") or player.location)
-        # Искать проход можно с текущей локации — аномальное поле «рядом».
         template = QuestContractTemplate(
             key=f"storm_{event['id']}",
             difficulty="hard",
@@ -371,14 +487,8 @@ def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
         result = start_or_resume_quest_mission(storage, telegram_id, template, QUESTS["hard"])
         if not result.ok:
             return result
-        helpers = [int(x) for x in (event.get("helpers") or [])]
-        if telegram_id not in helpers:
-            helpers.append(telegram_id)
-            names = list(event.get("helper_names") or [])
-            names.append(str(player.nickname))
-            event["helpers"] = helpers
-            event["helper_names"] = names
-            _save_event(storage, event)
+        _append_helper(event, telegram_id, str(player.nickname))
+        _save_event(storage, event)
         return ActionResult(
             True,
             "Ищешь стабильный проход среди аномалий. Успех откроет переходы для всех.",
@@ -406,14 +516,8 @@ def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
         result = start_or_resume_quest_mission(storage, telegram_id, template, QUESTS["hard"])
         if not result.ok:
             return result
-        helpers = [int(x) for x in (event.get("helpers") or [])]
-        if telegram_id not in helpers:
-            helpers.append(telegram_id)
-            names = list(event.get("helper_names") or [])
-            names.append(str(player.nickname))
-            event["helpers"] = helpers
-            event["helper_names"] = names
-            _save_event(storage, event)
+        _append_helper(event, telegram_id, str(player.nickname))
+        _save_event(storage, event)
         return ActionResult(
             True,
             f"Штурм логова на «{loc}» (осталось {dens}).",
@@ -436,9 +540,7 @@ def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
             return_home=False,
             mission_kind="clear_marauder",
         )
-        # На hard патроны не нужны — дуэль доступнее; heavy для жирных стволов.
         if diff == "heavy":
-            # Подстрахуем сообщение, если нет патронов — откатим на hard.
             ammo = int(player.inventory.get("ammo_pack", 0))
             med = int(player.inventory.get("medkit", 0)) + int(player.inventory.get("medkit_army", 0))
             if ammo < 2 or med < 1:
@@ -465,6 +567,131 @@ def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
             payload=result.payload,
         )
 
+    if kind == "monolith_rescue":
+        loc = str(event.get("location") or "Завод")
+        if player.location != loc:
+            return ActionResult(
+                False,
+                f"Пленник на «{loc}». Доберись туда и жми снова — эскорт под огнём.",
+            )
+        rescued = {int(x) for x in (event.get("rescued_by") or [])}
+        if telegram_id in rescued:
+            return ActionResult(False, "Ты уже вывел пленного с Завода.")
+        # Тяжёлый эскорт: патроны/аптечка желательны, иначе откат на hard.
+        diff = "heavy"
+        ammo = int(player.inventory.get("ammo_pack", 0))
+        med = int(player.inventory.get("medkit", 0)) + int(player.inventory.get("medkit_army", 0))
+        if ammo < 2 or med < 1:
+            diff = "hard"
+        template = QuestContractTemplate(
+            key=f"rescue_{event['id']}_{telegram_id}",
+            difficulty=diff,
+            title=f"Спасение пленного: {loc}",
+            work_location=loc,
+            return_home=False,
+            mission_kind="escort",
+        )
+        result = start_or_resume_quest_mission(storage, telegram_id, template, QUESTS[diff])
+        if not result.ok:
+            return result
+        _append_helper(event, telegram_id, str(player.nickname))
+        _save_event(storage, event)
+        return ActionResult(
+            True,
+            f"Пленник с тобой на «{loc}». Доведи до точки эвакуации — Монолит давит плотно.",
+            payload=result.payload,
+        )
+
+    if kind == "giant":
+        loc = str(event.get("location") or "")
+        hp = int(event.get("boss_hp") or 0)
+        if hp <= 0:
+            return ActionResult(False, "Гигант уже повержен.")
+        if player.location != loc:
+            return ActionResult(False, f"Гигант на «{loc}». Доберись и бей снова.")
+        from app.game_logic import equipment_power, effective_max_health
+
+        power = max(1, equipment_power(player))
+        # Урон вокруг: при подходе теряешь HP (нельзя только китить издалека).
+        aura = random.randint(4, 10)
+        max_hp = effective_max_health(player)
+        if player.health > aura:
+            storage.change_health(telegram_id, -aura, max_health=max_hp)
+        diff = "heavy" if power >= 12 else "hard"
+        ammo = int(player.inventory.get("ammo_pack", 0))
+        med = int(player.inventory.get("medkit", 0)) + int(player.inventory.get("medkit_army", 0))
+        if diff == "heavy" and (ammo < 2 or med < 1):
+            diff = "hard"
+        template = QuestContractTemplate(
+            key=f"giant_{event['id']}_{telegram_id}_{hp}",
+            difficulty=diff,
+            title=f"Гигант: охота на {loc}",
+            work_location=loc,
+            return_home=False,
+            mission_kind="clear_mutant",
+        )
+        result = start_or_resume_quest_mission(storage, telegram_id, template, QUESTS[diff])
+        if not result.ok:
+            return result
+        _append_helper(event, telegram_id, str(player.nickname))
+        _save_event(storage, event)
+        return ActionResult(
+            True,
+            (
+                f"Гигант на «{loc}» (HP {hp}/{event.get('boss_hp_max', GIANT_MAX_HP)}). "
+                f"Аура −{aura} HP. Бюреры и зомби рвутся на помощь — сила снаряги {power}."
+            ),
+            payload=result.payload,
+        )
+
+    if kind == "monolith_march":
+        origin = str(event.get("location") or "Радар")
+        target = str(event.get("target_base") or "")
+        hits = int(event.get("ambush_hits") or 0)
+        need = int(event.get("hits_needed") or MARCH_HITS_NEEDED)
+        if hits >= need:
+            return ActionResult(False, "Колонна уже рассеяна.")
+        if player.location not in {origin, target}:
+            return ActionResult(
+                False,
+                f"Перехват с «{origin}» или оборона «{target}». Сейчас ты на «{player.location}».",
+            )
+        where = "перехват" if player.location == origin else "оборона базы"
+        template = QuestContractTemplate(
+            key=f"march_{event['id']}_{hits}_{telegram_id}",
+            difficulty="heavy",
+            title=f"Колонна Монолита: {where}",
+            work_location=str(player.location),
+            return_home=False,
+            mission_kind="clear_marauder",
+        )
+        ammo = int(player.inventory.get("ammo_pack", 0))
+        med = int(player.inventory.get("medkit", 0)) + int(player.inventory.get("medkit_army", 0))
+        diff = "heavy"
+        if ammo < 2 or med < 1:
+            diff = "hard"
+            template = QuestContractTemplate(
+                key=f"march_{event['id']}_{hits}_{telegram_id}",
+                difficulty=diff,
+                title=f"Колонна Монолита: {where}",
+                work_location=str(player.location),
+                return_home=False,
+                mission_kind="clear_marauder",
+            )
+        result = start_or_resume_quest_mission(storage, telegram_id, template, QUESTS[diff])
+        if not result.ok:
+            return result
+        _append_helper(event, telegram_id, str(player.nickname))
+        _save_event(storage, event)
+        return ActionResult(
+            True,
+            (
+                f"Гаусс бьёт сквозь аномалии — не стой на прямой. "
+                f"Стычки: {hits}/{need}. Режим: {where}."
+            ),
+            payload=result.payload,
+        )
+
     return ActionResult(False, "Неизвестный тип события.")
 
 
@@ -488,7 +715,6 @@ def complete_special_event_objective(
         done.add(telegram_id)
         event["looters_done"] = list(done)
         _save_event(storage, event)
-        # Военный хабар сверх обычного квеста.
         storage.change_money(telegram_id, 800)
         storage.add_item(telegram_id, "ammo_pack", 1)
         return "С обломков: +800 RU и патроны."
@@ -517,7 +743,73 @@ def complete_special_event_objective(
     if kind == "dark_stalker" and title_l.startswith("Дуэль: Тёмный сталкер"):
         return "Тёмный сталкер повержен. Двойник рассеялся в аномальной дымке."
 
+    if kind == "monolith_rescue" and title_l.startswith("Спасение пленного"):
+        rescued = {int(x) for x in (event.get("rescued_by") or [])}
+        if telegram_id in rescued:
+            return None
+        rescued.add(telegram_id)
+        event["rescued_by"] = list(rescued)
+        event["resolved"] = True
+        _save_event(storage, event)
+        storage.change_money(telegram_id, 1200)
+        storage.add_item(telegram_id, "medkit", 1)
+        player = storage.get_character(telegram_id, refresh_energy=False)
+        nick = player.nickname if player else str(telegram_id)
+        return f"Пленник спасён ({nick}). +1200 RU и аптечка. Монолит отступил с Завода."
+
+    if kind == "giant" and title_l.startswith("Гигант:"):
+        hp = int(event.get("boss_hp") or 0)
+        if hp <= 0:
+            return "Гигант уже мёртв."
+        from app.game_logic import equipment_power
+
+        player = storage.get_character(telegram_id, refresh_energy=False)
+        power = max(1, equipment_power(player)) if player else 1
+        chip = GIANT_BASE_CHIP + power * GIANT_POWER_CHIP_MULT
+        hp = max(0, hp - chip)
+        event["boss_hp"] = hp
+        _save_event(storage, event)
+        storage.change_money(telegram_id, 400 + power * 50)
+        if hp <= 0:
+            event["resolved"] = True
+            _save_event(storage, event)
+            nick = player.nickname if player else str(telegram_id)
+            return (
+                f"Добивающий удар (−{chip} HP)! Гигант пал на «{event.get('location')}» "
+                f"({nick}). +{400 + power * 50} RU."
+            )
+        return (
+            f"Гигант получил −{chip} HP (сила {power}). "
+            f"Осталось {hp}/{event.get('boss_hp_max', GIANT_MAX_HP)}. +{400 + power * 50} RU."
+        )
+
+    if kind == "monolith_march" and title_l.startswith("Колонна Монолита"):
+        hits = int(event.get("ambush_hits") or 0) + 1
+        need = int(event.get("hits_needed") or MARCH_HITS_NEEDED)
+        event["ambush_hits"] = hits
+        _save_event(storage, event)
+        storage.change_money(telegram_id, 700)
+        storage.add_item(telegram_id, "ammo_pack", 1)
+        if hits >= need:
+            event["resolved"] = True
+            _save_event(storage, event)
+            return (
+                f"Колонна рассеяна ({hits}/{need})! База «{event.get('target_base')}» в безопасности. "
+                "+700 RU и патроны."
+            )
+        return f"Стычка с гаусс-отрядом успешна ({hits}/{need}). +700 RU и патроны."
+
     return None
+
+
+def _pressure_base_npc(storage: Storage, base_name: str, amount: int) -> int:
+    loc = storage.get_location(base_name)
+    if loc is None:
+        return 0
+    current = int(loc.get("npc_power") or 0)
+    new_power = max(5, current - max(1, amount))
+    storage.set_location_npc_power(base_name, new_power)
+    return current - new_power
 
 
 def resolve_expired_special_event(storage: Storage) -> dict[str, Any] | None:
@@ -531,13 +823,13 @@ def resolve_expired_special_event(storage: Storage) -> dict[str, Any] | None:
     if not isinstance(event, dict) or event.get("resolved"):
         return None
     expires = _parse_iso(str(event.get("expires_at") or ""), _utc_now())
+    # Гигант / колонна могут закрыться досрочно через complete_* — тогда resolved уже True.
     if expires > _utc_now():
         return None
     kind = str(event.get("kind") or "")
     event["resolved"] = True
     _save_event(storage, event)
     if kind == "bandit_blockade":
-        # Время вышло — поставки всё равно восстанавливаем, блокада слабеет.
         set_shop_stock(storage, None)
     if kind == "anomaly_storm" and not event.get("passages_open"):
         event["passages_open"] = True
@@ -556,6 +848,32 @@ def resolve_expired_special_event(storage: Storage) -> dict[str, Any] | None:
         )
     elif kind == "dark_stalker":
         text = f"Тёмный сталкер исчез с «{event.get('location')}»."
+    elif kind == "monolith_rescue":
+        if event.get("rescued_by"):
+            text = f"Пленник вывезен с «{event.get('location')}»."
+        else:
+            text = f"Окно спасения закрылось. Пленник остался у Монолита на «{event.get('location')}»."
+    elif kind == "giant":
+        hp = int(event.get("boss_hp") or 0)
+        if hp <= 0:
+            text = f"Гигант повержен на «{event.get('location')}»."
+        else:
+            text = (
+                f"Гигант ушёл в глубь Зоны с «{event.get('location')}» "
+                f"(оставалось HP {hp}). Ещё вернётся."
+            )
+    elif kind == "monolith_march":
+        hits = int(event.get("ambush_hits") or 0)
+        need = int(event.get("hits_needed") or MARCH_HITS_NEEDED)
+        target = str(event.get("target_base") or "")
+        if hits >= need:
+            text = f"Колонна Монолита рассеяна до удара по «{target}»."
+        else:
+            dropped = _pressure_base_npc(storage, target, MARCH_BASE_PRESSURE)
+            text = (
+                f"Колонна Монолита дошла до «{target}» и продавила оборону "
+                f"(−{dropped} силы NPC). Перехватов было {hits}/{need}."
+            )
     else:
         text = "Особое событие Зоны завершилось."
     schedule_next_special_event(storage)
@@ -595,6 +913,9 @@ def special_event_button_label(storage: Storage) -> str | None:
         "anomaly_storm": "🌪 Искать проход в шторме",
         "bandit_blockade": "🔫 Штурмовать логово бандитов",
         "dark_stalker": "🕶 Вызвать Тёмного сталкера",
+        "monolith_rescue": "⛓ Спасти пленного на Заводе",
+        "giant": "👹 Атаковать Гиганта",
+        "monolith_march": "☢ Перехватить колонну Монолита",
     }.get(kind)
 
 
@@ -615,5 +936,14 @@ def special_events_status_line(storage: Storage) -> str:
         extra = " · проходы открыты" if event.get("passages_open") else " · переходы закрыты"
     if kind == "bandit_blockade":
         extra = f" · логовищ {event.get('dens_left')}/{event.get('dens_total')}"
+    if kind == "giant":
+        extra = f" · HP {event.get('boss_hp')}/{event.get('boss_hp_max')}"
+    if kind == "monolith_march":
+        extra = (
+            f" · → «{event.get('target_base')}» "
+            f"· стычки {event.get('ambush_hits')}/{event.get('hits_needed')}"
+        )
+    if kind == "monolith_rescue":
+        extra = " · эскорт с Завода"
     loc_part = f" «{loc}»" if loc else ""
     return f"{title}{loc_part} (~{mins} мин){extra}."
