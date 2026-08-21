@@ -1454,6 +1454,13 @@ def _build_pda_chats_text(player: Character) -> str:
                 f"🛡️ Чат группировки «{player.faction}»:\n{faction_chat}",
             ]
         )
+    elif player.faction == "Монолит":
+        lines.extend(
+            [
+                "",
+                "🛡️ «Монолит» — закрытая группировка: публичная ссылка на чат не публикуется.",
+            ]
+        )
     else:
         lines.extend(
             [
@@ -7408,9 +7415,15 @@ async def monolith_war_attack_callback(callback: CallbackQuery, bot: Bot) -> Non
     pending = get_pending_monolith_war(storage)
     html = format_monolith_war_call(pending) if pending else result.text
     notify = set((result.payload or {}).get("monolith_notify_ids") or [])
+    markup = war_lobby_keyboard([], monolith_join=True)
     for uid in notify:
         try:
-            await bot.send_message(int(uid), html, parse_mode=ParseMode.HTML)
+            await bot.send_message(
+                int(uid),
+                html,
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
         except Exception:
             logger.debug("Failed monolith attack notify to %s", uid)
     await _refresh_war_lobby_menu(callback, bot)
@@ -7455,9 +7468,15 @@ async def monolith_attack_command(message: Message, bot: Bot, command: CommandOb
         return
     pending = get_pending_monolith_war(storage)
     html = format_monolith_war_call(pending) if pending else result.text
+    markup = war_lobby_keyboard([], monolith_join=True)
     for uid in (result.payload or {}).get("monolith_notify_ids") or []:
         try:
-            await bot.send_message(int(uid), html, parse_mode=ParseMode.HTML)
+            await bot.send_message(
+                int(uid),
+                html,
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+            )
         except Exception:
             logger.debug("Failed monolith attack cmd notify to %s", uid)
 
@@ -7559,9 +7578,15 @@ async def war_lobby_launch_callback(callback: CallbackQuery, bot: Bot) -> None:
         pending = get_pending_monolith_war(storage)
         html = format_monolith_war_call(pending) if pending else result.text
         notify = set(result.monolith_notify_ids) | set(result.notify_member_ids)
+        markup = war_lobby_keyboard([], monolith_join=True)
         for uid in notify:
             try:
-                await bot.send_message(uid, html, parse_mode=ParseMode.HTML)
+                await bot.send_message(
+                    uid,
+                    html,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=markup,
+                )
             except Exception:
                 logger.debug("Failed monolith war notify to %s", uid)
         await reply_action_result(callback, result.text)
@@ -7590,6 +7615,31 @@ async def monolith_war_bots_callback(callback: CallbackQuery, bot: Bot) -> None:
     await reply_action_result(callback, result.text)
     if result.ok:
         await _refresh_war_lobby_menu(callback, bot)
+
+
+@router.callback_query(F.data == "monolith_war:start")
+async def monolith_war_start_callback(callback: CallbackQuery, bot: Bot) -> None:
+    from app.monolith_war import force_start_monolith_war
+
+    storage = get_storage()
+    result = force_start_monolith_war(storage, callback.from_user.id)
+    await reply_action_result(callback, result.text)
+    if not result.ok:
+        return
+    outcome = (result.payload or {}).get("monolith_outcome") or {}
+    text = str(outcome.get("text") or result.text)
+    for uid in outcome.get("notify_ids") or []:
+        try:
+            await bot.send_message(int(uid), text)
+        except Exception:
+            logger.debug("Failed monolith war force-start notify to %s", uid)
+    if outcome.get("kind") == "tactical":
+        session = outcome.get("session")
+        if session is not None:
+            await _broadcast_cwar_session(bot, storage, session, note=text)
+            await safe_callback_answer(callback, "Бой Монолита!")
+            return
+    await _refresh_war_lobby_menu(callback, bot)
 
 
 @router.callback_query(F.data == "war_lobby:dissolve")
@@ -7961,6 +8011,7 @@ def _faction_group_keyboard_for(telegram_id: int):
         can_withdraw_treasury=can_tr,
         can_request_garage_rental=can_request,
         pending_garage_requests=pending,
+        faction=player.faction if player else None,
     )
 
 

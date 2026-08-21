@@ -214,7 +214,7 @@ def join_monolith_war(storage: Storage, telegram_id: int) -> ActionResult:
     return ActionResult(
         True,
         f"Ты в окне боя Монолита ({len(ids)} чел.). "
-        f"До авто-исхода или старта поля — жди таймер / команду.",
+        f"Дождись таймера или жми «Начать бой сейчас».",
     )
 
 
@@ -434,6 +434,30 @@ def resolve_pending_monolith_war(storage: Storage, *, force: bool = False) -> di
 
 def process_monolith_war_cycle(storage: Storage) -> dict[str, Any] | None:
     return resolve_pending_monolith_war(storage, force=False)
+
+
+def force_start_monolith_war(storage: Storage, telegram_id: int) -> ActionResult:
+    """Досрочно закрыть окно боя Монолита (кнопка «Начать сейчас»)."""
+    pending = get_pending_monolith_war(storage)
+    if pending is None:
+        return ActionResult(False, "Сейчас нет окна боя Монолита.")
+    expires = _parse_iso(str(pending.get("expires_at") or ""), _utc_now())
+    if expires <= _utc_now():
+        return ActionResult(False, "Окно уже закрылось — исход скоро придёт сам.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or player.faction != MONOLITH_FACTION:
+        return ActionResult(False, "Досрочный старт доступен только Монолиту.")
+    if player.health <= 0:
+        return ActionResult(False, "Мёртвый монолитовец бой не начнёт.")
+
+    outcome = resolve_pending_monolith_war(storage, force=True)
+    if outcome is None:
+        return ActionResult(False, "Не удалось закрыть окно боя Монолита.")
+    return ActionResult(
+        True,
+        str(outcome.get("text") or "Окно боя Монолита закрыто."),
+        payload={"monolith_outcome": outcome},
+    )
 
 
 def monolith_join_button_visible(storage: Storage, telegram_id: int) -> bool:

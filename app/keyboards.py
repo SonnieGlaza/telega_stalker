@@ -1006,6 +1006,9 @@ def war_lobby_keyboard(
         rows.append(
             [InlineKeyboardButton(text="🤖 Послать ботов Монолита", callback_data="monolith_war:bots")]
         )
+        rows.append(
+            [InlineKeyboardButton(text="▶ Начать бой сейчас", callback_data="monolith_war:start")]
+        )
     if can_dissolve:
         rows.append(
             [InlineKeyboardButton(text="🛑 Распустить лобби", callback_data="war_lobby:dissolve")]
@@ -1068,6 +1071,7 @@ def faction_group_keyboard(
     can_withdraw_treasury: bool = False,
     can_request_garage_rental: bool = False,
     pending_garage_requests: int = 0,
+    faction: str | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="📥 Сдать патрон — своё количество", callback_data="eco:warehouse:deposit:ammo_pack")],
@@ -1136,14 +1140,15 @@ def faction_group_keyboard(
                 )
             ]
         )
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="🤖 Улучшить ботов до 2-го тира (50000 RU)",
-                    callback_data="faction:bots:upgrade",
-                )
-            ]
-        )
+        if faction != "Монолит":
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="🤖 Улучшить ботов до 2-го тира (50000 RU)",
+                        callback_data="faction:bots:upgrade",
+                    )
+                ]
+            )
         rows.append(
             [
                 InlineKeyboardButton(

@@ -789,7 +789,7 @@ def complete_special_event_objective(
                 f"({nick}). +{400 + power * 50} RU."
             )
         return (
-            f"Гигант получил удар (сила {power}). Охота продолжается. "
+            f"Гигант получил удар (сила {power}). Осталось прочности: {hp}. "
             f"+{400 + power * 50} RU."
         )
 
@@ -946,7 +946,7 @@ def special_events_status_line(storage: Storage) -> str:
     if kind == "bandit_blockade":
         extra = f" · логовищ {event.get('dens_left')}/{event.get('dens_total')}"
     if kind == "giant":
-        extra = ""
+        extra = f" · прочность {event.get('boss_hp')}"
     if kind == "monolith_march":
         extra = (
             f" · → «{event.get('target_base')}» "

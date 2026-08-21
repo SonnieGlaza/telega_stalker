@@ -127,6 +127,26 @@ def run_smoke_check() -> None:
         assert fortify2.ok, fortify2.text
         assert int(storage.get_location(duty_base)["defense_bonus"]) == 2
 
+        from app.faction_bots import (
+            FACTION_BOT_COUNT_UPGRADE_COST,
+            FACTION_BOT_UPGRADE_COST,
+            get_faction_bots,
+            upgrade_faction_bot_count,
+            upgrade_faction_bots,
+        )
+
+        storage.change_faction_treasury("Долг", FACTION_BOT_UPGRADE_COST + FACTION_BOT_COUNT_UPGRADE_COST)
+        bots_before = get_faction_bots(storage, "Долг")
+        assert int(bots_before["tier"]) == 1
+        bot_up = upgrade_faction_bots(storage, 111)
+        assert bot_up.ok, bot_up.text
+        assert int(get_faction_bots(storage, "Долг")["tier"]) == 2
+        bot_cnt = upgrade_faction_bot_count(storage, 111)
+        assert bot_cnt.ok, bot_cnt.text
+        assert int(get_faction_bots(storage, "Долг")["count"]) == int(bots_before["count"]) + 1
+        already_t2 = upgrade_faction_bots(storage, 111)
+        assert not already_t2.ok
+
         # Referral rewards.
         from app.game_logic import (
             apply_referral_rewards,
@@ -486,13 +506,19 @@ def run_smoke_check() -> None:
         giant_join = join_special_event(storage, 111)
         assert giant_join.ok, giant_join.text
         assert "Гигант" in giant_join.text
-        chip_note = complete_special_event_objective(
-            storage, 111, title=f"Гигант: охота на {giant['location']}"
-        )
-        assert chip_note and "Гигант" in chip_note
+        from app.quest_mission import get_mission_session, _finish_success
+
+        giant_session = get_mission_session(storage, 111)
+        assert giant_session is not None
+        # Эфемерные ключи special-event должны проходить finish (не «Контракт повреждён»).
+        giant_finish = _finish_success(storage, 111, giant_session)
+        assert giant_finish.ok, giant_finish.text
         active_giant = get_active_special_event(storage)
         assert active_giant is not None
         assert int(active_giant["boss_hp"]) < 100
+        from app.special_events import special_events_status_line
+
+        assert "прочность" in special_events_status_line(storage)
         assert "нескольких смертей" not in str(giant.get("call_text") or "")
         assert "HP" not in str(giant.get("call_text") or "")
         _clear_mission()
@@ -523,6 +549,8 @@ def run_smoke_check() -> None:
             MONOLITH_FACTION,
             begin_monolith_war_window,
             filter_travel_locations_for_faction,
+            force_start_monolith_war,
+            get_pending_monolith_war,
             join_monolith_war,
             resolve_pending_monolith_war,
             save_pending_monolith_war,
@@ -557,18 +585,20 @@ def run_smoke_check() -> None:
         )
         join_m = join_monolith_war(storage, 111)
         assert join_m.ok, join_m.text
+        assert "Начать бой сейчас" in join_m.text
         bots = send_monolith_bots(storage, 111)
         assert bots.ok, bots.text
+        # Досрочный старт без людей → процентный исход (не оставляем cwar-сессию).
+        pending = get_pending_monolith_war(storage) or dict(pending)
         pending = dict(pending)
-        pending["expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
-        # Сбрасываем людей, чтобы проверить процентный исход.
         pending["monolith_ids"] = []
         pending["monolith_names"] = []
         pending["bots_sent"] = True
         pending["bot_count"] = 3
         save_pending_monolith_war(storage, pending)
-        resolved = resolve_pending_monolith_war(storage, force=True)
-        assert resolved is not None and resolved.get("kind") == "percent"
+        early = force_start_monolith_war(storage, 111)
+        assert early.ok, early.text
+        assert ((early.payload or {}).get("monolith_outcome") or {}).get("kind") == "percent"
         storage.set_meta("monolith_war:pending", "")
         # Вернём 111 в Долг для дальнейших smoke-тестов.
         admin_set_player_faction(storage, target="111", faction="Долг")
@@ -576,10 +606,33 @@ def run_smoke_check() -> None:
 
         # Кнопка/команда атаки Монолита.
         from app.monolith_war import start_monolith_attack
+        from app.faction_bots import upgrade_faction_bots as upgrade_mono_bots
+        from app.keyboards import faction_group_keyboard, war_lobby_keyboard
 
         storage.create_character(444, "MonoLead", "Мужской")
         admin_set_player_faction(storage, target="444", faction=MONOLITH_FACTION)
+        storage.set_faction_leader(MONOLITH_FACTION, 444)
         storage.restore_energy(444, 100)
+        mono_tier = upgrade_mono_bots(storage, 444)
+        assert not mono_tier.ok
+        assert "элитном" in mono_tier.text.lower() or "тир" in mono_tier.text.lower()
+        mono_kb = faction_group_keyboard(is_leader=True, faction=MONOLITH_FACTION)
+        mono_cbs = {
+            btn.callback_data
+            for row in mono_kb.inline_keyboard
+            for btn in row
+            if btn.callback_data
+        }
+        assert "faction:bots:upgrade" not in mono_cbs
+        assert "faction:bots:count" in mono_cbs
+        lobby_kb = war_lobby_keyboard([], monolith_join=True)
+        lobby_cbs = {
+            btn.callback_data
+            for row in lobby_kb.inline_keyboard
+            for btn in row
+            if btn.callback_data
+        }
+        assert "monolith_war:start" in lobby_cbs
         atk = start_monolith_attack(storage, 444, "Свалка")
         assert atk.ok, atk.text
         # Корректно закрываем окно/лобби, не оставляя war_lobbies in_progress.

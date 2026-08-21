@@ -95,6 +95,11 @@ def upgrade_faction_bots(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа.")
     if not player.faction:
         return ActionResult(False, "Сначала выбери группировку.")
+    if player.faction == "Монолит":
+        return ActionResult(
+            False,
+            "Боты Монолита уже на элитном снаряжении — тир не улучшается.",
+        )
     leader_id = storage.get_faction_leader_id(player.faction)
     if leader_id is None or int(leader_id) != telegram_id:
         return ActionResult(False, "Улучшать ботов может только лидер группировки.")
@@ -103,14 +108,12 @@ def upgrade_faction_bots(storage: Storage, telegram_id: int) -> ActionResult:
     if int(bots["tier"]) >= 2:
         return ActionResult(False, "Боты уже улучшены до Т2.")
 
-    treasury = storage.get_faction_treasury(player.faction)
-    if treasury < FACTION_BOT_UPGRADE_COST:
+    if not storage.withdraw_faction_treasury(player.faction, FACTION_BOT_UPGRADE_COST):
         return ActionResult(
             False,
-            f"В казне недостаточно средств. Нужно {FACTION_BOT_UPGRADE_COST:,} RU, сейчас {treasury:,}.",
+            f"В казне недостаточно средств. Нужно {FACTION_BOT_UPGRADE_COST:,} RU.",
         )
 
-    storage.change_faction_treasury(player.faction, -FACTION_BOT_UPGRADE_COST)
     bots["tier"] = 2
     storage.set_meta(_meta_key(player.faction), json.dumps(bots, ensure_ascii=False))
     return ActionResult(
@@ -136,14 +139,12 @@ def upgrade_faction_bot_count(storage: Storage, telegram_id: int) -> ActionResul
     if count >= FACTION_BOT_MAX_COUNT:
         return ActionResult(False, f"Уже максимум ботов ({FACTION_BOT_MAX_COUNT}).")
 
-    treasury = storage.get_faction_treasury(player.faction)
-    if treasury < FACTION_BOT_COUNT_UPGRADE_COST:
+    if not storage.withdraw_faction_treasury(player.faction, FACTION_BOT_COUNT_UPGRADE_COST):
         return ActionResult(
             False,
-            f"В казне недостаточно средств. Нужно {FACTION_BOT_COUNT_UPGRADE_COST:,} RU, сейчас {treasury:,}.",
+            f"В казне недостаточно средств. Нужно {FACTION_BOT_COUNT_UPGRADE_COST:,} RU.",
         )
 
-    storage.change_faction_treasury(player.faction, -FACTION_BOT_COUNT_UPGRADE_COST)
     bots["count"] = count + 1
     storage.set_meta(_meta_key(player.faction), json.dumps(bots, ensure_ascii=False))
     return ActionResult(

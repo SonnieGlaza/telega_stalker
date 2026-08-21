@@ -1049,12 +1049,30 @@ def _is_help_event_mission(session: QuestMissionSession) -> bool:
     return str(session.contract_key).startswith("help_") or str(session.title).startswith("Помощь:")
 
 
+_SPECIAL_EVENT_KEY_PREFIXES: tuple[str, ...] = (
+    "heli_",
+    "storm_",
+    "bandit_den_",
+    "dark_",
+    "rescue_",
+    "giant_",
+    "march_",
+)
+
+
+def _is_special_event_mission(session: QuestMissionSession) -> bool:
+    key = str(session.contract_key or "")
+    return any(key.startswith(prefix) for prefix in _SPECIAL_EVENT_KEY_PREFIXES)
+
+
 def _finish_success(storage: Storage, telegram_id: int, session: QuestMissionSession) -> ActionResult:
     clear_mission_session(storage, telegram_id)
     template = QUEST_CONTRACTS.get(session.contract_key)
     quest = QUESTS.get(session.difficulty)
     is_help = _is_help_event_mission(session)
-    if quest is None or (template is None and not is_help):
+    is_special = _is_special_event_mission(session)
+    is_ephemeral = is_help or is_special
+    if quest is None or (template is None and not is_ephemeral):
         storage.set_active_contract(telegram_id, None)
         return ActionResult(False, "Контракт повреждён после миссии.")
     if quest is None:
@@ -1069,7 +1087,7 @@ def _finish_success(storage: Storage, telegram_id: int, session: QuestMissionSes
     )
     reward = int((result.payload or {}).get("reward", 0))
     character = storage.get_character(telegram_id, refresh_energy=False)
-    if is_help or template is None or not template.return_home:
+    if is_ephemeral or template is None or not template.return_home:
         storage.set_active_contract(telegram_id, None)
         return ActionResult(
             True,
