@@ -17,8 +17,10 @@ FACTION_BOT_MAX_COUNT = 5
 
 BOT_T1_WEAPONS: tuple[str, ...] = ("ПМ", "Фора-12", "Обрез")
 BOT_T2_WEAPONS: tuple[str, ...] = ("Гадюка-5", "Чейзер-13", "АКС-74У")
+BOT_MONOLITH_WEAPONS: tuple[str, ...] = ("Гаусс-пушка", "Винтарь ВС", "АН-94")
 BOT_T1_ARMOR = "Кожаная куртка"
 BOT_T2_ARMOR = "Сталкерский бронежилет"
+BOT_MONOLITH_ARMOR = "Костюм СЕВА"
 
 
 def _meta_key(faction: str) -> str:
@@ -44,29 +46,35 @@ def get_faction_bots(storage: Storage, faction: str) -> dict[str, Any]:
     return default
 
 
-def bot_weapons_for_tier(tier: int) -> tuple[str, ...]:
+def bot_weapons_for_tier(tier: int, *, faction: str | None = None) -> tuple[str, ...]:
+    if faction == "Монолит":
+        return BOT_MONOLITH_WEAPONS
     return BOT_T2_WEAPONS if int(tier) >= 2 else BOT_T1_WEAPONS
 
 
-def bot_armor_for_tier(tier: int) -> str:
+def bot_armor_for_tier(tier: int, *, faction: str | None = None) -> str:
+    if faction == "Монолит":
+        return BOT_MONOLITH_ARMOR
     return BOT_T2_ARMOR if int(tier) >= 2 else BOT_T1_ARMOR
 
 
-def pick_bot_weapon(tier: int) -> str:
-    return random.choice(bot_weapons_for_tier(tier))
+def pick_bot_weapon(tier: int, *, faction: str | None = None) -> str:
+    return random.choice(bot_weapons_for_tier(tier, faction=faction))
 
 
 def build_faction_bots_overview(storage: Storage, faction: str) -> str:
     bots = get_faction_bots(storage, faction)
     tier = int(bots["tier"])
     count = int(bots["count"])
-    weapons = ", ".join(bot_weapons_for_tier(tier))
-    armor = bot_armor_for_tier(tier)
+    weapons = ", ".join(bot_weapons_for_tier(tier, faction=faction))
+    armor = bot_armor_for_tier(tier, faction=faction)
     lines = [
         f"🤖 Оборонительные боты: {count} шт.",
         f"Тир {tier}: {armor}, оружие — {weapons}.",
     ]
-    if tier < 2:
+    if faction == "Монолит":
+        lines.append("Боты Монолита: гаусс и элита (фикс. снаряга).")
+    elif tier < 2:
         lines.append(
             f"Улучшение до Т2 ({BOT_T2_ARMOR}, {', '.join(BOT_T2_WEAPONS)}): "
             f"{FACTION_BOT_UPGRADE_COST:,} RU из казны."

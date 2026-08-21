@@ -832,6 +832,7 @@ class Storage:
                     ("Свобода", 20000),
                     ("Нейтралы", 20000),
                     ("Бандиты", 20000),
+                    ("Монолит", 20000),
                 ],
             )
             conn.executemany(
@@ -848,6 +849,7 @@ class Storage:
                     ("Рыжий лес", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                     ("Радар", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                     ("Завод", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
+                    ("ЧАЭС", "база", "Монолит", BASE_LOCATION_NPC_POWER),
                 ],
             )
             # Для существующих БД фиксируем базовые владельцы и типы ключевых точек.
@@ -856,6 +858,9 @@ class Storage:
             )
             conn.execute(
                 "UPDATE locations SET point_type = 'база', controlled_by = 'Бандиты' WHERE name = 'Свалка'"
+            )
+            conn.execute(
+                "UPDATE locations SET point_type = 'база', controlled_by = 'Монолит' WHERE name = 'ЧАЭС'"
             )
             self._restore_from_snapshot_if_needed(conn)
             self._ensure_characters_schema(conn)

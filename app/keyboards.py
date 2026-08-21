@@ -993,11 +993,19 @@ def war_lobby_keyboard(
     locations: list[dict[str, str | int | None]],
     *,
     can_dissolve: bool = False,
+    monolith_join: bool = False,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="➕ Вступить в лобби", callback_data="war_lobby:join")],
         [InlineKeyboardButton(text="🚀 Запустить штурм (мин. 5 бойцов)", callback_data="war_lobby:launch")],
     ]
+    if monolith_join:
+        rows.append(
+            [InlineKeyboardButton(text="☢ Вступить в бой Монолита", callback_data="monolith_war:join")]
+        )
+        rows.append(
+            [InlineKeyboardButton(text="🤖 Послать ботов Монолита", callback_data="monolith_war:bots")]
+        )
     if can_dissolve:
         rows.append(
             [InlineKeyboardButton(text="🛑 Распустить лобби", callback_data="war_lobby:dissolve")]

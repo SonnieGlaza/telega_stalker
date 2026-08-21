@@ -404,7 +404,7 @@ def _spawn_hostiles(
         session.hostiles.append(cell)
         session.hostile_types.append("bot")
         session.hostile_kinds.append(pick_npc_kind())
-        session.hostile_weapons.append(pick_bot_weapon(bot_tier))
+        session.hostile_weapons.append(pick_bot_weapon(bot_tier, faction=session.target_faction))
         forbidden.add(cell)
 
     for _ in range(mutants):

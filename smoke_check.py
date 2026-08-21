@@ -515,6 +515,64 @@ def run_smoke_check() -> None:
         assert done_march is None or done_march.get("resolved")
         _clear_mission()
 
+        # Закрытая ГП Монолит + база ЧАЭС + окно боя 90/10.
+        from app.monolith_war import (
+            MONOLITH_BASE,
+            MONOLITH_FACTION,
+            begin_monolith_war_window,
+            filter_travel_locations_for_faction,
+            join_monolith_war,
+            resolve_pending_monolith_war,
+            save_pending_monolith_war,
+            send_monolith_bots,
+        )
+        from app.game_logic import admin_set_player_faction, FACTION_HOME_BASE
+
+        assert MONOLITH_BASE in {loc["name"] for loc in storage.get_locations()}
+        assert FACTION_HOME_BASE[MONOLITH_FACTION] == MONOLITH_BASE
+        chaes = storage.get_location(MONOLITH_BASE)
+        assert chaes is not None and chaes.get("controlled_by") == MONOLITH_FACTION
+        blocked = travel_to(storage, 111, MONOLITH_BASE)
+        assert not blocked.ok
+        visible = filter_travel_locations_for_faction(storage.get_locations(), "Долг")
+        assert MONOLITH_BASE not in {loc["name"] for loc in visible}
+        admin_set_player_faction(storage, target="111", faction=MONOLITH_FACTION)
+        mono = storage.get_character(111, refresh_energy=False)
+        assert mono is not None and mono.faction == MONOLITH_FACTION
+        assert mono.location == MONOLITH_BASE
+        ok_home = travel_to(storage, 222, MONOLITH_BASE)
+        assert not ok_home.ok
+        wid = storage.create_war_lobby("Долг", MONOLITH_BASE, 222)
+        storage.restore_energy(222, 100)
+        pending = begin_monolith_war_window(
+            storage,
+            war_id=wid,
+            location_name=MONOLITH_BASE,
+            host_faction="Долг",
+            attacker_ids=[222],
+            mode="defend",
+            energy_spent_ids=[222],
+        )
+        join_m = join_monolith_war(storage, 111)
+        assert join_m.ok, join_m.text
+        bots = send_monolith_bots(storage, 111)
+        # Лидер может быть не назначен — тогда ок; иначе нужен лидер.
+        assert bots.ok or "лидер" in bots.text.lower()
+        pending = dict(pending)
+        pending["expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        # Сбрасываем людей, чтобы проверить процентный исход.
+        pending["monolith_ids"] = []
+        pending["monolith_names"] = []
+        pending["bots_sent"] = True
+        pending["bot_count"] = 3
+        save_pending_monolith_war(storage, pending)
+        resolved = resolve_pending_monolith_war(storage, force=True)
+        assert resolved is not None and resolved.get("kind") == "percent"
+        storage.set_meta("monolith_war:pending", "")
+        # Вернём 111 в Долг для дальнейших smoke-тестов.
+        admin_set_player_faction(storage, target="111", faction="Долг")
+        storage.set_faction_leader("Долг", 111)
+
         # Сброс особого события, чтобы не мешать дальнейшим smoke-переходам.
         storage.set_meta("special_event:active", "")
         storage.set_meta("shop:stock:consumables", "")
@@ -2398,7 +2456,7 @@ def run_smoke_check() -> None:
         assert TOPUP_RATE_RU_PER_STAR == 150
         assert TRADER_SELL_CATALOG["weapons"][0] == "ammo_pack"
         assert "ammo_pack" not in TRADER_SELL_CATALOG["consumables"]
-        assert set(FACTION_LORE) == {"Долг", "Свобода", "Нейтралы", "Бандиты"}
+        assert set(FACTION_LORE) == {"Долг", "Свобода", "Нейтралы", "Бандиты", "Монолит"}
         for faction_name, lore in FACTION_LORE.items():
             assert "Как сформировал" in lore
             assert "Цель в Зоне" in lore

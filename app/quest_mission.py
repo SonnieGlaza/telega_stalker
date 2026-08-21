@@ -92,6 +92,8 @@ LOCATION_DANGER: dict[str, int] = {
     "Темная долина": 3,
     "Рыжий лес": 3,
     "Радар": 4,
+    "Завод": 4,
+    "ЧАЭС": 5,
 }
 
 DIFFICULTY_DANGER_BONUS: dict[str, int] = {

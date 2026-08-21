@@ -21,6 +21,7 @@ FACTION_SLUGS: dict[str, tuple[str, ...]] = {
     "Свобода": ("свобода", "svoboda", "freedom"),
     "Нейтралы": ("нейтралы", "нейтрал", "neutraly", "neutrals", "neutral"),
     "Бандиты": ("бандиты", "бандит", "bandity", "bandits", "bandit"),
+    "Монолит": ("монолит", "monolith", "монолита"),
 }
 
 FACTION_AVATAR_SIZE = 250

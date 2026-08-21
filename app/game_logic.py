@@ -376,6 +376,7 @@ MAP_TRAVEL_POINTS: dict[str, tuple[int, int]] = {
     "Рыжий лес": (730, 235),
     "Радар": (740, 125),
     "Завод": (690, 160),
+    "ЧАЭС": (780, 80),
 }
 
 # Сила растёт по ступеням: следующий класс оружия/брони обычно сильнее предыдущего.
@@ -1135,6 +1136,7 @@ FACTION_HOME_BASE: dict[str, str] = {
     "Свобода": "Армейские склады",
     "Нейтралы": "Кордон",
     "Бандиты": "Свалка",
+    "Монолит": "ЧАЭС",
 }
 
 # Лор для доната в казну группировки (показывается в ЛС).
@@ -1178,6 +1180,14 @@ FACTION_LORE: dict[str, str] = {
         "Контролировать хабар и дороги. Казна — общий котёл: стволы, бензин, откуп "
         "от чужих рейдов. Чем толще общак, тем громче имя на Свалке и тем тише "
         "ходят чужие по вашим тропам."
+    ),
+    "Монолит": (
+        "🏛 Как сформировался «Монолит»\n"
+        "Те, кто ушёл за Радар и услышал Зов. База на ЧАЭС — не для туристов: "
+        "сюда пускают только своих. Остальным Зона закрывает дорогу.\n\n"
+        "🎯 Цель в Зоне\n"
+        "Служить Монолиту. Бойцы и боты держат периметр; чужие группировки "
+        "ломают зубы о гаусс и процентный жребий, если живые не вышли в поле."
     ),
 }
 
@@ -1486,6 +1496,8 @@ class WarLobbyResult:
     text: str
     notify_member_ids: tuple[int, ...] = ()
     tactical_cwar: bool = False
+    monolith_pending: bool = False
+    monolith_notify_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -3574,7 +3586,7 @@ def admin_delete_player_account(storage: Storage, telegram_id: int) -> ActionRes
     return ActionResult(True, "\n".join(parts))
 
 
-VALID_ADMIN_FACTIONS = ("Долг", "Свобода", "Нейтралы", "Бандиты")
+VALID_ADMIN_FACTIONS = ("Долг", "Свобода", "Нейтралы", "Бандиты", "Монолит")
 
 
 def admin_set_player_faction(
@@ -5890,6 +5902,14 @@ def travel_to(
     if destination not in locations:
         return ActionResult(False, "Такой локации нет.")
 
+    from app.monolith_war import MONOLITH_BASE, MONOLITH_FACTION
+
+    if destination == MONOLITH_BASE and character.faction != MONOLITH_FACTION:
+        return ActionResult(
+            False,
+            f"«{MONOLITH_BASE}» — закрытая база Монолита. Чужим вход запрещён.",
+        )
+
     bound_transport = storage.get_bound_transport(telegram_id)
     if bound_transport in ("niva", "truck"):
         vehicle_label = _vehicle_label_for_key(bound_transport)
@@ -7809,20 +7829,35 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
     host_faction = str(lobby.get("host_faction") or leader.faction)
     member_ids = tuple(storage.get_war_lobby_member_ids(war_id))
     members = [m for m in storage.get_characters_by_ids(member_ids) if m.health > 0 and m.faction]
-    if len(members) < WAR_MIN_FACTION_MEMBERS:
+    from app.monolith_war import MONOLITH_FACTION
+    from app.faction_bots import get_faction_bots
+
+    monolith_bot_pad = 0
+    if host_faction == MONOLITH_FACTION:
+        monolith_bot_pad = int(get_faction_bots(storage, MONOLITH_FACTION).get("count") or 0)
+    if len(members) < WAR_MIN_FACTION_MEMBERS and len(members) + monolith_bot_pad < WAR_MIN_FACTION_MEMBERS:
         return WarLobbyResult(
             False,
-            f"Для запуска нужно минимум {WAR_MIN_FACTION_MEMBERS} живых бойцов.",
+            f"Для запуска нужно минимум {WAR_MIN_FACTION_MEMBERS} живых бойцов"
+            + (" (или ботов Монолита)." if host_faction == MONOLITH_FACTION else "."),
         )
+    if len(members) < 1:
+        return WarLobbyResult(False, "В лобби нет живых бойцов.")
     active: list[Character] = []
     spent_ids: list[int] = []
     for member in members:
         if storage.spend_energy(member.telegram_id, WAR_LOBBY_ENERGY_COST):
             active.append(member)
             spent_ids.append(member.telegram_id)
-    if len(active) < WAR_MIN_FACTION_MEMBERS:
+    min_humans = 1 if (host_faction == MONOLITH_FACTION and monolith_bot_pad > 0) else WAR_MIN_FACTION_MEMBERS
+    if len(active) < min_humans or (
+        host_faction != MONOLITH_FACTION and len(active) < WAR_MIN_FACTION_MEMBERS
+    ):
         _refund_spent_energy(storage, spent_ids, WAR_LOBBY_ENERGY_COST)
         return WarLobbyResult(False, "Недостаточно энергии у бойцов лобби.")
+    if host_faction == MONOLITH_FACTION and len(active) + monolith_bot_pad < WAR_MIN_FACTION_MEMBERS:
+        _refund_spent_energy(storage, spent_ids, WAR_LOBBY_ENERGY_COST)
+        return WarLobbyResult(False, "Недостаточно бойцов и ботов Монолита для запуска.")
     target = storage.get_location(location_name)
     if target is None:
         _refund_spent_energy(storage, spent_ids, WAR_LOBBY_ENERGY_COST)
@@ -7831,6 +7866,57 @@ def launch_war_lobby(storage: Storage, telegram_id: int) -> WarLobbyResult:
         _refund_spent_energy(storage, spent_ids, WAR_LOBBY_ENERGY_COST)
         return WarLobbyResult(False, "Нельзя штурмовать свою или союзническую точку.")
     member_id_list = [m.telegram_id for m in active]
+    from app.monolith_war import (
+        MONOLITH_FACTION,
+        begin_monolith_war_window,
+        should_defer_war_for_monolith,
+    )
+    from app.faction_bots import get_faction_bots
+
+    defer_mode = should_defer_war_for_monolith(
+        storage,
+        host_faction=host_faction,
+        location_name=location_name,
+    )
+    # Монолит может выйти с ботами, даже если людей меньше минимума.
+    if defer_mode is None and host_faction == MONOLITH_FACTION:
+        bots = get_faction_bots(storage, MONOLITH_FACTION)
+        if len(active) + int(bots.get("count") or 0) >= WAR_MIN_FACTION_MEMBERS:
+            defer_mode = "attack"
+
+    if defer_mode is not None:
+        pending = begin_monolith_war_window(
+            storage,
+            war_id=war_id,
+            location_name=location_name,
+            host_faction=host_faction,
+            attacker_ids=member_id_list,
+            mode=defer_mode,
+            energy_spent_ids=spent_ids,
+        )
+        if defer_mode == "attack" and host_faction == MONOLITH_FACTION:
+            # Авто-посылка ботов, если людей меньше минимума.
+            if len(active) < WAR_MIN_FACTION_MEMBERS:
+                from app.monolith_war import save_pending_monolith_war
+
+                bots = get_faction_bots(storage, MONOLITH_FACTION)
+                pending["bots_sent"] = True
+                pending["bot_count"] = int(bots.get("count") or 0)
+                save_pending_monolith_war(storage, pending)
+        monolith_ids = storage.list_faction_member_ids(MONOLITH_FACTION)
+        mode_ru = "оборона базы" if defer_mode == "defend" else "атака"
+        return WarLobbyResult(
+            True,
+            (
+                f"☢ Окно Монолита открыто ({mode_ru}): «{location_name}», "
+                f"~15 мин. Монолит: вступи в бой или пошли ботов.\n"
+                f"Без живых — авто-исход 90/10."
+            ),
+            tuple(member_id_list),
+            monolith_pending=True,
+            monolith_notify_ids=tuple(int(x) for x in monolith_ids),
+        )
+
     from app.clan_war_grid import start_clan_war_grid
 
     tactical_result, cwar_session = start_clan_war_grid(
@@ -8658,7 +8744,7 @@ def apply_controlled_points_income(storage: Storage) -> ActionResult:
 
 
 PLAYERS_PAGE_SIZE = 10
-PLAYERS_FACTION_ORDER = ("Долг", "Свобода", "Нейтралы", "Бандиты")
+PLAYERS_FACTION_ORDER = ("Долг", "Свобода", "Нейтралы", "Бандиты", "Монолит")
 PLAYERS_NO_FACTION_KEY = "_none"
 PLAYERS_NO_FACTION_LABEL = "Без группировки"
 

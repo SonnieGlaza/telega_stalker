@@ -1168,7 +1168,7 @@ async def admin_set_faction(message: Message, bot: Bot, command: CommandObject) 
         await message.answer(
             "Использование: /setfaction [telegram_id|прозвище] [группировка]\n"
             "Пример: /setfaction Воробей Нейтралы\n"
-            "Группировки: Долг, Свобода, Нейтралы, Бандиты"
+            "Группировки: Долг, Свобода, Нейтралы, Бандиты, Монолит"
         )
         return
     target, faction = parts[0].strip(), parts[1].strip()
@@ -7093,7 +7093,9 @@ async def show_travel(message: Message) -> None:
     if await reject_if_busy(message, player.telegram_id, skip="travel"):
         return
     db = get_storage()
-    locations = db.get_locations()
+    from app.monolith_war import filter_travel_locations_for_faction
+
+    locations = filter_travel_locations_for_faction(db.get_locations(), player.faction)
     traveling = is_traveling(player)
     if traveling:
         loc = format_location_display(player)
@@ -7141,7 +7143,11 @@ async def travel_back_callback(callback: CallbackQuery) -> None:
     if player is None:
         await callback.answer("Сначала создай персонажа.", show_alert=True)
         return
-    locations = get_storage().get_locations()
+    from app.monolith_war import filter_travel_locations_for_faction
+
+    locations = filter_travel_locations_for_faction(
+        get_storage().get_locations(), player.faction
+    )
     traveling = bool(player.travel_destination)
     text = (
         "Выбери локацию, затем транспорт.\n\n"
@@ -7356,9 +7362,15 @@ async def _show_war_lobby_menu(callback: CallbackQuery, bot: Bot) -> None:
     if player is None:
         return
     overview = build_war_lobby_overview(db, player.telegram_id)
+    from app.monolith_war import monolith_join_button_visible, monolith_war_status_line
+
+    mono_line = monolith_war_status_line(db)
+    if mono_line:
+        overview = f"{overview}\n\n⚠ {mono_line}"
     markup = war_lobby_keyboard(
         list_assaultable_locations(db, player.faction or ""),
         can_dissolve=can_dissolve_war_lobby(db, player.telegram_id),
+        monolith_join=monolith_join_button_visible(db, player.telegram_id),
     )
     session = get_cwar_session_by_player(db, player.telegram_id)
     if session is not None:
@@ -7433,7 +7445,43 @@ async def war_lobby_launch_callback(callback: CallbackQuery, bot: Bot) -> None:
             await _broadcast_cwar_session(bot, storage, session, note=result.text)
             await safe_callback_answer(callback, "Тактический штурм!")
             return
+    if result.ok and result.monolith_pending:
+        from app.monolith_war import format_monolith_war_call, get_pending_monolith_war
+        from aiogram.enums import ParseMode
+
+        storage = get_storage()
+        pending = get_pending_monolith_war(storage)
+        html = format_monolith_war_call(pending) if pending else result.text
+        notify = set(result.monolith_notify_ids) | set(result.notify_member_ids)
+        for uid in notify:
+            try:
+                await bot.send_message(uid, html, parse_mode=ParseMode.HTML)
+            except Exception:
+                logger.debug("Failed monolith war notify to %s", uid)
+        await reply_action_result(callback, result.text)
+        await _refresh_war_lobby_menu(callback, bot)
+        return
     await deliver_group_result(callback, bot, result, prefix="📣 Итог штурма:")
+    if result.ok:
+        await _refresh_war_lobby_menu(callback, bot)
+
+
+@router.callback_query(F.data == "monolith_war:join")
+async def monolith_war_join_callback(callback: CallbackQuery, bot: Bot) -> None:
+    from app.monolith_war import join_monolith_war
+
+    result = join_monolith_war(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+    if result.ok:
+        await _refresh_war_lobby_menu(callback, bot)
+
+
+@router.callback_query(F.data == "monolith_war:bots")
+async def monolith_war_bots_callback(callback: CallbackQuery, bot: Bot) -> None:
+    from app.monolith_war import send_monolith_bots
+
+    result = send_monolith_bots(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
     if result.ok:
         await _refresh_war_lobby_menu(callback, bot)
 
@@ -8934,6 +8982,29 @@ async def run_bot() -> None:
                         logger.exception("Failed to post special event to common chat")
             except Exception:
                 logger.exception("Special event cycle tick failed")
+            try:
+                from app.monolith_war import process_monolith_war_cycle
+
+                mono_payload = process_monolith_war_cycle(get_storage())
+                if mono_payload:
+                    storage = get_storage()
+                    text = str(mono_payload.get("text") or "")
+                    for uid in mono_payload.get("notify_ids") or []:
+                        try:
+                            await bot.send_message(int(uid), text)
+                        except Exception:
+                            logger.debug("Failed monolith war resolve notify to %s", uid)
+                    if mono_payload.get("kind") == "tactical":
+                        session = mono_payload.get("session")
+                        if session is not None:
+                            await _broadcast_cwar_session(
+                                bot,
+                                storage,
+                                session,
+                                note=text,
+                            )
+            except Exception:
+                logger.exception("Monolith war cycle tick failed")
             try:
                 season_message = process_rating_season(get_storage())
                 if season_message:

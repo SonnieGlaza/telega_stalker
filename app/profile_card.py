@@ -130,6 +130,8 @@ def _faction_color(faction: str | None) -> tuple[int, int, int]:
         return (145, 145, 145)
     if faction == "Бандиты":
         return (165, 120, 55)
+    if faction == "Монолит":
+        return (190, 175, 55)
     return (110, 110, 130)
 
 
@@ -145,6 +147,8 @@ def _location_color(location: str) -> tuple[int, int, int]:
         "Янтарь": (130, 125, 75),
         "Темная долина": (120, 90, 90),
         "Радар": (105, 85, 125),
+        "Завод": (110, 70, 70),
+        "ЧАЭС": (150, 140, 50),
         "База новичков": (100, 105, 120),
     }
     return mapping.get(location, (95, 95, 95))

@@ -118,6 +118,10 @@ class ClanWarGridSession:
     capture_progress: int = 0
     finished: bool = False
     success: bool = False
+    # Оборона Монолита: игроки — монолитовцы; провал отдаёт точку захватчикам.
+    monolith_defense: bool = False
+    invader_faction: str = ""
+    extra_defenders: int = 0
     log: list[str] = field(default_factory=list)
     message_ids: dict[str, int] = field(default_factory=dict)
     death_causes: dict[str, str] = field(default_factory=dict)
@@ -161,6 +165,9 @@ class ClanWarGridSession:
             "capture_progress": self.capture_progress,
             "finished": self.finished,
             "success": self.success,
+            "monolith_defense": self.monolith_defense,
+            "invader_faction": self.invader_faction,
+            "extra_defenders": self.extra_defenders,
             "log": self.log[-14:],
             "message_ids": {str(k): int(v) for k, v in self.message_ids.items()},
             "death_causes": dict(self.death_causes),
@@ -195,6 +202,9 @@ class ClanWarGridSession:
             capture_progress=int(raw.get("capture_progress") or 0),
             finished=bool(raw.get("finished")),
             success=bool(raw.get("success")),
+            monolith_defense=bool(raw.get("monolith_defense")),
+            invader_faction=str(raw.get("invader_faction") or ""),
+            extra_defenders=max(0, int(raw.get("extra_defenders") or 0)),
             log=[str(x) for x in (raw.get("log") or [])],
             message_ids={str(k): int(v) for k, v in (raw.get("message_ids") or {}).items()},
             death_causes={str(k): str(v) for k, v in (raw.get("death_causes") or {}).items()},
@@ -313,7 +323,9 @@ def _build_map(session: ClanWarGridSession) -> None:
         forbidden.add(cell)
     defender_count = min(
         CWAR_DEFENDER_COUNT_MAX,
-        CWAR_DEFENDER_COUNT + session.defense_bonus * CWAR_DEFENSE_BONUS_EXTRA_DEFENDERS,
+        CWAR_DEFENDER_COUNT
+        + session.defense_bonus * CWAR_DEFENSE_BONUS_EXTRA_DEFENDERS
+        + max(0, int(session.extra_defenders)),
     )
     for _ in range(defender_count):
         cell = _free_cell(grid, forbidden | set(session.base_cover))
@@ -411,6 +423,34 @@ def _check_capture(session: ClanWarGridSession) -> bool:
 
 
 def _finalize_success(storage: Storage, session: ClanWarGridSession) -> ActionResult:
+    if session.monolith_defense:
+        # Монолит удержал точку — штурм захватчиков провален.
+        storage.set_location_control(session.location_name, session.host_faction)
+        storage.finish_war_lobby(
+            session.war_id,
+            "failed",
+            f"Монолит отбил штурм на «{session.location_name}»",
+        )
+        paid = 0
+        for pid in session.player_ids:
+            if session.hp.get(str(pid), 0) <= 0:
+                continue
+            storage.add_player_stat(pid, "wars_won", 1)
+            storage.change_money(pid, WAR_SUCCESS_PAY_RU)
+            storage.add_player_stat(pid, "money_earned", WAR_SUCCESS_PAY_RU)
+            _add_rating(storage, pid, RATING_REWARD["war_success"])
+            paid += 1
+        text = (
+            f"🏆 Монолит удержал «{session.location_name}»!\n"
+            f"Штурм «{session.invader_faction or '?'}» отбит.\n"
+            f"Награда защитникам: {paid}×{WAR_SUCCESS_PAY_RU} RU."
+        )
+        return ActionResult(
+            True,
+            text,
+            payload={"cwar_done": True, "success": True, "member_ids": session.player_ids},
+        )
+
     target = storage.get_location(session.location_name) or {}
     previous_owner = str(target.get("controlled_by") or "")
     captured_enemy_base = (
@@ -459,6 +499,25 @@ def _finalize_success(storage: Storage, session: ClanWarGridSession) -> ActionRe
 
 
 def _finalize_fail(storage: Storage, session: ClanWarGridSession, reason: str) -> ActionResult:
+    if session.monolith_defense and session.invader_faction:
+        storage.set_location_control(session.location_name, session.invader_faction)
+        storage.finish_war_lobby(
+            session.war_id,
+            "success",
+            f"Монолит сдал «{session.location_name}»: {session.invader_faction}",
+        )
+        for pid in session.player_ids:
+            _add_rating(storage, pid, -RATING_REWARD["war_fail"])
+        text = (
+            f"💀 Монолит потерял «{session.location_name}».\n"
+            f"{reason}\n"
+            f"Контроль у «{session.invader_faction}». −{RATING_REWARD['war_fail']} рейтинга защитникам."
+        )
+        return ActionResult(
+            False,
+            text,
+            payload={"cwar_done": True, "success": False, "member_ids": session.player_ids},
+        )
     storage.finish_war_lobby(session.war_id, "failed", reason)
     for pid in session.player_ids:
         _add_rating(storage, pid, -RATING_REWARD["war_fail"])
@@ -522,6 +581,9 @@ def start_clan_war_grid(
     location_name: str,
     host_faction: str,
     player_ids: list[int],
+    monolith_defense: bool = False,
+    invader_faction: str = "",
+    extra_defenders: int = 0,
 ) -> tuple[ActionResult, ClanWarGridSession | None]:
     from app.player_busy import player_busy_reason
 
@@ -550,6 +612,9 @@ def start_clan_war_grid(
         host_faction=host_faction,
         player_ids=list(player_ids),
         defense_bonus=defense_bonus,
+        monolith_defense=bool(monolith_defense),
+        invader_faction=str(invader_faction or ""),
+        extra_defenders=max(0, int(extra_defenders)),
         turn_order=list(player_ids),
         turn_deadline=_deadline_iso(CWAR_TURN_SECONDS),
         match_deadline=_deadline_iso(CWAR_MATCH_SECONDS),
