@@ -33,10 +33,11 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📟 КПК"), KeyboardButton(text="📋 Задания")],
-            [KeyboardButton(text="🎒 Инвентарь"), KeyboardButton(text="🏕 Вылазка")],
-            [KeyboardButton(text="🛒 Торговец"), KeyboardButton(text="🏦 Барахолка")],
-            [KeyboardButton(text="🛰 События"), KeyboardButton(text="👥 Группировка")],
-            [KeyboardButton(text="ℹ️ Информация"), KeyboardButton(text="⭐ Пополнить")],
+            [KeyboardButton(text="🎒 Инвентарь"), KeyboardButton(text="📡 Статус")],
+            [KeyboardButton(text="🏕 Вылазка"), KeyboardButton(text="🛒 Торговец")],
+            [KeyboardButton(text="🏦 Барахолка"), KeyboardButton(text="🛰 События")],
+            [KeyboardButton(text="👥 Группировка"), KeyboardButton(text="ℹ️ Информация")],
+            [KeyboardButton(text="⭐ Пополнить")],
         ],
         resize_keyboard=True,
     )
@@ -58,11 +59,12 @@ def pda_keyboard(*, is_leader: bool = False) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [
         [KeyboardButton(text="🧾 Профиль"), KeyboardButton(text="💬 Чаты")],
         [KeyboardButton(text="🏆 Рейтинг"), KeyboardButton(text="🗺 Карта")],
-        [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="💎 Находки")],
-        [KeyboardButton(text="💎 Арты"), KeyboardButton(text="📊 Дроп")],
-        [KeyboardButton(text="☠️ Смерти"), KeyboardButton(text="📊 Статистика")],
-        [KeyboardButton(text="📅 Ежедневка"), KeyboardButton(text="🔔 Уведомления")],
-        [KeyboardButton(text="🔥 Как не сдохнуть"), KeyboardButton(text="🏛 Клановые задачи")],
+        [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="🤝 Обмен")],
+        [KeyboardButton(text="💎 Находки"), KeyboardButton(text="💎 Арты")],
+        [KeyboardButton(text="📊 Дроп"), KeyboardButton(text="☠️ Смерти")],
+        [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="📅 Ежедневка")],
+        [KeyboardButton(text="🔔 Уведомления"), KeyboardButton(text="🔥 Как не сдохнуть")],
+        [KeyboardButton(text="🏛 Клановые задачи")],
     ]
     if is_leader:
         rows[-1].append(KeyboardButton(text="📣 Сбор"))
@@ -1281,6 +1283,33 @@ def economy_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🛒 Рынок: выставить экипировку", callback_data="eco:market:create:choose")],
             [InlineKeyboardButton(text="🛑 Рынок: снять мой лот", callback_data="eco:market:cancel:mine")],
             [InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:menu")],
+        ]
+    )
+
+
+def bazaar_confirm_buy_kb(kind: str, lot_id: int, back_cb: str) -> InlineKeyboardMarkup:
+    """kind: market | auction."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтвердить покупку",
+                    callback_data=f"eco:{kind}:confirm:{lot_id}",
+                )
+            ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_cb)],
+        ]
+    )
+
+
+def trade_offer_keyboard(from_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Принять", callback_data=f"trade:accept:{from_id}"),
+                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"trade:decline:{from_id}"),
+            ],
+            [InlineKeyboardButton(text="🚫 Отменить (инициатор)", callback_data=f"trade:cancel:{from_id}")],
         ]
     )
 

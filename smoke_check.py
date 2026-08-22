@@ -2161,6 +2161,7 @@ def run_smoke_check() -> None:
         end_message = process_rating_season(storage)
         assert end_message
         assert "Чемпион Зоны" in end_message
+        assert "Награды казне группировок" in end_message or "казну" in end_message.lower()
         inv111 = storage.get_character(111, refresh_energy=False).inventory
         assert inv111.get("weapon_season_champion", 0) >= 1
         assert inv111.get("armor_season_champion", 0) >= 1
@@ -3031,6 +3032,135 @@ def run_smoke_check() -> None:
         await_finish = asyncio.run(bot_mod.finish_travel_eta_message(storage, 111))
         assert await_finish is None
         assert 111 not in bot_mod._travel_eta_locks
+
+        # Next-features pack: status, bazaar tax/confirm, trade, faction power cap.
+        from app.game_logic import (
+            BAZAAR_FACTION_TAX_PERCENT,
+            EXCHANGE_SELL_FEE_PERCENT,
+            FACTION_RATING_POWER_CAP_PER_MEMBER,
+            FACTION_SEASON_TREASURY_REWARDS,
+            build_faction_rating_overview,
+            build_quick_status_text,
+            compute_faction_dynamic_ratings,
+            create_custom_exchange_lot,
+            preview_bazaar_lot,
+            buy_exchange_lot,
+        )
+        from app.player_trade import (
+            accept_trade_offer,
+            create_trade_offer,
+            decline_trade_offer,
+            get_trade_offer,
+        )
+        from app.keyboards import (
+            bazaar_confirm_buy_kb,
+            main_menu_keyboard,
+            pda_keyboard,
+            trade_offer_keyboard,
+        )
+        from app.fsm_nav import REPLY_NAV_BUTTONS
+
+        status_text = build_quick_status_text(storage, 111)
+        assert "Статус" in status_text
+        assert "LeaderDuty" in status_text
+        menu_labels = {btn.text for row in main_menu_keyboard().keyboard for btn in row}
+        assert "📡 Статус" in menu_labels
+        pda_labels = {btn.text for row in pda_keyboard(is_leader=True).keyboard for btn in row}
+        assert "🤝 Обмен" in pda_labels
+        assert "📡 Статус" in REPLY_NAV_BUTTONS
+        assert "🤝 Обмен" in REPLY_NAV_BUTTONS
+
+        eco_text = build_economy_overview(storage, 111)
+        assert f"{BAZAAR_FACTION_TAX_PERCENT}%" in eco_text
+        assert FACTION_SEASON_TREASURY_REWARDS[1] == 25000
+
+        ratings = compute_faction_dynamic_ratings(storage)
+        assert ratings
+        for row in ratings:
+            assert int(row["power_sum"]) <= int(row["power_cap"])
+            assert int(row["power_cap"]) == FACTION_RATING_POWER_CAP_PER_MEMBER * max(
+                1, int(row["members"])
+            )
+        faction_overview = build_faction_rating_overview(storage, 111)
+        assert "потолок" in faction_overview.lower()
+
+        def _treasury(faction: str) -> int:
+            with storage._connect() as conn:
+                row = conn.execute(
+                    "SELECT treasury FROM factions WHERE name = ?", (faction,)
+                ).fetchone()
+            return int(row["treasury"] or 0) if row else 0
+
+        storage.add_item(111, "medkit", 3)
+        storage.change_money(222, 50_000)
+        before_treasury = _treasury("Долг")
+        lot_price = 1000
+        lot_res = create_custom_exchange_lot(storage, 111, "medkit", 1, price=lot_price)
+        assert lot_res.ok, lot_res.text
+        open_lots = [
+            a
+            for a in storage.list_open_auctions()
+            if int(a["seller_id"]) == 111 and str(a["item_key"]) == "medkit"
+        ]
+        assert open_lots
+        lot_id = int(open_lots[-1]["id"])
+        preview = preview_bazaar_lot(storage, lot_id, market=False)
+        assert preview.ok, preview.text
+        assert "Подтверди" in preview.text
+        confirm_kb = bazaar_confirm_buy_kb("auction", lot_id, "eco:auction:list")
+        assert any(
+            (btn.callback_data or "").startswith("eco:auction:confirm:")
+            for row in confirm_kb.inline_keyboard
+            for btn in row
+        )
+        buy_res = buy_exchange_lot(storage, 222, lot_id)
+        assert buy_res.ok, buy_res.text
+        fee = max(1, int(round(lot_price * (EXCHANGE_SELL_FEE_PERCENT / 100))))
+        expected_tax = max(0, min(fee, int(round(lot_price * (BAZAAR_FACTION_TAX_PERCENT / 100)))))
+        after_treasury = _treasury("Долг")
+        assert after_treasury == before_treasury + expected_tax
+
+        # Same location for trade.
+        storage.clear_travel(111)
+        storage.clear_travel(222)
+        from app.player_busy import force_clear_live_player_sessions, player_busy_reason
+
+        force_clear_live_player_sessions(storage, 111)
+        force_clear_live_player_sessions(storage, 222)
+        storage.clear_travel(111)
+        storage.clear_travel(222)
+        assert player_busy_reason(storage, 111, auto_recover=False) is None, player_busy_reason(
+            storage, 111, auto_recover=False
+        )
+        assert player_busy_reason(storage, 222, auto_recover=False) is None, player_busy_reason(
+            storage, 222, auto_recover=False
+        )
+        p111 = storage.get_character(111, refresh_energy=False)
+        assert p111 is not None
+        storage.set_location(222, p111.location)
+        storage.change_money(111, 5000)
+        money_before_222 = storage.get_character(222, refresh_energy=False).money
+        offer = create_trade_offer(storage, 111, 222, kind="money", amount=250)
+        assert offer.ok, offer.text
+        assert get_trade_offer(storage, 111) is not None
+        tokb = trade_offer_keyboard(111)
+        assert any(
+            (b.callback_data or "").startswith("trade:accept:")
+            for r in tokb.inline_keyboard
+            for b in r
+        )
+        accepted = accept_trade_offer(storage, 111, 222)
+        assert accepted.ok, accepted.text
+        assert storage.get_character(222, refresh_energy=False).money == money_before_222 + 250
+        assert get_trade_offer(storage, 111) is None
+
+        storage.add_item(111, "vodka", 2)
+        offer2 = create_trade_offer(storage, 111, 222, kind="item", item_key="vodka", amount=1)
+        assert offer2.ok, offer2.text
+        declined = decline_trade_offer(storage, 111, 222)
+        assert declined.ok, declined.text
+        assert get_trade_offer(storage, 111) is None
+        assert int(storage.get_character(111, refresh_energy=False).inventory.get("vodka", 0)) >= 2
 
         from app.ephemeral_messages import (
             EPHEMERAL_QUEUE_META,

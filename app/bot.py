@@ -182,6 +182,7 @@ from app.game_logic import (
     build_economy_overview,
     build_faction_group_overview,
     build_events_overview,
+    build_quick_status_text,
     build_raids_overview,
     build_rating_overview,
     build_season_rating_overview,
@@ -297,6 +298,8 @@ from app.game_logic import (
     transfer_location_to_ally,
     create_market_lot,
     buy_market_lot,
+    preview_bazaar_lot,
+    BAZAAR_FACTION_TAX_PERCENT,
     build_market_lots_overview,
     list_sellable_market_equipment,
     cancel_own_first_market_lot,
@@ -352,6 +355,8 @@ from app.game_logic import (
 )
 from app.keyboards import (
     economy_keyboard,
+    bazaar_confirm_buy_kb,
+    trade_offer_keyboard,
     smuggling_keyboard,
     faction_group_keyboard,
     faction_change_keyboard,
@@ -485,6 +490,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(command="top", description="Топ по деньгам и артам"),
         BotCommand(command="cancel", description="Отменить ввод"),
         BotCommand(command="pay", description="Перевод RU по id или нику"),
+        BotCommand(command="trade", description="Обмен 1-в-1 на локации"),
         BotCommand(command="duel", description="Вызвать на дуэль"),
         BotCommand(command="respawn", description="Респавн, если мёртв"),
         BotCommand(command="fixme", description="Сброс зависшей вылазки"),
@@ -1540,8 +1546,8 @@ def _build_info_text(player: Character) -> str:
         "• 👥 Группировка — склад/казна/гараж: сдать может любой; забрать склад/гараж с 5 ранга, "
         "ранги 1–4 — запрос на аренду авто. В гараже канистры и сданные Нивы/грузовики; "
         "техника из гаража — аренда 30 мин, перед сдачей грузовика — полный ремонт.\n"
-        "• 🏦 Барахолка — биржа (расходники/артефакты/топливо, «свой лот», покупка по номеру ячейки), "
-        "рынок снаряжения, перевозка контрабанды.\n"
+        "• 🏦 Барахолка — биржа (расходники/артефакты/топливо, «свой лот», покупка с подтверждением), "
+        f"рынок снаряжения (налог {BAZAAR_FACTION_TAX_PERCENT}% в казну ГП продавца), перевозка контрабанды.\n"
         "• 📋 Задания — контракты с переездом (есть 🗓 контракты дня и 📅 контракт недели "
         f"с бонусом +{DAILY_CONTRACT_BONUS_PERCENT}%/+{WEEKLY_CONTRACT_BONUS_PERCENT}% RU); "
         "контрабанда — рисковый курьерский рейс.\n\n"
@@ -1552,6 +1558,8 @@ def _build_info_text(player: Character) -> str:
         "• /info — эта справка.\n"
         "• /season — когда закончится сезонный рейтинг (дата и время).\n"
         f"• /pay [id|ник] [сумма] — перевод (комиссия {TRANSFER_FEE_PERCENT}%).\n"
+        "• /обмен [id|ник] [сумма] — отдать RU рядом стоящему.\n"
+        "• /обмен [id|ник] [предмет] [кол-во] — отдать предмет (ключ или название).\n"
         "• /дуэль [id|ник] — вызвать на дуэль (ID в КПК → Игроки).\n"
         f"  Проигравший: HP опускается до {DUEL_LOSER_HP_REMAINING}, "
         f"−{DUEL_LOSER_MONEY_PERCENT}% денег (макс. {DUEL_LOSER_MONEY_CAP} RU).\n"
@@ -1600,7 +1608,8 @@ def _build_info_text(player: Character) -> str:
         "если зачистил ≥1 волну — даже при падении.\n"
         "• 🎖 Скины по рейтингу: 0 / 500 / 2000 / 5000.\n"
         "• 📅 Сезон рейтинга: раз в 14 дней топ-3 получает эксклюзивную снарягу "
-        "(🥇 пушка+броня, 🥈 пушка, 🥉 броня; у торговца не продаётся).\n\n"
+        "(🥇 пушка+броня, 🥈 пушка, 🥉 броня; у торговца не продаётся); "
+        "топ-3 ГП получают RU в казну.\n\n"
         "Чаты и рефералка: 📟 КПК → 💬 Чаты.\n"
         f"Канал обновлений: {UPDATE_CHANNEL}"
     )
@@ -5982,6 +5991,16 @@ async def show_death_log_callback(callback: CallbackQuery) -> None:
         await callback.message.answer(text)
 
 
+@router.message(F.text == "📡 Статус")
+async def show_quick_status(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    text = build_quick_status_text(get_storage(), player.telegram_id)
+    await message.answer(text, reply_markup=main_menu_keyboard())
+
+
 @router.message(F.text == "📟 КПК")
 async def show_pda(message: Message) -> None:
     player = ensure_character(message)
@@ -6858,6 +6877,208 @@ async def pay_command(message: Message, bot: Bot, command: CommandObject) -> Non
     result = transfer_money_with_fee(storage, sender_id, target_telegram_id, amount)
     await message.answer(action_result_text(sender_id, result.text))
     await apply_action_notifies(bot, result)
+
+
+def _resolve_trade_item_key(token: str) -> str | None:
+    raw = (token or "").strip().lower()
+    if not raw:
+        return None
+    if raw in ITEM_LABELS:
+        return raw
+    for key, label in ITEM_LABELS.items():
+        if str(label).strip().lower() == raw:
+            return key
+    return None
+
+
+def _trade_help_text() -> str:
+    return (
+        "🤝 Обмен 1-в-1\n\n"
+        "Нужно стоять на одной локации с другим сталкером.\n"
+        "• /обмен [id|ник] [сумма] — отдать RU\n"
+        "• /обмен [id|ник] [предмет] [кол-во] — отдать предмет "
+        "(ключ вроде medkit или название «Аптечка»)\n"
+        "• /обмен отмена — снять своё предложение\n\n"
+        "Получатель принимает кнопками в личке бота. "
+        "Оружие/броню через обмен не передаём — только барахолка."
+    )
+
+
+async def _deliver_trade_offer(bot: Bot, sender_id: int, result: Any) -> str:
+    reply = action_result_text(sender_id, result.text)
+    if not result.ok:
+        return reply
+    payload = getattr(result, "payload", None) or {}
+    offer = payload.get("offer") if isinstance(payload, dict) else None
+    if not isinstance(offer, dict):
+        await apply_action_notifies(bot, result)
+        return reply
+    to_id = int(offer.get("to_id") or 0)
+    from_id = int(offer.get("from_id") or sender_id)
+    notify_text = ""
+    for uid, text in action_notify_pairs(result):
+        if int(uid) == to_id:
+            notify_text = text
+            break
+    if to_id <= 0 or not notify_text:
+        return reply
+    try:
+        await bot.send_message(
+            to_id,
+            action_result_text(to_id, notify_text),
+            reply_markup=trade_offer_keyboard(from_id),
+        )
+    except Exception:
+        logger.exception("Failed to deliver trade offer to %s", to_id)
+        reply = (
+            f"{reply}\n\nПредложение сохранено, но сообщение не доставлено "
+            "(получатель должен написать боту /start)."
+        )
+    return reply
+
+
+@router.message(F.text == "🤝 Обмен")
+async def show_trade_help(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
+        return
+    await message.answer(_trade_help_text(), reply_markup=_pda_keyboard_for(player))
+
+
+@router.message(Command("обмен"), F.chat.type == "private")
+@router.message(Command("obmen"), F.chat.type == "private")
+@router.message(Command("trade"), F.chat.type == "private")
+async def trade_command(message: Message, bot: Bot, command: CommandObject) -> None:
+    from app.player_trade import (
+        cancel_trade_offer,
+        create_trade_offer,
+    )
+
+    sender_id = message.from_user.id
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
+        return
+    if await reject_if_busy(message, sender_id):
+        return
+
+    args = (command.args or "").strip()
+    if not args:
+        await message.answer(_trade_help_text())
+        return
+    parts = args.split()
+    if len(parts) == 1 and parts[0].lower() in {"отмена", "cancel", "stop"}:
+        result = cancel_trade_offer(get_storage(), sender_id)
+        await message.answer(action_result_text(sender_id, result.text))
+        await apply_action_notifies(bot, result)
+        return
+
+    storage = get_storage()
+    if len(parts) == 2 and parts[1].isdigit():
+        target_token, amount_s = parts[0], parts[1]
+        target_id = resolve_player_id(storage, target_token)
+        if target_id is None:
+            await message.answer(f"Игрок «{h(target_token)}» не найден.")
+            return
+        result = create_trade_offer(
+            storage, sender_id, target_id, kind="money", amount=int(amount_s)
+        )
+        await message.answer(await _deliver_trade_offer(bot, sender_id, result))
+        return
+
+    if len(parts) >= 3 and parts[-1].isdigit():
+        amount = int(parts[-1])
+        item_token = " ".join(parts[1:-1]).strip()
+        target_token = parts[0]
+        item_key = _resolve_trade_item_key(item_token)
+        if item_key is None:
+            await message.answer(
+                f"Предмет «{h(item_token)}» не найден. "
+                "Укажи ключ (medkit) или точное название из инвентаря."
+            )
+            return
+        target_id = resolve_player_id(storage, target_token)
+        if target_id is None:
+            await message.answer(f"Игрок «{h(target_token)}» не найден.")
+            return
+        result = create_trade_offer(
+            storage,
+            sender_id,
+            target_id,
+            kind="item",
+            item_key=item_key,
+            amount=amount,
+        )
+        await message.answer(await _deliver_trade_offer(bot, sender_id, result))
+        return
+
+    await message.answer(_trade_help_text())
+
+
+@router.callback_query(F.data.startswith("trade:accept:"))
+async def trade_accept_callback(callback: CallbackQuery, bot: Bot) -> None:
+    from app.player_trade import accept_trade_offer
+
+    try:
+        from_id = int((callback.data or "").rsplit(":", 1)[1])
+    except ValueError:
+        await reply_action_result(callback, "Некорректное предложение.")
+        return
+    result = accept_trade_offer(get_storage(), from_id, callback.from_user.id)
+    await finish_callback_action(callback, result, bot)
+    if callback.message is not None:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+
+
+@router.callback_query(F.data.startswith("trade:decline:"))
+async def trade_decline_callback(callback: CallbackQuery, bot: Bot) -> None:
+    from app.player_trade import decline_trade_offer
+
+    try:
+        from_id = int((callback.data or "").rsplit(":", 1)[1])
+    except ValueError:
+        await reply_action_result(callback, "Некорректное предложение.")
+        return
+    result = decline_trade_offer(get_storage(), from_id, callback.from_user.id)
+    await finish_callback_action(callback, result, bot)
+    if callback.message is not None:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+
+
+@router.callback_query(F.data.startswith("trade:cancel:"))
+async def trade_cancel_callback(callback: CallbackQuery, bot: Bot) -> None:
+    from app.player_trade import cancel_trade_offer, get_trade_offer
+
+    try:
+        from_id = int((callback.data or "").rsplit(":", 1)[1])
+    except ValueError:
+        await reply_action_result(callback, "Некорректное предложение.")
+        return
+    if callback.from_user.id != from_id:
+        offer = get_trade_offer(get_storage(), from_id)
+        if offer is None:
+            await reply_action_result(callback, "Предложение уже недействительно.")
+            return
+        await reply_action_result(callback, "Отменить может только инициатор обмена.")
+        return
+    result = cancel_trade_offer(get_storage(), from_id)
+    await finish_callback_action(callback, result, bot)
+    if callback.message is not None:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
 
 
 async def _send_duel_challenge(bot: Bot, sender_id: int, target_telegram_id: int) -> str:
@@ -9185,7 +9406,26 @@ async def market_list_callback(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("eco:market:buy:"))
-async def market_buy_by_id_callback(callback: CallbackQuery, bot: Bot) -> None:
+async def market_buy_preview_callback(callback: CallbackQuery) -> None:
+    lot_id = (callback.data or "").split(":", maxsplit=3)[3]
+    try:
+        auction_id = int(lot_id)
+    except ValueError:
+        await callback.answer("Некорректный ID лота.", show_alert=True)
+        return
+    result = preview_bazaar_lot(get_storage(), auction_id, market=True)
+    if not result.ok:
+        await reply_action_result(callback, result.text)
+        return
+    await edit_menu_message(
+        callback,
+        result.text,
+        bazaar_confirm_buy_kb("market", auction_id, "eco:market:list"),
+    )
+
+
+@router.callback_query(F.data.startswith("eco:market:confirm:"))
+async def market_buy_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
     lot_id = (callback.data or "").split(":", maxsplit=3)[3]
     try:
         auction_id = int(lot_id)
@@ -9302,7 +9542,26 @@ async def _render_exchange_lots_list(callback: CallbackQuery, *, category: str) 
 
 
 @router.callback_query(F.data.startswith("eco:auction:buy:"))
-async def auction_buy_by_id_callback(callback: CallbackQuery, bot: Bot) -> None:
+async def auction_buy_preview_callback(callback: CallbackQuery) -> None:
+    lot_id = (callback.data or "").split(":", maxsplit=3)[3]
+    try:
+        auction_id = int(lot_id)
+    except ValueError:
+        await callback.answer("Некорректный ID лота.", show_alert=True)
+        return
+    result = preview_bazaar_lot(get_storage(), auction_id, market=False)
+    if not result.ok:
+        await reply_action_result(callback, result.text)
+        return
+    await edit_menu_message(
+        callback,
+        result.text,
+        bazaar_confirm_buy_kb("auction", auction_id, "eco:auction:list"),
+    )
+
+
+@router.callback_query(F.data.startswith("eco:auction:confirm:"))
+async def auction_buy_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
     lot_id = (callback.data or "").split(":", maxsplit=3)[3]
     try:
         auction_id = int(lot_id)

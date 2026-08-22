@@ -2644,6 +2644,12 @@ def process_rating_season(storage: Storage) -> str | None:
     else:
         lines.append("В этом сезоне никто не набрал очков.")
 
+    faction_reward_lines = _grant_faction_season_treasury_rewards(storage)
+    if faction_reward_lines:
+        lines.append("")
+        lines.append("🏅 Награды казне группировок:")
+        lines.extend(faction_reward_lines)
+
     storage.reset_all_season_ratings()
     new_season_id = int(season.get("id") or 0) + 1
     new_season = {
@@ -3253,7 +3259,10 @@ def build_season_rating_overview(
 
 
 FACTION_RATING_PER_LOCATION = 500
+FACTION_RATING_POWER_CAP_PER_MEMBER = 30
 FACTION_RATING_ORDER: tuple[str, ...] = ("Долг", "Свобода", "Нейтралы", "Бандиты", "Монолит")
+FACTION_SEASON_TREASURY_REWARDS: dict[int, int] = {1: 25000, 2: 15000, 3: 8000}
+BAZAAR_FACTION_TAX_PERCENT = 5
 
 
 def build_rating_menu_text() -> str:
@@ -3263,13 +3272,14 @@ def build_rating_menu_text() -> str:
         "• Рейтинг за сезон — топ текущего 14-дневного сезона; "
         "топ-3 получают эксклюзивную снарягу.\n"
         "• Рейтинг группировок — динамический: "
-        f"+{FACTION_RATING_PER_LOCATION} за каждую контролируемую локацию "
-        "и +сила снаряги каждого бойца ГП."
+        f"+{FACTION_RATING_PER_LOCATION} за локацию и сила бойцов "
+        f"(не больше {FACTION_RATING_POWER_CAP_PER_MEMBER}×число членов). "
+        "В конце сезона топ-3 ГП получают RU в казну."
     )
 
 
 def compute_faction_dynamic_ratings(storage: Storage) -> list[dict[str, Any]]:
-    """Динамический рейтинг ГП: локации×500 + сумма gear_power членов."""
+    """Динамический рейтинг ГП: локации×500 + capped сумма gear_power."""
     loc_counts: dict[str, int] = {}
     loc_names: dict[str, list[str]] = {}
     for location in storage.get_locations():
@@ -3283,7 +3293,9 @@ def compute_faction_dynamic_ratings(storage: Storage) -> list[dict[str, Any]]:
     for faction in FACTION_RATING_ORDER:
         members = storage.list_faction_members(faction)
         member_count = len(members)
-        power_sum = storage.get_faction_power(faction)
+        power_raw = storage.get_faction_power(faction)
+        power_cap = FACTION_RATING_POWER_CAP_PER_MEMBER * max(1, member_count)
+        power_sum = min(int(power_raw), int(power_cap))
         locations = int(loc_counts.get(faction, 0))
         location_score = locations * FACTION_RATING_PER_LOCATION
         total = location_score + power_sum
@@ -3294,7 +3306,9 @@ def compute_faction_dynamic_ratings(storage: Storage) -> list[dict[str, Any]]:
                 "location_names": sorted(loc_names.get(faction, [])),
                 "location_score": location_score,
                 "members": member_count,
+                "power_raw": int(power_raw),
                 "power_sum": power_sum,
+                "power_cap": power_cap,
                 "total": total,
             }
         )
@@ -3307,8 +3321,9 @@ def build_faction_rating_overview(storage: Storage, requester_id: int | None = N
     lines = [
         "🏅 Рейтинг группировок (динамический)",
         "",
-        f"Формула: локации × {FACTION_RATING_PER_LOCATION} + сумма силы снаряги бойцов.",
-        "Пересчитывается каждый раз при открытии — без накопления очков.",
+        f"Формула: локации × {FACTION_RATING_PER_LOCATION} + сила снаряги "
+        f"(потолок {FACTION_RATING_POWER_CAP_PER_MEMBER}×членов).",
+        "В конце сезона топ-3 получают RU в казну.",
         "",
     ]
     medals = ("🥇", "🥈", "🥉")
@@ -3322,10 +3337,12 @@ def build_faction_rating_overview(storage: Storage, requester_id: int | None = N
         mark = medals[index - 1] if index <= 3 else f"{index}."
         faction = str(row["faction"])
         you = " ← ты" if requester_faction == faction else ""
+        capped = int(row["power_raw"]) > int(row["power_sum"])
+        cap_note = " (cap)" if capped else ""
         lines.append(
             f"{mark} {faction}{you} — {int(row['total'])} "
             f"(локи {int(row['locations'])}×{FACTION_RATING_PER_LOCATION}="
-            f"{int(row['location_score'])}, сила бойцов {int(row['power_sum'])}, "
+            f"{int(row['location_score'])}, сила {int(row['power_sum'])}{cap_note}, "
             f"членов {int(row['members'])})"
         )
         names = list(row.get("location_names") or [])
@@ -3335,6 +3352,45 @@ def build_faction_rating_overview(storage: Storage, requester_id: int | None = N
                 shown += f"… (+{len(names) - 6})"
             lines.append(f"   📍 {shown}")
     return "\n".join(lines)
+
+
+def _grant_faction_season_treasury_rewards(storage: Storage) -> list[str]:
+    rows = compute_faction_dynamic_ratings(storage)
+    lines: list[str] = []
+    medals = ("🥇", "🥈", "🥉")
+    for idx, row in enumerate(rows[:3], start=1):
+        reward = int(FACTION_SEASON_TREASURY_REWARDS.get(idx, 0))
+        if reward <= 0:
+            continue
+        faction = str(row["faction"])
+        storage.change_faction_treasury(faction, reward)
+        mark = medals[idx - 1] if idx <= 3 else "•"
+        lines.append(
+            f"{mark} ГП «{faction}» — {int(row['total'])} очк. → +{reward} RU в казну"
+        )
+    return lines
+
+
+def build_quick_status_text(storage: Storage, telegram_id: int) -> str:
+    from app.player_busy import player_busy_reason
+
+    player = storage.get_character(telegram_id, refresh_energy=True)
+    if player is None:
+        return "Сначала создай персонажа через /start."
+    busy = player_busy_reason(storage, telegram_id, auto_recover=True)
+    status = busy if busy else "свободен"
+    travel = ""
+    if player.travel_destination:
+        travel = f"\n🚶 В пути → {player.travel_destination}"
+    return (
+        "📡 Статус\n"
+        f"• {h(player.nickname)} · {player.faction or 'без ГП'}\n"
+        f"• 📍 {player.location}\n"
+        f"• ❤️ {player.health}  ⚡ {player.energy}/{player.max_energy}  💰 {player.money} RU\n"
+        f"• 🛡 сила {player.gear_power}\n"
+        f"• Состояние: {status}"
+        f"{travel}"
+    )
 
 
 def _utc_now() -> datetime:
@@ -7870,6 +7926,47 @@ def build_exchange_lots_overview(
     return ("\n".join(lines), rows)
 
 
+def _apply_bazaar_faction_tax(storage: Storage, seller_id: int, price: int, fee: int) -> tuple[int, str]:
+    """Часть комиссии → казна ГП продавца. Возвращает (сумма, текст-хвост)."""
+    seller = storage.get_character(seller_id, refresh_energy=False)
+    faction = seller.faction if seller is not None else None
+    if not faction:
+        return 0, ""
+    tax = max(0, min(int(fee), int(round(price * (BAZAAR_FACTION_TAX_PERCENT / 100)))))
+    if tax <= 0:
+        return 0, ""
+    storage.change_faction_treasury(str(faction), tax)
+    return tax, f"\nКазна «{faction}»: +{tax} RU (налог барахолки {BAZAAR_FACTION_TAX_PERCENT}%)."
+
+
+def preview_bazaar_lot(storage: Storage, lot_id: int, *, market: bool) -> ActionResult:
+    lot = storage.get_open_auction(lot_id)
+    if lot is None:
+        return ActionResult(False, "Ячейка не найдена или уже закрыта.")
+    item_key = str(lot["item_key"])
+    is_eq = _is_equipment_item(item_key)
+    if market and not is_eq:
+        return ActionResult(False, "Это ячейка биржи, не рынка.")
+    if (not market) and is_eq:
+        return ActionResult(False, "Это ячейка рынка, не биржи.")
+    fee_pct = MARKET_SELL_FEE_PERCENT if market else EXCHANGE_SELL_FEE_PERCENT
+    price = int(lot["price"])
+    amount = int(lot["amount"])
+    seller_id = int(lot["seller_id"])
+    seller = storage.get_character(seller_id, refresh_energy=False)
+    seller_name = h(seller.nickname) if seller else str(seller_id)
+    kind = "рынка" if market else "биржи"
+    return ActionResult(
+        True,
+        f"Подтверди покупку ячейки №{lot_id} ({kind}):\n"
+        f"• {ITEM_LABELS.get(item_key, item_key)} ×{amount}\n"
+        f"• Цена: {price} RU (комиссия продавца {fee_pct}%)\n"
+        f"• Продавец: {seller_name}\n"
+        f"• Налог {BAZAAR_FACTION_TAX_PERCENT}% от цены уйдёт в казну ГП продавца (из комиссии).",
+        payload={"lot_id": lot_id, "market": market, "price": price},
+    )
+
+
 def buy_exchange_lot(storage: Storage, telegram_id: int, lot_id: int) -> ActionResult:
     """Покупка конкретного лота биржи по id (аналог рыночной покупки, с биржевой комиссией)."""
     buyer = storage.get_character(telegram_id, refresh_energy=False)
@@ -7900,6 +7997,7 @@ def buy_exchange_lot(storage: Storage, telegram_id: int, lot_id: int) -> ActionR
         amount=amount,
     ):
         return ActionResult(False, "Недостаточно денег или лот уже недоступен.")
+    tax, tax_note = _apply_bazaar_faction_tax(storage, seller_id, price, fee)
     storage.add_player_stat(telegram_id, "trades_done", 1)
     storage.add_player_stat(seller_id, "trades_done", 1)
     _add_rating(storage, telegram_id, RATING_REWARD["trade_action"])
@@ -7912,13 +8010,13 @@ def buy_exchange_lot(storage: Storage, telegram_id: int, lot_id: int) -> ActionR
     seller_msg = (
         f"🛒 {buyer_name} купил(а) твою ячейку №{lot_id}: "
         f"{item_name} x{amount} за {price} RU.\n"
-        f"На баланс: +{seller_income} RU (комиссия {fee} RU).{seller_achievements}"
+        f"На баланс: +{seller_income} RU (комиссия {fee} RU).{tax_note}{seller_achievements}"
     )
     return ActionResult(
         True,
         f"Куплена ячейка №{lot_id}: {item_name} x{amount} за {price} RU.\n"
-        f"Продавец получил {seller_income} RU (комиссия {fee} RU).{achievements_text}",
-        payload={"notify": [(seller_id, seller_msg)]},
+        f"Продавец получил {seller_income} RU (комиссия {fee} RU).{tax_note}{achievements_text}",
+        payload={"notify": [(seller_id, seller_msg)], "faction_tax": tax},
     )
 
 
@@ -8115,20 +8213,22 @@ def buy_market_lot(storage: Storage, telegram_id: int, lot_id: int) -> ActionRes
         amount=amount,
     ):
         return ActionResult(False, "Недостаточно денег или лот уже недоступен.")
+    tax, tax_note = _apply_bazaar_faction_tax(storage, seller_id, price, fee)
     item_name = ITEM_LABELS.get(item_key, item_key)
     buyer_name = h(buyer.nickname)
     return ActionResult(
         True,
         f"Куплена ячейка №{lot_id}: {item_name} x{amount} за {price} RU.\n"
-        f"Продавец получил {seller_income} RU (комиссия {fee} RU).",
+        f"Продавец получил {seller_income} RU (комиссия {fee} RU).{tax_note}",
         payload={
             "notify": [
                 (
                     seller_id,
                     f"🛒 {buyer_name} купил(а) твою ячейку №{lot_id}: {item_name} x{amount} за {price} RU.\n"
-                    f"На баланс: +{seller_income} RU (комиссия {fee} RU).",
+                    f"На баланс: +{seller_income} RU (комиссия {fee} RU).{tax_note}",
                 ),
             ],
+            "faction_tax": tax,
         },
     )
 
@@ -9301,9 +9401,11 @@ def build_economy_overview(storage: Storage, telegram_id: int) -> str:
         "🏦 Барахолка\n\n"
         "⚖️ Биржа — расходники, артефакты, топливо, мусор.\n"
         f"Комиссия {EXCHANGE_SELL_FEE_PERCENT}%: покупатель платит цену, продавец получает остаток.\n"
-        "Выставляй через «свой лот», покупай по номеру ячейки в списке.\n\n"
+        f"С покупки {BAZAAR_FACTION_TAX_PERCENT}% цены уходит в казну ГП продавца (из комиссии).\n"
+        "Выставляй через «свой лот», покупай по номеру ячейки (с подтверждением).\n\n"
         f"🛒 Рынок — только оружие и броня.\n"
         f"Комиссия {MARKET_SELL_FEE_PERCENT}%.\n"
+        f"Тот же налог {BAZAAR_FACTION_TAX_PERCENT}% в казну продавца.\n"
         "Выставляй экипировку из инвентаря, покупай по номеру ячейки.\n\n"
         f"Биржа (открытые):\n{chr(10).join(auctions_lines)}\n\n"
         f"Рынок (открытые):\n{chr(10).join(market_lines)}\n\n"
