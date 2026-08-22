@@ -376,6 +376,9 @@ def run_smoke_check() -> None:
         after_sell = storage.get_character(111, refresh_energy=False)
         assert after_sell.equipment.get("artifact_2") in {"", "Нет", None}
         storage.add_item(111, "artifact_power", 1)
+        cooldown_res = equip_artifact(storage, 111, "artifact_power")
+        assert not cooldown_res.ok
+        storage.delete_meta("artifact_equip_cd:111:artifact_power")
         assert equip_artifact(storage, 111, "artifact_power").ok
         inv_text = format_inventory(storage.get_character(111, refresh_energy=False), storage=storage)
         assert "Артефакт 2:" in inv_text
@@ -385,6 +388,15 @@ def run_smoke_check() -> None:
         assert storage.get_player_stats(111)["artifacts_found"] == junk_before
         record_valuable_artifact_found_stat(storage, 111, "artifact_power")
         assert storage.get_player_stats(111)["artifacts_found"] == junk_before + 1
+        from app.game_logic import build_artifact_find_log_text, on_artifact_found
+
+        on_artifact_found(storage, 111, "artifact_junk_bolt", location="Болото", source="hunt", detector_name="Отклик")
+        on_artifact_found(storage, 111, "artifact_power", location="Радар", source="quest")
+        log_text = build_artifact_find_log_text(storage, 111)
+        assert "Журнал находок" in log_text
+        assert "Болото" in log_text and "Отклик" in log_text
+        assert "Радар" in log_text and "Контракт" in log_text
+        assert "мусор" in log_text
         from app.bot import WAREHOUSE_CUSTOM_ITEM_KEYS
 
         assert WAREHOUSE_CUSTOM_ITEM_KEYS >= frozenset(

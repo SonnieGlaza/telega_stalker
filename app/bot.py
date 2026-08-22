@@ -314,6 +314,7 @@ from app.game_logic import (
     build_dead_character_text,
     build_battle_death_text,
     append_death_log_once,
+    build_artifact_find_log_text,
     build_death_log_text,
     respawn_character,
     format_personal_stash,
@@ -401,6 +402,8 @@ from app.keyboards import (
     trader_sell_weapons_keyboard,
     equip_root_keyboard,
     equip_slot_page_keyboard,
+    equip_artifact_slot_picker_keyboard,
+    tech_craft_junk_keyboard,
     alliance_keyboard,
     alliance_target_keyboard,
     alliance_pending_keyboard,
@@ -1502,7 +1505,7 @@ def _build_info_text(player: Character) -> str:
         "Разделы меню:\n"
         "• 📟 КПК — профиль (там же эмодзи игровых медалей), чаты (канал обновлений + общий + фракция), "
         "рейтинг (общий + сезонный, внутри «Достижения и медали»), карта, игроки, рефералка, "
-        "☠️ журнал смертей (последние 5).\n"
+        "☠️ журнал смертей (последние 5), 💎 журнал находок артефактов.\n"
         "• 🏕 Вылазка — война, переходы, ⚔️ арена (тренировка 8×8 на базе), рейды и 👥 кооп-вылазка.\n"
         "  В коопе: до 3 игроков, −14 энергии, 1 аптечка/боец, «🏃 Свалить» возвращает энергию; "
         "эвакуация раненого (рядом + тащить на старт). "
@@ -3679,6 +3682,85 @@ async def repair_niva_callback(callback: CallbackQuery) -> None:
     await reply_action_result(callback, result.text)
 
 
+@router.callback_query(F.data == "tech:repair:artifacts")
+async def tech_repair_artifacts_callback(callback: CallbackQuery) -> None:
+    from app.artifact_features import repair_equipped_artifacts
+
+    result = repair_equipped_artifacts(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "tech:insurance:buy")
+async def tech_insurance_callback(callback: CallbackQuery) -> None:
+    from app.artifact_features import buy_artifact_insurance
+
+    result = buy_artifact_insurance(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "tech:craft:menu")
+async def tech_craft_menu_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    from app.game_logic import ARTIFACT_JUNK_KEYS, ITEM_LABELS
+
+    junk_items = [
+        (key, ITEM_LABELS.get(key, key), int(player.inventory.get(key, 0)))
+        for key in ARTIFACT_JUNK_KEYS
+        if int(player.inventory.get(key, 0)) > 0
+    ]
+    if len(junk_items) < 2:
+        await callback.answer("Нужно минимум 2 разных типа мусора.", show_alert=True)
+        return
+    await edit_menu_message(
+        callback,
+        "🔬 Крафт артефакта\nВыбери первый мусорный артефакт (750 RU, шанс 15%):",
+        tech_craft_junk_keyboard(junk_items, stage="a"),
+    )
+
+
+@router.callback_query(F.data.startswith("tech:craft:a:"))
+async def tech_craft_first_callback(callback: CallbackQuery) -> None:
+    first_key = (callback.data or "").split(":", maxsplit=3)[3]
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    from app.game_logic import ARTIFACT_JUNK_KEYS, ITEM_LABELS
+
+    junk_items = [
+        (key, ITEM_LABELS.get(key, key), int(player.inventory.get(key, 0)))
+        for key in ARTIFACT_JUNK_KEYS
+        if int(player.inventory.get(key, 0)) > 0 and key != first_key
+    ]
+    if not junk_items:
+        await callback.answer("Нужен второй тип мусора.", show_alert=True)
+        return
+    await edit_menu_message(
+        callback,
+        f"Первый: {ITEM_LABELS.get(first_key, first_key)}\nВыбери второй мусор:",
+        tech_craft_junk_keyboard(junk_items, stage="b", first_key=first_key),
+    )
+
+
+@router.callback_query(F.data.startswith("tech:craft:b:"))
+async def tech_craft_second_callback(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) < 5:
+        await callback.answer("Некорректный выбор.", show_alert=True)
+        return
+    first_key = parts[3]
+    second_key = parts[4]
+    from app.artifact_features import craft_artifact_from_junk
+
+    result = craft_artifact_from_junk(get_storage(), callback.from_user.id, first_key, second_key)
+    await reply_action_result(callback, result.text)
+
+
 @router.callback_query(F.data == "equip:root")
 async def equip_root_callback(callback: CallbackQuery) -> None:
     player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
@@ -3802,11 +3884,25 @@ async def equip_put_callback(callback: CallbackQuery) -> None:
     slot = parts[2]
     item_key = parts[3]
     db = get_storage()
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
     if slot == "weapon":
         result = equip_weapon(db, callback.from_user.id, item_key)
     elif slot == "armor":
         result = equip_armor(db, callback.from_user.id, item_key)
     elif slot == "artifact":
+        from app.game_logic import ARTIFACT_EQUIP_SLOT_KEYS, max_artifact_slots
+
+        cap = max_artifact_slots(player)
+        if cap > 1:
+            await edit_menu_message(
+                callback,
+                f"Куда надеть {ITEM_LABELS.get(item_key, item_key)}?",
+                equip_artifact_slot_picker_keyboard(item_key, cap),
+            )
+            return
         result = equip_artifact(db, callback.from_user.id, item_key)
     else:
         await callback.answer("Неизвестная категория.", show_alert=True)
@@ -3835,6 +3931,70 @@ async def equip_put_callback(callback: CallbackQuery) -> None:
             pass
     if result.ok:
         await send_profile_snapshot(callback.message, player)
+
+
+@router.callback_query(F.data.startswith("equip:pick:artifact:"))
+async def equip_artifact_pick_callback(callback: CallbackQuery) -> None:
+    parts = (callback.data or "").split(":")
+    if len(parts) < 5:
+        await callback.answer("Некорректный слот.", show_alert=True)
+        return
+    try:
+        slot_idx = int(parts[3])
+    except ValueError:
+        await callback.answer("Некорректный слот.", show_alert=True)
+        return
+    item_key = parts[4]
+    from app.game_logic import ARTIFACT_EQUIP_SLOT_KEYS
+
+    if slot_idx < 1 or slot_idx > len(ARTIFACT_EQUIP_SLOT_KEYS):
+        await callback.answer("Некорректный слот.", show_alert=True)
+        return
+    target_slot = ARTIFACT_EQUIP_SLOT_KEYS[slot_idx - 1]
+    db = get_storage()
+    result = equip_artifact(db, callback.from_user.id, item_key, target_slot=target_slot)
+    await reply_action_result(callback, result.text)
+    player = db.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        return
+    text, safe_slot, safe_page, total_pages, options = build_equip_slot_page(player, "artifact", 0)
+    from app.game_logic import has_any_equipped_artifact
+
+    await edit_menu_message(
+        callback,
+        text,
+        equip_slot_page_keyboard(
+            safe_slot,
+            page=safe_page,
+            total_pages=total_pages,
+            options=options,
+            can_unequip_artifact=has_any_equipped_artifact(player),
+        ),
+    )
+    if result.ok:
+        await send_profile_snapshot(callback.message, player)
+
+
+@router.callback_query(F.data == "equip:menu:artifact")
+async def equip_artifact_menu_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    text, safe_slot, safe_page, total_pages, options = build_equip_slot_page(player, "artifact", 0)
+    from app.game_logic import has_any_equipped_artifact
+
+    await edit_menu_message(
+        callback,
+        text,
+        equip_slot_page_keyboard(
+            safe_slot,
+            page=safe_page,
+            total_pages=total_pages,
+            options=options,
+            can_unequip_artifact=has_any_equipped_artifact(player),
+        ),
+    )
 
 
 @router.callback_query(F.data == "equip:unequip:artifact")
@@ -5713,6 +5873,45 @@ async def show_death_log(message: Message) -> None:
     await message.answer(text, reply_markup=_pda_keyboard_for(player))
 
 
+@router.message(F.text == "💎 Арты")
+async def show_my_artifacts(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    from app.artifact_features import build_my_artifacts_text
+
+    text = build_my_artifacts_text(get_storage(), player.telegram_id)
+    await message.answer(text, reply_markup=_pda_keyboard_for(player))
+
+
+@router.message(F.text == "📊 Дроп")
+async def show_artifact_drop_table(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    from app.artifact_features import build_artifact_drop_table_text
+    from app.game_logic import best_detector_base_chance
+
+    text = build_artifact_drop_table_text(
+        get_storage(),
+        player.location,
+        best_detector_base_chance(player) or 17,
+    )
+    await message.answer(text, reply_markup=_pda_keyboard_for(player))
+
+
+@router.message(F.text == "💎 Находки")
+async def show_artifact_find_log(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    text = build_artifact_find_log_text(get_storage(), player.telegram_id)
+    await message.answer(text, reply_markup=_pda_keyboard_for(player))
+
+
 @router.callback_query(F.data == "death:log")
 async def show_death_log_callback(callback: CallbackQuery) -> None:
     """Журнал смертей (из КПК, когда игрок жив)."""
@@ -5736,7 +5935,7 @@ async def show_pda(message: Message) -> None:
         return
     await message.answer(
         "📟 КПК сталкера\n"
-        "Профиль, связь, рейтинг, карта, журнал смертей, игроки и рефералка.",
+        "Профиль, связь, рейтинг, карта, журналы, артефакты, игроки и рефералка.",
         reply_markup=_pda_keyboard_for(player),
     )
 
@@ -6405,10 +6604,11 @@ async def _send_or_edit_hunt_frame(
     image_bytes: bytes,
     caption: str,
     note: str | None = None,
+    deep_available: bool = True,
 ) -> None:
     media = BufferedInputFile(image_bytes, filename="artifact_hunt.png")
     text = caption if not note else f"{caption}\n\n{note}"
-    markup = artifact_hunt_keyboard()
+    markup = artifact_hunt_keyboard(deep_available=deep_available)
     try:
         if callback.message and callback.message.photo:
             await callback.message.edit_media(
@@ -6450,6 +6650,23 @@ async def artifact_search_callback(callback: CallbackQuery) -> None:
             image_bytes=image,
             caption=str(payload.get("caption") or result.text),
             note=result.text if payload.get("hunt_started") else None,
+        )
+        return
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "artifact:search:deep")
+async def artifact_search_deep_callback(callback: CallbackQuery) -> None:
+    result = start_artifact_hunt(get_storage(), callback.from_user.id, hunt_mode="deep")
+    payload = result.payload or {}
+    image = payload.get("hunt_image")
+    if image and payload.get("hunt_active"):
+        await _send_or_edit_hunt_frame(
+            callback,
+            image_bytes=image,
+            caption=str(payload.get("caption") or result.text),
+            note=result.text if payload.get("hunt_started") else None,
+            deep_available=False,
         )
         return
     await reply_action_result(callback, result.text)

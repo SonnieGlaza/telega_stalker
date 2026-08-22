@@ -59,9 +59,11 @@ def pda_keyboard(*, is_leader: bool = False) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [
         [KeyboardButton(text="🧾 Профиль"), KeyboardButton(text="💬 Чаты")],
         [KeyboardButton(text="🏆 Рейтинг"), KeyboardButton(text="🗺 Карта")],
-        [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="☠️ Смерти")],
-        [KeyboardButton(text="📅 Ежедневка"), KeyboardButton(text="🔔 Уведомления")],
-        [KeyboardButton(text="🔥 Как не сдохнуть"), KeyboardButton(text="🏛 Клановые задачи")],
+        [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="💎 Находки")],
+        [KeyboardButton(text="💎 Арты"), KeyboardButton(text="📊 Дроп")],
+        [KeyboardButton(text="☠️ Смерти"), KeyboardButton(text="📅 Ежедневка")],
+        [KeyboardButton(text="🔔 Уведомления"), KeyboardButton(text="🔥 Как не сдохнуть")],
+        [KeyboardButton(text="🏛 Клановые задачи")],
     ]
     if is_leader:
         rows[-1].append(KeyboardButton(text="📣 Сбор"))
@@ -300,6 +302,9 @@ def tech_menu_keyboard(*, can_buy_upgrade: bool = True, can_buy_artifact_slot: b
             ]
         )
     rows.append([InlineKeyboardButton(text="⭐ Уровень сервиса", callback_data="trade:upgrade:tech")])
+    rows.append([InlineKeyboardButton(text="🔧 Ремонт артефактов", callback_data="tech:repair:artifacts")])
+    rows.append([InlineKeyboardButton(text="🔬 Крафт из мусора", callback_data="tech:craft:menu")])
+    rows.append([InlineKeyboardButton(text="🛡 Страховка артов (8000 RU)", callback_data="tech:insurance:buy")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад к торговцу", callback_data="trade:menu:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -475,10 +480,9 @@ def inventory_equipment_keyboard(*, money: int | None = None) -> InlineKeyboardM
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def artifact_hunt_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="⬆️ Вперёд", callback_data="hunt:up")],
+def artifact_hunt_keyboard(*, deep_available: bool = True) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="⬆️ Вперёд", callback_data="hunt:up")],
             [
                 InlineKeyboardButton(text="⬅️ Влево", callback_data="hunt:left"),
                 InlineKeyboardButton(text="⬇️ Назад", callback_data="hunt:down"),
@@ -490,12 +494,49 @@ def artifact_hunt_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🔫⬇", callback_data="hunt:shoot:down"),
                 InlineKeyboardButton(text="🔫➡", callback_data="hunt:shoot:right"),
             ],
-            [
-                InlineKeyboardButton(text="🏃 Свалить", callback_data="hunt:leave"),
-                InlineKeyboardButton(text="🔄 Обновить", callback_data="hunt:refresh"),
-            ],
-        ]
-    )
+        [
+            InlineKeyboardButton(text="🏃 Свалить", callback_data="hunt:leave"),
+            InlineKeyboardButton(text="🔄 Обновить", callback_data="hunt:refresh"),
+        ],
+    ]
+    if deep_available:
+        rows.insert(
+            0,
+            [InlineKeyboardButton(text="🔍 Глубокий поиск (12 ходов)", callback_data="artifact:search:deep")],
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def equip_artifact_slot_picker_keyboard(item_key: str, slots_cap: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    slot_row: list[InlineKeyboardButton] = []
+    for idx in range(1, min(slots_cap, 3) + 1):
+        slot_row.append(
+            InlineKeyboardButton(
+                text=f"Ячейка {idx}",
+                callback_data=f"equip:pick:artifact:{idx}:{item_key}",
+            )
+        )
+    rows.append(slot_row)
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="equip:menu:artifact")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def tech_craft_junk_keyboard(
+    junk_items: list[tuple[str, str, int]],
+    *,
+    stage: str = "a",
+    first_key: str = "",
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for key, title, amount in junk_items[:12]:
+        if stage == "a":
+            cb = f"tech:craft:a:{key}"
+        else:
+            cb = f"tech:craft:b:{first_key}:{key}"
+        rows.append([InlineKeyboardButton(text=f"{title} ×{amount}", callback_data=cb)])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад к технику", callback_data="trade:vendor:tech")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def smuggle_mission_keyboard() -> InlineKeyboardMarkup:
@@ -1219,6 +1260,9 @@ def economy_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⚖️ Биржа: выставить арт «Сила»", callback_data="eco:auction:create:artifact_power")],
             [InlineKeyboardButton(text="⚖️ Биржа: выставить арт «Живучесть»", callback_data="eco:auction:create:artifact_vitality")],
             [InlineKeyboardButton(text="⚖️ Биржа: выставить арт «Антирад»", callback_data="eco:auction:create:artifact_antirad")],
+            [InlineKeyboardButton(text="⚖️ Биржа: арт «Жар»", callback_data="eco:auction:create:artifact_fire")],
+            [InlineKeyboardButton(text="⚖️ Биржа: арт «Кровь»", callback_data="eco:auction:create:artifact_blood")],
+            [InlineKeyboardButton(text="⚖️ Биржа: арт «Кристалл»", callback_data="eco:auction:create:artifact_crystal")],
             [InlineKeyboardButton(text="⚖️ Биржа: выставить патроны", callback_data="eco:auction:create:ammo_pack")],
             [InlineKeyboardButton(text="⚖️ Биржа: выставить аптечку", callback_data="eco:auction:create:medkit")],
             [InlineKeyboardButton(text="⚖️ Биржа: свой лот", callback_data="eco:auction:custom:choose")],

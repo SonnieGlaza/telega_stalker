@@ -296,6 +296,7 @@ class HuntSession:
     started_at: str | None = None
     active_anomalies: list[ActiveAnomaly] | None = None
     gravi_trapped: bool = False
+    hunt_mode: str = "normal"
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -315,6 +316,7 @@ class HuntSession:
             "turn_seq": self.turn_seq,
             "started_at": self.started_at,
             "gravi_trapped": self.gravi_trapped,
+            "hunt_mode": self.hunt_mode,
         }
         if self.active_anomalies is not None:
             d["active_anomalies"] = [a.to_dict() for a in self.active_anomalies]
@@ -343,6 +345,7 @@ class HuntSession:
             started_at=raw.get("started_at"),
             active_anomalies=active,
             gravi_trapped=bool(raw.get("gravi_trapped", False)),
+            hunt_mode=str(raw.get("hunt_mode") or "normal"),
         )
 
 
@@ -786,7 +789,18 @@ def artifact_beside_anomaly(session: HuntSession) -> bool:
     return False
 
 
-def _build_session(character: Character, detector_key: str, detector_name: str) -> HuntSession:
+def _build_session(
+    character: Character,
+    detector_key: str,
+    detector_name: str,
+    *,
+    hunt_mode: str = "normal",
+) -> HuntSession:
+    from app.artifact_features import (
+        ARTIFACT_DEEP_HUNT_CIRCLES_DELTA,
+        ARTIFACT_DEEP_HUNT_MAX_MOVES,
+    )
+
     grid = HUNT_GRID_SIZE
     anomaly_n = location_anomaly_count(character.location)
     player = (random.randrange(grid), random.randrange(grid))
@@ -802,7 +816,12 @@ def _build_session(character: Character, detector_key: str, detector_name: str) 
     else:
         artifact = _random_free_cell(grid, forbidden)
     circles_needed = DETECTOR_CIRCLES_NEEDED.get(detector_key, 5)
+    if hunt_mode == "deep":
+        circles_needed = max(3, circles_needed + ARTIFACT_DEEP_HUNT_CIRCLES_DELTA)
     active = _spawn_active_anomalies(grid, forbidden, anomaly_n)
+    max_moves = HUNT_MAX_MOVES
+    if hunt_mode == "deep":
+        max_moves = ARTIFACT_DEEP_HUNT_MAX_MOVES
     session = HuntSession(
         location=character.location,
         detector_key=detector_key,
@@ -817,6 +836,8 @@ def _build_session(character: Character, detector_key: str, detector_name: str) 
         rad_gained=0,
         started_at=_utc_now().isoformat(),
         active_anomalies=active,
+        max_moves=max_moves,
+        hunt_mode=hunt_mode,
     )
     # Стартовый замер сигнала на месте появления.
     session.circles_filled = min(
@@ -844,11 +865,18 @@ def hunt_status_caption(session: HuntSession, character: Character | None = None
     lines.append(f"Аномалий: {len(session.anomalies)} обычных + {active_n} активных · бонус поиска +{bonus}%")
     if session.gravi_trapped:
         lines.append("🌀 Застрял в гравитационной аномалии!")
+    if session.hunt_mode == "deep":
+        lines.append("🔍 Режим глубокого поиска: больше ходов, выше шанс дропа.")
     lines.append("Стрельба: ↑↓←→ для уничтожения активных аномалий.")
     return "\n".join(lines)
 
 
-def start_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
+def start_artifact_hunt(
+    storage: Storage,
+    telegram_id: int,
+    *,
+    hunt_mode: str = "normal",
+) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
@@ -885,15 +913,16 @@ def start_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
     if not storage.spend_energy(telegram_id, energy_cost):
         return ActionResult(False, f"Не хватает энергии для поиска артов (нужно {energy_cost}).")
 
-    session = _build_session(player, detector_key, detector_name)
+    session = _build_session(player, detector_key, detector_name, hunt_mode=hunt_mode)
     save_hunt_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = _render_for_player(storage, telegram_id, session, player)
     caption = hunt_status_caption(session, player)
     anomaly_n = len(session.anomalies)
+    mode_note = " (глубокий поиск)" if hunt_mode == "deep" else ""
     return ActionResult(
         True,
-        f"Вылазка на «{session.location}».\n"
+        f"Вылазка на «{session.location}»{mode_note}.\n"
         f"Детектор «{detector_name}»: нужно {session.circles_needed} кружка(ов).\n"
         f"Аномалий на поле: {anomaly_n}. Энергия −{energy_cost}.",
         payload={
@@ -919,6 +948,8 @@ def abandon_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
 
 
 def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) -> ActionResult:
+    from app.artifact_features import ARTIFACT_DEEP_HUNT_DROP_MULT, coop_hunt_drop_multiplier
+
     player = storage.get_character(telegram_id, refresh_energy=False)
     base_chance = 17
     for key, _name, chance in ARTIFACT_DETECTORS:
@@ -926,7 +957,16 @@ def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) ->
             base_chance = chance
             break
     base_chance += _anomaly_search_bonus(session)
-    art_key = roll_location_artifact_drop(session.location, base_chance)
+    drop_mult = coop_hunt_drop_multiplier(storage, telegram_id, session.location)
+    if session.hunt_mode == "deep":
+        drop_mult *= ARTIFACT_DEEP_HUNT_DROP_MULT
+    art_key = roll_location_artifact_drop(
+        session.location,
+        base_chance,
+        storage,
+        detector_key=session.detector_key,
+        drop_mult=drop_mult,
+    )
     survival_text = _apply_active_survival(storage, telegram_id)
     spawn_hint = describe_location_artifact_spawns(session.location)
     if art_key is None:
@@ -939,10 +979,14 @@ def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) ->
             payload={"hunt_active": False, "hunt_done": True},
         )
     storage.add_item(telegram_id, art_key, 1)
-    if art_key not in ARTIFACT_JUNK_KEYS:
-        from app.game_logic import record_valuable_artifact_found_stat
-
-        record_valuable_artifact_found_stat(storage, telegram_id, art_key)
+    on_artifact_found(
+        storage,
+        telegram_id,
+        art_key,
+        location=session.location,
+        source="hunt",
+        detector_name=session.detector_name,
+    )
     label = ITEM_LABELS.get(art_key, art_key)
     kind = "мусорный артефакт (без бонусов)" if art_key in ARTIFACT_JUNK_KEYS else "артефакт"
     bonus_note = ""

@@ -1001,6 +1001,7 @@ class Storage:
             f"respawn:debt:{tid}",
             f"death:last_cause:{tid}",
             f"death:last_killer:{tid}",
+            f"artifact_find_log:{tid}",
             f"death_log:{tid}",
             f"death_notice_sent:{tid}",
             f"duel:pending_in:{tid}",
@@ -2245,11 +2246,10 @@ class Storage:
 
             regen_multiplier = 2.0 if _as_int(self._row_get(row, "sleeping_bag_owned", 0), 0) == 1 else 1.0
             has_zone_artifact = False
-            has_antirad_artifact = False
             try:
                 equipment = json.loads(self._row_get(row, "equipment_json", "{}") or "{}")
                 if isinstance(equipment, dict):
-                    from app.game_logic import ARTIFACT_ENERGY_REGEN_NAMES, ARTIFACT_RAD_CLEANSE_NAMES
+                    from app.game_logic import ARTIFACT_ENERGY_REGEN_NAMES
 
                     art_names = [
                         str(equipment.get("artifact") or "").strip(),
@@ -2257,26 +2257,26 @@ class Storage:
                         str(equipment.get("artifact_3") or "").strip(),
                     ]
                     has_zone_artifact = any(n in ARTIFACT_ENERGY_REGEN_NAMES for n in art_names)
-                    has_antirad_artifact = any(n in ARTIFACT_RAD_CLEANSE_NAMES for n in art_names)
             except (TypeError, json.JSONDecodeError, ImportError):
                 has_zone_artifact = False
-                has_antirad_artifact = False
             if has_zone_artifact:
                 regen_multiplier *= 1.05
             gained = int(minutes_passed * ENERGY_REGEN_PER_MINUTE * regen_multiplier)
             new_energy = min(max_energy, energy + gained)
             new_radiation = radiation
-            if has_antirad_artifact:
-                from app.game_logic import (
-                    ARTIFACT_RAD_CLEANSE_AMOUNT,
-                    ARTIFACT_RAD_CLEANSE_INTERVAL_MINUTES,
-                )
+            try:
+                equipment = json.loads(self._row_get(row, "equipment_json", "{}") or "{}")
+                if isinstance(equipment, dict):
+                    from types import SimpleNamespace
 
-                cleanse_ticks = minutes_passed // max(1, int(ARTIFACT_RAD_CLEANSE_INTERVAL_MINUTES))
-                if cleanse_ticks > 0:
-                    new_radiation = max(
-                        0, radiation - cleanse_ticks * int(ARTIFACT_RAD_CLEANSE_AMOUNT)
+                    from app.artifact_features import apply_passive_artifact_radiation
+
+                    proxy = SimpleNamespace(equipment=equipment)
+                    new_radiation = apply_passive_artifact_radiation(
+                        radiation, minutes_passed, proxy  # type: ignore[arg-type]
                     )
+            except (TypeError, json.JSONDecodeError, ImportError):
+                new_radiation = radiation
 
             if new_energy == energy and new_radiation == radiation and minutes_passed > 0:
                 # Даже без прироста двигаем таймер, чтобы не пересчитывать огромный gap.

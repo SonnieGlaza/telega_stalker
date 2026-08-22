@@ -50,8 +50,10 @@ class QuestContractTemplate:
     work_location: str
     min_transport: str | None = None  # "niva" | "truck"
     return_home: bool = True
-    # collect/scout/loot — поиск; clear_*/anomaly — угрозы; escort — сопровождение NPC A→B.
+    # collect/scout/loot/deliver_junk — тип работы на точке.
     mission_kind: str = "collect"
+    deliver_items: tuple[tuple[str, int], ...] = ()
+    min_gear_power: int = 0
 
 
 QUEST_CONTRACTS: dict[str, QuestContractTemplate] = {
@@ -152,6 +154,33 @@ QUEST_CONTRACTS: dict[str, QuestContractTemplate] = {
         "Рыжий лес",
         min_transport="truck",
         mission_kind="anomaly",
+        min_gear_power=14,
+    ),
+    "easy_deliver_junk": QuestContractTemplate(
+        "easy_deliver_junk",
+        "easy",
+        "Сдать мусор с Свалки",
+        "Свалка",
+        mission_kind="deliver_junk",
+        deliver_items=(("artifact_junk_bolt", 3), ("artifact_junk_slime", 2)),
+    ),
+    "hard_deliver_junk": QuestContractTemplate(
+        "hard_deliver_junk",
+        "hard",
+        "Партия хлама с Радара",
+        "Радар",
+        min_transport="niva",
+        mission_kind="deliver_junk",
+        deliver_items=(("artifact_junk_battery", 2), ("artifact_junk_flash", 2), ("artifact_junk_stone", 2)),
+    ),
+    "heavy_deliver_junk": QuestContractTemplate(
+        "heavy_deliver_junk",
+        "heavy",
+        "Разбор находок в долине",
+        "Темная долина",
+        min_transport="niva",
+        mission_kind="deliver_junk",
+        deliver_items=(("artifact_junk_splinter", 3), ("artifact_junk_bolt", 3)),
     ),
 }
 
@@ -284,6 +313,13 @@ SEASON_RANK_REWARDS: dict[int, tuple[tuple[str, str], ...]] = {
     ),
     2: (("weapon_season_silver", "ВСС «Серебряный сталкер»"),),
     3: (("armor_season_bronze", "Бронекостюм «Бронза сезона»"),),
+    4: (("artifact_fire", "Арт «Жар»"),),
+    5: (("artifact_blood", "Арт «Кровь»"),),
+    6: (("artifact_power", "Арт «Сила»"),),
+    7: (("artifact_vitality", "Арт «Живучесть»"),),
+    8: (("artifact_antirad", "Арт «Антирад»"),),
+    9: (("artifact_crystal", "Арт «Кристалл»"),),
+    10: (("artifact", "Артефакт Зоны"),),
 }
 SEASON_REWARD_ITEM_KEYS: frozenset[str] = frozenset(SEASON_REWARD_WEAPONS) | frozenset(SEASON_REWARD_ARMOR)
 
@@ -819,14 +855,45 @@ def location_artifact_spawn_table(location: str, detector_base_chance: int) -> l
     return table
 
 
-def roll_location_artifact_drop(location: str, detector_base_chance: int) -> str | None:
+def roll_location_artifact_drop(
+    location: str,
+    detector_base_chance: int,
+    storage: Storage | None = None,
+    *,
+    detector_key: str | None = None,
+    drop_mult: float = 1.0,
+) -> str | None:
     """Поиск на локации: взаимоисключающий ролл по таблице спавна."""
     table = location_artifact_spawn_table(location, detector_base_chance)
+    if storage is not None:
+        from app.artifact_features import artifact_hotspot_multiplier
+
+        mult = artifact_hotspot_multiplier(storage, location)
+        if mult > 1.0:
+            table = [
+                (key, float(chance) * mult if key not in ("artifact",) and key not in dict(ARTIFACT_TOP_LOCATION_SPAWNS.get(location, ())) else float(chance))
+                for key, chance in table
+            ]
+    if drop_mult > 1.0:
+        top_keys = dict(ARTIFACT_TOP_LOCATION_SPAWNS.get(location, ()))
+        table = [
+            (
+                key,
+                float(chance) * drop_mult
+                if key not in ("artifact",) and key not in top_keys
+                else float(chance),
+            )
+            for key, chance in table
+        ]
     roll = random.uniform(0.0, 100.0)
     cumulative = 0.0
     for key, chance in table:
         cumulative += float(chance)
         if roll < cumulative:
+            if detector_key:
+                from app.artifact_features import filter_roll_for_detector
+
+                return filter_roll_for_detector(detector_key, key)
             return key
     return None
 
@@ -1672,21 +1739,31 @@ def equipment_power(character: Character) -> int:
     weapon_level = _weapon_rating(weapon_name)
     armor_level = _armor_rating(armor_name)
     artifact_bonus = 0
-    for artifact_name in _equipped_artifact_names(character):
-        if artifact_name in ARTIFACT_EQUIP_BONUSES:
-            artifact_bonus += int(ARTIFACT_EQUIP_BONUSES[artifact_name].get("power", 0))
-        else:
-            artifact_bonus += 2
+    try:
+        from app.artifact_features import scaled_artifact_power_bonus
+
+        artifact_bonus = scaled_artifact_power_bonus(character)
+    except Exception:
+        for artifact_name in _equipped_artifact_names(character):
+            if artifact_name in ARTIFACT_EQUIP_BONUSES:
+                artifact_bonus += int(ARTIFACT_EQUIP_BONUSES[artifact_name].get("power", 0))
+            else:
+                artifact_bonus += 2
     durability_penalty = _durability_penalty(weapon_durability, 6) + _durability_penalty(armor_durability, 6)
     # Жёсткий потолок шкалы профиля: топ оружие+броня+арты = 20.
     return max(1, min(20, weapon_level + armor_level + artifact_bonus - durability_penalty))
 
 
 def _artifact_hp_bonus(character: Character) -> int:
-    total = 0
-    for artifact_name in _equipped_artifact_names(character):
-        total += int(ARTIFACT_EQUIP_BONUSES.get(artifact_name, {}).get("hp", 0))
-    return total
+    try:
+        from app.artifact_features import scaled_artifact_hp_bonus
+
+        return scaled_artifact_hp_bonus(character)
+    except Exception:
+        total = 0
+        for artifact_name in _equipped_artifact_names(character):
+            total += int(ARTIFACT_EQUIP_BONUSES.get(artifact_name, {}).get("hp", 0))
+        return total
 
 
 def effective_max_health(character: Character) -> int:
@@ -1718,11 +1795,17 @@ def armor_block_chance(character: Character) -> int:
 
 
 def apply_incoming_damage(raw_damage: int, character: Character, *, min_damage: int = 1) -> int:
-    """Блок брони → 0; иначе урон − смягчение брони − апгрейды (не ниже min_damage)."""
+    """Блок брони → 0; иначе урон − смягчение брони − апгрейды − арты (не ниже min_damage)."""
     chance = armor_block_chance(character)
     if chance > 0 and random.randint(1, 100) <= chance:
         return 0
-    reduced = int(raw_damage) - armor_flat_mitigation(character) - armor_defense(character)
+    try:
+        from app.artifact_features import artifact_incoming_damage_reduction
+
+        art_reduce = artifact_incoming_damage_reduction(character)
+    except Exception:
+        art_reduce = 0
+    reduced = int(raw_damage) - armor_flat_mitigation(character) - armor_defense(character) - art_reduce
     return max(min_damage, reduced)
 
 
@@ -1980,6 +2063,113 @@ def build_battle_death_text(
 
 DEATH_LOG_MAX_ENTRIES = 5
 DEATH_LOG_TEXT_LIMIT = 400
+ARTIFACT_FIND_LOG_MAX_ENTRIES = 20
+ARTIFACT_FIND_SOURCE_LABELS: dict[str, str] = {
+    "hunt": "Охота",
+    "quest": "Контракт",
+    "raid": "Рейд",
+}
+
+
+def _artifact_find_log_key(telegram_id: int) -> str:
+    return f"artifact_find_log:{int(telegram_id)}"
+
+
+def append_artifact_find_log(
+    storage: Storage,
+    telegram_id: int,
+    art_key: str,
+    *,
+    location: str,
+    source: str,
+    detector_name: str | None = None,
+) -> None:
+    """Журнал находок артефактов (ценные и мусор) — последние N записей в meta."""
+    key = normalize_shop_item_key(art_key)
+    if key not in ARTIFACT_ALL_KEYS:
+        return
+    label = ITEM_LABELS.get(key, key)
+    if key in ARTIFACT_JUNK_KEYS:
+        label = f"{label} (мусор)"
+    source_label = ARTIFACT_FIND_SOURCE_LABELS.get(source, source)
+    detail = source_label
+    if detector_name and source == "hunt":
+        detail = f"{source_label} · {detector_name}"
+    entry = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "art_key": key,
+        "label": label,
+        "location": str(location or "").strip() or "неизвестно",
+        "source": source,
+        "detail": detail,
+    }
+    meta_key = _artifact_find_log_key(telegram_id)
+    raw = storage.get_meta(meta_key)
+    entries: list[dict[str, str]] = []
+    if raw:
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, list):
+                entries = [e for e in loaded if isinstance(e, dict)]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            entries = []
+    entries.append(entry)
+    entries = entries[-ARTIFACT_FIND_LOG_MAX_ENTRIES:]
+    storage.set_meta(meta_key, json.dumps(entries, ensure_ascii=False))
+
+
+def on_artifact_found(
+    storage: Storage,
+    telegram_id: int,
+    art_key: str,
+    *,
+    location: str,
+    source: str,
+    detector_name: str | None = None,
+) -> None:
+    """Статистика ценных артов + запись в журнал находок."""
+    if art_key in ARTIFACT_JUNK_KEYS:
+        from app.artifact_features import note_junk_type_seen
+
+        note_junk_type_seen(storage, telegram_id, art_key)
+    else:
+        record_valuable_artifact_found_stat(storage, telegram_id, art_key)
+    append_artifact_find_log(
+        storage,
+        telegram_id,
+        art_key,
+        location=location,
+        source=source,
+        detector_name=detector_name,
+    )
+
+
+def build_artifact_find_log_text(storage: Storage, telegram_id: int) -> str:
+    """Журнал находок: последние записи, новые сверху."""
+    raw = storage.get_meta(_artifact_find_log_key(telegram_id))
+    entries: list[dict[str, str]] = []
+    if raw:
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, list):
+                entries = [e for e in loaded if isinstance(e, dict)]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            entries = []
+    if not entries:
+        return (
+            "💎 Журнал находок пуст.\n"
+            "Здесь появятся артефакты с охоты, контрактов и рейдов — с локацией и источником."
+        )
+    lines = ["💎 Журнал находок (последние записи, UTC):", ""]
+    for idx, entry in enumerate(reversed(entries), start=1):
+        when = _format_death_log_when(str(entry.get("at") or ""))
+        label = str(entry.get("label") or entry.get("art_key") or "?")
+        location = str(entry.get("location") or "?")
+        detail = str(entry.get("detail") or entry.get("source") or "?")
+        lines.append(f"{idx}. {when} — {label}")
+        lines.append(f"   📍 {location} · {detail}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def _death_log_key(telegram_id: int) -> str:
@@ -2229,7 +2419,12 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
         paid = 0
         debt_added = cost
 
+    from app.artifact_features import strip_equipped_artifacts_for_death
+
+    insurance_text = strip_equipped_artifacts_for_death(storage, telegram_id)
     loot_text = _apply_death_inventory_loot(storage, telegram_id)
+    if insurance_text:
+        loot_text = f"{insurance_text}\n\n{loot_text}"
     death_cause = peek_death_cause(storage, telegram_id)
     survival_death = death_cause in {"hunger", "thirst"}
     current_health = player.health
@@ -2381,14 +2576,15 @@ def _season_reward_blurb() -> str:
         "🥇 РПК «Чемпион Зоны» + Костюм «Чемпион Зоны»\n"
         "🥈 ВСС «Серебряный сталкер»\n"
         "🥉 Бронекостюм «Бронза сезона»\n"
+        "4–10 места — редкие артефакты (Жар, Кровь, Сила…)\n"
         "🏷 Титулы в чатах: Чемпион Зоны / Серебро сезона / Бронза сезона"
     )
 
 
 def _grant_season_rating_rewards(storage: Storage, top: list[dict[str, Any]]) -> list[str]:
     lines: list[str] = []
-    medals = ["🥇", "🥈", "🥉"]
-    for idx, row in enumerate(top[:3], start=1):
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+    for idx, row in enumerate(top[:10], start=1):
         rewards = SEASON_RANK_REWARDS.get(idx)
         if not rewards:
             continue
@@ -2416,7 +2612,7 @@ def process_rating_season(storage: Storage) -> str | None:
     if now < ends_at:
         return None
 
-    top = storage.get_season_rating_leaderboard(limit=3)
+    top = storage.get_season_rating_leaderboard(limit=10)
     try:
         from app.player_medals import remember_season_podium
 
@@ -2654,6 +2850,22 @@ def _achievement_rules() -> tuple[AchievementRule, ...]:
             check=lambda stats, _: stats["artifacts_found"] >= 50,
         ),
         AchievementRule(
+            key="junk_collection",
+            title="Энциклопедия мусора",
+            description="Собери все типы мусорных артефактов",
+            reward_ru=600,
+            reward_rating=40,
+            check=lambda *_: False,
+        ),
+        AchievementRule(
+            key="artifact_slots_3",
+            title="Три слота",
+            description="Экипируй 3 артефакта одновременно",
+            reward_ru=800,
+            reward_rating=50,
+            check=lambda *_: False,
+        ),
+        AchievementRule(
             key="death_3",
             title="Бессмертный?",
             description="Погибни 3 раза",
@@ -2804,6 +3016,17 @@ def _progress_and_unlock_achievements(storage: Storage, telegram_id: int) -> str
             rank = _player_rating_rank(storage, telegram_id, limit=10)
             need = RATING_TOP_ACHIEVEMENT_RANKS[rule.key]
             ok = rank is not None and rank <= need
+        elif rule.key == "junk_collection":
+            from app.artifact_features import junk_types_collected_count
+
+            ok = junk_types_collected_count(storage, telegram_id) >= len(ARTIFACT_JUNK_KEYS)
+        elif rule.key == "artifact_slots_3":
+            equipped = sum(
+                1
+                for key in ARTIFACT_EQUIP_SLOT_KEYS
+                if str(character.equipment.get(key, "Нет") or "Нет") not in {"", "Нет"}
+            )
+            ok = equipped >= 3 and max_artifact_slots(character) >= 3
         else:
             ok = rule.check(stats, character)
         if not ok:
@@ -3557,6 +3780,11 @@ def accept_quest_contract(
     if not _has_transport(character, template.min_transport):
         need = _transport_requirement_text(template.min_transport).strip(" ()")
         return ActionResult(False, f"Для этого контракта {need or 'нужен транспорт'}.")
+    if template.min_gear_power > 0 and equipment_power(character) < template.min_gear_power:
+        return ActionResult(
+            False,
+            f"Нужна сила снаряги ≥ {template.min_gear_power} (сейчас {equipment_power(character)}).",
+        )
 
     payload: dict[str, Any] = {"template_key": template.key, "stage": "work", "pending_reward": 0}
     if vendor in {"barkeep", "medic", "tech"}:
@@ -3781,6 +4009,15 @@ def apply_contract_mission_success(
         return ActionResult(False, "Персонаж не найден.")
 
     durability_text = _apply_durability_decay(storage, telegram_id, weapon_loss=3, armor_loss=2)
+    wear_notes = ""
+    try:
+        from app.artifact_features import apply_quest_artifact_wear
+
+        wear_lines = apply_quest_artifact_wear(storage, telegram_id)
+        if wear_lines:
+            wear_notes = "\n" + "\n".join(wear_lines)
+    except Exception:
+        logger.exception("Artifact wear after contract failed for %s", telegram_id)
     rating_success, _rating_fail = QUEST_RATING_BY_DIFFICULTY.get(
         quest.key,
         (RATING_REWARD["quest_success"], RATING_REWARD["quest_fail"]),
@@ -3807,13 +4044,28 @@ def apply_contract_mission_success(
     storage.add_player_stat(telegram_id, "quests_completed", 1)
     storage.add_player_stat(telegram_id, "money_earned", reward)
 
+    updated = storage.get_character(telegram_id, refresh_energy=False)
+    detector_key = None
+    if updated is not None:
+        for key, _, _ in ARTIFACT_DETECTORS:
+            if int(updated.inventory.get(key, 0)) > 0:
+                detector_key = key
+                break
     art_key = roll_location_artifact_drop(
         work_location,
-        best_detector_base_chance(updated) or 12,
+        best_detector_base_chance(updated) if updated else 12,
+        storage,
+        detector_key=detector_key,
     )
     if art_key is not None:
         storage.add_item(telegram_id, art_key, 1)
-        record_valuable_artifact_found_stat(storage, telegram_id, art_key)
+        on_artifact_found(
+            storage,
+            telegram_id,
+            art_key,
+            location=work_location,
+            source="quest",
+        )
         extra = f"\nНаходка на «{work_location}»: {ITEM_LABELS.get(art_key, art_key)}!"
     else:
         extra = ""
@@ -3859,7 +4111,7 @@ def apply_contract_mission_success(
         True,
         f"«{title}» выполнено на «{work_location}»!\n"
         f"Награда: {reward} RU{mult_note}, рейтинг +{rating_success}."
-        f"{extra}{stash_text}{durability_text}{achievements_text}{rep_note}{_maybe_help_event_reward(storage, telegram_id, title)}",
+        f"{extra}{stash_text}{durability_text}{wear_notes}{achievements_text}{rep_note}{_maybe_help_event_reward(storage, telegram_id, title)}",
         payload={"reward": reward},
     )
 
@@ -3945,10 +4197,74 @@ def run_contract_work(storage: Storage, telegram_id: int) -> ActionResult:
     if quest is None:
         return ActionResult(False, "Неизвестная сложность контракта.")
 
+    if template.mission_kind == "deliver_junk":
+        return _complete_deliver_junk_contract(storage, telegram_id, template, quest)
+
     # Grid-миссии (поиск / разведка / зачистка).
     from app.quest_mission import start_or_resume_quest_mission
 
     return start_or_resume_quest_mission(storage, telegram_id, template, quest)
+
+
+def _complete_deliver_junk_contract(
+    storage: Storage,
+    telegram_id: int,
+    template: QuestContractTemplate,
+    quest: QuestType,
+) -> ActionResult:
+    """Сдать мусорные артефакты без grid-миссии."""
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Персонаж не найден.")
+    missing: list[str] = []
+    for item_key, qty in template.deliver_items:
+        have = int(player.inventory.get(item_key, 0))
+        if have < qty:
+            missing.append(f"{ITEM_LABELS.get(item_key, item_key)} ×{qty - have}")
+    if missing:
+        return ActionResult(
+            False,
+            "Не хватает мусора для сдачи:\n" + "\n".join(f"• {line}" for line in missing),
+        )
+    spend_err = _spend_quest_resources(storage, telegram_id, quest)
+    if spend_err is not None:
+        return spend_err
+    for item_key, qty in template.deliver_items:
+        if not storage.remove_item(telegram_id, item_key, qty):
+            return ActionResult(False, "Ошибка списания мусора.")
+    result = apply_contract_mission_success(
+        storage,
+        telegram_id,
+        quest=quest,
+        work_location=template.work_location,
+        title=template.title,
+    )
+    if template.return_home:
+        storage.set_active_contract(
+            telegram_id,
+            {
+                "template_key": template.key,
+                "stage": "return",
+                "pending_reward": int((result.payload or {}).get("reward", 0)),
+            },
+        )
+        home = faction_home_base(player.faction)
+        auto = try_auto_turn_in_contract(storage, telegram_id)
+        if auto:
+            return ActionResult(
+                True,
+                result.text + "\n\n" + auto,
+                payload={"mission_done": True, "turned_in": True},
+            )
+        return ActionResult(
+            True,
+            result.text
+            + f"\n\nВернись на «{home}» — отчёт сдастся автоматически при прибытии "
+            + f"(+{CONTRACT_TURN_IN_BONUS_PERCENT}% RU).",
+            payload={"mission_done": True},
+        )
+    storage.set_active_contract(telegram_id, None)
+    return result
 
 
 def turn_in_quest_contract(storage: Storage, telegram_id: int) -> ActionResult:
@@ -5045,7 +5361,16 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
             )
         return ActionResult(True, f"Продано: {title} за {final_sell_price} RU.{upgrade_note}")
     if item_key in ARTIFACT_INVENTORY_TO_NAME:
+        from app.artifact_features import (
+            artifact_equip_cooldown_active,
+            artifact_faction_tax,
+            effective_artifact_trader_sell_price,
+            mark_artifact_equip_cooldown,
+            record_artifact_trader_sale,
+        )
+
         expected_name = ARTIFACT_INVENTORY_TO_NAME[item_key]
+        sell_price = effective_artifact_trader_sell_price(storage, item_key, sell_price)
         removed_from_inventory = storage.remove_item(telegram_id, item_key, 1)
         if not removed_from_inventory:
             slot_key = _artifact_equip_slot_for_name(character, expected_name)
@@ -5060,8 +5385,15 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
                     storage.change_health(telegram_id, max_hp - updated.health, max_health=max_hp)
         else:
             storage.sync_gear_power(telegram_id)
-        storage.change_money(telegram_id, sell_price)
-        return ActionResult(True, f"Продано: {title} за {sell_price} RU.")
+        payout, tax = artifact_faction_tax(sell_price, character.faction)
+        storage.change_money(telegram_id, payout)
+        record_artifact_trader_sale(storage, item_key)
+        mark_artifact_equip_cooldown(storage, telegram_id, item_key)
+        tax_note = f"\nНалог группировки 10%: −{tax} RU." if tax > 0 else ""
+        dynamic_note = ""
+        if payout != int(item["sell_price"]):
+            dynamic_note = f"\n(Динамическая цена скупки: база {item['sell_price']} RU.)"
+        return ActionResult(True, f"Продано: {title} за {payout} RU.{tax_note}{dynamic_note}")
     if item_key == "diesel_can":
         if not storage.change_diesel(telegram_id, -FUEL_CAN_DIESEL_AMOUNT):
             return ActionResult(False, "Недостаточно дизеля для продажи канистры.")
@@ -5266,6 +5598,9 @@ def _unequip_artifact_to_inventory(
     inv_key = ARTIFACT_NAME_TO_INVENTORY.get(equipped_name)
     if inv_key is not None:
         storage.add_item(telegram_id, inv_key, 1)
+        from app.artifact_features import mark_artifact_equip_cooldown
+
+        mark_artifact_equip_cooldown(storage, telegram_id, inv_key)
     storage.set_equipment_item(telegram_id, slot, "Нет")
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is not None:
@@ -5522,7 +5857,21 @@ def repair_niva(storage: Storage, telegram_id: int) -> ActionResult:
     return ActionResult(True, f"Нива полностью отремонтирована за {price} RU{discount_note}.{achievements_text}")
 
 
-def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = None) -> ActionResult:
+def equip_artifact(
+    storage: Storage,
+    telegram_id: int,
+    item_key: str | None = None,
+    *,
+    target_slot: str | None = None,
+) -> ActionResult:
+    from app.artifact_features import (
+        ARTIFACT_WEAR_MAX,
+        _wear_field,
+        artifact_bonus_entry,
+        artifact_equip_cooldown_active,
+        mark_artifact_equip_cooldown,
+    )
+
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
@@ -5538,6 +5887,12 @@ def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = No
             return ActionResult(False, "Мусорные артефакты нельзя экипировать — только продать торговцу.")
         return ActionResult(False, "Выбери артефакт в меню экипировки.")
 
+    if artifact_equip_cooldown_active(storage, telegram_id, chosen_key):
+        return ActionResult(
+            False,
+            "Этот тип артефакта нельзя экипировать сразу после продажи/снятия — подожди 1 ч.",
+        )
+
     if int(player.inventory.get(chosen_key, 0)) <= 0:
         return ActionResult(False, "У тебя нет этого артефакта в инвентаре.")
 
@@ -5550,35 +5905,44 @@ def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = No
             "Нужна броня T3 (1 ячейка) или T4+ (2 ячейки); улучшение у техника даёт ещё +1 (макс. 3).",
         )
 
-    equipped_names = [
-        str(player.equipment.get(key, "Нет") or "Нет") for key in ARTIFACT_EQUIP_SLOT_KEYS[:cap]
-    ]
+    slot_keys = ARTIFACT_EQUIP_SLOT_KEYS[:cap]
+    equipped_names = [str(player.equipment.get(key, "Нет") or "Нет") for key in slot_keys]
     if artifact_name in equipped_names:
         return ActionResult(False, f"{artifact_name} уже экипирован.")
 
     if not storage.remove_item(telegram_id, chosen_key, 1):
         return ActionResult(False, "У тебя нет этого артефакта в инвентаре.")
 
-    target_slot = ARTIFACT_EQUIP_SLOT_KEYS[0]
-    for idx in range(cap):
-        key = ARTIFACT_EQUIP_SLOT_KEYS[idx]
-        cur = str(player.equipment.get(key, "Нет") or "Нет")
-        if not cur or cur == "Нет":
-            target_slot = key
-            break
+    if target_slot and target_slot in slot_keys:
+        target = target_slot
     else:
-        # Все доступные ячейки заняты — меняем первую, старый арт в инвентарь.
-        old_name = equipped_names[0]
-        if old_name and old_name != "Нет":
-            old_key = ARTIFACT_NAME_TO_INVENTORY.get(old_name)
-            if old_key is not None:
-                storage.add_item(telegram_id, old_key, 1)
-        target_slot = ARTIFACT_EQUIP_SLOT_KEYS[0]
+        target = slot_keys[0]
+        for key in slot_keys:
+            cur = str(player.equipment.get(key, "Нет") or "Нет")
+            if not cur or cur == "Нет":
+                target = key
+                break
+        else:
+            old_name = equipped_names[0]
+            if old_name and old_name != "Нет":
+                old_key = ARTIFACT_NAME_TO_INVENTORY.get(old_name)
+                if old_key is not None:
+                    storage.add_item(telegram_id, old_key, 1)
+                    mark_artifact_equip_cooldown(storage, telegram_id, old_key)
+            target = slot_keys[0]
 
-    storage.set_equipment_item(telegram_id, target_slot, artifact_name)
+    cur_at_target = str(player.equipment.get(target, "Нет") or "Нет")
+    if cur_at_target and cur_at_target != "Нет" and cur_at_target != artifact_name:
+        old_key = ARTIFACT_NAME_TO_INVENTORY.get(cur_at_target)
+        if old_key is not None:
+            storage.add_item(telegram_id, old_key, 1)
+            mark_artifact_equip_cooldown(storage, telegram_id, old_key)
+
+    storage.set_equipment_item(telegram_id, target, artifact_name)
+    storage.update_equipment_fields(telegram_id, {_wear_field(target): ARTIFACT_WEAR_MAX})
     storage.sync_gear_power(telegram_id)
 
-    bonus = ARTIFACT_EQUIP_BONUSES.get(artifact_name, {"power": 0, "hp": 0})
+    bonus = artifact_bonus_entry(artifact_name)
     bonus_parts: list[str] = []
     if bonus.get("power"):
         bonus_parts.append(f"+{bonus['power']} к силе")
@@ -5594,18 +5958,17 @@ def equip_artifact(storage: Storage, telegram_id: int, item_key: str | None = No
                 storage.change_health(telegram_id, heal, max_health=max_hp)
     if hp_bonus:
         bonus_parts.append(f"+{hp_bonus} к запасу HP")
+    if bonus.get("rad_pressure"):
+        bonus_parts.append(f"+{bonus['rad_pressure']} рад/10 мин")
+    if bonus.get("cleanse_power"):
+        bonus_parts.append(f"очистка рад {bonus['cleanse_power']}")
     if chosen_key == "artifact":
         bonus_parts.append("+5% реген энергии")
-    if chosen_key == "artifact_antirad":
-        bonus_parts.append(
-            f"−{ARTIFACT_RAD_CLEANSE_AMOUNT} радиации каждые "
-            f"{ARTIFACT_RAD_CLEANSE_INTERVAL_MINUTES} мин"
-        )
     if not bonus_parts:
         bonus_parts.append("без доп. бонуса")
 
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
-    slot_idx = ARTIFACT_EQUIP_SLOT_KEYS.index(target_slot) + 1
+    slot_idx = ARTIFACT_EQUIP_SLOT_KEYS.index(target) + 1
     return ActionResult(
         True,
         f"Экипирован {artifact_name} (ячейка {slot_idx}/{cap}). "
@@ -9170,11 +9533,21 @@ def _execute_emission_wave(
         storage.set_meta(EMISSION_META_WARN30, "0")
         storage.set_meta(EMISSION_META_PHASE, "calm")
         storage.delete_meta(EMISSION_META_WAVE_AT)
+        hotspot_line = ""
+        try:
+            from app.artifact_features import set_post_emission_artifact_hotspot
+
+            hotspot_loc = set_post_emission_artifact_hotspot(storage)
+            if hotspot_loc:
+                hotspot_line = f"\n\n🔥 Горячая точка артефактов: «{hotspot_loc}» (×1.5 к локальному дропу, 24 ч)."
+        except Exception:
+            logger.exception("Failed to set post-emission artifact hotspot")
         message = (
             f"💥 ВЫБРОС — {wave_label} прошла!\n"
             f"Локации: {locations_text}.\n"
             f"Погибшие: {killed_text}.\n\n"
             f"☢️ Выброс полностью завершён. Следующий примерно через {EMISSION_INTERVAL_HOURS} ч."
+            f"{hotspot_line}"
         )
     else:
         next_wave_at = now + timedelta(minutes=EMISSION_WAVE_GAP_MINUTES)
@@ -10303,3 +10676,8 @@ def claim_clan_quest(storage: Storage, telegram_id: int) -> ActionResult:
         f"«{target}» под контролем «{player.faction}».\n"
         f"Награда: +{personal_reward} RU, +{CLAN_QUEST_RATING_REWARD} рейтинга.{treasury_note}",
     )
+
+
+from app.artifact_features import merge_extended_artifact_catalog
+
+merge_extended_artifact_catalog()

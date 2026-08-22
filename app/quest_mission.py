@@ -120,6 +120,7 @@ KIND_LABELS: dict[str, str] = {
     "clear_marauder": "Зачистка мародёров",
     "anomaly": "Аномалии",
     "escort": "Сопровождение",
+    "deliver_junk": "Сдача мусора",
 }
 
 
@@ -947,6 +948,8 @@ def _finalize_quest_death_result(
 
 
 def _combat_damage(location: str, difficulty: str, character: Character) -> int:
+    from app.artifact_features import artifact_outgoing_damage_mult
+
     danger = _location_danger(location, difficulty)
     base_lo = 6 + danger * 4
     base_hi = 12 + danger * 7
@@ -954,7 +957,8 @@ def _combat_damage(location: str, difficulty: str, character: Character) -> int:
     # Снаряга слегка режет урон.
     soak = min(12, equipment_power(character))
     pre_defense = max(4, raw - soak)
-    return apply_incoming_damage(pre_defense, character, min_damage=1)
+    dmg = apply_incoming_damage(pre_defense, character, min_damage=1)
+    return max(1, int(dmg / artifact_outgoing_damage_mult(character)))
 
 
 def _hazard_damage(kind: str, character: Character) -> int:
@@ -1210,6 +1214,12 @@ def start_or_resume_quest_mission(
     spend_err = _spend_quest_resources(storage, telegram_id, quest)
     if spend_err is not None:
         return spend_err
+
+    if template.min_gear_power > 0 and equipment_power(player) < template.min_gear_power:
+        return ActionResult(
+            False,
+            f"Нужна сила снаряги ≥ {template.min_gear_power} (сейчас {equipment_power(player)}).",
+        )
 
     session = _build_session(template, quest)
     session.resources_spent = True
@@ -1490,12 +1500,20 @@ def _complete_quest_turn_after_action(
         session.objectives_done = True
 
     def _commit_turn_and_damage() -> ActionResult | None:
-        nonlocal death_result
+        nonlocal death_result, player
         session.turn_seq = expected_seq + 1
         if not _save_mission_if_turn_ok(storage, telegram_id, session, expected_seq):
             from app.tactical_combat import STALE_TURN_MESSAGE
 
             return ActionResult(False, STALE_TURN_MESSAGE, payload={"mission_active": True})
+        from app.artifact_features import artifact_quest_heal_per_turn
+        from app.game_logic import effective_max_health
+
+        heal = artifact_quest_heal_per_turn(player)
+        if heal > 0:
+            storage.change_health(telegram_id, heal, max_health=effective_max_health(player))
+            notes.append(f"💚 Артефакты: +{heal} HP")
+            player = storage.get_character(telegram_id, refresh_energy=False) or player
         _apply_quest_mission_damage(storage, telegram_id, pending_damage)
         death_result = _quest_death_from_pending_damage(
             storage, telegram_id, session, death_result=death_result
