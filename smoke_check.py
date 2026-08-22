@@ -147,6 +147,16 @@ def run_smoke_check() -> None:
         already_t2 = upgrade_faction_bots(storage, 111)
         assert not already_t2.ok
 
+        from app.faction_bots import apply_location_control, garrison_defenders_for_location
+
+        neutral_for_garrison = next(
+            loc["name"]
+            for loc in storage.get_locations()
+            if not loc.get("controlled_by") and str(loc.get("point_type") or "") != "база"
+        )
+        apply_location_control(storage, str(neutral_for_garrison), "Долг")
+        assert garrison_defenders_for_location(storage, str(neutral_for_garrison), "Долг") >= 1
+
         # Referral rewards.
         from app.game_logic import (
             apply_referral_rewards,
@@ -1469,7 +1479,7 @@ def run_smoke_check() -> None:
         assert war_join.ok, war_join.text
         too_few = launch_war_lobby(storage, 111)
         assert not too_few.ok, too_few.text
-        assert "5" in too_few.text
+        assert "3" in too_few.text
         assert build_war_lobby_overview(storage, 111)
         assert "Создал:" in build_war_lobby_overview(storage, 111)
         from app.game_logic import dissolve_war_lobby, can_dissolve_war_lobby
@@ -1483,12 +1493,11 @@ def run_smoke_check() -> None:
         storage.restore_energy(111, 100)
         storage.restore_energy(222, 100)
         create_or_join_war_lobby(storage, 222, "Янтарь")
-        for extra_id, extra_name in ((501, "Duty3"), (502, "Duty4"), (503, "Duty5")):
-            storage.create_character(extra_id, extra_name, "Мужской")
-            storage.set_faction(extra_id, "Долг")
-            storage.restore_energy(extra_id, 100)
-            join_extra = create_or_join_war_lobby(storage, extra_id, "Янтарь")
-            assert join_extra.ok, join_extra.text
+        storage.create_character(501, "Duty3", "Мужской")
+        storage.set_faction(501, "Долг")
+        storage.restore_energy(501, 100)
+        join_extra = create_or_join_war_lobby(storage, 501, "Янтарь")
+        assert join_extra.ok, join_extra.text
         war_launch = launch_war_lobby(storage, 111)
         assert war_launch.text
         if war_launch.tactical_cwar:

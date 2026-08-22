@@ -425,7 +425,9 @@ def _check_capture(session: ClanWarGridSession) -> bool:
 def _finalize_success(storage: Storage, session: ClanWarGridSession) -> ActionResult:
     if session.monolith_defense:
         # Монолит удержал точку — штурм захватчиков провален.
-        storage.set_location_control(session.location_name, session.host_faction)
+        from app.faction_bots import apply_location_control
+
+        apply_location_control(storage, session.location_name, session.host_faction)
         storage.finish_war_lobby(
             session.war_id,
             "failed",
@@ -464,7 +466,9 @@ def _finalize_success(storage: Storage, session: ClanWarGridSession) -> ActionRe
         and bool(previous_owner)
         and previous_owner != session.host_faction
     )
-    storage.set_location_control(session.location_name, session.host_faction)
+    from app.faction_bots import apply_location_control
+
+    apply_location_control(storage, session.location_name, session.host_faction)
     storage.finish_war_lobby(session.war_id, "success", f"Тактическая победа: {session.host_faction}")
     host_paid = 0
     ally_paid = 0
@@ -506,7 +510,9 @@ def _finalize_success(storage: Storage, session: ClanWarGridSession) -> ActionRe
 
 def _finalize_fail(storage: Storage, session: ClanWarGridSession, reason: str) -> ActionResult:
     if session.monolith_defense and session.invader_faction:
-        storage.set_location_control(session.location_name, session.invader_faction)
+        from app.faction_bots import apply_location_control
+
+        apply_location_control(storage, session.location_name, session.invader_faction)
         storage.finish_war_lobby(
             session.war_id,
             "success",
@@ -626,6 +632,17 @@ def start_clan_war_grid(
 
     location = storage.get_location(location_name) or {}
     defense_bonus = max(0, int(location.get("defense_bonus") or 0))
+    if extra_defenders <= 0:
+        from app.faction_bots import garrison_defenders_for_location
+
+        if monolith_defense:
+            extra_defenders = garrison_defenders_for_location(storage, location_name, host_faction)
+        else:
+            defender_faction = str(location.get("controlled_by") or "")
+            if defender_faction and defender_faction != host_faction:
+                extra_defenders = garrison_defenders_for_location(
+                    storage, location_name, defender_faction
+                )
 
     session_id = uuid.uuid4().hex[:12]
     session = ClanWarGridSession(
@@ -651,9 +668,14 @@ def start_clan_war_grid(
         if defense_bonus
         else ""
     )
+    garrison_note = (
+        f" Гарнизон: +{extra_defenders} ботов группировки."
+        if extra_defenders
+        else ""
+    )
     session.log.append(
         f"Штурм «{location_name}»: поле {CWAR_GRID_SIZE}×{CWAR_GRID_SIZE}, "
-        f"база справа (+{BASE_COVER_ARMOR_BONUS} брони). Таймер {CWAR_MATCH_SECONDS // 60} мин.{fortify_note}"
+        f"база справа (+{BASE_COVER_ARMOR_BONUS} брони). Таймер {CWAR_MATCH_SECONDS // 60} мин.{fortify_note}{garrison_note}"
     )
     save_cwar_session(storage, session)
     _register_active(storage, session_id)
@@ -662,6 +684,7 @@ def start_clan_war_grid(
         f"Бойцов: {len(player_ids)}. Захвати центр ({CWAR_CAPTURE_TURNS} хода на точке).\n"
         f"Укрытия базы справа дают +{BASE_COVER_ARMOR_BONUS} брони защитникам.\n"
         + (f"Укрепление точки: +{defense_bonus} (доп. защитники и +{defense_bonus} к урону).\n" if defense_bonus else "")
+        + (f"Гарнизон на точке: +{extra_defenders} ботов.\n" if extra_defenders else "")
         + f"Таймер: {CWAR_MATCH_SECONDS // 60} мин."
     )
     return ActionResult(True, text, payload={"cwar_started": True, "session_id": session_id}), session

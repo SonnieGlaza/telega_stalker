@@ -4,7 +4,7 @@ from typing import Any
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
-from app.game_logic import TOPUP_RATE_RU_PER_STAR, default_trader_sell_catalog_buttons
+from app.game_logic import TOPUP_RATE_RU_PER_STAR, WAR_MIN_FACTION_MEMBERS, default_trader_sell_catalog_buttons
 
 
 def gender_keyboard() -> InlineKeyboardMarkup:
@@ -997,7 +997,12 @@ def war_lobby_keyboard(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="➕ Вступить в лобби", callback_data="war_lobby:join")],
-        [InlineKeyboardButton(text="🚀 Запустить штурм (мин. 5 бойцов)", callback_data="war_lobby:launch")],
+        [
+            InlineKeyboardButton(
+                text=f"🚀 Запустить штурм (мин. {WAR_MIN_FACTION_MEMBERS} бойцов)",
+                callback_data="war_lobby:launch",
+            )
+        ],
     ]
     if monolith_join:
         rows.append(
@@ -1035,7 +1040,12 @@ def war_sections_keyboard(*, monolith: bool = False) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📘 Правила и дипломатия", callback_data="war:section:scenario")],
         [InlineKeyboardButton(text="🎯 Захват нейтральных точек", callback_data="war:section:ncap")],
         [InlineKeyboardButton(text="🎁 Передача точки союзнику", callback_data="war:section:transfer")],
-        [InlineKeyboardButton(text="🪖 Военные лобби (мин. 5 бойцов)", callback_data="war:section:lobby")],
+        [
+            InlineKeyboardButton(
+                text=f"🪖 Военные лобби (мин. {WAR_MIN_FACTION_MEMBERS} бойцов)",
+                callback_data="war:section:lobby",
+            )
+        ],
     ]
     if monolith:
         rows.insert(
