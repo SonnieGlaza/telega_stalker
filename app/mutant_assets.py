@@ -19,6 +19,7 @@ MUTANTS_SOURCE_DIR = MUTANTS_DIR / "source"
 
 # Размер спрайта на клетке миссии (клетка 108px, игрок ~144px).
 MISSION_MUTANT_GRID_DIAMETER = 80
+MISSION_GIANT_GRID_DIAMETER = 96
 MISSION_MUTANT_GRID_SIZE = 88
 MISSION_MUTANT_CARD_SIZE = 256
 
@@ -29,6 +30,7 @@ MUTANT_SPRITES: dict[str, str] = {
     "bloodsucker": "Кровосос",
     "flesh": "Плоть",
     "controller": "Контролёр",
+    "giant": "Псевдогигант",
     "burer": "Бюрер",
     "zombie": "Зомбированный",
 }
@@ -169,6 +171,19 @@ def load_mutant_card_sprite(kind: str) -> bytes | None:
     if not path.is_file():
         return None
     return path.read_bytes()
+
+
+def mutant_grid_diameter(kind: str, *, default: int = MISSION_MUTANT_GRID_DIAMETER) -> int:
+    if kind == "giant":
+        return MISSION_GIANT_GRID_DIAMETER
+    return default
+
+
+def special_event_call_photo(event_kind: str) -> bytes | None:
+    """Карточка мутанта для объявления особого события в общем чате."""
+    if event_kind == "giant":
+        return load_mutant_card_sprite("giant")
+    return None
 
 
 def mutant_sprite_image(kind: str, *, card: bool = False) -> Image.Image | None:

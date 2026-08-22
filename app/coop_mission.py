@@ -33,6 +33,7 @@ from app.mutant_assets import (
     MISSION_MUTANT_GRID_DIAMETER,
     MUTANT_SPRITE_KEYS,
     MUTANT_SPRITES,
+    mutant_grid_diameter,
     mutant_sprite_image,
     pick_mutant_kind,
 )
@@ -1654,8 +1655,10 @@ def render_coop_frame(storage: Storage, session: CoopMissionSession, viewer_id: 
         cy = margin + ey * cell + cell // 2
         kind = session.enemy_kinds[i] if i < len(session.enemy_kinds) else MUTANT_SPRITE_KEYS[i % len(MUTANT_SPRITE_KEYS)]
         sprite = mutant_sprite_image(kind)
+        enemy_diameter = mutant_grid_diameter(kind, default=MISSION_MUTANT_GRID_DIAMETER)
+        ring_w = 4 if kind == "giant" else 3
         if sprite is not None:
-            _paste_circle(canvas, sprite, cx, cy, MISSION_MUTANT_GRID_DIAMETER, ring_color=enemy_ring, ring_width=3)
+            _paste_circle(canvas, sprite, cx, cy, enemy_diameter, ring_color=enemy_ring, ring_width=ring_w)
         else:
             _draw_enemy_icon(draw, cx, cy, marauder=False)
         hp_val = session.enemy_hp[i] if i < len(session.enemy_hp) else None

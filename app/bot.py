@@ -9266,11 +9266,26 @@ async def run_bot() -> None:
                         else format_special_resolve_html(str(special_payload.get("text") or ""))
                     )
                     try:
-                        await bot.send_message(
-                            ZONE_COMMON_CHAT_ID,
-                            html,
-                            parse_mode=ParseMode.HTML,
+                        from app.mutant_assets import special_event_call_photo
+
+                        photo = (
+                            special_event_call_photo(str(event.get("kind") or ""))
+                            if special_payload.get("kind") == "call"
+                            else None
                         )
+                        if photo:
+                            await bot.send_photo(
+                                ZONE_COMMON_CHAT_ID,
+                                BufferedInputFile(photo, filename="giant.png"),
+                                caption=html,
+                                parse_mode=ParseMode.HTML,
+                            )
+                        else:
+                            await bot.send_message(
+                                ZONE_COMMON_CHAT_ID,
+                                html,
+                                parse_mode=ParseMode.HTML,
+                            )
                     except Exception:
                         logger.exception("Failed to post special event to common chat")
             except Exception:

@@ -518,6 +518,12 @@ def run_smoke_check() -> None:
 
         giant_session = get_mission_session(storage, 111)
         assert giant_session is not None
+        assert "giant" in (giant_session.enemy_kinds or [])
+        from app.mutant_assets import load_mutant_card_sprite, load_mutant_grid_sprite, special_event_call_photo
+
+        assert load_mutant_grid_sprite("giant") is not None
+        assert load_mutant_card_sprite("giant") is not None
+        assert special_event_call_photo("giant") is not None
         # Эфемерные ключи special-event должны проходить finish (не «Контракт повреждён»).
         giant_finish = _finish_success(storage, 111, giant_session)
         assert giant_finish.ok, giant_finish.text

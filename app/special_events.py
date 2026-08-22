@@ -393,10 +393,11 @@ def format_special_call_html(event: dict[str, Any]) -> str:
         "bandit_blockade": "🔫",
         "dark_stalker": "🕶",
         "monolith_rescue": "⛓",
-        "giant": "👹",
+        "giant": "",
         "monolith_march": "☢",
     }.get(kind, "📡")
-    return f"{emoji} <b>{title}</b>\n{body}"
+    prefix = f"{emoji} " if emoji else ""
+    return f"{prefix}<b>{title}</b>\n{body}"
 
 
 def format_special_resolve_html(text: str) -> str:
@@ -923,7 +924,7 @@ def special_event_button_label(storage: Storage) -> str | None:
         "bandit_blockade": "🔫 Штурмовать логово бандитов",
         "dark_stalker": "🕶 Вызвать Тёмного сталкера",
         "monolith_rescue": "⛓ Спасти пленного на Заводе",
-        "giant": "👹 Атаковать псевдогиганта",
+        "giant": "Атаковать псевдогиганта",
         "monolith_march": "☢ Перехватить колонну Монолита",
     }.get(kind)
 

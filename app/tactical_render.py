@@ -9,7 +9,13 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from app.artifact_hunt import _paste_circle
-from app.mutant_assets import MISSION_MUTANT_GRID_DIAMETER, MUTANT_SPRITE_KEYS, mutant_sprite_image, pick_mutant_kind
+from app.mutant_assets import (
+    MISSION_MUTANT_GRID_DIAMETER,
+    MUTANT_SPRITE_KEYS,
+    mutant_grid_diameter,
+    mutant_sprite_image,
+    pick_mutant_kind,
+)
 from app.npc_assets import MISSION_NPC_GRID_DIAMETER, NPC_SPRITE_KEYS, npc_sprite_image
 from app.storage import Character, Storage
 
@@ -168,6 +174,7 @@ def paste_mutant_sprite(
     wave: bool = False,
 ) -> None:
     key = kind or pick_mutant_kind()
+    draw_diameter = mutant_grid_diameter(key, default=diameter)
     sprite = mutant_sprite_image(key)
     if sprite is not None:
         if key == "bloodsucker":
@@ -175,16 +182,17 @@ def paste_mutant_sprite(
             r, g, b, a = sprite.split()
             a = a.point(lambda p: min(255, int(p * 1.25) + 48) if p > 0 else 0)
             sprite = Image.merge("RGBA", (r, g, b, a))
-            _paste_circle(canvas, sprite, cx, cy, diameter, ring_color=ring_color, ring_width=0)
+            _paste_circle(canvas, sprite, cx, cy, draw_diameter, ring_color=ring_color, ring_width=0)
             return
         ring = (255, 120, 80) if wave else ring_color
-        _paste_circle(canvas, sprite, cx, cy, diameter, ring_color=ring, ring_width=2)
+        ring_w = 3 if key == "giant" else 2
+        _paste_circle(canvas, sprite, cx, cy, draw_diameter, ring_color=ring, ring_width=ring_w)
         return
     color = (180, 60, 40) if wave else (50, 90, 45)
     outline = (255, 120, 80) if wave else (120, 200, 80)
     if key == "bloodsucker":
         outline = color
-    r = diameter // 2 - 4
+    r = draw_diameter // 2 - 4
     draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=color, outline=outline, width=2)
 
 

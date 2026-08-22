@@ -43,6 +43,7 @@ from app.mutant_assets import (
     MISSION_MUTANT_GRID_DIAMETER,
     MUTANT_SPRITE_KEYS,
     MUTANT_SPRITES,
+    mutant_grid_diameter,
     mutant_sprite_image,
     pick_mutant_kind,
 )
@@ -625,11 +626,12 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
                 mut_n += 3
             _spawn_mutants(mut_n, grid, forbidden, enemies, enemy_kinds)
             if giant_hunt and enemy_kinds:
-                # Помощники Гиганта: пара бюреров + зомбированные.
-                for i in range(len(enemy_kinds)):
-                    if i < 2:
+                # Босс — псевдогигант; остальные — бюреры и зомбированные.
+                enemy_kinds[0] = "giant"
+                for i in range(1, len(enemy_kinds)):
+                    if i <= 2:
                         enemy_kinds[i] = "burer"
-                    elif i < 5:
+                    elif i <= 5:
                         enemy_kinds[i] = "zombie"
         if want_npc:
             npc_n = base_n + (1 if kind == "clear_marauder" else 0)
@@ -1907,15 +1909,17 @@ def render_mission_frame(
             else MUTANT_SPRITE_KEYS[i % len(MUTANT_SPRITE_KEYS)]
         )
         sprite = mutant_sprite_image(kind)
+        enemy_diameter = mutant_grid_diameter(kind, default=MISSION_MUTANT_GRID_DIAMETER)
+        ring_w = 4 if kind == "giant" else 3
         if sprite is not None:
             _paste_circle(
                 canvas,
                 sprite,
                 cx,
                 cy,
-                MISSION_MUTANT_GRID_DIAMETER,
+                enemy_diameter,
                 ring_color=enemy_ring,
-                ring_width=3,
+                ring_width=ring_w,
             )
         else:
             _draw_enemy_icon(ImageDraw.Draw(canvas), cx, cy, marauder=False)
