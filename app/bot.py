@@ -185,6 +185,7 @@ from app.game_logic import (
     build_raids_overview,
     build_rating_overview,
     build_season_rating_overview,
+    build_faction_rating_overview,
     build_season_schedule_text,
     set_season_end,
     MSK_TZ,
@@ -6527,6 +6528,17 @@ async def show_ratings_menu_callback(callback: CallbackQuery) -> None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
     await edit_menu_message(callback, build_rating_menu_text(), ratings_keyboard())
+
+
+@router.callback_query(F.data == "ratings:factions")
+async def show_faction_ratings_callback(callback: CallbackQuery) -> None:
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    text = build_faction_rating_overview(get_storage(), player.telegram_id)
+    await edit_menu_message(callback, text, ratings_keyboard())
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("rating:alltime:page:"))

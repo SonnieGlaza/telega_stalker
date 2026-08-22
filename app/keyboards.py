@@ -1418,6 +1418,7 @@ def ratings_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Моя статистика", callback_data="ratings:stats")],
             [InlineKeyboardButton(text="🎖 Достижения и медали", callback_data="ratings:achievements")],
+            [InlineKeyboardButton(text="🏅 Рейтинг группировок", callback_data="ratings:factions")],
             [InlineKeyboardButton(text="🏆 Рейтинг за всё время", callback_data="rating:alltime:page:0")],
             [InlineKeyboardButton(text="📅 Рейтинг за сезон", callback_data="rating:season:page:0")],
         ]

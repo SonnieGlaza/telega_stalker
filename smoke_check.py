@@ -2776,7 +2776,17 @@ def run_smoke_check() -> None:
         medal_labels = [btn.text for row in ratings_keyboard().inline_keyboard for btn in row]
         assert "ratings:medals" not in medal_data
         assert "ratings:achievements" in medal_data
+        assert "ratings:factions" in medal_data
         assert any("Достижения и медали" in text for text in medal_labels)
+        assert any("группировок" in text for text in medal_labels)
+
+        from app.game_logic import compute_faction_dynamic_ratings, FACTION_RATING_PER_LOCATION
+
+        faction_rows = compute_faction_dynamic_ratings(storage)
+        assert len(faction_rows) == 5
+        assert all("total" in row for row in faction_rows)
+        dolg = next(row for row in faction_rows if row["faction"] == "Долг")
+        assert int(dolg["total"]) == int(dolg["locations"]) * FACTION_RATING_PER_LOCATION + int(dolg["power_sum"])
 
         from app.keyboards import vendor_upgrade_keyboard
 

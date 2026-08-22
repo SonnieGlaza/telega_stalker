@@ -3252,13 +3252,89 @@ def build_season_rating_overview(
     return ("\n".join(lines), safe_page, total_pages)
 
 
+FACTION_RATING_PER_LOCATION = 500
+FACTION_RATING_ORDER: tuple[str, ...] = ("Долг", "Свобода", "Нейтралы", "Бандиты", "Монолит")
+
+
 def build_rating_menu_text() -> str:
     return (
-        "🏆 Рейтинг сталкеров\n\n"
-        "• Рейтинг за всё время — общий топ-100.\n"
+        "🏆 Рейтинг\n\n"
+        "• Рейтинг за всё время — общий топ-100 сталкеров.\n"
         "• Рейтинг за сезон — топ текущего 14-дневного сезона; "
-        "топ-3 получают эксклюзивную снарягу (не продаётся у торговца)."
+        "топ-3 получают эксклюзивную снарягу.\n"
+        "• Рейтинг группировок — динамический: "
+        f"+{FACTION_RATING_PER_LOCATION} за каждую контролируемую локацию "
+        "и +сила снаряги каждого бойца ГП."
     )
+
+
+def compute_faction_dynamic_ratings(storage: Storage) -> list[dict[str, Any]]:
+    """Динамический рейтинг ГП: локации×500 + сумма gear_power членов."""
+    loc_counts: dict[str, int] = {}
+    loc_names: dict[str, list[str]] = {}
+    for location in storage.get_locations():
+        owner = str(location.get("controlled_by") or "").strip()
+        if not owner:
+            continue
+        loc_counts[owner] = loc_counts.get(owner, 0) + 1
+        loc_names.setdefault(owner, []).append(str(location.get("name") or "?"))
+
+    rows: list[dict[str, Any]] = []
+    for faction in FACTION_RATING_ORDER:
+        members = storage.list_faction_members(faction)
+        member_count = len(members)
+        power_sum = storage.get_faction_power(faction)
+        locations = int(loc_counts.get(faction, 0))
+        location_score = locations * FACTION_RATING_PER_LOCATION
+        total = location_score + power_sum
+        rows.append(
+            {
+                "faction": faction,
+                "locations": locations,
+                "location_names": sorted(loc_names.get(faction, [])),
+                "location_score": location_score,
+                "members": member_count,
+                "power_sum": power_sum,
+                "total": total,
+            }
+        )
+    rows.sort(key=lambda row: (-int(row["total"]), str(row["faction"])))
+    return rows
+
+
+def build_faction_rating_overview(storage: Storage, requester_id: int | None = None) -> str:
+    rows = compute_faction_dynamic_ratings(storage)
+    lines = [
+        "🏅 Рейтинг группировок (динамический)",
+        "",
+        f"Формула: локации × {FACTION_RATING_PER_LOCATION} + сумма силы снаряги бойцов.",
+        "Пересчитывается каждый раз при открытии — без накопления очков.",
+        "",
+    ]
+    medals = ("🥇", "🥈", "🥉")
+    requester_faction: str | None = None
+    if requester_id is not None:
+        player = storage.get_character(requester_id, refresh_energy=False)
+        if player is not None and player.faction:
+            requester_faction = player.faction
+
+    for index, row in enumerate(rows, start=1):
+        mark = medals[index - 1] if index <= 3 else f"{index}."
+        faction = str(row["faction"])
+        you = " ← ты" if requester_faction == faction else ""
+        lines.append(
+            f"{mark} {faction}{you} — {int(row['total'])} "
+            f"(локи {int(row['locations'])}×{FACTION_RATING_PER_LOCATION}="
+            f"{int(row['location_score'])}, сила бойцов {int(row['power_sum'])}, "
+            f"членов {int(row['members'])})"
+        )
+        names = list(row.get("location_names") or [])
+        if names:
+            shown = ", ".join(names[:6])
+            if len(names) > 6:
+                shown += f"… (+{len(names) - 6})"
+            lines.append(f"   📍 {shown}")
+    return "\n".join(lines)
 
 
 def _utc_now() -> datetime:
