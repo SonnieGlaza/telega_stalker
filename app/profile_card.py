@@ -701,10 +701,10 @@ def build_character_card(
     if flat_mit > 0 or defense > 0:
         bits = []
         if flat_mit > 0:
-            bits.append(f"−{flat_mit}")
+            bits.append(f"-{flat_mit}")
         if defense > 0:
-            bits.append(f"апгрейд −{defense}")
-        equipment_lines.append("Защита: " + " · ".join(bits))
+            bits.append(f"апгрейд -{defense}")
+        equipment_lines.append("Защита: " + ", ".join(bits))
     equipment_lines.append(f"Артефакт: {artifact_name}")
     art2 = str(equipment.get("artifact_2", "Нет") or "Нет")
     art3 = str(equipment.get("artifact_3", "Нет") or "Нет")
