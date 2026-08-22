@@ -1450,36 +1450,43 @@ def _tactical_grid_keyboard(
     medkit_label: str = "💊 Аптечка (1×)",
     revive_targets: list[tuple[int, str]] | None = None,
 ) -> InlineKeyboardMarkup:
-    refresh_row: list[InlineKeyboardButton] = [
-        InlineKeyboardButton(text="🔄 Обновить", callback_data=f"{prefix}:refresh"),
-    ]
-    if forfeit_label:
-        refresh_row.append(
-            InlineKeyboardButton(text=forfeit_label, callback_data=f"{prefix}:forfeit"),
-        )
+    refresh_btn = InlineKeyboardButton(text="🔄 Обновить", callback_data=f"{prefix}:refresh")
+    forfeit_btn = (
+        InlineKeyboardButton(text=forfeit_label, callback_data=f"{prefix}:forfeit")
+        if forfeit_label
+        else None
+    )
+    rows: list[list[InlineKeyboardButton]] = []
+    # Выход/отступление — первой строкой: на длинной клавиатуре нижние кнопки
+    # на телефоне часто уезжают за край экрана.
+    if forfeit_btn is not None:
+        rows.append([forfeit_btn])
     if not is_active_turn:
-        return InlineKeyboardMarkup(inline_keyboard=[refresh_row])
-    rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="🚶 ⬆️", callback_data=f"{prefix}:move:up")],
+        rows.append([refresh_btn])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+    rows.extend(
         [
-            InlineKeyboardButton(text="🚶 ⬅️", callback_data=f"{prefix}:move:left"),
-            InlineKeyboardButton(text="🚶 ⬇️", callback_data=f"{prefix}:move:down"),
-            InlineKeyboardButton(text="🚶 ➡️", callback_data=f"{prefix}:move:right"),
-        ],
-        [InlineKeyboardButton(text="🔫 ⬆️", callback_data=f"{prefix}:shoot:up")],
-        [
-            InlineKeyboardButton(text="🔫 ⬅️", callback_data=f"{prefix}:shoot:left"),
-            InlineKeyboardButton(text="🔫 ⬇️", callback_data=f"{prefix}:shoot:down"),
-            InlineKeyboardButton(text="🔫 ➡️", callback_data=f"{prefix}:shoot:right"),
-        ],
-    ]
+            [InlineKeyboardButton(text="🚶 ⬆️", callback_data=f"{prefix}:move:up")],
+            [
+                InlineKeyboardButton(text="🚶 ⬅️", callback_data=f"{prefix}:move:left"),
+                InlineKeyboardButton(text="🚶 ⬇️", callback_data=f"{prefix}:move:down"),
+                InlineKeyboardButton(text="🚶 ➡️", callback_data=f"{prefix}:move:right"),
+            ],
+            [InlineKeyboardButton(text="🔫 ⬆️", callback_data=f"{prefix}:shoot:up")],
+            [
+                InlineKeyboardButton(text="🔫 ⬅️", callback_data=f"{prefix}:shoot:left"),
+                InlineKeyboardButton(text="🔫 ⬇️", callback_data=f"{prefix}:shoot:down"),
+                InlineKeyboardButton(text="🔫 ➡️", callback_data=f"{prefix}:shoot:right"),
+            ],
+        ]
+    )
     if medkit_available:
         rows.append([InlineKeyboardButton(text=medkit_label, callback_data=f"{prefix}:medkit")])
     for target_id, label in revive_targets or []:
         rows.append(
             [InlineKeyboardButton(text=f"💊 Поднять {label}", callback_data=f"{prefix}:revive:{target_id}")]
         )
-    rows.append(refresh_row)
+    rows.append([refresh_btn])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

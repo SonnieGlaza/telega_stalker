@@ -652,6 +652,9 @@ def run_smoke_check() -> None:
             if btn.callback_data
         }
         assert "cwar:forfeit" in cwar_cbs
+        assert cwar_kb.inline_keyboard[0][0].callback_data == "cwar:forfeit"
+        cwar_active_kb = cwar_grid_keyboard(is_active_turn=True, medkit_available=True)
+        assert cwar_active_kb.inline_keyboard[0][0].callback_data == "cwar:forfeit"
         atk = start_monolith_attack(storage, 444, "Свалка")
         assert atk.ok, atk.text
         from app.monolith_war import format_monolith_war_call
@@ -662,6 +665,8 @@ def run_smoke_check() -> None:
         assert "Внимание" in attack_call
         assert "разведки" in attack_call
         assert "подключение бойцов" not in attack_call
+        assert "Окно" not in attack_call
+        assert "90/10" not in attack_call
         defend_call = format_monolith_war_call(
             {"location": MONOLITH_BASE, "mode": "defend", "host_faction": "Долг"}
         )
