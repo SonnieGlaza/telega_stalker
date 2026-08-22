@@ -438,7 +438,7 @@ def format_rotating_tops(storage: Storage, *, limit: int = 5) -> str:
         "",
         block("💰 Деньги на руках", money, lambda n: f"{n} RU", money_err),
         "",
-        block("💎 Артефактов найдено", arts, lambda n: f"{n} шт.", arts_err),
+        block("💎 Ценных артефактов найдено", arts, lambda n: f"{n} шт.", arts_err),
         "",
         block(
             "🏦 Донаты проекту",

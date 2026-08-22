@@ -757,36 +757,30 @@ ARTIFACT_DEFAULT_JUNK_SPAWNS: tuple[tuple[str, float], ...] = (
     ("artifact_junk_slime", 5.0),
 )
 
-# Абсолютные шансы дропа ценных артов с заданий (взаимоисключающие), %:
-ARTIFACT_DROP_RATES_PERCENT: tuple[tuple[str, float], ...] = (
-    ("artifact", 0.1),
-    ("artifact_antirad", 0.1),
-    ("artifact_power", 3.0),
-    ("artifact_vitality", 3.0),
-)
-# Только typed-арты в награде рейдов (без Зоны/Антирада):
+# Абсолютные шансы дропа typed-артов в награде рейдов (взаимоисключающие), %:
 ARTIFACT_RAID_DROP_RATES_PERCENT: tuple[tuple[str, float], ...] = (
     ("artifact_power", 3.0),
     ("artifact_vitality", 3.0),
 )
 
 
-def roll_artifact_drop() -> str | None:
-    """Ролл дропа ценного арта (задания/рейды). None — ничего не выпало."""
-    roll = random.uniform(0.0, 100.0)
-    cumulative = 0.0
-    for key, chance in ARTIFACT_DROP_RATES_PERCENT:
-        cumulative += float(chance)
-        if roll < cumulative:
-            return key
+def is_valuable_artifact_key(item_key: str) -> bool:
+    """Ценный арт (не мусор): можно экипировать и учитывать в статистике находок."""
+    return normalize_shop_item_key(item_key) in ARTIFACT_DROP_KEYS
+
+
+def record_valuable_artifact_found_stat(storage: Storage, telegram_id: int, art_key: str) -> None:
+    if is_valuable_artifact_key(art_key):
+        storage.add_player_stat(telegram_id, "artifacts_found", 1)
+
+
+def _artifact_equip_slot_for_name(character: Character, artifact_name: str) -> str | None:
+    """Слот экипировки, где надет арт с данным отображаемым именем, или None."""
+    for slot_key in ARTIFACT_EQUIP_SLOT_KEYS:
+        equipped = str(character.equipment.get(slot_key, "Нет") or "Нет")
+        if equipped == artifact_name:
+            return slot_key
     return None
-
-
-def pick_weighted_artifact_key() -> str:
-    """Выбор ценного арта по весам (когда награда уже гарантирована)."""
-    keys = [key for key, _ in ARTIFACT_DROP_RATES_PERCENT]
-    weights = [float(chance) for _, chance in ARTIFACT_DROP_RATES_PERCENT]
-    return random.choices(keys, weights=weights, k=1)[0]
 
 
 def pick_weighted_raid_artifact_key() -> str:
@@ -2896,7 +2890,7 @@ def build_character_stats_overview(storage: Storage, telegram_id: int) -> str:
         f"⚔️ Захватов точек: {stats['wars_won']}\n"
         f"🏛 Вражеских баз захвачено: {stats['enemy_bases_captured']}\n"
         f"💰 Денег накоплено: {stats['money_earned']} RU\n"
-        f"🔮 Артефактов найдено: {stats['artifacts_found']}\n"
+        f"🔮 Ценных артефактов найдено: {stats['artifacts_found']}\n"
         f"📡 Помощей по рации: {stats.get('radio_helps', 0)}\n"
         f"☠️ Смертей: {stats['deaths']}\n\n"
         f"⭐ Рейтинг: {stats['rating_points']}\n"
@@ -3819,7 +3813,7 @@ def apply_contract_mission_success(
     )
     if art_key is not None:
         storage.add_item(telegram_id, art_key, 1)
-        storage.add_player_stat(telegram_id, "artifacts_found", 1)
+        record_valuable_artifact_found_stat(storage, telegram_id, art_key)
         extra = f"\nНаходка на «{work_location}»: {ITEM_LABELS.get(art_key, art_key)}!"
     else:
         extra = ""
@@ -4886,10 +4880,11 @@ def player_owns_sellable_item(character: Character, item_key: str) -> bool:
         if equipped == title and title != "Куртка новичка":
             return True
     if item_key in ARTIFACT_INVENTORY_TO_NAME:
-        equipped = str(character.equipment.get("artifact", "Нет") or "Нет")
         expected = ARTIFACT_INVENTORY_TO_NAME[item_key]
-        if equipped == expected:
-            return True
+        for slot_key in ARTIFACT_EQUIP_SLOT_KEYS:
+            equipped = str(character.equipment.get(slot_key, "Нет") or "Нет")
+            if equipped == expected:
+                return True
     return False
 
 
@@ -5050,18 +5045,19 @@ def sell_item(storage: Storage, telegram_id: int, item_key: str) -> ActionResult
             )
         return ActionResult(True, f"Продано: {title} за {final_sell_price} RU.{upgrade_note}")
     if item_key in ARTIFACT_INVENTORY_TO_NAME:
+        expected_name = ARTIFACT_INVENTORY_TO_NAME[item_key]
         removed_from_inventory = storage.remove_item(telegram_id, item_key, 1)
         if not removed_from_inventory:
-            equipped_artifact = str(character.equipment.get("artifact", "Нет"))
-            expected_name = ARTIFACT_INVENTORY_TO_NAME[item_key]
-            if equipped_artifact == expected_name:
-                storage.set_equipment_item(telegram_id, "artifact", "Нет")
-                # После снятия арта «Живучесть» HP не выше 100.
-                if character.health > 100:
-                    storage.change_health(telegram_id, 100 - character.health, max_health=100)
-                storage.sync_gear_power(telegram_id)
-            else:
+            slot_key = _artifact_equip_slot_for_name(character, expected_name)
+            if slot_key is None:
                 return ActionResult(False, f"У тебя нет артефакта: {title}.")
+            storage.set_equipment_item(telegram_id, slot_key, "Нет")
+            storage.sync_gear_power(telegram_id)
+            updated = storage.get_character(telegram_id, refresh_energy=False)
+            if updated is not None:
+                max_hp = effective_max_health(updated)
+                if updated.health > max_hp:
+                    storage.change_health(telegram_id, max_hp - updated.health, max_health=max_hp)
         else:
             storage.sync_gear_power(telegram_id)
         storage.change_money(telegram_id, sell_price)
@@ -5649,17 +5645,25 @@ def format_inventory(
         vehicle_parts.append("Велосипед")
     vehicle = " + ".join(vehicle_parts) if vehicle_parts else "Нет транспорта"
     sleeping_bag = "Есть спальник (x2 реген энергии)" if character.sleeping_bag_owned else "Спальника нет"
-    equipment_labels = {
-        "weapon": "Оружие",
-        "armor": "Броня",
-        "artifact": "Артефакт",
-    }
+    weapon_name = str(character.equipment.get("weapon", "Нож"))
+    armor_name = str(character.equipment.get("armor", "Куртка новичка"))
     weapon_durability = _durability_percent(character, "weapon")
     armor_durability = _durability_percent(character, "armor")
-    equipment = "\n".join(
-        f"• {equipment_labels.get(k, k)}: {v}"
-        for k, v in character.equipment.items()
-        if k in {"weapon", "armor", "artifact"}
+    slots_cap = max_artifact_slots(character)
+    art_lines: list[str] = []
+    for idx, slot_key in enumerate(ARTIFACT_EQUIP_SLOT_KEYS, start=1):
+        if idx > max(slots_cap, 1):
+            break
+        art_name = str(character.equipment.get(slot_key, "Нет") or "Нет")
+        art_lines.append(f"• Артефакт {idx}: {art_name}")
+    if slots_cap <= 0:
+        art_block = "• Артефакты: нет ячеек (нужна броня T3+)"
+    else:
+        art_block = "\n".join(art_lines)
+    equipment = (
+        f"• Оружие: {weapon_name}\n"
+        f"• Броня: {armor_name}\n"
+        f"{art_block}"
     )
     durability_block = (
         f"• Прочность оружия: {weapon_durability}%\n"

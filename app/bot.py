@@ -232,6 +232,7 @@ from app.game_logic import (
     QUESTS,
     QUEST_RATING_BY_DIFFICULTY,
     ARTIFACT_SEARCH_ENERGY_COST,
+    ARTIFACT_DROP_KEYS,
     DEPOT_RAID_ENERGY_COST,
     TOPUP_RATE_RU_PER_STAR,
     process_due_travels,
@@ -758,7 +759,7 @@ TREASURY_CUSTOM_MIN_RU = 1
 TREASURY_CUSTOM_MAX_RU = 1_000_000
 WAREHOUSE_CUSTOM_MIN = 1
 WAREHOUSE_CUSTOM_MAX = 10_000
-WAREHOUSE_CUSTOM_ITEM_KEYS = frozenset({"ammo_pack", "medkit", "energy_drink", "artifact"})
+WAREHOUSE_CUSTOM_ITEM_KEYS = frozenset({"ammo_pack", "medkit", "energy_drink", *ARTIFACT_DROP_KEYS})
 FSM_CANCEL_HINT = "\nОтмена: /cancel или «⬅️ В меню»."
 
 

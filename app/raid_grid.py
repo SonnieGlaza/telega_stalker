@@ -775,7 +775,9 @@ def _finalize_lair_success(storage: Storage, session: RaidGridSession) -> Action
         if enemy_power >= RAID_ARTIFACT_MIN_ENEMY_POWER and random.randint(1, 100) <= RAID_ARTIFACT_DROP_CHANCE:
             art_key = pick_weighted_raid_artifact_key()
             storage.add_item(pid, art_key, 1)
-            storage.add_player_stat(pid, "artifacts_found", 1)
+            from app.game_logic import record_valuable_artifact_found_stat
+
+            record_valuable_artifact_found_stat(storage, pid, art_key)
             artifacts_given += 1
         _maybe_drop_stash(storage, pid)
         _add_rating(storage, pid, RATING_REWARD["raid_success"])

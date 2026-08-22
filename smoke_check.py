@@ -363,6 +363,33 @@ def run_smoke_check() -> None:
         assert equipped.equipment.get("artifact") not in {"", "Нет", None}
         assert equipped.equipment.get("artifact_2") not in {"", "Нет", None}
         assert equipped.equipment.get("artifact_3") not in {"", "Нет", None}
+        from app.game_logic import (
+            format_inventory,
+            player_owns_sellable_item,
+            record_valuable_artifact_found_stat,
+            sell_item,
+        )
+
+        assert player_owns_sellable_item(equipped, "artifact_power")
+        sell_slot2 = sell_item(storage, 111, "artifact_power")
+        assert sell_slot2.ok, sell_slot2.text
+        after_sell = storage.get_character(111, refresh_energy=False)
+        assert after_sell.equipment.get("artifact_2") in {"", "Нет", None}
+        storage.add_item(111, "artifact_power", 1)
+        assert equip_artifact(storage, 111, "artifact_power").ok
+        inv_text = format_inventory(storage.get_character(111, refresh_energy=False), storage=storage)
+        assert "Артефакт 2:" in inv_text
+        assert "Артефакт 3:" in inv_text
+        junk_before = storage.get_player_stats(111)["artifacts_found"]
+        record_valuable_artifact_found_stat(storage, 111, "artifact_junk_bolt")
+        assert storage.get_player_stats(111)["artifacts_found"] == junk_before
+        record_valuable_artifact_found_stat(storage, 111, "artifact_power")
+        assert storage.get_player_stats(111)["artifacts_found"] == junk_before + 1
+        from app.bot import WAREHOUSE_CUSTOM_ITEM_KEYS
+
+        assert WAREHOUSE_CUSTOM_ITEM_KEYS >= frozenset(
+            {"artifact", "artifact_power", "artifact_vitality", "artifact_antirad"}
+        )
         # Даунгрейд брони снимает лишние арты.
         storage.add_item(111, "armor_leather", 1)
         down = equip_armor(storage, 111, "armor_leather")
@@ -1678,7 +1705,7 @@ def run_smoke_check() -> None:
         assert stats["raids_completed"] >= 0
         stats_text = build_character_stats_overview(storage, 111)
         assert "Заданий выполнено" in stats_text
-        assert "Артефактов найдено" in stats_text
+        assert "Ценных артефактов найдено" in stats_text
         assert "Смертей" in stats_text
         storage.change_health(111, 100)
 
@@ -2872,7 +2899,7 @@ def run_smoke_check() -> None:
         assert arts_top and int(arts_top[0]["value"]) >= 2
         tops_text = format_rotating_tops(storage)
         assert "Деньги на руках" in tops_text
-        assert "Артефактов найдено" in tops_text
+        assert "Ценных артефактов найдено" in tops_text
         assert "LeaderDuty" in tops_text
         assert "id 111" in tops_text
         assert "&lt;" not in tops_text
