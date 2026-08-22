@@ -98,7 +98,7 @@ def _forfeit_tactical_sessions(storage: Storage, telegram_id: int) -> bool:
     if get_arena_session(storage, telegram_id):
         arena_forfeit(storage, telegram_id)
 
-    return player_busy_reason(storage, telegram_id) is None
+    return player_busy_reason(storage, telegram_id, auto_recover=False) is None
 
 
 def clear_all_activity_sessions(storage: Storage, telegram_id: int) -> None:
@@ -177,8 +177,12 @@ def recover_stuck_player(storage: Storage, telegram_id: int, *, force_clear: boo
     return player.health <= 0, int(player.health)
 
 
-def player_busy_reason(storage: Storage, telegram_id: int, *, skip: str | None = None) -> str | None:
+def player_busy_reason(storage: Storage, telegram_id: int, *, skip: str | None = None, auto_recover: bool = True) -> str | None:
     """Вернёт текст блокировки или None если свободен. skip: duel|coop|quest|hunt|cwar|ncap|rgrid|arena|travel|smuggle."""
+    from app.session_recovery import auto_recover_before_busy_check
+
+    if auto_recover:
+        auto_recover_before_busy_check(storage, telegram_id)
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is not None and player.health <= 0:
         return "Ты без сознания — сначала респавн (/respawn)."

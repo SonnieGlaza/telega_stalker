@@ -155,11 +155,15 @@ def format_monolith_war_call(pending: dict[str, Any]) -> str:
     host = h(str(pending.get("host_faction") or "?"))
     mode = str(pending.get("mode") or "")
     mins = MONOLITH_JOIN_MINUTES
+    humans = len(pending.get("monolith_ids") or [])
+    attackers = len(pending.get("attacker_ids") or [])
+    bots = "да" if pending.get("bots_sent") else "нет"
     if mode == "defend":
         return (
             f"☢ <b>Штурм базы Монолита</b>\n"
             f"«{host}» идёт на «{loc}».\n"
-            f"У Монолита {mins} мин — вступить в бой или послать ботов.\n"
+            f"Окно: ~{mins} мин. Защитников Монолита в бою: {humans}.\n"
+            f"Боты отправлены: {bots}. Атакующих в лобби: {attackers}.\n"
             f"Без живых защитников — авто 90/10 <b>в пользу обороны</b>."
         )
     return (
@@ -179,11 +183,12 @@ def monolith_war_status_line(storage: Storage) -> str | None:
     expires = _parse_iso(str(pending.get("expires_at") or ""), _utc_now())
     left = max(0, int((expires - _utc_now()).total_seconds() // 60))
     humans = len(pending.get("monolith_ids") or [])
+    attackers = len(pending.get("attacker_ids") or [])
     bots = "боты+" if pending.get("bots_sent") else "боты−"
     mode = "оборона" if pending.get("mode") == "defend" else "атака"
     return (
         f"Монолит: {mode} «{pending.get('location')}» "
-        f"(~{left} мин, людей {humans}, {bots})."
+        f"(~{left} мин, защитников {humans}, атакующих {attackers}, {bots})."
     )
 
 

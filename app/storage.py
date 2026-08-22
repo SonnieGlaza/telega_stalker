@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.db import DbConfig, DbConnection, connect as db_connect, integrity_error_types
 
@@ -116,6 +116,7 @@ class Storage:
         self.snapshot_path = self._resolve_writable_snapshot_path(requested)
         self._snapshot_last_at: float = 0.0
         self._snapshot_min_interval_sec: float = 15.0
+        self._meta_schema_ready = False
 
     @staticmethod
     def _resolve_writable_snapshot_path(preferred: Path) -> Path:
@@ -146,6 +147,23 @@ class Storage:
 
     def _connect(self) -> DbConnection:
         return db_connect(self._db_config())
+
+    @staticmethod
+    def _stmt_rowcount(cursor: Any) -> int:
+        return max(0, int(getattr(cursor, "rowcount", 0) or 0))
+
+    def _ensure_meta_kv_schema(self, conn: DbConnection) -> None:
+        if self._meta_schema_ready:
+            return
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS meta_kv (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        self._meta_schema_ready = True
 
     def _sync_serial_sequences(self, conn: DbConnection) -> None:
         if conn.backend != "postgres":
@@ -207,6 +225,7 @@ class Storage:
                 player_achievements = [
                     dict(row) for row in conn.execute("SELECT * FROM player_achievements").fetchall()
                 ]
+                meta_kv = [dict(row) for row in conn.execute("SELECT * FROM meta_kv").fetchall()]
                 pending_registrations: list[dict[str, Any]] = []
                 conn.savepoint("sp_pending_snap")
                 try:
@@ -219,7 +238,7 @@ class Storage:
                     conn.rollback_to_savepoint("sp_pending_snap")
                     pending_registrations = []
             payload = {
-                "version": 2,
+                "version": 3,
                 "characters": characters,
                 "factions": factions,
                 "locations": locations,
@@ -235,6 +254,7 @@ class Storage:
                 "map_events": map_events,
                 "player_stats": player_stats,
                 "player_achievements": player_achievements,
+                "meta_kv": meta_kv,
                 "pending_registrations": pending_registrations,
             }
             self.snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
@@ -268,6 +288,7 @@ class Storage:
         map_events = payload.get("map_events") or []
         player_stats = payload.get("player_stats") or []
         player_achievements = payload.get("player_achievements") or []
+        meta_kv = payload.get("meta_kv") or []
         pending_registrations = payload.get("pending_registrations") or []
         if not characters:
             return
@@ -535,6 +556,16 @@ class Storage:
                     row.get("achievement_key"),
                     row.get("unlocked_at") or utc_now().isoformat(),
                 ),
+            )
+        for row in meta_kv:
+            key = str(row.get("key") or "").strip()
+            if not key:
+                continue
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO meta_kv(key, value) VALUES (?, ?)
+                """,
+                (key, str(row.get("value") or "")),
             )
         self._ensure_pending_registrations_schema(conn)
         for row in pending_registrations:
@@ -2346,14 +2377,16 @@ class Storage:
         return taken
 
     def change_gear_power(self, telegram_id: int, delta: int) -> None:
-        character = self.get_character(telegram_id, refresh_energy=False)
-        if character is None:
+        if delta == 0:
             return
-        new_power = max(1, character.gear_power + delta)
         with self._connect() as conn:
             conn.execute(
-                "UPDATE characters SET gear_power = ? WHERE telegram_id = ?",
-                (new_power, telegram_id),
+                """
+                UPDATE characters
+                SET gear_power = MAX(1, gear_power + ?)
+                WHERE telegram_id = ?
+                """,
+                (int(delta), telegram_id),
             )
         self.save_snapshot()
 
@@ -2915,14 +2948,7 @@ class Storage:
 
     def get_meta(self, key: str) -> str | None:
         with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS meta_kv (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                )
-                """
-            )
+            self._ensure_meta_kv_schema(conn)
             row = conn.execute("SELECT value FROM meta_kv WHERE key = ?", (key,)).fetchone()
         if row is None:
             return None
@@ -2930,14 +2956,7 @@ class Storage:
 
     def set_meta(self, key: str, value: str) -> None:
         with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS meta_kv (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                )
-                """
-            )
+            self._ensure_meta_kv_schema(conn)
             conn.execute(
                 """
                 INSERT INTO meta_kv(key, value) VALUES (?, ?)
@@ -2950,33 +2969,63 @@ class Storage:
     def set_meta_if_absent(self, key: str, value: str) -> bool:
         """Записать meta только если ключа ещё нет. True — ключ создан, False — уже был."""
         with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS meta_kv (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                )
-                """
-            )
+            self._ensure_meta_kv_schema(conn)
             cur = conn.execute(
                 "INSERT OR IGNORE INTO meta_kv(key, value) VALUES (?, ?)",
                 (key, value),
             )
-            inserted = int(cur.rowcount or 0) > 0
+            inserted = self._stmt_rowcount(cur) > 0
         if inserted:
             self.save_snapshot()
         return inserted
 
+    def cas_meta_value(self, key: str, *, expected_value: str, new_value: str) -> bool:
+        """Compare-and-swap meta: обновить только если текущее value совпадает."""
+        with self._connect() as conn:
+            self._ensure_meta_kv_schema(conn)
+            cur = conn.execute(
+                "UPDATE meta_kv SET value = ? WHERE key = ? AND value = ?",
+                (new_value, key, expected_value),
+            )
+            ok = self._stmt_rowcount(cur) > 0
+        if ok:
+            self.save_snapshot()
+        return ok
+
+    def update_json_meta(
+        self,
+        key: str,
+        mutator: Callable[[dict[str, Any]], bool],
+    ) -> bool:
+        """Атомарно прочитать JSON meta, изменить через mutator, записать если mutator вернул True."""
+        with self._connect() as conn:
+            self._ensure_meta_kv_schema(conn)
+            row = conn.execute("SELECT value FROM meta_kv WHERE key = ?", (key,)).fetchone()
+            if row is None:
+                return False
+            old_value = str(row["value"])
+            try:
+                parsed = json.loads(old_value)
+            except json.JSONDecodeError:
+                return False
+            if not isinstance(parsed, dict):
+                return False
+            data = dict(parsed)
+            if not mutator(data):
+                return False
+            new_value = json.dumps(data, ensure_ascii=False)
+            cur = conn.execute(
+                "UPDATE meta_kv SET value = ? WHERE key = ? AND value = ?",
+                (new_value, key, old_value),
+            )
+            if self._stmt_rowcount(cur) <= 0:
+                return False
+        self.save_snapshot()
+        return True
+
     def delete_meta(self, key: str) -> None:
         with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS meta_kv (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                )
-                """
-            )
+            self._ensure_meta_kv_schema(conn)
             conn.execute("DELETE FROM meta_kv WHERE key = ?", (key,))
         self.save_snapshot()
 
@@ -3127,6 +3176,22 @@ class Storage:
                 (faction,),
             ).fetchall()
         return [int(row["telegram_id"]) for row in rows]
+
+    def list_characters_at_location(self, location: str) -> list[dict[str, Any]]:
+        loc = (location or "").strip()
+        if not loc:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT telegram_id, nickname, faction, health
+                FROM characters
+                WHERE location = ? AND health > 0
+                ORDER BY nickname
+                """,
+                (loc,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_factions(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
@@ -3852,48 +3917,105 @@ class Storage:
         amount: int,
     ) -> bool:
         """Атомарно: списать деньги у покупателя, закрыть лот, выплатить продавцу, выдать предмет."""
-        with self._connect() as conn:
-            lot = conn.execute(
-                "SELECT status FROM auctions WHERE id = ?",
-                (lot_id,),
-            ).fetchone()
-            if lot is None or lot["status"] != "open":
-                return False
-            buyer_row = conn.execute(
-                "SELECT money, inventory_json FROM characters WHERE telegram_id = ?",
-                (buyer_id,),
-            ).fetchone()
-            if buyer_row is None or int(buyer_row["money"]) < price:
-                return False
-            conn.execute(
-                "UPDATE characters SET money = money - ? WHERE telegram_id = ? AND money >= ?",
-                (price, buyer_id, price),
-            )
-            if conn.total_changes <= 0:
-                return False
-            conn.execute(
-                """
-                UPDATE auctions
-                SET status = ?, buyer_id = ?, closed_at = ?
-                WHERE id = ? AND status = 'open'
-                """,
-                ("sold", buyer_id, utc_now().isoformat(), lot_id),
-            )
-            if conn.total_changes <= 0:
-                return False
-            conn.execute(
-                "UPDATE characters SET money = money + ? WHERE telegram_id = ?",
-                (seller_income, seller_id),
-            )
-            try:
-                inventory = json.loads(buyer_row["inventory_json"] or "{}")
-            except json.JSONDecodeError:
-                inventory = {}
-            inventory[item_key] = int(inventory.get(item_key, 0)) + amount
-            conn.execute(
-                "UPDATE characters SET inventory_json = ? WHERE telegram_id = ?",
-                (json.dumps(inventory, ensure_ascii=False), buyer_id),
-            )
+        try:
+            with self._connect() as conn:
+                lot = conn.execute(
+                    "SELECT status FROM auctions WHERE id = ?",
+                    (lot_id,),
+                ).fetchone()
+                if lot is None or lot["status"] != "open":
+                    return False
+                buyer_row = conn.execute(
+                    "SELECT money, inventory_json FROM characters WHERE telegram_id = ?",
+                    (buyer_id,),
+                ).fetchone()
+                if buyer_row is None or int(buyer_row["money"]) < price:
+                    return False
+                cur = conn.execute(
+                    "UPDATE characters SET money = money - ? WHERE telegram_id = ? AND money >= ?",
+                    (price, buyer_id, price),
+                )
+                if self._stmt_rowcount(cur) <= 0:
+                    raise RuntimeError("auction_buyer_deduct_failed")
+                cur = conn.execute(
+                    """
+                    UPDATE auctions
+                    SET status = ?, buyer_id = ?, closed_at = ?
+                    WHERE id = ? AND status = 'open'
+                    """,
+                    ("sold", buyer_id, utc_now().isoformat(), lot_id),
+                )
+                if self._stmt_rowcount(cur) <= 0:
+                    raise RuntimeError("auction_close_failed")
+                conn.execute(
+                    "UPDATE characters SET money = money + ? WHERE telegram_id = ?",
+                    (seller_income, seller_id),
+                )
+                try:
+                    inventory = json.loads(buyer_row["inventory_json"] or "{}")
+                except json.JSONDecodeError:
+                    inventory = {}
+                inventory[item_key] = int(inventory.get(item_key, 0)) + amount
+                conn.execute(
+                    "UPDATE characters SET inventory_json = ? WHERE telegram_id = ?",
+                    (json.dumps(inventory, ensure_ascii=False), buyer_id),
+                )
+        except RuntimeError:
+            return False
+        self.save_snapshot()
+        return True
+
+    def cancel_auction_and_refund(
+        self,
+        auction_id: int,
+        *,
+        seller_id: int,
+        item_key: str,
+        amount: int,
+    ) -> bool:
+        """Атомарно отменить открытый лот и вернуть предмет продавцу."""
+        try:
+            with self._connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT status, seller_id, item_key, amount
+                    FROM auctions WHERE id = ?
+                    """,
+                    (auction_id,),
+                ).fetchone()
+                if row is None or row["status"] != "open":
+                    return False
+                if int(row["seller_id"]) != int(seller_id):
+                    return False
+                if str(row["item_key"]) != str(item_key) or int(row["amount"]) != int(amount):
+                    return False
+                cur = conn.execute(
+                    """
+                    UPDATE auctions
+                    SET status = ?, buyer_id = ?, closed_at = ?
+                    WHERE id = ? AND status = 'open'
+                    """,
+                    ("cancelled", None, utc_now().isoformat(), auction_id),
+                )
+                if self._stmt_rowcount(cur) <= 0:
+                    raise RuntimeError("auction_cancel_failed")
+                seller_row = conn.execute(
+                    "SELECT inventory_json FROM characters WHERE telegram_id = ?",
+                    (seller_id,),
+                ).fetchone()
+                if seller_row is None:
+                    raise RuntimeError("auction_seller_missing")
+                try:
+                    inventory = json.loads(seller_row["inventory_json"] or "{}")
+                except json.JSONDecodeError:
+                    inventory = {}
+                inventory[item_key] = int(inventory.get(item_key, 0)) + amount
+                conn.execute(
+                    "UPDATE characters SET inventory_json = ? WHERE telegram_id = ?",
+                    (json.dumps(inventory, ensure_ascii=False), seller_id),
+                )
+        except RuntimeError:
+            return False
         self.save_snapshot()
         return True
 

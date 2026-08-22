@@ -483,6 +483,9 @@ def _finalize_success(storage: Storage, session: ClanWarGridSession) -> ActionRe
             storage.add_player_stat(pid, "wars_won", 1)
             if captured_enemy_base:
                 storage.add_player_stat(pid, "enemy_bases_captured", 1)
+                from app.faction_goals import record_faction_goal_event
+
+                record_faction_goal_event(storage, session.host_faction, "captures")
             storage.change_money(pid, WAR_SUCCESS_PAY_RU)
             storage.add_player_stat(pid, "money_earned", WAR_SUCCESS_PAY_RU)
             _add_rating(storage, pid, RATING_REWARD["war_success"])

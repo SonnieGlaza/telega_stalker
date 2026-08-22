@@ -61,9 +61,9 @@ def pda_keyboard(*, is_leader: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🏆 Рейтинг"), KeyboardButton(text="🗺 Карта")],
         [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="💎 Находки")],
         [KeyboardButton(text="💎 Арты"), KeyboardButton(text="📊 Дроп")],
-        [KeyboardButton(text="☠️ Смерти"), KeyboardButton(text="📅 Ежедневка")],
-        [KeyboardButton(text="🔔 Уведомления"), KeyboardButton(text="🔥 Как не сдохнуть")],
-        [KeyboardButton(text="🏛 Клановые задачи")],
+        [KeyboardButton(text="☠️ Смерти"), KeyboardButton(text="📊 Статистика")],
+        [KeyboardButton(text="📅 Ежедневка"), KeyboardButton(text="🔔 Уведомления")],
+        [KeyboardButton(text="🔥 Как не сдохнуть"), KeyboardButton(text="🏛 Клановые задачи")],
     ]
     if is_leader:
         rows[-1].append(KeyboardButton(text="📣 Сбор"))
@@ -1227,6 +1227,25 @@ def faction_group_keyboard(
             ]
         )
         rows.append([InlineKeyboardButton(text="🎖 Назначить звание", callback_data="rank:menu")])
+        rows.append([InlineKeyboardButton(text="📅 Цели недели", callback_data="faction:goals")])
+        rows.append(
+            [InlineKeyboardButton(text="🎁 Забрать бонус недели", callback_data="faction:goals:claim")]
+        )
+    rows.append([InlineKeyboardButton(text="🔄 Сменить группировку", callback_data="faction:change")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def faction_change_keyboard(current_faction: str | None) -> InlineKeyboardMarkup:
+    from app.faction_change import FACTION_CHANGE_TARGETS
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for name in FACTION_CHANGE_TARGETS:
+        if name == current_faction:
+            continue
+        rows.append(
+            [InlineKeyboardButton(text=f"→ {name}", callback_data=f"faction:change:{name}")]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="faction:group")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

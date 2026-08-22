@@ -47,6 +47,14 @@ def _load_queue(storage: Storage) -> list[dict[str, Any]]:
 
 
 def _save_queue(storage: Storage, queue: list[dict[str, Any]]) -> None:
+    if len(queue) > EPHEMERAL_QUEUE_MAX:
+        dropped = len(queue) - EPHEMERAL_QUEUE_MAX
+        logger.warning(
+            "Ephemeral delete queue truncated: dropped %s oldest entries (cap %s)",
+            dropped,
+            EPHEMERAL_QUEUE_MAX,
+        )
+        queue = queue[-EPHEMERAL_QUEUE_MAX:]
     if not queue:
         storage.delete_meta(EPHEMERAL_QUEUE_META)
         return

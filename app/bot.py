@@ -340,6 +340,7 @@ from app.game_logic import (
     toggle_notify_pref,
     is_notify_enabled,
     build_notify_prefs_text,
+    build_player_stats_text,
     build_tutorial_page,
     claim_tutorial_completion,
     format_faction_lore,
@@ -352,6 +353,7 @@ from app.keyboards import (
     economy_keyboard,
     smuggling_keyboard,
     faction_group_keyboard,
+    faction_change_keyboard,
     garage_rental_requests_keyboard,
     faction_ranks_members_keyboard,
     faction_rank_pick_keyboard,
@@ -1220,6 +1222,20 @@ async def admin_set_faction(message: Message, bot: Bot, command: CommandObject) 
         )
     except Exception:
         logger.debug("Set-faction notify failed for %s", telegram_id, exc_info=True)
+
+
+@router.message(Command("player"), F.chat.type == "private")
+async def admin_player_summary(message: Message, command: CommandObject) -> None:
+    if not is_admin_user(message.from_user.id):
+        await message.answer("Команда только для администратора.")
+        return
+    target = (command.args or "").strip()
+    if not target:
+        await message.answer("Использование: /player [telegram_id|прозвище]")
+        return
+    from app.admin_tools import build_admin_player_summary
+
+    await message.answer(build_admin_player_summary(get_storage(), target))
 
 
 @router.message(Command("medal"), F.chat.type == "private")
@@ -6012,6 +6028,18 @@ async def show_pda_chats(message: Message) -> None:
     await message.answer(_build_pda_chats_text(player), reply_markup=_pda_keyboard_for(player))
 
 
+@router.message(F.text == "📊 Статистика")
+async def show_player_stats(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
+        return
+    text = build_player_stats_text(get_storage(), player.telegram_id)
+    await message.answer(text, reply_markup=_pda_keyboard_for(player))
+
+
 @router.message(F.text == "📅 Ежедневка")
 async def show_daily_login(message: Message) -> None:
     player = ensure_character(message)
@@ -8813,6 +8841,87 @@ async def process_treasury_withdraw_custom(message: Message, state: FSMContext) 
     await message.answer(action_result_text(message.from_user.id, result.text))
 
 
+@router.callback_query(F.data == "faction:goals")
+async def faction_goals_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or not player.faction:
+        await callback.answer("Сначала вступи в группировку.", show_alert=True)
+        return
+    from app.faction_goals import build_faction_goals_text
+
+    text = build_faction_goals_text(storage, player.faction)
+    await edit_menu_message(callback, text, _faction_group_keyboard_for(player.telegram_id))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "faction:goals:claim")
+async def faction_goals_claim_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or not player.faction:
+        await callback.answer("Сначала вступи в группировку.", show_alert=True)
+        return
+    from app.faction_goals import try_claim_faction_goal_reward
+
+    ok, note = try_claim_faction_goal_reward(storage, player.faction, player.telegram_id)
+    await callback.answer(note, show_alert=True)
+    if ok:
+        overview = build_faction_group_overview(storage, player.telegram_id)
+        await edit_menu_message(callback, overview, _faction_group_keyboard_for(player.telegram_id))
+
+
+@router.callback_query(F.data == "faction:change")
+async def faction_change_menu_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or not player.faction:
+        await callback.answer("Сначала вступи в группировку.", show_alert=True)
+        return
+    from app.faction_change import build_faction_change_text
+
+    text = build_faction_change_text(storage, player.telegram_id)
+    await edit_menu_message(callback, text, faction_change_keyboard(player.faction))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("faction:change:"))
+async def faction_change_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Персонаж не найден.", show_alert=True)
+        return
+    parts = (callback.data or "").split(":", maxsplit=2)
+    if len(parts) < 3:
+        await callback.answer("Ошибка.", show_alert=True)
+        return
+    faction = parts[2]
+    from app.faction_change import change_player_faction
+
+    result = change_player_faction(storage, player.telegram_id, faction)
+    await callback.answer(result.text[:200], show_alert=True)
+    if result.ok:
+        try:
+            await bot.send_message(player.telegram_id, result.text, reply_markup=main_menu_keyboard())
+        except Exception:
+            pass
+    overview = build_faction_group_overview(storage, player.telegram_id)
+    await edit_menu_message(callback, overview, _faction_group_keyboard_for(player.telegram_id))
+
+
+@router.callback_query(F.data == "faction:group")
+async def faction_group_back_callback(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Персонаж не найден.", show_alert=True)
+        return
+    text = build_faction_group_overview(storage, player.telegram_id)
+    await edit_menu_message(callback, text, _faction_group_keyboard_for(player.telegram_id))
+    await callback.answer()
+
+
 @router.callback_query(F.data == "faction:menu:root")
 @router.callback_query(F.data == "faction:warehouse:view")
 @router.callback_query(F.data == "eco:warehouse:view")
@@ -9528,6 +9637,9 @@ async def run_bot() -> None:
                         )
                         if payload.get("kind") == "call":
                             attach_help_call_message(storage, ZONE_COMMON_CHAT_ID, sent.message_id)
+                            from app.zone_notifications import notify_help_event_started
+
+                            await notify_help_event_started(bot, storage, event)
                         else:
                             schedule_group_outcome_deletion(
                                 storage,
@@ -9589,6 +9701,9 @@ async def run_bot() -> None:
                             )
                         if special_payload.get("kind") == "call":
                             attach_special_call_message(storage, ZONE_COMMON_CHAT_ID, sent.message_id)
+                            from app.zone_notifications import notify_special_event_started
+
+                            await notify_special_event_started(bot, storage, event)
                         else:
                             schedule_group_outcome_deletion(
                                 storage,

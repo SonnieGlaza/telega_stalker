@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Any
 
 from aiogram import Bot
@@ -14,14 +15,42 @@ from app.storage import Storage
 
 logger = logging.getLogger(__name__)
 
-# Числовые id супергрупп (не invite-ссылки).
-ZONE_COMMON_CHAT_ID = -1003958853707
-ZONE_FACTION_CHAT_IDS: dict[str, int] = {
+_DEFAULT_ZONE_COMMON_CHAT_ID = -1003958853707
+_DEFAULT_ZONE_FACTION_CHAT_IDS: dict[str, int] = {
     "Бандиты": -1004375297519,
     "Свобода": -1003883863150,
     "Долг": -1004377044940,
     "Нейтралы": -1004295857240,
 }
+
+
+def _parse_chat_id(raw: str) -> int | None:
+    value = (raw or "").strip()
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _load_zone_common_chat_id() -> int:
+    parsed = _parse_chat_id(os.getenv("ZONE_COMMON_CHAT_ID", ""))
+    return parsed if parsed is not None else _DEFAULT_ZONE_COMMON_CHAT_ID
+
+
+def _load_zone_faction_chat_ids() -> dict[str, int]:
+    result = dict(_DEFAULT_ZONE_FACTION_CHAT_IDS)
+    for faction in _DEFAULT_ZONE_FACTION_CHAT_IDS:
+        env_key = f"ZONE_CHAT_{faction.upper()}"
+        parsed = _parse_chat_id(os.getenv(env_key, ""))
+        if parsed is not None:
+            result[faction] = parsed
+    return result
+
+
+ZONE_COMMON_CHAT_ID = _load_zone_common_chat_id()
+ZONE_FACTION_CHAT_IDS: dict[str, int] = _load_zone_faction_chat_ids()
 
 # Telegram: custom_title ≤ 16 символов, без эмодзи.
 SEASON_CHAT_TITLE_BY_PLACE: dict[int, str] = {

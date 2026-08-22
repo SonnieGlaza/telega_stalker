@@ -798,6 +798,9 @@ def _finalize_lair_success(storage: Storage, session: RaidGridSession) -> Action
         status="success",
         result_text=f"Тактический рейд успешен. Врагов было: {enemy_power}.",
     )
+    from app.faction_goals import record_faction_goal_event
+
+    record_faction_goal_event(storage, session.attacker_faction, "raids")
     text = (
         f"🏆 Рейд #{session.raid_id} на «{location_name}» успешен!\n"
         f"Точка захвачена группировкой «{session.attacker_faction}».\n"
@@ -858,6 +861,9 @@ def _finalize_depot_success(storage: Storage, session: RaidGridSession) -> Actio
         status="success",
         result_text=f"Тактический рейд на {label} «{target}» успешен.",
     )
+    from app.faction_goals import record_faction_goal_event
+
+    record_faction_goal_event(storage, session.attacker_faction, "raids")
     loot_text = "\n".join(loot_lines) if loot_lines else "Трофеев не найдено."
     text = (
         f"🏚 Рейд #{session.raid_id} на {label} «{target}» успешен!\n"

@@ -36,6 +36,7 @@ TABLE_PRIMARY_KEYS: dict[str, tuple[str, ...]] = {
     "alliances": ("faction_a", "faction_b"),
     "alliance_requests": ("requester_faction", "target_faction"),
     "pending_registrations": ("telegram_id",),
+    "meta_kv": ("key",),
 }
 
 

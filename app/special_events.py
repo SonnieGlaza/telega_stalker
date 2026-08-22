@@ -208,6 +208,51 @@ def _append_helper(event: dict[str, Any], telegram_id: int, nickname: str) -> No
     event["helper_names"] = names
 
 
+def _reserve_event_helper(
+    storage: Storage,
+    telegram_id: int,
+    nickname: str,
+    *,
+    max_helpers: int | None = None,
+) -> bool:
+    tid = int(telegram_id)
+    nick = str(nickname)
+
+    def _mutator(data: dict[str, Any]) -> bool:
+        helpers = [int(x) for x in (data.get("helpers") or [])]
+        if tid in helpers:
+            return False
+        if max_helpers is not None and len(helpers) >= max_helpers:
+            return False
+        helpers.append(tid)
+        names = list(data.get("helper_names") or [])
+        names.append(nick)
+        data["helpers"] = helpers
+        data["helper_names"] = names
+        return True
+
+    return storage.update_json_meta(SPECIAL_EVENT_META, _mutator)
+
+
+def _unreserve_event_helper(storage: Storage, telegram_id: int) -> None:
+    tid = int(telegram_id)
+
+    def _mutator(data: dict[str, Any]) -> bool:
+        helpers = [int(x) for x in (data.get("helpers") or [])]
+        if tid not in helpers:
+            return False
+        idx = helpers.index(tid)
+        helpers.pop(idx)
+        names = list(data.get("helper_names") or [])
+        if idx < len(names):
+            names.pop(idx)
+        data["helpers"] = helpers
+        data["helper_names"] = names
+        return True
+
+    storage.update_json_meta(SPECIAL_EVENT_META, _mutator)
+
+
 def _build_heli_crash(location: str, now: datetime) -> dict[str, Any]:
     return {
         "id": now.strftime("%Y%m%d%H%M%S"),
@@ -502,11 +547,12 @@ def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
             return_home=False,
             mission_kind="clear_marauder",
         )
+        if not _reserve_event_helper(storage, telegram_id, str(player.nickname), max_helpers=4):
+            return ActionResult(False, "У обломков уже толпа — мест нет.")
         result = start_or_resume_quest_mission(storage, telegram_id, template, QUESTS["hard"])
         if not result.ok:
+            _unreserve_event_helper(storage, telegram_id)
             return result
-        _append_helper(event, telegram_id, str(player.nickname))
-        _save_event(storage, event)
         return ActionResult(
             True,
             f"Ты у обломков на «{loc}». Зачисти военных — хабар с вертушки.",

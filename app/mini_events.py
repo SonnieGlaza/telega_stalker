@@ -168,20 +168,53 @@ def join_help_event(storage: Storage, telegram_id: int) -> ActionResult:
         return_home=False,
         mission_kind="clear_mutant",
     )
+    tid = int(telegram_id)
+    nickname = str(player.nickname)
+    faction = str(player.faction or "Нейтралы")
+
+    def _reserve(data: dict[str, Any]) -> bool:
+        current = [int(x) for x in (data.get("helpers") or [])]
+        if tid in current:
+            return False
+        if len(current) >= HELP_EVENT_MAX_HELPERS:
+            return False
+        current.append(tid)
+        names = list(data.get("helper_names") or [])
+        factions = list(data.get("helper_factions") or [])
+        names.append(nickname)
+        factions.append(faction)
+        data["helpers"] = current
+        data["helper_names"] = names
+        data["helper_factions"] = factions
+        return True
+
+    if not storage.update_json_meta(HELP_EVENT_META, _reserve):
+        return ActionResult(False, "Группа помощи уже собрана или вызов закончился.")
+
     quest = QUESTS["hard"]
     result = start_or_resume_quest_mission(storage, telegram_id, template, quest)
     if not result.ok:
+        def _unreserve(data: dict[str, Any]) -> bool:
+            current = [int(x) for x in (data.get("helpers") or [])]
+            if tid not in current:
+                return False
+            idx = current.index(tid)
+            current.pop(idx)
+            names = list(data.get("helper_names") or [])
+            factions = list(data.get("helper_factions") or [])
+            if idx < len(names):
+                names.pop(idx)
+            if idx < len(factions):
+                factions.pop(idx)
+            data["helpers"] = current
+            data["helper_names"] = names
+            data["helper_factions"] = factions
+            return True
+
+        storage.update_json_meta(HELP_EVENT_META, _unreserve)
         return result
 
-    helpers.append(telegram_id)
-    names = list(event.get("helper_names") or [])
-    factions = list(event.get("helper_factions") or [])
-    names.append(str(player.nickname))
-    factions.append(str(player.faction or "Нейтралы"))
-    event["helpers"] = helpers
-    event["helper_names"] = names
-    event["helper_factions"] = factions
-    _save_event(storage, event)
+    event = get_active_help_event(storage) or event
     return ActionResult(
         True,
         f"Ты откликнулся: {event['speaker']} на «{event['location']}». Уничтожь мутантов на поле.",

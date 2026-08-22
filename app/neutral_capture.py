@@ -768,6 +768,9 @@ def _finalize_success(storage: Storage, session: NeutralCaptureSession) -> Actio
     from app.faction_bots import apply_location_control
 
     apply_location_control(storage, session.location_name, session.faction)
+    from app.faction_goals import record_faction_goal_event
+
+    record_faction_goal_event(storage, session.faction, "captures")
     survivors = _alive_players(session)
     for pid in survivors:
         storage.add_player_stat(pid, "wars_won", 1)

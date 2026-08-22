@@ -9,6 +9,24 @@ from typing import Any
 from app.storage import Storage
 
 
+class _CasMetaCaptureStorage:
+    """Прокси: перехватывает set_meta для CAS-сохранения тактической сессии."""
+
+    def __init__(self, inner: Storage, meta_key: str, captured: dict[str, str]) -> None:
+        self._inner = inner
+        self._meta_key = meta_key
+        self._captured = captured
+
+    def set_meta(self, key: str, value: str) -> None:
+        if key == self._meta_key:
+            self._captured["json"] = value
+            return
+        self._inner.set_meta(key, value)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
 def patch_session_message_ids(
     storage: Storage,
     *,
@@ -43,7 +61,6 @@ def patch_session_json_field(
     field: str,
     value: Any,
 ) -> None:
-    """Точечно обновить одно поле сессии в meta без полной перезаписи."""
     raw = storage.get_meta(meta_key)
     if not raw:
         return
@@ -75,5 +92,11 @@ def save_turn_if_seq_ok(
         return False
     if getattr(fresh, "finished", False) or int(getattr(fresh, "turn_seq", -1)) != int(expected_seq):
         return False
-    save_fn(storage, session)
-    return True
+
+    captured: dict[str, str] = {}
+    proxy = _CasMetaCaptureStorage(storage, meta_key, captured)
+    save_fn(proxy, session)
+    new_json = captured.get("json")
+    if not new_json:
+        return False
+    return storage.cas_meta_value(meta_key, expected_value=raw, new_value=new_json)

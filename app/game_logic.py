@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 class QuestType:
     key: str
     title: str
-    max_success: int
     energy_cost: int
     reward_min: int
     reward_max: int
@@ -35,10 +34,10 @@ class QuestType:
 
 
 QUESTS: dict[str, QuestType] = {
-    "easy": QuestType("easy", "Легко", 75, 10, 472, 717, 0, 0),
-    "hard": QuestType("hard", "Средне", 65, 16, 700, 1137, 0, 0),
-    "heavy": QuestType("heavy", "Опасно", 55, 22, 1155, 2100, 2, 1),
-    "impossible": QuestType("impossible", "Невозможно", 45, 28, 1470, 3150, 3, 1),
+    "easy": QuestType("easy", "Легко", 10, 472, 717, 0, 0),
+    "hard": QuestType("hard", "Средне", 16, 700, 1137, 0, 0),
+    "heavy": QuestType("heavy", "Опасно", 22, 1155, 2100, 2, 1),
+    "impossible": QuestType("impossible", "Невозможно", 28, 1470, 3150, 3, 1),
 }
 
 
@@ -3918,10 +3917,7 @@ def admin_set_player_faction(
 
 def apply_pending_admin_faction_transfers(storage: Storage) -> list[str]:
     """Одноразовые админ-переводы ГП при старте бота (meta-флаг, без повторов)."""
-    pending: tuple[tuple[str, str, str], ...] = (
-        # meta_key, nickname, faction
-        ("admin_fix:vorobey_neutrals_20260811", "Воробей", "Нейтралы"),
-    )
+    pending: tuple[tuple[str, str, str], ...] = ()
     notes: list[str] = []
     for meta_key, nickname, faction in pending:
         if storage.get_meta(meta_key):
@@ -7379,6 +7375,10 @@ def deposit_to_faction_warehouse(
     if not storage.change_faction_warehouse_item(player.faction, key, amount):
         storage.add_item(telegram_id, key, amount)
         return ActionResult(False, "Не удалось обновить склад группировки.")
+    if key.startswith("artifact_junk"):
+        from app.faction_goals import record_faction_goal_event
+
+        record_faction_goal_event(storage, player.faction, "junk_deposit", amount=amount)
     return ActionResult(True, f"На склад {player.faction} отправлено: {ITEM_LABELS.get(key, key)} x{amount}.")
 
 
@@ -7634,9 +7634,13 @@ def cancel_own_first_auction(storage: Storage, telegram_id: int) -> ActionResult
     auction_id = int(target["id"])
     item_key = str(target["item_key"])
     amount = int(target["amount"])
-    if not storage.close_auction(auction_id, buyer_id=None, status="cancelled"):
+    if not storage.cancel_auction_and_refund(
+        auction_id,
+        seller_id=telegram_id,
+        item_key=item_key,
+        amount=amount,
+    ):
         return ActionResult(False, "Не удалось отменить лот.")
-    storage.add_item(telegram_id, item_key, amount)
     return ActionResult(
         True,
         f"Лот #{auction_id} отменен, предметы возвращены: {ITEM_LABELS.get(item_key, item_key)} x{amount}.",
@@ -10399,12 +10403,13 @@ def claim_daily_login(storage: Storage, telegram_id: int) -> ActionResult:
 
 # --- Настройки уведомлений -------------------------------------------------
 
-NOTIFY_PREF_KEYS: tuple[str, ...] = ("emission", "death", "coop", "garage")
+NOTIFY_PREF_KEYS: tuple[str, ...] = ("emission", "death", "coop", "garage", "zone_event")
 NOTIFY_PREF_LABELS: dict[str, str] = {
     "emission": "☢️ Выброс",
     "death": "☠️ Смерть",
     "coop": "👥 Совместные вылазки",
     "garage": "🏚 Гараж (возврат аренды)",
+    "zone_event": "⚡ События на локации",
 }
 
 
@@ -10451,6 +10456,29 @@ def build_notify_prefs_text(prefs: dict[str, bool]) -> str:
         lines.append(f"{NOTIFY_PREF_LABELS.get(key, key)}: {state}")
     lines.append("")
     lines.append("Нажми на пункт ниже, чтобы переключить.")
+    return "\n".join(lines)
+
+
+def build_player_stats_text(storage: Storage, telegram_id: int) -> str:
+    stats = storage.get_player_stats(telegram_id)
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    nick = player.nickname if player else str(telegram_id)
+    lines = [
+        f"📊 Статистика — {h(nick)}",
+        "",
+        f"Контракты: ✅ {stats['quests_completed']} / ❌ {stats['quests_failed']}",
+        f"Рейды: ✅ {stats['raids_completed']} / ❌ {stats['raids_failed']}",
+        f"Войны выиграно: {stats['wars_won']}",
+        f"Захватов точек: {stats['enemy_bases_captured']}",
+        f"Контрабанда: {stats['smuggling_success']}",
+        f"Сделок: {stats['trades_done']}",
+        f"Заработано RU (учёт): {stats['money_earned']}",
+        f"Артефактов: {stats['artifacts_found']}",
+        f"Помощь по рации: {stats['radio_helps']}",
+        f"Смерти: {stats['deaths']}",
+        f"Рейтинг: {stats['rating_points']} | сезон: {stats['season_rating']}",
+        f"Достижений: {stats['achievements_unlocked']}",
+    ]
     return "\n".join(lines)
 
 
