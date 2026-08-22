@@ -269,7 +269,9 @@ def _pay_attackers_success(storage: Storage, attacker_ids: list[int], host_facti
         storage.add_player_stat(pid, "money_earned", WAR_SUCCESS_PAY_RU)
         _add_rating(storage, pid, RATING_REWARD["war_success"])
         paid += 1
-    storage.set_location_control(location, host_faction)
+    from app.faction_bots import apply_location_control
+
+    apply_location_control(storage, location, host_faction)
     return (
         f"Процентный исход: «{location}» захвачена «{host_faction}». "
         f"Награда хоста: {paid} бойц. ×{WAR_SUCCESS_PAY_RU} RU."
@@ -425,7 +427,9 @@ def resolve_pending_monolith_war(storage: Storage, *, force: bool = False) -> di
         if attacker_ids:
             text = _pay_attackers_success(storage, attacker_ids, MONOLITH_FACTION, location)
         else:
-            storage.set_location_control(location, MONOLITH_FACTION)
+            from app.faction_bots import apply_location_control
+
+            apply_location_control(storage, location, MONOLITH_FACTION)
             text = f"Процентный исход (крит атаке 10%): «{location}» взята Монолитом (боты ×{bot_count})."
         text = f"Авто-исход 90/10: {text}"
         return {"kind": "percent", "text": text, "notify_ids": notify_ids, "monolith_wins": True}

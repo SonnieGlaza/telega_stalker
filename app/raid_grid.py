@@ -761,7 +761,9 @@ def _finalize_lair_success(storage: Storage, session: RaidGridSession) -> Action
     location_name = session.location_label
     location = storage.get_location(location_name)
     enemy_power = session.enemy_power or 30
-    storage.set_location_control(location_name, session.attacker_faction)
+    from app.faction_bots import apply_location_control
+
+    apply_location_control(storage, location_name, session.attacker_faction)
     survivors = [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
     treasury_gain = 1400 + len(survivors) * 180
     storage.change_faction_treasury(session.attacker_faction, treasury_gain)

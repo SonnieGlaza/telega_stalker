@@ -1291,7 +1291,7 @@ QUEST_FAIL_PENALTY_RANGE: dict[str, tuple[int, int]] = {
 
 RAID_ARTIFACT_MIN_ENEMY_POWER = 35
 RAID_ARTIFACT_DROP_CHANCE = 5  # % шанс арта участнику при успехе (NPC ≥ порога)
-WAR_MIN_FACTION_MEMBERS = 5
+WAR_MIN_FACTION_MEMBERS = 3
 MAX_FACTION_ALLIANCES = 2
 
 # Рейды на склад/гараж вражеской группировки (не логова, не базы).
@@ -8037,7 +8037,9 @@ def transfer_location_to_ally(storage: Storage, telegram_id: int, location_name:
         return ActionResult(False, "Локация не найдена.")
     if str(location.get("controlled_by") or "") != player.faction:
         return ActionResult(False, "Передавать можно только локацию своей группировки.")
-    storage.set_location_control(location_name, ally_faction)
+    from app.faction_bots import apply_location_control
+
+    apply_location_control(storage, location_name, ally_faction)
     return ActionResult(True, f"Локация «{location_name}» передана союзнику: {ally_faction}.")
 
 

@@ -226,6 +226,7 @@ from app.game_logic import (
     WAR_ALLY_SUCCESS_PAY_RU,
     WAR_ALLY_SUCCESS_RATING,
     WAR_LOBBY_ENERGY_COST,
+    WAR_MIN_FACTION_MEMBERS,
     RATING_REWARD,
     QUESTS,
     QUEST_RATING_BY_DIFFICULTY,
@@ -7398,8 +7399,8 @@ async def war_scenario_section_callback(callback: CallbackQuery) -> None:
         "Правила войны:\n"
         f"• Нейтральные — от {NCAP_MIN_MEMBERS} бойцов на 6×6 («🎯 Захват нейтральных точек», +{NCAP_SUCCESS_PAY_RU} RU, "
         f"+{RATING_REWARD['war_success']} рейт., −18 энергии, 8 мин; захват удержанием центра) "
-        "или лобби от 5 на ту же точку (9×9, −24 энергии).\n"
-        "• Занятые точки и базы — только лобби (мин. 5 бойцов), штурм 9×9, 10 мин / ход 10 сек, "
+        f"или лобби от {WAR_MIN_FACTION_MEMBERS} на ту же точку (9×9, −24 энергии).\n"
+        f"• Занятые точки и базы — только лобби (мин. {WAR_MIN_FACTION_MEMBERS} бойцов), штурм 9×9, 10 мин / ход 10 сек, "
         f"−{WAR_LOBBY_ENERGY_COST} энергии, 1 аптечка/боец.\n"
         f"• Награды лобби (выжившим): хост +{WAR_SUCCESS_PAY_RU} RU (+{RATING_REWARD['war_success']} рейт.), "
         f"союзники +{WAR_ALLY_SUCCESS_PAY_RU} RU (+{WAR_ALLY_SUCCESS_RATING} рейт.).\n"
@@ -7411,6 +7412,7 @@ async def war_scenario_section_callback(callback: CallbackQuery) -> None:
         "• В рейде: 1 аптечка, «💊 Поднять» раненого; «🏳 Сдаться» — провал для всех.\n"
         "• Нельзя штурмовать свои и союзнические точки.\n"
         "• При успехе лобби контроль получает группировка-хост.\n"
+        "• На занятых точках автоматически дежурят боты группировки (+защитники в штурме).\n"
         "• Укрепление базы: 100000 RU из казны, +1 защитник и +1 урон за уровень в штурме.\n"
         "• Казна и склад — в «👥 Группировка».\n"
     )

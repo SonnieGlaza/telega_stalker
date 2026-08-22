@@ -765,7 +765,9 @@ def _hostile_shoot_turn(storage: Storage, session: NeutralCaptureSession) -> lis
 
 
 def _finalize_success(storage: Storage, session: NeutralCaptureSession) -> ActionResult:
-    storage.set_location_control(session.location_name, session.faction)
+    from app.faction_bots import apply_location_control
+
+    apply_location_control(storage, session.location_name, session.faction)
     survivors = _alive_players(session)
     for pid in survivors:
         storage.add_player_stat(pid, "wars_won", 1)

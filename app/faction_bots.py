@@ -10,6 +10,7 @@ from app.game_logic import ActionResult, h
 from app.storage import Storage
 
 FACTION_BOTS_META_PREFIX = "faction_bots:"
+LOCATION_GARRISON_META_PREFIX = "location_garrison:"
 FACTION_BOT_UPGRADE_COST = 50_000
 FACTION_BOT_COUNT_UPGRADE_COST = 25_000
 FACTION_BOT_DEFAULT_COUNT = 3
@@ -25,6 +26,111 @@ BOT_MONOLITH_ARMOR = "Костюм СЕВА"
 
 def _meta_key(faction: str) -> str:
     return f"{FACTION_BOTS_META_PREFIX}{faction}"
+
+
+def _garrison_meta_key(location_name: str) -> str:
+    return f"{LOCATION_GARRISON_META_PREFIX}{location_name}"
+
+
+def get_location_garrison(storage: Storage, location_name: str) -> dict[str, Any] | None:
+    raw = storage.get_meta(_garrison_meta_key(location_name))
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    faction = str(parsed.get("faction") or "")
+    if not faction:
+        return None
+    return {
+        "faction": faction,
+        "count": max(0, int(parsed.get("count") or 0)),
+        "tier": max(1, min(2, int(parsed.get("tier") or 1))),
+    }
+
+
+def _save_location_garrison(
+    storage: Storage,
+    location_name: str,
+    *,
+    faction: str,
+    count: int,
+    tier: int,
+) -> None:
+    payload = {
+        "faction": faction,
+        "count": max(0, int(count)),
+        "tier": max(1, min(2, int(tier))),
+    }
+    storage.set_meta(_garrison_meta_key(location_name), json.dumps(payload, ensure_ascii=False))
+
+
+def _clear_location_garrison(storage: Storage, location_name: str) -> None:
+    storage.delete_meta(_garrison_meta_key(location_name))
+
+
+def sync_faction_location_garrisons(storage: Storage, faction: str) -> None:
+    """Распределить ботов группировки по всем занятым ею точкам."""
+    if not faction:
+        return
+    bots = get_faction_bots(storage, faction)
+    total = int(bots.get("count") or 0)
+    tier = int(bots.get("tier") or 1)
+    controlled = sorted(
+        str(loc["name"])
+        for loc in storage.get_locations()
+        if str(loc.get("controlled_by") or "") == faction
+    )
+    for loc in storage.get_locations():
+        name = str(loc["name"])
+        garrison = get_location_garrison(storage, name)
+        if garrison and garrison.get("faction") == faction and name not in controlled:
+            _clear_location_garrison(storage, name)
+    if not controlled or total <= 0:
+        for name in controlled:
+            _clear_location_garrison(storage, name)
+        return
+    n = len(controlled)
+    if total < n:
+        for i, name in enumerate(controlled):
+            if i < total:
+                _save_location_garrison(storage, name, faction=faction, count=1, tier=tier)
+            else:
+                _clear_location_garrison(storage, name)
+        return
+    per_loc = total // n
+    remainder = total % n
+    for i, name in enumerate(controlled):
+        count = per_loc + (1 if i < remainder else 0)
+        _save_location_garrison(storage, name, faction=faction, count=count, tier=tier)
+
+
+def apply_location_control(storage: Storage, location_name: str, faction: str | None) -> None:
+    """Сменить контроль точки и перераспределить гарнизоны ботов."""
+    loc = storage.get_location(location_name)
+    old_faction = str(loc.get("controlled_by") or "") if loc else ""
+    storage.set_location_control(location_name, faction)
+    _clear_location_garrison(storage, location_name)
+    if old_faction and old_faction != (faction or ""):
+        sync_faction_location_garrisons(storage, old_faction)
+    if faction:
+        sync_faction_location_garrisons(storage, faction)
+
+
+def garrison_defenders_for_location(storage: Storage, location_name: str, faction: str) -> int:
+    """Сколько ботов группировки сидит на точке (доп. защитники в штурме)."""
+    if not faction:
+        return 0
+    garrison = get_location_garrison(storage, location_name)
+    if garrison is None or garrison.get("faction") != faction:
+        sync_faction_location_garrisons(storage, faction)
+        garrison = get_location_garrison(storage, location_name)
+    if garrison is None or garrison.get("faction") != faction:
+        return 0
+    return max(0, int(garrison.get("count") or 0))
 
 
 def get_faction_bots(storage: Storage, faction: str) -> dict[str, Any]:
@@ -86,6 +192,18 @@ def build_faction_bots_overview(storage: Storage, faction: str) -> str:
             f"Набор +1 бот (макс. {FACTION_BOT_MAX_COUNT}): "
             f"{FACTION_BOT_COUNT_UPGRADE_COST:,} RU из казны."
         )
+    garrison_lines: list[str] = []
+    for loc in storage.get_locations():
+        name = str(loc["name"])
+        if str(loc.get("controlled_by") or "") != faction:
+            continue
+        g = get_location_garrison(storage, name)
+        bot_n = int(g.get("count") or 0) if g and g.get("faction") == faction else 0
+        if bot_n > 0:
+            garrison_lines.append(f"• «{name}»: {bot_n} бот.")
+    if garrison_lines:
+        lines.append("На занятых точках автоматически:")
+        lines.extend(garrison_lines)
     return "\n".join(lines)
 
 
@@ -116,6 +234,7 @@ def upgrade_faction_bots(storage: Storage, telegram_id: int) -> ActionResult:
 
     bots["tier"] = 2
     storage.set_meta(_meta_key(player.faction), json.dumps(bots, ensure_ascii=False))
+    sync_faction_location_garrisons(storage, player.faction)
     return ActionResult(
         True,
         f"🤖 Боты «{player.faction}» улучшены до Т2!\n"
@@ -147,6 +266,7 @@ def upgrade_faction_bot_count(storage: Storage, telegram_id: int) -> ActionResul
 
     bots["count"] = count + 1
     storage.set_meta(_meta_key(player.faction), json.dumps(bots, ensure_ascii=False))
+    sync_faction_location_garrisons(storage, player.faction)
     return ActionResult(
         True,
         f"🤖 На базе «{player.faction}» теперь {bots['count']} оборонительных ботов "
