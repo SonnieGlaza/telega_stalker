@@ -642,8 +642,30 @@ def run_smoke_check() -> None:
             if btn.callback_data
         }
         assert "monolith_war:start" in lobby_cbs
+        from app.keyboards import cwar_grid_keyboard
+
+        cwar_kb = cwar_grid_keyboard(is_active_turn=False, medkit_available=False)
+        cwar_cbs = {
+            btn.callback_data
+            for row in cwar_kb.inline_keyboard
+            for btn in row
+            if btn.callback_data
+        }
+        assert "cwar:forfeit" in cwar_cbs
         atk = start_monolith_attack(storage, 444, "Свалка")
         assert atk.ok, atk.text
+        from app.monolith_war import format_monolith_war_call
+
+        attack_call = format_monolith_war_call(
+            {"location": "Болото", "mode": "attack", "host_faction": MONOLITH_FACTION}
+        )
+        assert "Внимание" in attack_call
+        assert "разведки" in attack_call
+        assert "подключение бойцов" not in attack_call
+        defend_call = format_monolith_war_call(
+            {"location": MONOLITH_BASE, "mode": "defend", "host_faction": "Долг"}
+        )
+        assert "Штурм базы Монолита" in defend_call
         # Корректно закрываем окно/лобби, не оставляя war_lobbies in_progress.
         forced = resolve_pending_monolith_war(storage, force=True)
         assert forced is not None

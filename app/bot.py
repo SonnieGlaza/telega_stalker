@@ -72,6 +72,7 @@ from app.duel_grid import (
     save_duel_session,
 )
 from app.clan_war_grid import (
+    cwar_forfeit,
     cwar_move,
     cwar_shoot,
     cwar_status_caption,
@@ -6709,7 +6710,8 @@ async def cwar_grid_callback(callback: CallbackQuery, bot: Bot) -> None:
             return
 
         if action == "forfeit":
-            await callback.answer("Сдаться нельзя — только захват или поражение.", show_alert=True)
+            result = cwar_forfeit(storage, telegram_id)
+            await _handle_cwar_action(bot, callback, result)
             return
 
         if action == "medkit":
@@ -7523,8 +7525,8 @@ async def war_monolith_attack_section_callback(callback: CallbackQuery) -> None:
     await edit_menu_message(
         callback,
         "☢ Атака Монолита\n"
-        "Выбери цель. Откроется окно 15 мин: можно вступить самому или оставить ботов "
-        "(авто 90/10 в пользу защитников).\n"
+        "Выбери цель. Откроется окно 15 мин: можно вступить самому или послать ботов.\n"
+        "Без живых защитников — авто 90/10.\n"
         "Команда: /monolith_attack [локация]",
         monolith_attack_targets_keyboard(targets),
     )

@@ -1488,7 +1488,7 @@ def cwar_grid_keyboard(*, is_active_turn: bool, medkit_available: bool) -> Inlin
         "cwar",
         is_active_turn=is_active_turn,
         medkit_available=medkit_available,
-        forfeit_label=None,
+        forfeit_label="🏃 Отступить",
     )
 
 
