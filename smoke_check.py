@@ -1939,7 +1939,12 @@ def run_smoke_check() -> None:
         assert int(SHOP_ITEMS["truck"]["buy_price"]) == 500000
         assert int(SHOP_ITEMS["detector_otklik"]["buy_price"]) == 3000
         assert int(SHOP_ITEMS["detector_medved"]["buy_price"]) == 40000
-        assert int(SHOP_ITEMS["medkit"]["buy_price"]) == 1300
+        assert int(SHOP_ITEMS["medkit"]["buy_price"]) == 500
+        assert int(SHOP_ITEMS["medkit_army"]["buy_price"]) == 1000
+        assert int(SHOP_ITEMS["medkit_science"]["buy_price"]) == 1500
+        assert int(SHOP_ITEMS["antirad"]["buy_price"]) == 886
+        assert int(SHOP_ITEMS["energy_drink"]["buy_price"]) == 554
+        assert int(SHOP_ITEMS["ammo_pack"]["buy_price"]) == 53
         assert WEAPON_RATING_BY_NAME["ПМ"] == 2
         assert WEAPON_RATING_BY_NAME["Фора-12"] == 3
         assert WEAPON_RATING_BY_NAME["Обрез"] == 3

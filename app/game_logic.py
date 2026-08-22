@@ -186,11 +186,11 @@ LOCATION_TYPE_RU_MULT: dict[str, float] = {
 CONTROLLED_LOCATION_RU_BONUS = 1.1
 
 SHOP_ITEMS: dict[str, dict[str, int | str]] = {
-    "energy_drink": {"name": "Энергетик", "buy_price": 250, "sell_price": 112},
-    "medkit": {"name": "Аптечка", "buy_price": 260, "sell_price": 120},
-    "medkit_army": {"name": "Армейская аптечка", "buy_price": 450, "sell_price": 180},
-    "medkit_science": {"name": "Научная аптечка", "buy_price": 600, "sell_price": 240},
-    "ammo_pack": {"name": "Патроны", "buy_price": 120, "sell_price": 55},
+    "energy_drink": {"name": "Энергетик", "buy_price": 111, "sell_price": 50},
+    "medkit": {"name": "Аптечка", "buy_price": 100, "sell_price": 46},
+    "medkit_army": {"name": "Армейская аптечка", "buy_price": 200, "sell_price": 80},
+    "medkit_science": {"name": "Научная аптечка", "buy_price": 300, "sell_price": 120},
+    "ammo_pack": {"name": "Патроны", "buy_price": 53, "sell_price": 24},
     "artifact": {"name": "Артефакт Зоны", "buy_price": 0, "sell_price": 5000},
     "artifact_power": {"name": "Арт «Сила»", "buy_price": 0, "sell_price": 1100},
     "artifact_vitality": {"name": "Арт «Живучесть»", "buy_price": 0, "sell_price": 1100},
@@ -208,14 +208,14 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "mutant_eye": {"name": "Глаз мутанта", "buy_price": 0, "sell_price": 260},
     "mutant_hide": {"name": "Шкура мутанта", "buy_price": 0, "sell_price": 300},
     "mutant_tendril": {"name": "Щупальце кровососа", "buy_price": 0, "sell_price": 340},
-    "vodka": {"name": "Водка", "buy_price": 150, "sell_price": 50},
-    "antirad": {"name": "Антирад", "buy_price": 400, "sell_price": 130},
-    "bread": {"name": "Хлеб", "buy_price": 50, "sell_price": 16},
-    "sausage": {"name": "Колбаса", "buy_price": 100, "sell_price": 33},
-    "stew": {"name": "Тушёнка", "buy_price": 250, "sell_price": 83},
-    "water_bottle": {"name": "Бутылка воды", "buy_price": 50, "sell_price": 16},
-    "mineral_water": {"name": "Минералка", "buy_price": 100, "sell_price": 33},
-    "beard_tea": {"name": "Чай Бороды", "buy_price": 250, "sell_price": 83},
+    "vodka": {"name": "Водка", "buy_price": 66, "sell_price": 22},
+    "antirad": {"name": "Антирад", "buy_price": 177, "sell_price": 58},
+    "bread": {"name": "Хлеб", "buy_price": 22, "sell_price": 7},
+    "sausage": {"name": "Колбаса", "buy_price": 44, "sell_price": 15},
+    "stew": {"name": "Тушёнка", "buy_price": 111, "sell_price": 37},
+    "water_bottle": {"name": "Бутылка воды", "buy_price": 22, "sell_price": 7},
+    "mineral_water": {"name": "Минералка", "buy_price": 44, "sell_price": 15},
+    "beard_tea": {"name": "Чай Бороды", "buy_price": 111, "sell_price": 37},
     "detector_otklik": {"name": "Детектор «Отклик»", "buy_price": 1000, "sell_price": 500},
     "detector_medved": {"name": "Детектор «Медведь»", "buy_price": 4000, "sell_price": 2000},
     "detector_veles": {"name": "Детектор «Велес»", "buy_price": 10000, "sell_price": 5000},
@@ -227,9 +227,9 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "niva": {"name": "Нива", "buy_price": 10000, "sell_price": 4500},
     "bicycle": {"name": "Велосипед", "buy_price": 3500, "sell_price": 1500},
     "sleeping_bag": {"name": "Спальник", "buy_price": 20000, "sell_price": 10000},
-    "diesel_can": {"name": "Канистра дизеля (+5)", "buy_price": 450, "sell_price": 200},
-    "gasoline_can": {"name": "Канистра бензина (+5)", "buy_price": 225, "sell_price": 100},
-    "fuel_can": {"name": "Канистра дизеля (+5)", "buy_price": 450, "sell_price": 200},
+    "diesel_can": {"name": "Канистра дизеля (+5)", "buy_price": 199, "sell_price": 89},
+    "gasoline_can": {"name": "Канистра бензина (+5)", "buy_price": 100, "sell_price": 44},
+    "fuel_can": {"name": "Канистра дизеля (+5)", "buy_price": 199, "sell_price": 89},
     "stash_case": {"name": "Тайник", "buy_price": 2000, "sell_price": 500},
 }
 
@@ -344,6 +344,30 @@ _scale_item_prices(SHOP_ITEMS["detector_svarog"], 10)
 for _key in _FOOD_CONSUMABLE_KEYS | _MEDKIT_KEYS:
     if _key in SHOP_ITEMS:
         _scale_item_prices(SHOP_ITEMS[_key], 5)
+
+# Снижение расходников: средний коэфф. ≈0.443 от прежних финальных цен (аптечки заданы явно).
+_CONSUMABLE_PRICE_OVERRIDES: dict[str, tuple[int, int]] = {
+    "medkit": (500, 231),
+    "medkit_army": (1000, 400),
+    "medkit_science": (1500, 600),
+    "antirad": (886, 288),
+    "energy_drink": (554, 248),
+    "vodka": (332, 111),
+    "bread": (111, 35),
+    "sausage": (222, 73),
+    "stew": (554, 184),
+    "water_bottle": (111, 35),
+    "mineral_water": (222, 73),
+    "beard_tea": (554, 184),
+    "ammo_pack": (53, 24),
+    "diesel_can": (199, 89),
+    "gasoline_can": (100, 44),
+    "fuel_can": (199, 89),
+}
+for _key, (_buy, _sell) in _CONSUMABLE_PRICE_OVERRIDES.items():
+    if _key in SHOP_ITEMS:
+        SHOP_ITEMS[_key]["buy_price"] = _buy
+        SHOP_ITEMS[_key]["sell_price"] = _sell
 
 # Обрез сильнее ПМ — фиксируем цену выше ПМ (после T1×5).
 WEAPON_CATALOG["weapon_sawedoff"]["buy_price"] = 17000
@@ -6235,6 +6259,17 @@ def _telegram_button_title(text: str, *, limit: int = 64) -> str:
     if len(raw) <= limit:
         return raw
     return raw[: max(1, limit - 1)].rstrip() + "…"
+
+
+def shop_consumable_button_title(item_key: str, *, label: str | None = None) -> str:
+    """Подпись кнопки расходника: имя (от цена)."""
+    key = normalize_shop_item_key(item_key)
+    item = SHOP_ITEMS.get(key)
+    if item is None:
+        return label or key
+    name = label or str(item["name"])
+    price = int(item["buy_price"])
+    return _telegram_button_title(f"{name} (от {price})")
 
 
 def shop_weapon_button_title(item_key: str) -> str:

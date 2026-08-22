@@ -344,17 +344,19 @@ def trader_buy_consumables_keyboard(
 def barkeep_food_keyboard(
     *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
 ) -> InlineKeyboardMarkup:
+    from app.game_logic import shop_consumable_button_title
+
     catalog = [
-        ("Энергетик (от 250)", "buyqty:energy_drink", "energy_drink"),
-        ("Водка (от 150)", "buyqty:vodka", "vodka"),
-        ("Хлеб (от 50)", "buyqty:bread", "bread"),
-        ("Колбаса (от 100)", "buyqty:sausage", "sausage"),
-        ("Тушёнка (от 250)", "buyqty:stew", "stew"),
-        ("Вода (от 50)", "buyqty:water_bottle", "water_bottle"),
-        ("Минералка (от 100)", "buyqty:mineral_water", "mineral_water"),
-        ("Чай Бороды (от 250)", "buyqty:beard_tea", "beard_tea"),
-        ("Дизель +5 (от 450)", "buyqty:diesel_can", "diesel_can"),
-        ("Бензин +5 (от 225)", "buyqty:gasoline_can", "gasoline_can"),
+        (shop_consumable_button_title("energy_drink"), "buyqty:energy_drink", "energy_drink"),
+        (shop_consumable_button_title("vodka"), "buyqty:vodka", "vodka"),
+        (shop_consumable_button_title("bread"), "buyqty:bread", "bread"),
+        (shop_consumable_button_title("sausage"), "buyqty:sausage", "sausage"),
+        (shop_consumable_button_title("stew"), "buyqty:stew", "stew"),
+        (shop_consumable_button_title("water_bottle", label="Вода"), "buyqty:water_bottle", "water_bottle"),
+        (shop_consumable_button_title("mineral_water"), "buyqty:mineral_water", "mineral_water"),
+        (shop_consumable_button_title("beard_tea"), "buyqty:beard_tea", "beard_tea"),
+        (shop_consumable_button_title("diesel_can", label="Дизель +5"), "buyqty:diesel_can", "diesel_can"),
+        (shop_consumable_button_title("gasoline_can", label="Бензин +5"), "buyqty:gasoline_can", "gasoline_can"),
     ]
     items = _filter_shop_rows(catalog, unlocked_keys)
     return _trader_page_keyboard(
@@ -369,11 +371,13 @@ def barkeep_food_keyboard(
 def medic_buy_keyboard(
     *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
 ) -> InlineKeyboardMarkup:
+    from app.game_logic import shop_consumable_button_title
+
     catalog = [
-        ("Аптечка (от 260)", "buyqty:medkit", "medkit"),
-        ("Армейская аптечка (от 450)", "buyqty:medkit_army", "medkit_army"),
-        ("Антирад (от 400)", "buyqty:antirad", "antirad"),
-        ("Научная аптечка (от 600)", "buyqty:medkit_science", "medkit_science"),
+        (shop_consumable_button_title("medkit"), "buyqty:medkit", "medkit"),
+        (shop_consumable_button_title("medkit_army"), "buyqty:medkit_army", "medkit_army"),
+        (shop_consumable_button_title("antirad"), "buyqty:antirad", "antirad"),
+        (shop_consumable_button_title("medkit_science"), "buyqty:medkit_science", "medkit_science"),
     ]
     items = _filter_shop_rows(catalog, unlocked_keys)
     return _trader_page_keyboard(
@@ -766,10 +770,10 @@ def trader_buy_armor_keyboard(
 def trader_buy_weapons_keyboard(
     *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
 ) -> InlineKeyboardMarkup:
-    from app.game_logic import shop_weapon_button_title
+    from app.game_logic import shop_consumable_button_title, shop_weapon_button_title
 
     catalog = [
-        ("Патроны (от 120)", "buyqty:ammo_pack", "ammo_pack"),
+        (shop_consumable_button_title("ammo_pack", label="Патроны"), "buyqty:ammo_pack", "ammo_pack"),
         (shop_weapon_button_title("weapon_pm"), "buy:weapon_pm", "weapon_pm"),
         (shop_weapon_button_title("weapon_fort12"), "buy:weapon_fora12", "weapon_fort12"),
         (shop_weapon_button_title("weapon_sawedoff"), "buy:weapon_sawedoff", "weapon_sawedoff"),
