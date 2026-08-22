@@ -376,6 +376,9 @@ def run_smoke_check() -> None:
         after_sell = storage.get_character(111, refresh_energy=False)
         assert after_sell.equipment.get("artifact_2") in {"", "Нет", None}
         storage.add_item(111, "artifact_power", 1)
+        cooldown_res = equip_artifact(storage, 111, "artifact_power")
+        assert not cooldown_res.ok
+        storage.delete_meta("artifact_equip_cd:111:artifact_power")
         assert equip_artifact(storage, 111, "artifact_power").ok
         inv_text = format_inventory(storage.get_character(111, refresh_energy=False), storage=storage)
         assert "Артефакт 2:" in inv_text
