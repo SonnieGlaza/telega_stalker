@@ -383,6 +383,41 @@ def start_special_event(storage: Storage, *, kind: str | None = None) -> dict[st
     return event
 
 
+def attach_special_call_message(storage: Storage, chat_id: int, message_id: int) -> None:
+    raw = storage.get_meta(SPECIAL_EVENT_META)
+    if not raw:
+        return
+    try:
+        event = json.loads(raw)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(event, dict) or event.get("resolved"):
+        return
+    event["call_chat_id"] = int(chat_id)
+    event["call_message_id"] = int(message_id)
+    _save_event(storage, event)
+
+
+def pop_special_call_message(storage: Storage) -> tuple[int, int] | None:
+    raw = storage.get_meta(SPECIAL_EVENT_META)
+    if not raw:
+        return None
+    try:
+        event = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict):
+        return None
+    chat_id = int(event.get("call_chat_id") or 0)
+    message_id = int(event.get("call_message_id") or 0)
+    if chat_id and message_id:
+        event.pop("call_chat_id", None)
+        event.pop("call_message_id", None)
+        _save_event(storage, event)
+        return chat_id, message_id
+    return None
+
+
 def format_special_call_html(event: dict[str, Any]) -> str:
     title = h(str(event.get("title") or "Событие Зоны"))
     body = h(str(event.get("call_text") or ""))

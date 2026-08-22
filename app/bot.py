@@ -680,6 +680,7 @@ async def reply_action_result(
     *,
     bot: Bot | None = None,
     short_ack: str = "Готово",
+    ephemeral: bool = False,
 ) -> None:
     """Короткий итог — popup; длинный — сообщение в чат."""
     clean = action_result_text(callback.from_user.id, text)
@@ -692,9 +693,17 @@ async def reply_action_result(
     await safe_callback_answer(callback, short_ack)
     message = callback.message
     if message is not None:
-        await message.answer(clean)
+        sent = await message.answer(clean)
+        if ephemeral:
+            from app.ephemeral_messages import schedule_battle_message_deletion
+
+            schedule_battle_message_deletion(get_storage(), callback.from_user.id, sent.message_id)
     elif bot is not None:
-        await bot.send_message(callback.from_user.id, clean)
+        sent = await bot.send_message(callback.from_user.id, clean)
+        if ephemeral:
+            from app.ephemeral_messages import schedule_battle_message_deletion
+
+            schedule_battle_message_deletion(get_storage(), callback.from_user.id, sent.message_id)
 
 
 async def finish_callback_action(
@@ -4770,7 +4779,10 @@ async def _deliver_player_message_or_death(
             killer_name=killers_map.get(str(telegram_id)) or killer_name,
         )
         return
-    await bot.send_message(telegram_id, action_result_text(telegram_id, result_text))
+    sent = await bot.send_message(telegram_id, action_result_text(telegram_id, result_text))
+    from app.ephemeral_messages import schedule_battle_message_deletion
+
+    schedule_battle_message_deletion(storage, telegram_id, sent.message_id)
 
 
 async def _push_fresh_tactical_deaths(
@@ -5024,6 +5036,22 @@ async def _clear_tactical_keyboards(bot: Bot, message_ids: dict[str, int]) -> No
             logger.debug("Failed to clear tactical keyboard for %s", pid_raw, exc_info=True)
 
 
+async def _finalize_tactical_battle(bot: Bot, storage: Storage, message_ids: dict[str, int]) -> None:
+    """Снять клавиатуру с тактической карты и запланировать удаление через час."""
+    await _clear_tactical_keyboards(bot, message_ids)
+    from app.ephemeral_messages import schedule_messages_deletion
+
+    schedule_messages_deletion(storage, message_ids)
+
+
+def _schedule_callback_battle_photo(storage: Storage, callback: CallbackQuery | None) -> None:
+    if callback is None or callback.message is None or not callback.message.photo:
+        return
+    from app.ephemeral_messages import schedule_battle_message_deletion
+
+    schedule_battle_message_deletion(storage, callback.from_user.id, callback.message.message_id)
+
+
 def _patch_duel_message_ids(storage: Storage, session: Any) -> None:
     from app.duel_grid import DuelGridSession, _session_key, save_duel_session
     from app.tactical_turn import patch_session_message_ids
@@ -5132,7 +5160,8 @@ async def _notify_duel_finished(bot: Bot, result: Any) -> None:
     payload = result.payload or {}
     if not payload.get("duel_done"):
         return
-    await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
+    storage = get_storage()
+    await _finalize_tactical_battle(bot, storage, payload.get("message_ids") or {})
     winner_id = int(payload.get("winner_id") or 0)
     loser_id = int(payload.get("loser_id") or 0)
     for pid, key in ((winner_id, "winner_text"), (loser_id, "loser_text")):
@@ -5147,7 +5176,6 @@ async def _handle_duel_action(bot: Bot, callback: CallbackQuery, result: Any) ->
     storage = get_storage()
     payload = result.payload or {}
     if payload.get("duel_done"):
-        await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
         await _notify_duel_finished(bot, result)
         await safe_callback_answer(callback, "Дуэль завершена")
         return
@@ -5196,7 +5224,8 @@ async def _notify_cwar_finished(bot: Bot, result: Any) -> None:
     payload = result.payload or {}
     if not payload.get("cwar_done"):
         return
-    await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
+    storage = get_storage()
+    await _finalize_tactical_battle(bot, storage, payload.get("message_ids") or {})
     member_ids = payload.get("member_ids") or []
     dead_player_ids = {int(x) for x in (payload.get("dead_players") or [])}
     death_causes = {str(k): str(v) for k, v in (payload.get("death_causes") or {}).items()}
@@ -5284,7 +5313,8 @@ async def _notify_rgrid_finished(bot: Bot, result: Any) -> None:
     payload = result.payload or {}
     if not payload.get("rgrid_done"):
         return
-    await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
+    storage = get_storage()
+    await _finalize_tactical_battle(bot, storage, payload.get("message_ids") or {})
     member_ids = payload.get("member_ids") or []
     defender_leader_id = payload.get("defender_leader_id")
     dead_player_ids = {int(x) for x in (payload.get("dead_players") or [])}
@@ -5360,7 +5390,8 @@ async def _notify_ncap_finished(bot: Bot, result: Any) -> None:
     payload = result.payload or {}
     if not payload.get("ncap_done"):
         return
-    await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
+    storage = get_storage()
+    await _finalize_tactical_battle(bot, storage, payload.get("message_ids") or {})
     notify_ids = [int(x) for x in (payload.get("notify_all") or [])]
     dead_player_ids = {int(x) for x in (payload.get("dead_players") or [])}
     death_causes = {str(k): str(v) for k, v in (payload.get("death_causes") or {}).items()}
@@ -5447,9 +5478,11 @@ async def _handle_arena_action(bot: Bot, callback: CallbackQuery, result: Any) -
         msg_id = payload.get("message_id")
         tid = int(payload.get("telegram_id") or callback.from_user.id)
         if msg_id:
-            await _clear_tactical_keyboards(bot, {str(tid): int(msg_id)})
-        # Арена — тренировка: без экрана смерти и автореспавна.
-        await bot.send_message(tid, action_result_text(tid, result.text))
+            await _finalize_tactical_battle(bot, storage, {str(tid): int(msg_id)})
+        sent = await bot.send_message(tid, action_result_text(tid, result.text))
+        from app.ephemeral_messages import schedule_battle_message_deletion
+
+        schedule_battle_message_deletion(storage, tid, sent.message_id)
         await safe_callback_answer(callback, "Арена завершена")
         return
     if not result.ok:
@@ -5503,8 +5536,8 @@ async def _notify_coop_finished(bot: Bot, result: Any) -> None:
     payload = result.payload or {}
     if not payload.get("coop_done"):
         return
-    await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
     storage = get_storage()
+    await _finalize_tactical_battle(bot, storage, payload.get("message_ids") or {})
     notify_ids = [int(x) for x in (payload.get("notify_all") or [])]
     death_where = payload.get("death_location")
     death_causes = {
@@ -5536,7 +5569,10 @@ async def _notify_coop_finished(bot: Bot, result: Any) -> None:
                 if payload.get("coop_success"):
                     continue
             elif is_notify_enabled(storage, pid, "coop"):
-                await bot.send_message(pid, action_result_text(pid, result.text))
+                sent = await bot.send_message(pid, action_result_text(pid, result.text))
+                from app.ephemeral_messages import schedule_battle_message_deletion
+
+                schedule_battle_message_deletion(storage, pid, sent.message_id)
         except Exception:
             logger.exception("Failed coop result notify to %s", pid)
 
@@ -5545,7 +5581,6 @@ async def _handle_coop_action(bot: Bot, callback: CallbackQuery, result: Any) ->
     storage = get_storage()
     payload = result.payload or {}
     if payload.get("coop_done"):
-        await _clear_tactical_keyboards(bot, payload.get("message_ids") or {})
         await _notify_coop_finished(bot, result)
         await safe_callback_answer(callback, "Вылазка завершена")
         return
@@ -5671,7 +5706,8 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
             return
 
         if payload.get("mission_done") or payload.get("mission_active") is False:
-            await reply_action_result(callback, result.text)
+            _schedule_callback_battle_photo(storage, callback)
+            await reply_action_result(callback, result.text, ephemeral=True)
             player = storage.get_character(telegram_id, refresh_energy=False)
             if player is not None and callback.message is not None:
                 auto = try_auto_turn_in_contract(storage, telegram_id)
@@ -5680,7 +5716,10 @@ async def quest_mission_callback(callback: CallbackQuery) -> None:
                 if auto:
                     text = f"{auto}\n\n{text}"
                 try:
-                    await callback.message.answer(text, reply_markup=keyboard)
+                    menu_msg = await callback.message.answer(text, reply_markup=keyboard)
+                    from app.ephemeral_messages import schedule_battle_message_deletion
+
+                    schedule_battle_message_deletion(storage, telegram_id, menu_msg.message_id)
                 except Exception:
                     logger.exception("Failed to send quest menu after mission for %s", telegram_id)
             return
@@ -5751,7 +5790,8 @@ async def smuggle_mission_callback(callback: CallbackQuery) -> None:
             return
 
         if payload.get("mission_done") or payload.get("mission_active") is False:
-            await reply_action_result(callback, result.text)
+            _schedule_callback_battle_photo(storage, callback)
+            await reply_action_result(callback, result.text, ephemeral=True)
             return
 
         image = payload.get("mission_image")
@@ -6686,8 +6726,9 @@ async def artifact_hunt_callback(callback: CallbackQuery) -> None:
 
     try:
         if action == "leave":
+            _schedule_callback_battle_photo(storage, callback)
             result = abandon_artifact_hunt(storage, telegram_id)
-            await reply_action_result(callback, result.text)
+            await reply_action_result(callback, result.text, ephemeral=True)
             return
 
         if action == "refresh":
@@ -6737,7 +6778,8 @@ async def artifact_hunt_callback(callback: CallbackQuery) -> None:
             return
 
         if payload.get("hunt_done") or payload.get("hunt_active") is False:
-            await reply_action_result(callback, result.text)
+            _schedule_callback_battle_photo(storage, callback)
+            await reply_action_result(callback, result.text, ephemeral=True)
             return
 
         image = payload.get("hunt_image")
@@ -9390,6 +9432,12 @@ async def run_bot() -> None:
             await asyncio.sleep(POINTS_INCOME_TICK_SECONDS)
             zone_tick_counter["n"] += 1
             try:
+                from app.ephemeral_messages import process_ephemeral_message_queue
+
+                await process_ephemeral_message_queue(bot, get_storage())
+            except Exception:
+                logger.exception("Ephemeral message cleanup tick failed")
+            try:
                 apply_controlled_points_income(get_storage())
             except Exception:
                 logger.exception("Points income tick failed")
@@ -9446,14 +9494,21 @@ async def run_bot() -> None:
                 logger.exception("Zone event cycle tick failed")
             try:
                 from app.mini_events import (
+                    attach_help_call_message,
                     format_help_call_html,
                     format_help_thanks_html,
+                    pop_help_call_message,
                     process_help_event_cycle,
+                )
+                from app.ephemeral_messages import (
+                    delete_message_safe,
+                    schedule_group_outcome_deletion,
                 )
                 from app.season_chat_titles import ZONE_COMMON_CHAT_ID
 
                 payload = process_help_event_cycle(get_storage())
                 if payload:
+                    storage = get_storage()
                     text = payload.get("text") or ""
                     event = payload.get("event") or {}
                     html = (
@@ -9462,25 +9517,45 @@ async def run_bot() -> None:
                         else format_help_thanks_html(text)
                     )
                     try:
-                        await bot.send_message(
+                        if payload.get("kind") == "thanks":
+                            call_ref = pop_help_call_message(storage)
+                            if call_ref:
+                                await delete_message_safe(bot, call_ref[0], call_ref[1])
+                        sent = await bot.send_message(
                             ZONE_COMMON_CHAT_ID,
                             html,
                             parse_mode=ParseMode.HTML,
                         )
+                        if payload.get("kind") == "call":
+                            attach_help_call_message(storage, ZONE_COMMON_CHAT_ID, sent.message_id)
+                        else:
+                            schedule_group_outcome_deletion(
+                                storage,
+                                ZONE_COMMON_CHAT_ID,
+                                sent.message_id,
+                                kind="help_thanks",
+                            )
                     except Exception:
                         logger.exception("Failed to post help event to common chat")
             except Exception:
                 logger.exception("Help event cycle tick failed")
             try:
                 from app.special_events import (
+                    attach_special_call_message,
                     format_special_call_html,
                     format_special_resolve_html,
+                    pop_special_call_message,
                     process_special_event_cycle,
+                )
+                from app.ephemeral_messages import (
+                    delete_message_safe,
+                    schedule_group_outcome_deletion,
                 )
                 from app.season_chat_titles import ZONE_COMMON_CHAT_ID
 
                 special_payload = process_special_event_cycle(get_storage())
                 if special_payload:
+                    storage = get_storage()
                     event = special_payload.get("event") or {}
                     html = (
                         format_special_call_html(event)
@@ -9490,23 +9565,36 @@ async def run_bot() -> None:
                     try:
                         from app.mutant_assets import special_event_call_photo
 
+                        if special_payload.get("kind") == "resolve":
+                            call_ref = pop_special_call_message(storage)
+                            if call_ref:
+                                await delete_message_safe(bot, call_ref[0], call_ref[1])
                         photo = (
                             special_event_call_photo(str(event.get("kind") or ""))
                             if special_payload.get("kind") == "call"
                             else None
                         )
                         if photo:
-                            await bot.send_photo(
+                            sent = await bot.send_photo(
                                 ZONE_COMMON_CHAT_ID,
                                 BufferedInputFile(photo, filename="giant.png"),
                                 caption=html,
                                 parse_mode=ParseMode.HTML,
                             )
                         else:
-                            await bot.send_message(
+                            sent = await bot.send_message(
                                 ZONE_COMMON_CHAT_ID,
                                 html,
                                 parse_mode=ParseMode.HTML,
+                            )
+                        if special_payload.get("kind") == "call":
+                            attach_special_call_message(storage, ZONE_COMMON_CHAT_ID, sent.message_id)
+                        else:
+                            schedule_group_outcome_deletion(
+                                storage,
+                                ZONE_COMMON_CHAT_ID,
+                                sent.message_id,
+                                kind="special_resolve",
                             )
                     except Exception:
                         logger.exception("Failed to post special event to common chat")
@@ -9720,8 +9808,11 @@ async def run_bot() -> None:
                     if payload.get("arena_done"):
                         msg_id = payload.get("message_id")
                         if msg_id:
-                            await _clear_tactical_keyboards(bot, {str(pid): int(msg_id)})
-                        await bot.send_message(pid, action_result_text(pid, result.text))
+                            await _finalize_tactical_battle(bot, storage, {str(pid): int(msg_id)})
+                        sent = await bot.send_message(pid, action_result_text(pid, result.text))
+                        from app.ephemeral_messages import schedule_battle_message_deletion
+
+                        schedule_battle_message_deletion(storage, pid, sent.message_id)
                         continue
                     session = get_arena_session(storage, pid)
                     if session:
