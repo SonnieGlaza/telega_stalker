@@ -3022,6 +3022,17 @@ def run_smoke_check() -> None:
         assert await_finish is None
         assert 111 not in bot_mod._travel_eta_locks
 
+        from app.ephemeral_messages import (
+            EPHEMERAL_QUEUE_META,
+            schedule_battle_message_deletion,
+            schedule_message_deletion,
+        )
+
+        schedule_battle_message_deletion(storage, 111, 4242)
+        schedule_message_deletion(storage, -1003958853707, 777, ttl_seconds=120, kind="help_thanks")
+        raw_queue = storage.get_meta(EPHEMERAL_QUEUE_META)
+        assert raw_queue and "4242" in raw_queue and "777" in raw_queue
+
 
 if __name__ == "__main__":
     run_smoke_check()
