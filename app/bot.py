@@ -314,6 +314,7 @@ from app.game_logic import (
     build_dead_character_text,
     build_battle_death_text,
     append_death_log_once,
+    build_artifact_find_log_text,
     build_death_log_text,
     respawn_character,
     format_personal_stash,
@@ -1502,7 +1503,7 @@ def _build_info_text(player: Character) -> str:
         "Разделы меню:\n"
         "• 📟 КПК — профиль (там же эмодзи игровых медалей), чаты (канал обновлений + общий + фракция), "
         "рейтинг (общий + сезонный, внутри «Достижения и медали»), карта, игроки, рефералка, "
-        "☠️ журнал смертей (последние 5).\n"
+        "☠️ журнал смертей (последние 5), 💎 журнал находок артефактов.\n"
         "• 🏕 Вылазка — война, переходы, ⚔️ арена (тренировка 8×8 на базе), рейды и 👥 кооп-вылазка.\n"
         "  В коопе: до 3 игроков, −14 энергии, 1 аптечка/боец, «🏃 Свалить» возвращает энергию; "
         "эвакуация раненого (рядом + тащить на старт). "
@@ -5713,6 +5714,16 @@ async def show_death_log(message: Message) -> None:
     await message.answer(text, reply_markup=_pda_keyboard_for(player))
 
 
+@router.message(F.text == "💎 Находки")
+async def show_artifact_find_log(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    text = build_artifact_find_log_text(get_storage(), player.telegram_id)
+    await message.answer(text, reply_markup=_pda_keyboard_for(player))
+
+
 @router.callback_query(F.data == "death:log")
 async def show_death_log_callback(callback: CallbackQuery) -> None:
     """Журнал смертей (из КПК, когда игрок жив)."""
@@ -5736,7 +5747,7 @@ async def show_pda(message: Message) -> None:
         return
     await message.answer(
         "📟 КПК сталкера\n"
-        "Профиль, связь, рейтинг, карта, журнал смертей, игроки и рефералка.",
+        "Профиль, связь, рейтинг, карта, журналы смертей и находок, игроки и рефералка.",
         reply_markup=_pda_keyboard_for(player),
     )
 

@@ -59,9 +59,10 @@ def pda_keyboard(*, is_leader: bool = False) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [
         [KeyboardButton(text="🧾 Профиль"), KeyboardButton(text="💬 Чаты")],
         [KeyboardButton(text="🏆 Рейтинг"), KeyboardButton(text="🗺 Карта")],
-        [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="☠️ Смерти")],
-        [KeyboardButton(text="📅 Ежедневка"), KeyboardButton(text="🔔 Уведомления")],
-        [KeyboardButton(text="🔥 Как не сдохнуть"), KeyboardButton(text="🏛 Клановые задачи")],
+        [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="💎 Находки")],
+        [KeyboardButton(text="☠️ Смерти"), KeyboardButton(text="📅 Ежедневка")],
+        [KeyboardButton(text="🔔 Уведомления"), KeyboardButton(text="🔥 Как не сдохнуть")],
+        [KeyboardButton(text="🏛 Клановые задачи")],
     ]
     if is_leader:
         rows[-1].append(KeyboardButton(text="📣 Сбор"))

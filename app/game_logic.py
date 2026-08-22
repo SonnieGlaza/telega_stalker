@@ -1980,6 +1980,108 @@ def build_battle_death_text(
 
 DEATH_LOG_MAX_ENTRIES = 5
 DEATH_LOG_TEXT_LIMIT = 400
+ARTIFACT_FIND_LOG_MAX_ENTRIES = 20
+ARTIFACT_FIND_SOURCE_LABELS: dict[str, str] = {
+    "hunt": "Охота",
+    "quest": "Контракт",
+    "raid": "Рейд",
+}
+
+
+def _artifact_find_log_key(telegram_id: int) -> str:
+    return f"artifact_find_log:{int(telegram_id)}"
+
+
+def append_artifact_find_log(
+    storage: Storage,
+    telegram_id: int,
+    art_key: str,
+    *,
+    location: str,
+    source: str,
+    detector_name: str | None = None,
+) -> None:
+    """Журнал находок артефактов (ценные и мусор) — последние N записей в meta."""
+    key = normalize_shop_item_key(art_key)
+    if key not in ARTIFACT_ALL_KEYS:
+        return
+    label = ITEM_LABELS.get(key, key)
+    if key in ARTIFACT_JUNK_KEYS:
+        label = f"{label} (мусор)"
+    source_label = ARTIFACT_FIND_SOURCE_LABELS.get(source, source)
+    detail = source_label
+    if detector_name and source == "hunt":
+        detail = f"{source_label} · {detector_name}"
+    entry = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "art_key": key,
+        "label": label,
+        "location": str(location or "").strip() or "неизвестно",
+        "source": source,
+        "detail": detail,
+    }
+    meta_key = _artifact_find_log_key(telegram_id)
+    raw = storage.get_meta(meta_key)
+    entries: list[dict[str, str]] = []
+    if raw:
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, list):
+                entries = [e for e in loaded if isinstance(e, dict)]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            entries = []
+    entries.append(entry)
+    entries = entries[-ARTIFACT_FIND_LOG_MAX_ENTRIES:]
+    storage.set_meta(meta_key, json.dumps(entries, ensure_ascii=False))
+
+
+def on_artifact_found(
+    storage: Storage,
+    telegram_id: int,
+    art_key: str,
+    *,
+    location: str,
+    source: str,
+    detector_name: str | None = None,
+) -> None:
+    """Статистика ценных артов + запись в журнал находок."""
+    record_valuable_artifact_found_stat(storage, telegram_id, art_key)
+    append_artifact_find_log(
+        storage,
+        telegram_id,
+        art_key,
+        location=location,
+        source=source,
+        detector_name=detector_name,
+    )
+
+
+def build_artifact_find_log_text(storage: Storage, telegram_id: int) -> str:
+    """Журнал находок: последние записи, новые сверху."""
+    raw = storage.get_meta(_artifact_find_log_key(telegram_id))
+    entries: list[dict[str, str]] = []
+    if raw:
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, list):
+                entries = [e for e in loaded if isinstance(e, dict)]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            entries = []
+    if not entries:
+        return (
+            "💎 Журнал находок пуст.\n"
+            "Здесь появятся артефакты с охоты, контрактов и рейдов — с локацией и источником."
+        )
+    lines = ["💎 Журнал находок (последние записи, UTC):", ""]
+    for idx, entry in enumerate(reversed(entries), start=1):
+        when = _format_death_log_when(str(entry.get("at") or ""))
+        label = str(entry.get("label") or entry.get("art_key") or "?")
+        location = str(entry.get("location") or "?")
+        detail = str(entry.get("detail") or entry.get("source") or "?")
+        lines.append(f"{idx}. {when} — {label}")
+        lines.append(f"   📍 {location} · {detail}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def _death_log_key(telegram_id: int) -> str:
@@ -3813,7 +3915,13 @@ def apply_contract_mission_success(
     )
     if art_key is not None:
         storage.add_item(telegram_id, art_key, 1)
-        record_valuable_artifact_found_stat(storage, telegram_id, art_key)
+        on_artifact_found(
+            storage,
+            telegram_id,
+            art_key,
+            location=work_location,
+            source="quest",
+        )
         extra = f"\nНаходка на «{work_location}»: {ITEM_LABELS.get(art_key, art_key)}!"
     else:
         extra = ""

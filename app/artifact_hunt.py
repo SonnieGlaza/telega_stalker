@@ -939,10 +939,14 @@ def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) ->
             payload={"hunt_active": False, "hunt_done": True},
         )
     storage.add_item(telegram_id, art_key, 1)
-    if art_key not in ARTIFACT_JUNK_KEYS:
-        from app.game_logic import record_valuable_artifact_found_stat
-
-        record_valuable_artifact_found_stat(storage, telegram_id, art_key)
+    on_artifact_found(
+        storage,
+        telegram_id,
+        art_key,
+        location=session.location,
+        source="hunt",
+        detector_name=session.detector_name,
+    )
     label = ITEM_LABELS.get(art_key, art_key)
     kind = "мусорный артефакт (без бонусов)" if art_key in ARTIFACT_JUNK_KEYS else "артефакт"
     bonus_note = ""

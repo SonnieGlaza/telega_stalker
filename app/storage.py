@@ -1001,6 +1001,7 @@ class Storage:
             f"respawn:debt:{tid}",
             f"death:last_cause:{tid}",
             f"death:last_killer:{tid}",
+            f"artifact_find_log:{tid}",
             f"death_log:{tid}",
             f"death_notice_sent:{tid}",
             f"duel:pending_in:{tid}",

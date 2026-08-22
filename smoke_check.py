@@ -385,6 +385,15 @@ def run_smoke_check() -> None:
         assert storage.get_player_stats(111)["artifacts_found"] == junk_before
         record_valuable_artifact_found_stat(storage, 111, "artifact_power")
         assert storage.get_player_stats(111)["artifacts_found"] == junk_before + 1
+        from app.game_logic import build_artifact_find_log_text, on_artifact_found
+
+        on_artifact_found(storage, 111, "artifact_junk_bolt", location="Болото", source="hunt", detector_name="Отклик")
+        on_artifact_found(storage, 111, "artifact_power", location="Радар", source="quest")
+        log_text = build_artifact_find_log_text(storage, 111)
+        assert "Журнал находок" in log_text
+        assert "Болото" in log_text and "Отклик" in log_text
+        assert "Радар" in log_text and "Контракт" in log_text
+        assert "мусор" in log_text
         from app.bot import WAREHOUSE_CUSTOM_ITEM_KEYS
 
         assert WAREHOUSE_CUSTOM_ITEM_KEYS >= frozenset(
