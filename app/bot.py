@@ -190,6 +190,7 @@ from app.game_logic import (
     build_rating_menu_text,
     BULK_BUY_ITEM_KEYS,
     SHOP_ITEMS,
+    consumable_buy_menu_text,
     buy_item,
     buy_first_faction_auction,
     cancel_own_first_auction,
@@ -379,7 +380,9 @@ from app.keyboards import (
     trader_buy_armor_keyboard,
     trader_buy_consumables_keyboard,
     buy_item_qty_keyboard,
+    buy_item_confirm_keyboard,
     trader_buy_consumable_qty_keyboard,
+    trader_buy_consumable_confirm_keyboard,
     trader_buy_gear_keyboard,
     trader_buy_repair_keyboard,
     trader_buy_weapons_keyboard,
@@ -3524,21 +3527,51 @@ async def show_buy_consumable_qty(callback: CallbackQuery) -> None:
     if item is None or item_key not in BULK_BUY_ITEM_KEYS or int(item.get("buy_price", 0)) <= 0:
         await reply_action_result(callback, "Такого товара нельзя купить пачкой.")
         return
-    title = str(item["name"])
     unit_price = int(item["buy_price"])
-    if item_key == "stash_case":
-        qty_keyboard = buy_item_qty_keyboard(
-            item_key,
-            unit_price=unit_price,
-            back_callback="trade:buy:gear:0",
-            back_text="⬅️ Назад",
-        )
-    else:
-        qty_keyboard = trader_buy_consumable_qty_keyboard(item_key, unit_price=unit_price, title=title)
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    money = int(player.money) if player is not None else None
     await edit_menu_message(
         callback,
-        _trader_text(callback.from_user.id, f"Покупка: {title}\nЦена за 1 шт.: {unit_price} RU\nВыбери количество:"),
-        qty_keyboard,
+        _trader_text(
+            callback.from_user.id,
+            consumable_buy_menu_text(item_key, unit_price=unit_price, money=money),
+        ),
+        trader_buy_consumable_qty_keyboard(item_key, unit_price=unit_price, title=str(item["name"])),
+    )
+
+
+@router.callback_query(F.data.startswith("askbuy:"))
+async def show_buy_consumable_confirm(callback: CallbackQuery) -> None:
+    raw = (callback.data or "").split(":")
+    if len(raw) < 3 or not raw[1]:
+        await reply_action_result(callback, "Некорректная покупка.")
+        return
+    item_key = raw[1]
+    try:
+        amount = max(1, int(raw[2]))
+    except ValueError:
+        await reply_action_result(callback, "Некорректное количество.")
+        return
+    item = SHOP_ITEMS.get(item_key)
+    if item is None or item_key not in BULK_BUY_ITEM_KEYS or int(item.get("buy_price", 0)) <= 0:
+        await reply_action_result(callback, "Такого товара нельзя купить пачкой.")
+        return
+    unit_price = int(item["buy_price"])
+    player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+    money = int(player.money) if player is not None else None
+    await edit_menu_message(
+        callback,
+        _trader_text(
+            callback.from_user.id,
+            consumable_buy_menu_text(
+                item_key,
+                unit_price=unit_price,
+                amount=amount,
+                money=money,
+                confirm=True,
+            ),
+        ),
+        trader_buy_consumable_confirm_keyboard(item_key, amount=amount, unit_price=unit_price),
     )
 
 
@@ -3554,22 +3587,57 @@ async def show_inventory_buy_qty(callback: CallbackQuery) -> None:
     if player is None:
         await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
         return
-    title = str(item["name"])
     unit_price = int(item["buy_price"])
-    text = (
-        f"Покупка: {title}\n"
-        f"Цена за 1 шт.: {unit_price} RU\n"
-        f"Баланс: {player.money:,} RU\n"
-        f"Выбери количество:"
-    )
     await edit_menu_message(
         callback,
-        text,
+        consumable_buy_menu_text(item_key, unit_price=unit_price, money=int(player.money)),
         buy_item_qty_keyboard(
             item_key,
             unit_price=unit_price,
             back_callback="inventory:open",
             back_text="⬅️ Назад в инвентарь",
+            ask_prefix="invaskbuy",
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("invaskbuy:"))
+async def show_inventory_buy_confirm(callback: CallbackQuery) -> None:
+    raw = (callback.data or "").split(":")
+    if len(raw) < 3 or not raw[1]:
+        await reply_action_result(callback, "Некорректная покупка.")
+        return
+    item_key = raw[1]
+    try:
+        amount = max(1, int(raw[2]))
+    except ValueError:
+        await reply_action_result(callback, "Некорректное количество.")
+        return
+    item = SHOP_ITEMS.get(item_key)
+    if item is None or item_key not in BULK_BUY_ITEM_KEYS or int(item.get("buy_price", 0)) <= 0:
+        await reply_action_result(callback, "Этот предмет нельзя купить пачкой из инвентаря.")
+        return
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Сначала создай персонажа через /start.", show_alert=True)
+        return
+    unit_price = int(item["buy_price"])
+    await edit_menu_message(
+        callback,
+        consumable_buy_menu_text(
+            item_key,
+            unit_price=unit_price,
+            amount=amount,
+            money=int(player.money),
+            confirm=True,
+        ),
+        buy_item_confirm_keyboard(
+            item_key,
+            amount=amount,
+            total_price=unit_price * amount,
+            back_callback=f"invbuyqty:{item_key}",
+            back_text="⬅️ К количеству",
             buy_prefix="invbuy",
         ),
     )
