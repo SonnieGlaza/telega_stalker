@@ -7577,7 +7577,7 @@ def create_faction_auction(storage: Storage, telegram_id: int, lot_key: str) -> 
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     return ActionResult(
         True,
-        f"Лот #{auction_id} создан: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.\n"
+        f"Ячейка №{auction_id} создана: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.\n"
         f"Комиссия при продаже: {EXCHANGE_SELL_FEE_PERCENT}%.{achievements_text}",
     )
 
@@ -7621,13 +7621,13 @@ def buy_first_faction_auction(storage: Storage, telegram_id: int) -> ActionResul
     buyer = storage.get_character(telegram_id, refresh_energy=False)
     buyer_name = h(buyer.nickname) if buyer else h(str(telegram_id))
     seller_msg = (
-        f"🛒 {buyer_name} купил(а) твой лот #{auction_id}: "
+        f"🛒 {buyer_name} купил(а) твою ячейку №{auction_id}: "
         f"{ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.\n"
         f"На баланс: +{seller_income} RU (комиссия {fee} RU).{seller_achievements}"
     )
     return ActionResult(
         True,
-        f"Куплен лот #{auction_id}: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.\n"
+        f"Куплена ячейка №{auction_id}: {ITEM_LABELS.get(item_key, item_key)} x{amount} за {price} RU.\n"
         f"Продавец получил {seller_income} RU (комиссия {fee} RU).{achievements_text}",
         payload={"notify": [(seller_id, seller_msg)]},
     )
@@ -7746,7 +7746,7 @@ def create_custom_exchange_lot(
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     return ActionResult(
         True,
-        f"Лот #{auction_id} создан: {item_name} x{amount} за {price} RU.\n"
+        f"Ячейка №{auction_id} создана: {item_name} x{amount} за {price} RU.\n"
         f"Комиссия при продаже: {EXCHANGE_SELL_FEE_PERCENT}%.{achievements_text}",
     )
 
@@ -7768,9 +7768,9 @@ def build_exchange_lots_overview(
     shown = lots[: max(1, limit)]
     category_label = EXCHANGE_CATEGORY_LABELS.get(normalized_category, "все")
     if not shown:
-        return (f"Открытых лотов биржи ({category_label}) сейчас нет.", [])
+        return (f"Открытых ячеек биржи ({category_label}) сейчас нет.", [])
     rows: list[dict[str, int | str]] = []
-    lines = [f"Биржа: открытые лоты — {category_label} (комиссия {EXCHANGE_SELL_FEE_PERCENT}%):"]
+    lines = [f"Биржа: открытые ячейки — {category_label} (комиссия {EXCHANGE_SELL_FEE_PERCENT}%):"]
     for lot in shown:
         item_key = str(lot["item_key"])
         title = ITEM_LABELS.get(item_key, item_key)
@@ -7789,8 +7789,8 @@ def build_exchange_lots_overview(
                 "is_own": is_own,
             }
         )
-        own_note = " (твой лот)" if is_own else ""
-        lines.append(f"• #{lot_id} {title} x{amount} — {price} RU (продавец {seller_id}){own_note}")
+        own_note = " (твоя)" if is_own else ""
+        lines.append(f"• Ячейка №{lot_id}: {title} x{amount} — {price} RU (продавец {seller_id}){own_note}")
     return ("\n".join(lines), rows)
 
 
@@ -7834,13 +7834,13 @@ def buy_exchange_lot(storage: Storage, telegram_id: int, lot_id: int) -> ActionR
     buyer_name = h(buyer.nickname)
     item_name = ITEM_LABELS.get(item_key, item_key)
     seller_msg = (
-        f"🛒 {buyer_name} купил(а) твой лот #{lot_id}: "
+        f"🛒 {buyer_name} купил(а) твою ячейку №{lot_id}: "
         f"{item_name} x{amount} за {price} RU.\n"
         f"На баланс: +{seller_income} RU (комиссия {fee} RU).{seller_achievements}"
     )
     return ActionResult(
         True,
-        f"Куплен лот #{lot_id}: {item_name} x{amount} за {price} RU.\n"
+        f"Куплена ячейка №{lot_id}: {item_name} x{amount} за {price} RU.\n"
         f"Продавец получил {seller_income} RU (комиссия {fee} RU).{achievements_text}",
         payload={"notify": [(seller_id, seller_msg)]},
     )
@@ -7960,7 +7960,7 @@ def create_market_lot(
     )
     return ActionResult(
         True,
-        f"Рыночный лот #{auction_id} выставлен: {item_name} x{amount} за {lot_price} RU.\n"
+        f"Рыночная ячейка №{auction_id} выставлена: {item_name} x{amount} за {lot_price} RU.\n"
         f"Комиссия при продаже: {MARKET_SELL_FEE_PERCENT}%.",
     )
 
@@ -7996,13 +7996,13 @@ def buy_first_market_lot(storage: Storage, telegram_id: int) -> ActionResult:
     buyer_name = h(buyer.nickname)
     return ActionResult(
         True,
-        f"Куплен рыночный лот #{auction_id}: {item_name} x{amount} за {price} RU.\n"
+        f"Куплена ячейка №{auction_id}: {item_name} x{amount} за {price} RU.\n"
         f"Продавец получил {seller_income} RU (комиссия {fee} RU).",
         payload={
             "notify": [
                 (
                     seller_id,
-                    f"🛒 {buyer_name} купил(а) твой лот #{auction_id}: {item_name} x{amount} за {price} RU.\n"
+                    f"🛒 {buyer_name} купил(а) твою ячейку №{auction_id}: {item_name} x{amount} за {price} RU.\n"
                     f"На баланс: +{seller_income} RU (комиссия {fee} RU).",
                 ),
             ],
@@ -8043,13 +8043,13 @@ def buy_market_lot(storage: Storage, telegram_id: int, lot_id: int) -> ActionRes
     buyer_name = h(buyer.nickname)
     return ActionResult(
         True,
-        f"Куплен рыночный лот #{lot_id}: {item_name} x{amount} за {price} RU.\n"
+        f"Куплена ячейка №{lot_id}: {item_name} x{amount} за {price} RU.\n"
         f"Продавец получил {seller_income} RU (комиссия {fee} RU).",
         payload={
             "notify": [
                 (
                     seller_id,
-                    f"🛒 {buyer_name} купил(а) твой лот #{lot_id}: {item_name} x{amount} за {price} RU.\n"
+                    f"🛒 {buyer_name} купил(а) твою ячейку №{lot_id}: {item_name} x{amount} за {price} RU.\n"
                     f"На баланс: +{seller_income} RU (комиссия {fee} RU).",
                 ),
             ],
@@ -9201,29 +9201,36 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
 def build_economy_overview(storage: Storage, telegram_id: int) -> str:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or player.faction is None:
-        return "Экономика доступна только после выбора группировки."
+        return "Барахолка доступна только после выбора группировки."
 
     auctions = _list_open_exchange_lots(storage)
     auctions_lines = [
-        f"• #{a['id']} {ITEM_LABELS.get(str(a['item_key']), str(a['item_key']))} x{a['amount']} "
-        f"за {a['price']} RU (продавец {a['seller_id']})"
+        f"• Ячейка №{a['id']}: {ITEM_LABELS.get(str(a['item_key']), str(a['item_key']))} "
+        f"x{a['amount']} за {a['price']} RU"
         for a in auctions[:5]
     ]
     if not auctions_lines:
-        auctions_lines = ["• Открытых лотов нет"]
+        auctions_lines = ["• Открытых ячеек нет"]
 
     market_lots = list_market_lots(storage, telegram_id)
     market_lines = [
-        f"• #{lot['id']} {ITEM_LABELS.get(str(lot['item_key']), str(lot['item_key']))} "
-        f"x{lot['amount']} за {lot['price']} RU (продавец {lot['seller_id']})"
+        f"• Ячейка №{lot['id']}: {ITEM_LABELS.get(str(lot['item_key']), str(lot['item_key']))} "
+        f"x{lot['amount']} за {lot['price']} RU"
         for lot in market_lots[:5]
     ]
     if not market_lines:
-        market_lines = ["• Открытых лотов нет"]
+        market_lines = ["• Открытых ячеек нет"]
 
     return (
-        f"Биржа:\n{chr(10).join(auctions_lines)}\n\n"
-        f"Рынок экипировки:\n{chr(10).join(market_lines)}\n\n"
+        "🏦 Барахолка\n\n"
+        "⚖️ Биржа — расходники, артефакты, топливо, мусор.\n"
+        f"Комиссия {EXCHANGE_SELL_FEE_PERCENT}%: покупатель платит цену, продавец получает остаток.\n"
+        "Выставляй через «свой лот», покупай по номеру ячейки в списке.\n\n"
+        f"🛒 Рынок — только оружие и броня.\n"
+        f"Комиссия {MARKET_SELL_FEE_PERCENT}%.\n"
+        "Выставляй экипировку из инвентаря, покупай по номеру ячейки.\n\n"
+        f"Биржа (открытые):\n{chr(10).join(auctions_lines)}\n\n"
+        f"Рынок (открытые):\n{chr(10).join(market_lines)}\n\n"
         f"{build_smuggling_overview(storage, telegram_id)}"
     )
 

@@ -32,12 +32,11 @@ def faction_keyboard() -> InlineKeyboardMarkup:
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📟 КПК")],
-            [KeyboardButton(text="🎒 Инвентарь"), KeyboardButton(text="📋 Задания")],
-            [KeyboardButton(text="🛒 Торговец"), KeyboardButton(text="🏕 Вылазка")],
+            [KeyboardButton(text="📟 КПК"), KeyboardButton(text="📋 Задания")],
+            [KeyboardButton(text="🎒 Инвентарь"), KeyboardButton(text="🏕 Вылазка")],
+            [KeyboardButton(text="🛒 Торговец"), KeyboardButton(text="🏦 Барахолка")],
             [KeyboardButton(text="🛰 События"), KeyboardButton(text="👥 Группировка")],
-            [KeyboardButton(text="🏦 Экономика"), KeyboardButton(text="ℹ️ Информация")],
-            [KeyboardButton(text="⭐ Пополнить")],
+            [KeyboardButton(text="ℹ️ Информация"), KeyboardButton(text="⭐ Пополнить")],
         ],
         resize_keyboard=True,
     )
@@ -1275,23 +1274,13 @@ def garage_rental_requests_keyboard(requests: list[dict[str, object]]) -> Inline
 def economy_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="⚖️ Биржа: выставить артефакт Зоны", callback_data="eco:auction:create:artifact")],
-            [InlineKeyboardButton(text="⚖️ Биржа: выставить арт «Сила»", callback_data="eco:auction:create:artifact_power")],
-            [InlineKeyboardButton(text="⚖️ Биржа: выставить арт «Живучесть»", callback_data="eco:auction:create:artifact_vitality")],
-            [InlineKeyboardButton(text="⚖️ Биржа: выставить арт «Антирад»", callback_data="eco:auction:create:artifact_antirad")],
-            [InlineKeyboardButton(text="⚖️ Биржа: арт «Жар»", callback_data="eco:auction:create:artifact_fire")],
-            [InlineKeyboardButton(text="⚖️ Биржа: арт «Кровь»", callback_data="eco:auction:create:artifact_blood")],
-            [InlineKeyboardButton(text="⚖️ Биржа: арт «Кристалл»", callback_data="eco:auction:create:artifact_crystal")],
-            [InlineKeyboardButton(text="⚖️ Биржа: выставить патроны", callback_data="eco:auction:create:ammo_pack")],
-            [InlineKeyboardButton(text="⚖️ Биржа: выставить аптечку", callback_data="eco:auction:create:medkit")],
-            [InlineKeyboardButton(text="⚖️ Биржа: свой лот", callback_data="eco:auction:custom:choose")],
-            [InlineKeyboardButton(text="🛒 Рынок: выставить экипировку", callback_data="eco:market:create:choose")],
-            [InlineKeyboardButton(text="🛒 Рынок: список лотов", callback_data="eco:market:list")],
-            [InlineKeyboardButton(text="🛑 Рынок: снять мой лот", callback_data="eco:market:cancel:mine")],
-            [InlineKeyboardButton(text="⚖️ Биржа: купить старейший лот", callback_data="eco:auction:buy:first")],
+            [InlineKeyboardButton(text="📋 Биржа: список лотов", callback_data="eco:auction:list")],
+            [InlineKeyboardButton(text="📦 Биржа: свой лот", callback_data="eco:auction:custom:choose")],
             [InlineKeyboardButton(text="🛑 Биржа: снять мой лот", callback_data="eco:auction:cancel:mine")],
-            [InlineKeyboardButton(text="⚖️ Биржа: список лотов", callback_data="eco:auction:list")],
-            [InlineKeyboardButton(text="🚚 Контрабанда: перевозка", callback_data="eco:smuggle:menu")],
+            [InlineKeyboardButton(text="📋 Рынок: список лотов", callback_data="eco:market:list")],
+            [InlineKeyboardButton(text="🛒 Рынок: выставить экипировку", callback_data="eco:market:create:choose")],
+            [InlineKeyboardButton(text="🛑 Рынок: снять мой лот", callback_data="eco:market:cancel:mine")],
+            [InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:menu")],
         ]
     )
 
@@ -1310,7 +1299,7 @@ def smuggling_keyboard(
             rows.append(
                 [InlineKeyboardButton(text=f"→ {name}", callback_data=f"eco:smuggle:to:{name}")]
             )
-    rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад в барахолку", callback_data="eco:menu:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1325,12 +1314,12 @@ def market_lots_keyboard(lots: list[dict[str, str | int]]) -> InlineKeyboardMark
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"#{lot_id} {title} ×{amount} • {price} RU • {seller_name}",
+                    text=f"Ячейка №{lot_id} · {title} ×{amount} · {price} RU · {seller_name}",
                     callback_data=f"eco:market:buy:{lot_id}",
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад в барахолку", callback_data="eco:menu:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1369,7 +1358,7 @@ def exchange_lots_keyboard(
             lot_rows.append(
                 [
                     InlineKeyboardButton(
-                        text=f"🛑 #{lot_id} {title} ×{amount} • {price} RU (твой, снять)",
+                        text=f"🛑 Ячейка №{lot_id} · {title} ×{amount} · {price} RU (снять)",
                         callback_data=f"eco:auction:cancel:{lot_id}",
                     )
                 ]
@@ -1378,13 +1367,13 @@ def exchange_lots_keyboard(
             lot_rows.append(
                 [
                     InlineKeyboardButton(
-                        text=f"#{lot_id} {title} ×{amount} • {price} RU • игрок {seller_id}",
+                        text=f"Ячейка №{lot_id} · {title} ×{amount} · {price} RU · игрок {seller_id}",
                         callback_data=f"eco:auction:buy:{lot_id}",
                     )
                 ]
             )
     rows.extend(lot_rows)
-    rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад в барахолку", callback_data="eco:menu:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1402,7 +1391,7 @@ def market_create_select_keyboard(items: list[dict[str, str | int]]) -> InlineKe
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад в барахолку", callback_data="eco:menu:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1420,7 +1409,7 @@ def exchange_custom_select_keyboard(items: list[dict[str, str | int]]) -> Inline
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(text="⬅️ Назад в экономику", callback_data="eco:menu:root")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад в барахолку", callback_data="eco:menu:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

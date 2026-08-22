@@ -1539,7 +1539,7 @@ def _build_info_text(player: Character) -> str:
         "• 👥 Группировка — склад/казна/гараж: сдать может любой; забрать склад/гараж с 5 ранга, "
         "ранги 1–4 — запрос на аренду авто. В гараже канистры и сданные Нивы/грузовики; "
         "техника из гаража — аренда 30 мин, перед сдачей грузовика — полный ремонт.\n"
-        "• 🏦 Экономика — биржа (свои лоты, фильтры по категориям: артефакты/расходники/топливо), "
+        "• 🏦 Барахолка — биржа (расходники/артефакты/топливо, «свой лот», покупка по номеру ячейки), "
         "рынок снаряжения, перевозка контрабанды.\n"
         "• 📋 Задания — контракты с переездом (есть 🗓 контракты дня и 📅 контракт недели "
         f"с бонусом +{DAILY_CONTRACT_BONUS_PERCENT}%/+{WEEKLY_CONTRACT_BONUS_PERCENT}% RU); "
@@ -8472,7 +8472,7 @@ async def show_faction_group(message: Message) -> None:
     await message.answer(text, reply_markup=_faction_group_keyboard_for(player.telegram_id))
 
 
-@router.message(F.text == "🏦 Экономика")
+@router.message(F.text.in_({"🏦 Барахолка", "🏦 Экономика"}))
 async def show_economy(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
@@ -9151,7 +9151,7 @@ async def process_market_lot_price(message: Message, state: FSMContext) -> None:
     item_key = str(data.get("market_item_key", "")).strip()
     if not item_key:
         await state.clear()
-        await message.answer("Не удалось определить предмет для лота. Попробуй снова через Экономику.")
+        await message.answer("Не удалось определить предмет для лота. Попробуй снова через Барахолку.")
         return
 
     result = create_market_lot(get_storage(), message.from_user.id, item_key, 1, price=lot_price)
@@ -9259,7 +9259,7 @@ async def process_auction_lot_price(message: Message, state: FSMContext) -> None
     item_key = str(data.get("auction_item_key", "")).strip()
     if not item_key:
         await state.clear()
-        await message.answer("Не удалось определить предмет для лота. Попробуй снова через Экономику.")
+        await message.answer("Не удалось определить предмет для лота. Попробуй снова через Барахолку.")
         return
 
     result = create_custom_exchange_lot(get_storage(), message.from_user.id, item_key, 1, price=lot_price)
