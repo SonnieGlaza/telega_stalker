@@ -328,6 +328,23 @@ def _scale_item_prices(item: dict[str, int | str], mult: int) -> None:
         item["sell_price"] = int(item["sell_price"]) * mult
 
 
+def round_shop_price(value: int) -> int:
+    """Округление цены до «круглых» сумм: остаток >51 — вверх, иначе вниз (до сотен; ниже 52 — до десятков)."""
+    if value <= 0:
+        return 0
+    if value < 52:
+        base = (value // 10) * 10
+        rem = value % 10
+        if rem > 5:
+            return base + 10
+        return base
+    base = (value // 100) * 100
+    rem = value % 100
+    if rem > 51:
+        return base + 100
+    return base
+
+
 for _key, _item in ARMOR_CATALOG.items():
     _scale_item_prices(_item, 5 if _key in _T1_GEAR_KEYS else 10)
 for _key, _item in WEAPON_CATALOG.items():
@@ -366,8 +383,8 @@ _CONSUMABLE_PRICE_OVERRIDES: dict[str, tuple[int, int]] = {
 }
 for _key, (_buy, _sell) in _CONSUMABLE_PRICE_OVERRIDES.items():
     if _key in SHOP_ITEMS:
-        SHOP_ITEMS[_key]["buy_price"] = _buy
-        SHOP_ITEMS[_key]["sell_price"] = _sell
+        SHOP_ITEMS[_key]["buy_price"] = round_shop_price(_buy)
+        SHOP_ITEMS[_key]["sell_price"] = round_shop_price(_sell)
 
 # Обрез сильнее ПМ — фиксируем цену выше ПМ (после T1×5).
 WEAPON_CATALOG["weapon_sawedoff"]["buy_price"] = 17000

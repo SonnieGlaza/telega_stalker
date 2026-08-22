@@ -20,6 +20,7 @@ from app.game_logic import (
     launch_open_raid,
     launch_war_lobby,
     repair_truck,
+    round_shop_price,
     upgrade_armor,
     armor_defense,
     apply_incoming_damage,
@@ -1942,9 +1943,14 @@ def run_smoke_check() -> None:
         assert int(SHOP_ITEMS["medkit"]["buy_price"]) == 500
         assert int(SHOP_ITEMS["medkit_army"]["buy_price"]) == 1000
         assert int(SHOP_ITEMS["medkit_science"]["buy_price"]) == 1500
-        assert int(SHOP_ITEMS["antirad"]["buy_price"]) == 886
-        assert int(SHOP_ITEMS["energy_drink"]["buy_price"]) == 554
-        assert int(SHOP_ITEMS["ammo_pack"]["buy_price"]) == 53
+        assert int(SHOP_ITEMS["antirad"]["buy_price"]) == 900
+        assert int(SHOP_ITEMS["energy_drink"]["buy_price"]) == 600
+        assert int(SHOP_ITEMS["vodka"]["buy_price"]) == 300
+        assert int(SHOP_ITEMS["ammo_pack"]["buy_price"]) == 100
+        assert round_shop_price(886) == 900
+        assert round_shop_price(332) == 300
+        assert round_shop_price(53) == 100
+        assert round_shop_price(24) == 20
         assert WEAPON_RATING_BY_NAME["ПМ"] == 2
         assert WEAPON_RATING_BY_NAME["Фора-12"] == 3
         assert WEAPON_RATING_BY_NAME["Обрез"] == 3
