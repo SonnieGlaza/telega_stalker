@@ -85,7 +85,7 @@ RAID_GRID_SPRITE_DIAMETER = 62
 LOOT_ZONE_LABELS: dict[str, str] = {
     "warehouse": "СКЛАД",
     "garage": "ГАРАЖ",
-    "lair": "ЦЕЛЬ",
+    "lair": "РЕС",
 }
 
 
@@ -699,7 +699,8 @@ def _all_hostiles_cleared(session: RaidGridSession) -> bool:
     return len(session.hostiles) == 0
 
 
-def _check_capture(session: RaidGridSession) -> bool:
+def _check_loot_lair(session: RaidGridSession) -> bool:
+    """Удержание центра после зачистки — вынос ресурсов (без захвата точки)."""
     if not _all_hostiles_cleared(session):
         return False
     alive_on_point = [
@@ -709,7 +710,7 @@ def _check_capture(session: RaidGridSession) -> bool:
     ]
     if alive_on_point:
         session.capture_progress += 1
-        session.log.append(f"Захват: {session.capture_progress}/{RAID_CAPTURE_TURNS}.")
+        session.log.append(f"Вынос ресурсов: {session.capture_progress}/{RAID_CAPTURE_TURNS}.")
         return session.capture_progress >= RAID_CAPTURE_TURNS
     session.capture_progress = 0
     return False
@@ -761,9 +762,7 @@ def _finalize_lair_success(storage: Storage, session: RaidGridSession) -> Action
     location_name = session.location_label
     location = storage.get_location(location_name)
     enemy_power = session.enemy_power or 30
-    from app.faction_bots import apply_location_control
-
-    apply_location_control(storage, location_name, session.attacker_faction)
+    owner = str(location.get("controlled_by") or "") if location else ""
     survivors = [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
     treasury_gain = 1400 + len(survivors) * 180
     storage.change_faction_treasury(session.attacker_faction, treasury_gain)
@@ -803,8 +802,11 @@ def _finalize_lair_success(storage: Storage, session: RaidGridSession) -> Action
     record_faction_goal_event(storage, session.attacker_faction, "raids")
     text = (
         f"🏆 Рейд #{session.raid_id} на «{location_name}» успешен!\n"
-        f"Точка захвачена группировкой «{session.attacker_faction}».\n"
-        f"Казна: +{treasury_gain} RU. Артефакты: {artifacts_given}/{len(session.player_ids)}.\n"
+        f"Ресурсы вывезены в казну «{session.attacker_faction}»: +{treasury_gain} RU.\n"
+        f"Контроль точки не меняется"
+        f"{f' (остаётся у «{owner}»)' if owner else ' (точка остаётся нейтральной)'}.\n"
+        f"Захват локаций — только через ⚔️ Войну.\n"
+        f"Артефакты: {artifacts_given}/{len(session.player_ids)}.\n"
         f"+{RATING_REWARD['raid_success']} рейтинга выжившим."
     )
     return ActionResult(
@@ -932,7 +934,7 @@ def _check_end(storage: Storage, session: RaidGridSession) -> ActionResult | Non
         if _check_loot(session):
             return _end_session(storage, session, _finalize_depot_success(storage, session))
         return None
-    if _all_hostiles_cleared(session) and _check_capture(session):
+    if _all_hostiles_cleared(session) and _check_loot_lair(session):
         return _end_session(storage, session, _finalize_lair_success(storage, session))
     return None
 
@@ -1003,7 +1005,7 @@ def start_raid_grid(
         label = DEPOT_RAID_LABELS.get(raid_kind, "объект")
         session.log.append(f"Зачисти врагов и удерживай клетку {label}а {RAID_LOOT_TURNS} хода.")
     else:
-        session.log.append(f"Зачисти врагов и удерживай центр {RAID_CAPTURE_TURNS} хода.")
+        session.log.append(f"Зачисти врагов и удерживай центр {RAID_CAPTURE_TURNS} хода — вынос ресурсов.")
 
     save_raid_grid_session(storage, session)
     _register_active(storage, session_id)
@@ -1338,7 +1340,7 @@ def rgrid_status_caption(storage: Storage, session: RaidGridSession, viewer_id: 
     if session.raid_kind in ("warehouse", "garage"):
         lines.append(f"Ограбление: {session.loot_progress}/{RAID_LOOT_TURNS}")
     else:
-        lines.append(f"Захват: {session.capture_progress}/{RAID_CAPTURE_TURNS}")
+        lines.append(f"Вынос: {session.capture_progress}/{RAID_CAPTURE_TURNS}")
     for pid in session.player_ids[:5]:
         ch = storage.get_character(pid, refresh_energy=False)
         name = h(ch.nickname) if ch else str(pid)

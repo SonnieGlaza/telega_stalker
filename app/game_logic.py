@@ -6832,6 +6832,12 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
             False,
             "Базы штурмуются только через военное лобби (раздел «⚔️ Война»).",
         )
+    if str(location.get("point_type") or "") != "точка ресурсов":
+        return ActionResult(
+            False,
+            "Рейд на логово возможен только на точках ресурсов. "
+            "Захват других локаций — через ⚔️ Войну или захват нейтрали.",
+        )
     if _location_is_friendly_to_faction(storage, location, player.faction):
         return ActionResult(False, "Нельзя рейдить свою или союзническую точку.")
 
@@ -6853,14 +6859,14 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
         raid_id = storage.create_raid(player.faction, location_name, telegram_id)
         return ActionResult(
             True,
-            f"Создан рейд #{raid_id} на логово «{location_name}».\n"
+            f"Создан рейд #{raid_id} на точку ресурсов «{location_name}».\n"
             "Позови товарищей по группировке и нажми «Запустить».",
         )
 
     if str(open_raid["location"]) != location_name:
         return ActionResult(
             False,
-            f"У твоей группировки уже есть открытый рейд #{open_raid['id']} на логово «{open_raid['location']}».\n"
+            f"У твоей группировки уже есть открытый рейд #{open_raid['id']} на «{open_raid['location']}».\n"
             "Сначала запусти или закрой его.",
         )
 
@@ -6887,7 +6893,7 @@ def create_or_join_faction_raid(storage: Storage, telegram_id: int, location_nam
     )
     return ActionResult(
         True,
-        f"Ты в составе рейда #{raid_id} на логово «{location_name}».\n"
+        f"Ты в составе рейда #{raid_id} на «{location_name}».\n"
         f"Состав рейда: {len(member_ids)}/{RAID_MAX_MEMBERS} бойцов.",
         payload={"notify": notify} if notify else None,
     )
@@ -7180,6 +7186,13 @@ def launch_open_raid(storage: Storage, telegram_id: int) -> RaidLaunchResult:
                 "Базы штурмуются только через военное лобби.",
                 (),
             )
+        if str(location.get("point_type") or "") != "точка ресурсов":
+            _refund_spent_energy(storage, spent_ids, raid_energy_cost)
+            return RaidLaunchResult(
+                False,
+                "Рейд возможен только на точках ресурсов. Захват локаций — через ⚔️ Войну.",
+                (),
+            )
         if _location_is_friendly_to_faction(storage, location, leader.faction):
             _refund_spent_energy(storage, spent_ids, raid_energy_cost)
             return RaidLaunchResult(False, "Нельзя рейдить свою или союзническую точку.", ())
@@ -7223,13 +7236,13 @@ def build_raids_overview(storage: Storage, telegram_id: int) -> str:
         enemies_line = ", ".join(war_enemies) if war_enemies else "нет (со всеми мир или союз)"
         return (
             "Отрядные рейды (тактическая карта 9×9):\n"
-            "• Создай рейд на логово, позови отряд — каждый сам ходит и стреляет.\n"
+            "• Создай рейд на точку ресурсов, позови отряд — каждый сам ходит и стреляет.\n"
             f"• Участников: {RAID_MIN_MEMBERS}–{RAID_MAX_MEMBERS} (своя группировка или союзники), "
             f"на поле 6–10 врагов (мутанты + боты).\n"
             f"• Энергия при запуске: 18 (логово) / {DEPOT_RAID_ENERGY_COST} (склад/гараж) у каждого.\n"
             f"• 1 аптечка из инвентаря на бойца; на соседней клетке — «💊 Поднять» союзника (≈40% HP).\n"
-            f"• Логово: зачисти врагов и удерживай центр {RAID_CAPTURE_TURNS} хода подряд.\n"
-            f"• Успех логова: 1400 + 180×выживших RU в казну фракции.\n"
+            f"• Точка ресурсов: зачисти врагов и удерживай центр {RAID_CAPTURE_TURNS} хода — вынос в казну.\n"
+            f"• Успех: 1400 + 180×выживших RU в казну (контроль точки не меняется).\n"
             f"• Таймер матча: {RAID_MATCH_SECONDS // 60} мин, ход {RAID_TURN_SECONDS} сек.\n"
             f"• Артефакт: у каждого выжившего шанс {RAID_ARTIFACT_DROP_CHANCE}% "
             f"(при NPC ≥ {RAID_ARTIFACT_MIN_ENEMY_POWER}).\n"
