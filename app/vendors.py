@@ -64,7 +64,7 @@ VENDOR_STAGE_LABELS: dict[str, dict[int, str]] = {
         2: "+ армейская аптечка",
         3: "+ антирад",
         4: "+ научная аптечка",
-        5: "ассортимент на максимуме (как этап 4)",
+        5: "+ антибиотик (защита от Выброса)",
     },
     "tech": {
         1: "улучшение брони, скидка на ремонт 2%",
@@ -146,7 +146,7 @@ _MEDIC_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
     2: ("medkit_army",),
     3: ("antirad",),
     4: ("medkit_science",),
-    5: (),
+    5: ("antibiotic",),
 }
 
 _TECH_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
