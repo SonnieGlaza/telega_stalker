@@ -8,9 +8,19 @@ _RECOVER_GUARD: set[int] = set()
 
 
 def try_auto_recover_orphan_contract(storage: Storage, telegram_id: int) -> str | None:
-    """Сбросить контракт без meta-сессии. Возвращает текст для игрока или None."""
+    """Сбросить контракт, если вылазка была начата, но тактическая сессия пропала."""
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or not player.active_contract_json:
+        return None
+
+    active = storage.get_active_contract(telegram_id)
+    if not active:
+        return None
+
+    stage = str(active.get("stage", "work"))
+    if stage == "return":
+        return None
+    if not active.get("mission_started"):
         return None
 
     from app.artifact_hunt import get_hunt_session

@@ -4185,7 +4185,7 @@ QUEST_DIFFICULTY_EMOJI = {
 
 def _quests_rules_text() -> str:
     return (
-        "Контракты с переходами: прими на базе, доберись до точки, нажми «Выполнить работу» "
+        "Контракты с переходами: прими на базе, доберись до точки, нажми «Выполнить задание» "
         "(ресурсы спишутся при старте вылазки).\n"
         "Поле 6×6, лимит ходов ~28+ (зависит от локации).\n"
         "Угрозы: 🟢 — аномалии; 🟡 — аномалии+мутанты; "
@@ -4220,6 +4220,10 @@ def _quests_compact_status(storage, player) -> str:
         lines.append(f"📌 {title} · этап: {stage}")
         if template and stage == "work":
             lines.append(f"Точка: «{template.work_location}»")
+            if player.location == template.work_location and not is_traveling(player):
+                lines.append("На месте — жми «⚙️ Выполнить задание».")
+            elif not is_traveling(player):
+                lines.append("Доберись до точки или жми «🗺 Ехать».")
     else:
         lines.append("Выбери торговца: у каждого 🟢🟡🟠🔴 из старых заданий.")
     if daily_artifact_hunt_done_today(storage, player.telegram_id):
@@ -4360,7 +4364,7 @@ async def show_quests(message: Message) -> None:
         return
     if await reject_if_dead(message, player):
         return
-    if await reject_if_busy(message, player.telegram_id):
+    if await reject_if_busy(message, player.telegram_id, skip="travel"):
         return
     if not player_ready(player):
         await message.answer("Сначала выбери группировку.")
