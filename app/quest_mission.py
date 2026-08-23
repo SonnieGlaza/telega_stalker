@@ -1224,6 +1224,11 @@ def start_or_resume_quest_mission(
     session = _build_session(template, quest)
     session.resources_spent = True
     save_mission_session(storage, telegram_id, session)
+    active_contract = storage.get_active_contract(telegram_id) or {}
+    storage.set_active_contract(
+        telegram_id,
+        {**active_contract, "mission_started": True},
+    )
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = _render_for_player(storage, telegram_id, session, player)
     want_anom, want_mut, want_npc = _difficulty_threat_flags(template.difficulty, template.mission_kind)

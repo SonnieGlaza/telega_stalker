@@ -911,6 +911,12 @@ def run_smoke_check() -> None:
         storage.set_location(111, "Росток")
         contract = accept_quest_contract(storage, 111, "easy_boloto")
         assert contract.ok, contract.text
+        from app.session_recovery import try_auto_recover_orphan_contract
+        from app.player_busy import player_busy_reason
+
+        assert try_auto_recover_orphan_contract(storage, 111) is None
+        assert storage.get_active_contract(111) is not None
+        assert player_busy_reason(storage, 111) is None
         storage.set_location(111, "Болото")
         work = run_contract_work(storage, 111)
         assert work.ok, work.text

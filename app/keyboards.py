@@ -100,7 +100,7 @@ def quests_keyboard(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if show_work:
-        rows.append([InlineKeyboardButton(text="⚙️ Выполнить вылазку", callback_data="contract:work")])
+        rows.append([InlineKeyboardButton(text="⚙️ Выполнить задание", callback_data="contract:work")])
     if show_go_work and work_location:
         short = work_location if len(work_location) <= 22 else f"{work_location[:20]}…"
         rows.append(
