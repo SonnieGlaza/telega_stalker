@@ -248,6 +248,39 @@ def run_smoke_check() -> None:
         assert get_vendor_reputation(storage, 222, "medic") == 5000
         assert get_vendor_tier(storage, 222, "medic") == 4
         assert buy_item(storage, 222, "medkit_science").ok
+        assert not buy_item(storage, 222, "antibiotic").ok
+        add_vendor_reputation(storage, 222, "medic", 15000)
+        assert get_vendor_tier(storage, 222, "medic") == 5
+        storage.change_money(222, 5000)
+        assert buy_item(storage, 222, "antibiotic").ok
+        from app.game_logic import (
+            EMISSION_META_AT,
+            EMISSION_META_PHASE,
+            _kill_players_in_locations,
+            _safe_base_location_names,
+            has_emission_protection,
+            use_antibiotic,
+        )
+
+        storage.create_character(555, "EmissionTest", "Мужской")
+        storage.change_money(555, 10000)
+        storage.add_item(555, "antibiotic", 1)
+        with storage._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET location = ? WHERE telegram_id = ?",
+                ("Радар", 555),
+            )
+        storage.set_meta(EMISSION_META_PHASE, "calm")
+        storage.set_meta(
+            EMISSION_META_AT,
+            (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+        )
+        assert use_antibiotic(storage, 555).ok
+        assert has_emission_protection(storage, 555)
+        safe_bases = _safe_base_location_names(storage)
+        killed, killed_ids = _kill_players_in_locations(storage, {"Радар"}, safe_bases)
+        assert 555 not in killed_ids
+        assert storage.get_character(555, refresh_energy=False).health > 0
         # Скидка техника.
         discounted, pct = apply_tech_repair_discount(storage, 111, 1000)
         assert pct == 8 and discounted == 920
@@ -1983,6 +2016,7 @@ def run_smoke_check() -> None:
         assert int(SHOP_ITEMS["medkit_army"]["buy_price"]) == 1000
         assert int(SHOP_ITEMS["medkit_science"]["buy_price"]) == 1500
         assert int(SHOP_ITEMS["antirad"]["buy_price"]) == 900
+        assert int(SHOP_ITEMS["antibiotic"]["buy_price"]) == 3500
         assert int(SHOP_ITEMS["energy_drink"]["buy_price"]) == 600
         assert int(SHOP_ITEMS["vodka"]["buy_price"]) == 300
         assert int(SHOP_ITEMS["ammo_pack"]["buy_price"]) == 100

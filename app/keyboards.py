@@ -384,6 +384,7 @@ def medic_buy_keyboard(
         (shop_consumable_button_title("medkit_army"), "buyqty:medkit_army", "medkit_army"),
         (shop_consumable_button_title("antirad"), "buyqty:antirad", "antirad"),
         (shop_consumable_button_title("medkit_science"), "buyqty:medkit_science", "medkit_science"),
+        (shop_consumable_button_title("antibiotic"), "buyqty:antibiotic", "antibiotic"),
     ]
     items = _filter_shop_rows(catalog, unlocked_keys)
     return _trader_page_keyboard(
@@ -665,6 +666,7 @@ def inventory_consumables_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🔬 Научная аптечка (+75 к здоровью, −15 рад.)", callback_data="use:medkit_science")],
             [InlineKeyboardButton(text="🍸 Выпить водку (−20 рад.)", callback_data="use:vodka")],
             [InlineKeyboardButton(text="💉 Использовать антирад (−50 рад.)", callback_data="use:antirad")],
+            [InlineKeyboardButton(text="💊 Принять антибиотик (защита от Выброса)", callback_data="use:antibiotic")],
             [InlineKeyboardButton(text="🍞 Поесть хлеб (голод −10)", callback_data="use:bread")],
             [InlineKeyboardButton(text="🥓 Поесть колбасу (голод −20)", callback_data="use:sausage")],
             [InlineKeyboardButton(text="🥫 Поесть тушёнку (голод −50)", callback_data="use:stew")],

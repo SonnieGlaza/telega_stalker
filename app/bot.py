@@ -278,6 +278,7 @@ from app.game_logic import (
     repair_niva,
     use_vodka,
     use_antirad,
+    use_antibiotic,
     use_bread,
     use_sausage,
     use_stew,
@@ -6652,6 +6653,12 @@ async def use_vodka_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "use:antirad")
 async def use_antirad_callback(callback: CallbackQuery) -> None:
     result = use_antirad(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "use:antibiotic")
+async def use_antibiotic_callback(callback: CallbackQuery) -> None:
+    result = use_antibiotic(get_storage(), callback.from_user.id)
     await reply_action_result(callback, result.text)
 
 

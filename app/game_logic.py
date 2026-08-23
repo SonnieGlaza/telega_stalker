@@ -238,6 +238,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "mutant_tendril": {"name": "Щупальце кровососа", "buy_price": 0, "sell_price": 340},
     "vodka": {"name": "Водка", "buy_price": 66, "sell_price": 22},
     "antirad": {"name": "Антирад", "buy_price": 177, "sell_price": 58},
+    "antibiotic": {"name": "Антибиотик", "buy_price": 700, "sell_price": 240},
     "bread": {"name": "Хлеб", "buy_price": 22, "sell_price": 7},
     "sausage": {"name": "Колбаса", "buy_price": 44, "sell_price": 15},
     "stew": {"name": "Тушёнка", "buy_price": 111, "sell_price": 37},
@@ -350,6 +351,7 @@ _MEDKIT_KEYS: frozenset[str] = frozenset(
         "medkit_army",
         "medkit_science",
         "antirad",
+        "antibiotic",
     }
 )
 
@@ -403,6 +405,7 @@ _CONSUMABLE_PRICE_OVERRIDES: dict[str, tuple[int, int]] = {
     "medkit_army": (1000, 400),
     "medkit_science": (1500, 600),
     "antirad": (886, 288),
+    "antibiotic": (3500, 1200),
     "energy_drink": (554, 248),
     "vodka": (332, 111),
     "bread": (111, 35),
@@ -575,6 +578,7 @@ ITEM_LABELS = {
     "mutant_tendril": "Щупальце кровососа",
     "vodka": "Водка",
     "antirad": "Антирад",
+    "antibiotic": "Антибиотик",
     "bread": "Хлеб",
     "sausage": "Колбаса",
     "stew": "Тушёнка",
@@ -953,6 +957,7 @@ STASH_CONSUMABLE_KEYS = (
     "ammo_pack",
     "vodka",
     "antirad",
+    "antibiotic",
     "bread",
     "sausage",
     "stew",
@@ -1185,6 +1190,7 @@ EXCHANGE_CONSUMABLE_ITEM_KEYS = {
     "energy_drink",
     "vodka",
     "antirad",
+    "antibiotic",
     "bread",
     "sausage",
     "stew",
@@ -1210,6 +1216,8 @@ EMISSION_META_WARN60 = "emission_warn60_sent"
 EMISSION_META_WARN30 = "emission_warn30_sent"
 EMISSION_META_PHASE = "emission_phase"
 EMISSION_META_WAVE_AT = "emission_wave_at"
+EMISSION_PROTECT_META_PREFIX = "emission_protect_until:"
+EMISSION_PROTECT_BUFFER_MINUTES = 5
 EMISSION_WAVE_GAP_MINUTES = 7
 ZONE_EVENT_META_NEXT_AT = "zone_event_next_at"
 ZONE_EVENT_INTERVAL_MIN_MINUTES = 30
@@ -4589,6 +4597,76 @@ def use_antirad(storage: Storage, telegram_id: int) -> ActionResult:
     )
 
 
+def _emission_protect_meta_key(telegram_id: int) -> str:
+    return f"{EMISSION_PROTECT_META_PREFIX}{telegram_id}"
+
+
+def has_emission_protection(
+    storage: Storage,
+    telegram_id: int,
+    now: datetime | None = None,
+) -> bool:
+    raw = storage.get_meta(_emission_protect_meta_key(telegram_id))
+    if not raw:
+        return False
+    check_at = now or datetime.now(timezone.utc)
+    until = _parse_meta_datetime(raw, check_at)
+    if check_at >= until:
+        storage.delete_meta(_emission_protect_meta_key(telegram_id))
+        return False
+    return True
+
+
+def _compute_emission_protect_until(storage: Storage, now: datetime) -> datetime:
+    """Защита на один полный Выброс (все 3 волны): текущий или ближайший."""
+    buffer = timedelta(minutes=EMISSION_PROTECT_BUFFER_MINUTES)
+    waves_span = timedelta(minutes=EMISSION_WAVE_GAP_MINUTES * 2)
+    phase = storage.get_meta(EMISSION_META_PHASE) or "calm"
+    if phase in ("wave1", "wave2", "wave3"):
+        raw_wave_at = storage.get_meta(EMISSION_META_WAVE_AT)
+        wave_at = _parse_meta_datetime(raw_wave_at, now)
+        if phase == "wave1":
+            end = wave_at + timedelta(minutes=EMISSION_WAVE_GAP_MINUTES)
+        elif phase == "wave2":
+            end = wave_at
+        else:
+            end = now
+        return end + buffer
+    raw_at = storage.get_meta(EMISSION_META_AT)
+    emission_at = _parse_meta_datetime(raw_at, now + timedelta(hours=EMISSION_INTERVAL_HOURS))
+    if emission_at < now:
+        emission_at = now
+    return emission_at + waves_span + buffer
+
+
+def use_antibiotic(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
+    now = datetime.now(timezone.utc)
+    if has_emission_protection(storage, telegram_id, now):
+        until_raw = storage.get_meta(_emission_protect_meta_key(telegram_id))
+        until = _parse_meta_datetime(until_raw, now)
+        return ActionResult(
+            False,
+            f"Защита от Выброса уже активна до {until.strftime('%d.%m %H:%M')} UTC.",
+        )
+    if not storage.remove_item(telegram_id, "antibiotic", 1):
+        return ActionResult(False, "У тебя нет предмета: Антибиотик.")
+    until = _compute_emission_protect_until(storage, now)
+    storage.set_meta(_emission_protect_meta_key(telegram_id), until.isoformat())
+    return ActionResult(
+        True,
+        f"Ты принял антибиотик. Полная защита от Выброса до {until.strftime('%d.%m %H:%M')} UTC "
+        "(все 3 волны текущего или ближайшего Выброса).",
+    )
+
+
 def use_bread(storage: Storage, telegram_id: int) -> ActionResult:
     return _consume_survival_item(
         storage,
@@ -4987,6 +5065,7 @@ BULK_BUY_ITEM_KEYS: frozenset[str] = frozenset(
         "ammo_pack",
         "vodka",
         "antirad",
+        "antibiotic",
         "bread",
         "sausage",
         "stew",
@@ -5191,6 +5270,7 @@ TRADER_SELL_CATALOG: dict[str, tuple[str, ...]] = {
         "medkit_science",
         "vodka",
         "antirad",
+        "antibiotic",
         "bread",
         "sausage",
         "stew",
@@ -9694,6 +9774,7 @@ def _kill_players_in_locations(
 ) -> tuple[list[str], list[int]]:
     killed: list[str] = []
     killed_ids: list[int] = []
+    now = datetime.now(timezone.utc)
     for telegram_id in storage.list_player_ids():
         character = storage.get_character(telegram_id, refresh_energy=False)
         if character is None or int(character.health) <= 0:
@@ -9701,6 +9782,8 @@ def _kill_players_in_locations(
         if character.location not in targets:
             continue
         if is_traveling(character) and character.travel_destination in safe_bases:
+            continue
+        if has_emission_protection(storage, telegram_id, now):
             continue
         storage.change_health(telegram_id, -int(character.health))
         remember_death_cause(storage, telegram_id, "emission")
