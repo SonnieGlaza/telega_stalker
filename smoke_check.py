@@ -746,6 +746,30 @@ def run_smoke_check() -> None:
         assert cwar_active_kb.inline_keyboard[0][0].callback_data == "cwar:forfeit"
         atk = start_monolith_attack(storage, 444, "Свалка")
         assert atk.ok, atk.text
+        from app.monolith_war import (
+            format_monolith_war_call,
+            get_pending_monolith_war,
+            monolith_join_button_label,
+            resolve_pending_monolith_war,
+        )
+        from app.clan_war_grid import clear_cwar_session, get_cwar_session_by_player
+
+        pending_after_atk = get_pending_monolith_war(storage)
+        assert pending_after_atk is not None
+        assert pending_after_atk.get("mode") == "attack"
+        assert 444 in pending_after_atk.get("monolith_ids", [])
+        assert monolith_join_button_label(storage) == "☢ Вступить в атаку Монолита"
+        forced_atk = resolve_pending_monolith_war(storage, force=True)
+        assert forced_atk is not None and forced_atk.get("kind") == "tactical"
+        sess_atk = forced_atk.get("session")
+        assert sess_atk is not None and not sess_atk.monolith_defense
+        assert 444 in sess_atk.player_ids
+        if sess_atk is not None:
+            clear_cwar_session(storage, sess_atk)
+        storage.set_meta("monolith_war:pending", "")
+
+        atk = start_monolith_attack(storage, 444, "Болото")
+        assert atk.ok, atk.text
         from app.monolith_war import format_monolith_war_call
 
         attack_call = format_monolith_war_call(

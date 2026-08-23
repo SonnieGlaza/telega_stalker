@@ -117,6 +117,33 @@ def _pull_monolith_energy_spenders(
     return out
 
 
+def _pending_mode(pending: dict[str, Any]) -> str:
+    return str(pending.get("mode") or "defend")
+
+
+def _monolith_fighters_for_pending(storage: Storage, pending: dict[str, Any]) -> list[int]:
+    """Живые монолитовцы в окне боя: атака — штурмующие, оборона — защитники."""
+    monolith_ids = [int(x) for x in (pending.get("monolith_ids") or [])]
+    if _pending_mode(pending) != "attack":
+        return monolith_ids
+    attacker_ids = [int(x) for x in (pending.get("attacker_ids") or [])]
+    energy_spent = [int(x) for x in (pending.get("energy_spent_ids") or [])]
+    return _pull_monolith_energy_spenders(
+        storage,
+        monolith_ids,
+        energy_spent + attacker_ids,
+    )
+
+
+def monolith_join_button_label(storage: Storage) -> str:
+    pending = get_pending_monolith_war(storage)
+    if pending is None:
+        return "☢ Вступить в бой Монолита"
+    if _pending_mode(pending) == "attack":
+        return "☢ Вступить в атаку Монолита"
+    return "☢ Вступить в оборону Монолита"
+
+
 def begin_monolith_war_window(
     storage: Storage,
     *,
@@ -153,7 +180,7 @@ def begin_monolith_war_window(
 def format_monolith_war_call(pending: dict[str, Any]) -> str:
     loc = h(str(pending.get("location") or "?"))
     host = h(str(pending.get("host_faction") or "?"))
-    mode = str(pending.get("mode") or "")
+    mode = _pending_mode(pending)
     mins = MONOLITH_JOIN_MINUTES
     humans = len(pending.get("monolith_ids") or [])
     attackers = len(pending.get("attacker_ids") or [])
@@ -182,13 +209,17 @@ def monolith_war_status_line(storage: Storage) -> str | None:
         return None
     expires = _parse_iso(str(pending.get("expires_at") or ""), _utc_now())
     left = max(0, int((expires - _utc_now()).total_seconds() // 60))
-    humans = len(pending.get("monolith_ids") or [])
-    attackers = len(pending.get("attacker_ids") or [])
+    fighters = len(_monolith_fighters_for_pending(storage, pending))
+    invaders = len(pending.get("attacker_ids") or [])
     bots = "боты+" if pending.get("bots_sent") else "боты−"
-    mode = "оборона" if pending.get("mode") == "defend" else "атака"
+    if pending.get("mode") == "defend":
+        return (
+            f"Монолит: оборона «{pending.get('location')}» "
+            f"(~{left} мин, защитников {fighters}, атакующих {invaders}, {bots})."
+        )
     return (
-        f"Монолит: {mode} «{pending.get('location')}» "
-        f"(~{left} мин, защитников {humans}, атакующих {attackers}, {bots})."
+        f"Монолит: атака «{pending.get('location')}» "
+        f"(~{left} мин, в штурме {fighters}, {bots})."
     )
 
 
@@ -211,19 +242,24 @@ def join_monolith_war(storage: Storage, telegram_id: int) -> ActionResult:
     busy = player_busy_reason(storage, telegram_id)
     if busy:
         return ActionResult(False, busy)
+    mode = _pending_mode(pending)
     ids = [int(x) for x in (pending.get("monolith_ids") or [])]
     if telegram_id in ids:
-        return ActionResult(False, "Ты уже в окне боя Монолита.")
+        role_ru = "атакующем отряде" if mode == "attack" else "обороне"
+        return ActionResult(False, f"Ты уже в {role_ru} Монолита.")
     ids.append(telegram_id)
     names = list(pending.get("monolith_names") or [])
     names.append(str(player.nickname))
     pending["monolith_ids"] = ids
     pending["monolith_names"] = names
     _save_pending(storage, pending)
+    if mode == "attack":
+        role_line = f"Ты в атакующем отряде Монолита ({len(ids)} чел.)."
+    else:
+        role_line = f"Ты в обороне Монолита ({len(ids)} чел.)."
     return ActionResult(
         True,
-        f"Ты в окне боя Монолита ({len(ids)} чел.). "
-        f"Дождись таймера или жми «Начать бой сейчас».",
+        f"{role_line} Дождись таймера или жми «Начать бой сейчас».",
     )
 
 
@@ -313,12 +349,10 @@ def resolve_pending_monolith_war(storage: Storage, *, force: bool = False) -> di
     _save_pending(storage, pending)
 
     notify_ids = list(dict.fromkeys(attacker_ids + monolith_ids))
-    # Если кто-то уже нажал «вступить» — подтягиваем и тех, кто списал энергию при запуске лобби.
-    # Чистая атака ботами (/monolith_attack без join) остаётся на 90/10.
-    if mode == "attack" and monolith_ids:
-        monolith_ids = _pull_monolith_energy_spenders(storage, monolith_ids, energy_spent)
-        notify_ids = list(dict.fromkeys(notify_ids + monolith_ids))
-    humans_ready = len(monolith_ids) > 0
+    fighter_ids = _monolith_fighters_for_pending(storage, pending)
+    if fighter_ids:
+        notify_ids = list(dict.fromkeys(notify_ids + fighter_ids))
+    humans_ready = len(fighter_ids) > 0
 
     # Живые монолитовцы → тактическое поле.
     if humans_ready:
@@ -332,7 +366,7 @@ def resolve_pending_monolith_war(storage: Storage, *, force: bool = False) -> di
                 war_id=war_id,
                 location_name=location,
                 host_faction=MONOLITH_FACTION,
-                player_ids=monolith_ids,
+                player_ids=fighter_ids,
                 monolith_defense=True,
                 invader_faction=host_faction,
                 extra_defenders=0,
@@ -349,47 +383,47 @@ def resolve_pending_monolith_war(storage: Storage, *, force: bool = False) -> di
             return {
                 "kind": "tactical",
                 "text": (
-                    f"Монолит вступил в бой за «{location}» "
-                    f"({len(monolith_ids)} чел."
+                    f"Монолит вступил в оборону «{location}» "
+                    f"({len(fighter_ids)} чел."
                     + (f"; боты держали периметр до входа" if bots_sent else "")
                     + "). Тактическое поле!"
                 ),
                 "notify_ids": notify_ids,
                 "session": session,
-                "member_ids": monolith_ids,
+                "member_ids": fighter_ids,
             }
 
-        # Атака Монолита людьми → тянем и тех, кто списал энергию на объявление атаки.
-        fight_ids = _pull_monolith_energy_spenders(storage, monolith_ids, energy_spent)
-        result, session = start_clan_war_grid(
-            storage,
-            war_id=war_id,
-            location_name=location,
-            host_faction=MONOLITH_FACTION,
-            player_ids=fight_ids,
-            extra_defenders=0,
-        )
-        clear_pending_monolith_war(storage)
-        if not result.ok or session is None:
-            _refund_energy(storage, energy_spent, WAR_LOBBY_ENERGY_COST)
-            storage.finish_war_lobby(war_id, "failed", "Не удалось стартовать атаку Монолита")
+        if mode == "attack":
+            # Атака: все живые монолитовцы (инициаторы + вступившие) — штурмующие.
+            result, session = start_clan_war_grid(
+                storage,
+                war_id=war_id,
+                location_name=location,
+                host_faction=MONOLITH_FACTION,
+                player_ids=fighter_ids,
+                extra_defenders=0,
+            )
+            clear_pending_monolith_war(storage)
+            if not result.ok or session is None:
+                _refund_energy(storage, energy_spent, WAR_LOBBY_ENERGY_COST)
+                storage.finish_war_lobby(war_id, "failed", "Не удалось стартовать атаку Монолита")
+                return {
+                    "kind": "error",
+                    "text": result.text or "Не удалось начать бой Монолита.",
+                    "notify_ids": notify_ids,
+                }
             return {
-                "kind": "error",
-                "text": result.text or "Не удалось начать бой Монолита.",
-                "notify_ids": notify_ids,
+                "kind": "tactical",
+                "text": (
+                    f"Монолит штурмует «{location}» "
+                    f"({len(fighter_ids)} чел."
+                    + (f", боты в поддержке ×{bot_count}" if bots_sent else "")
+                    + ")."
+                ),
+                "notify_ids": list(dict.fromkeys(notify_ids + fighter_ids)),
+                "session": session,
+                "member_ids": fighter_ids,
             }
-        return {
-            "kind": "tactical",
-            "text": (
-                f"Монолит штурмует «{location}» "
-                f"({len(fight_ids)} чел."
-                + (f", боты в поддержке ×{bot_count}" if bots_sent else "")
-                + ")."
-            ),
-            "notify_ids": list(dict.fromkeys(notify_ids + fight_ids)),
-            "session": session,
-            "member_ids": fight_ids,
-        }
 
     # Нет людей Монолита → процентный исход 90/10 в пользу защитников.
     from app.game_logic import WAR_LOBBY_ENERGY_COST
@@ -566,6 +600,8 @@ def start_monolith_attack(
         mode="attack",
         energy_spent_ids=[telegram_id],
     )
+    pending["monolith_ids"] = [telegram_id]
+    pending["monolith_names"] = [str(player.nickname)]
     pending["bots_sent"] = True
     pending["bot_count"] = bot_count
     save_pending_monolith_war(storage, pending)
@@ -575,7 +611,8 @@ def start_monolith_attack(
         True,
         (
             f"☢ Монолит объявил атаку на «{loc_name}».\n"
-            f"Окно {MONOLITH_JOIN_MINUTES} мин: вступи в бой или жди авто 90/10 с ботами (×{bot_count})."
+            f"Ты уже в атакующем отряде. Окно {MONOLITH_JOIN_MINUTES} мин: "
+            f"союзники могут вступить или ждать авто 90/10 с ботами (×{bot_count})."
         ),
         payload={
             "monolith_pending": True,

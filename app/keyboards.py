@@ -1042,6 +1042,7 @@ def war_lobby_keyboard(
     *,
     can_dissolve: bool = False,
     monolith_join: bool = False,
+    monolith_join_label: str = "☢ Вступить в бой Монолита",
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="➕ Вступить в лобби", callback_data="war_lobby:join")],
@@ -1054,7 +1055,7 @@ def war_lobby_keyboard(
     ]
     if monolith_join:
         rows.append(
-            [InlineKeyboardButton(text="☢ Вступить в бой Монолита", callback_data="monolith_war:join")]
+            [InlineKeyboardButton(text=monolith_join_label, callback_data="monolith_war:join")]
         )
         rows.append(
             [InlineKeyboardButton(text="🤖 Послать ботов Монолита", callback_data="monolith_war:bots")]
