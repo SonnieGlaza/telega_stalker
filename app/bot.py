@@ -8059,8 +8059,9 @@ async def war_monolith_attack_section_callback(callback: CallbackQuery) -> None:
     await edit_menu_message(
         callback,
         "☢ Атака Монолита\n"
-        "Выбери цель. Откроется окно 15 мин: можно вступить самому или послать ботов.\n"
-        "Без живых защитников — авто 90/10.\n"
+        "Выбери цель. Откроется окно 15 мин: ты сразу в атакующем отряде, "
+        "союзники могут вступить или послать ботов.\n"
+        "Без живых штурмующих — авто 90/10.\n"
         "Команда: /monolith_attack [локация]",
         monolith_attack_targets_keyboard(targets),
     )
@@ -8068,7 +8069,12 @@ async def war_monolith_attack_section_callback(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("monolith_war:attack:"))
 async def monolith_war_attack_callback(callback: CallbackQuery, bot: Bot) -> None:
-    from app.monolith_war import format_monolith_war_call, get_pending_monolith_war, start_monolith_attack
+    from app.monolith_war import (
+        format_monolith_war_call,
+        get_pending_monolith_war,
+        monolith_join_button_label,
+        start_monolith_attack,
+    )
     from aiogram.enums import ParseMode
 
     location = (callback.data or "").removeprefix("monolith_war:attack:").strip()
@@ -8080,7 +8086,7 @@ async def monolith_war_attack_callback(callback: CallbackQuery, bot: Bot) -> Non
     pending = get_pending_monolith_war(storage)
     html = format_monolith_war_call(pending) if pending else result.text
     notify = set((result.payload or {}).get("monolith_notify_ids") or [])
-    markup = war_lobby_keyboard([], monolith_join=True)
+    markup = war_lobby_keyboard([], monolith_join=True, monolith_join_label=monolith_join_button_label(storage))
     for uid in notify:
         try:
             await bot.send_message(
@@ -8103,6 +8109,7 @@ async def monolith_attack_command(message: Message, bot: Bot, command: CommandOb
         MONOLITH_FACTION,
         format_monolith_war_call,
         get_pending_monolith_war,
+        monolith_join_button_label,
         start_monolith_attack,
     )
     from aiogram.enums import ParseMode
@@ -8135,7 +8142,7 @@ async def monolith_attack_command(message: Message, bot: Bot, command: CommandOb
         return
     pending = get_pending_monolith_war(storage)
     html = format_monolith_war_call(pending) if pending else result.text
-    markup = war_lobby_keyboard([], monolith_join=True)
+    markup = war_lobby_keyboard([], monolith_join=True, monolith_join_label=monolith_join_button_label(storage))
     for uid in (result.payload or {}).get("monolith_notify_ids") or []:
         try:
             await bot.send_message(
@@ -8156,15 +8163,17 @@ async def _show_war_lobby_menu(callback: CallbackQuery, bot: Bot) -> None:
     if player is None:
         return
     overview = build_war_lobby_overview(db, player.telegram_id)
-    from app.monolith_war import monolith_join_button_visible, monolith_war_status_line
+    from app.monolith_war import monolith_join_button_label, monolith_join_button_visible, monolith_war_status_line
 
     mono_line = monolith_war_status_line(db)
     if mono_line:
         overview = f"{overview}\n\n⚠ {mono_line}"
+    mono_join = monolith_join_button_visible(db, player.telegram_id)
     markup = war_lobby_keyboard(
         list_assaultable_locations(db, player.faction or ""),
         can_dissolve=can_dissolve_war_lobby(db, player.telegram_id),
-        monolith_join=monolith_join_button_visible(db, player.telegram_id),
+        monolith_join=mono_join,
+        monolith_join_label=monolith_join_button_label(db),
     )
     session = get_cwar_session_by_player(db, player.telegram_id)
     if session is not None:
@@ -8240,14 +8249,14 @@ async def war_lobby_launch_callback(callback: CallbackQuery, bot: Bot) -> None:
             await safe_callback_answer(callback, "Тактический штурм!")
             return
     if result.ok and result.monolith_pending:
-        from app.monolith_war import format_monolith_war_call, get_pending_monolith_war
+        from app.monolith_war import format_monolith_war_call, get_pending_monolith_war, monolith_join_button_label
         from aiogram.enums import ParseMode
 
         storage = get_storage()
         pending = get_pending_monolith_war(storage)
         html = format_monolith_war_call(pending) if pending else result.text
         notify = set(result.monolith_notify_ids) | set(result.notify_member_ids)
-        markup = war_lobby_keyboard([], monolith_join=True)
+        markup = war_lobby_keyboard([], monolith_join=True, monolith_join_label=monolith_join_button_label(storage))
         for uid in notify:
             try:
                 await bot.send_message(
