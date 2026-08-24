@@ -950,6 +950,16 @@ def _finalize_quest_death_result(
 def _combat_damage(location: str, difficulty: str, character: Character) -> int:
     from app.artifact_features import artifact_outgoing_damage_mult
 
+    # Хай-задания (🟠/🔴): мутанты бьют ощутимо — 10–20 HP за удар.
+    # Без soak от снаряги: иначе топ-броня сводила урон к 1–4.
+    if difficulty in {"heavy", "impossible"}:
+        lo, hi = (12, 20) if difficulty == "impossible" else (10, 20)
+        raw = random.randint(lo, hi)
+        dmg = apply_incoming_damage(raw, character, min_damage=10)
+        if dmg <= 0:
+            return 0  # полный блок брони
+        return max(10, int(dmg / artifact_outgoing_damage_mult(character)))
+
     danger = _location_danger(location, difficulty)
     base_lo = 6 + danger * 4
     base_hi = 12 + danger * 7
