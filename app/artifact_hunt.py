@@ -26,15 +26,6 @@ from app.game_logic import (
     travel_block_text,
 )
 from app.storage import Character, Storage
-from app.mission_icons import ANOMALY_ICON_KEY, MISSION_ICON_GRID_DIAMETER, mission_icon_image
-
-# Тот же спрайт аномалии (mission_icon_image/ANOMALY_ICON_KEY), что и в quest_mission.py/coop_mission.py —
-# единый арт для угроз на всех сетках. Клетка охоты крупнее (118px против 108px в quest_mission),
-# поэтому масштабируем от общего MISSION_ICON_GRID_DIAMETER, сохраняя ту же пропорцию иконка/клетка,
-# чтобы аномалии выглядели одинаково узнаваемо во всех режимах (квесты/кооп/охота).
-HUNT_GRID_CELL_PX = 118
-_QUEST_GRID_CELL_PX = 108
-HUNT_ANOMALY_ICON_DIAMETER = round(MISSION_ICON_GRID_DIAMETER * HUNT_GRID_CELL_PX / _QUEST_GRID_CELL_PX)
 
 
 HUNT_META_PREFIX = "artifact_hunt:"
@@ -70,163 +61,6 @@ FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 )
-
-LOCATIONS_ASSET_DIR = PROJECT_ROOT / "assets" / "locations"
-HUNT_ASSET_DIR = PROJECT_ROOT / "assets" / "hunt"
-LOCATION_THUMB_SLUGS: dict[str, str] = {
-    "Кордон": "kordon",
-    "Свалка": "svalka",
-    "Росток": "rostok",
-    "Армейские склады": "army_warehouses",
-    "НИИ Агропром": "agroprom",
-    "Янтарь": "yantar",
-    "Болото": "boloto",
-    "Темная долина": "dark_valley",
-    "Рыжий лес": "red_forest",
-    "Радар": "radar",
-}
-DETECTOR_SIGNAL_ASSET = HUNT_ASSET_DIR / "detector_signal.png"
-
-_location_thumb_cache: dict[str, Image.Image | None] = {}
-_signal_asset_cache: Image.Image | None | bool = False
-
-
-def _load_location_thumb(location: str) -> Image.Image | None:
-    slug = LOCATION_THUMB_SLUGS.get(location)
-    if not slug:
-        return None
-    if slug in _location_thumb_cache:
-        return _location_thumb_cache[slug]
-    path = LOCATIONS_ASSET_DIR / f"{slug}.png"
-    img: Image.Image | None = None
-    if path.is_file():
-        try:
-            img = Image.open(path).convert("RGBA")
-        except Exception:
-            img = None
-    _location_thumb_cache[slug] = img
-    return img
-
-
-def _load_signal_asset() -> Image.Image | None:
-    global _signal_asset_cache
-    if _signal_asset_cache is not False:
-        return _signal_asset_cache  # type: ignore[return-value]
-    img: Image.Image | None = None
-    if DETECTOR_SIGNAL_ASSET.is_file():
-        try:
-            img = Image.open(DETECTOR_SIGNAL_ASSET).convert("RGBA")
-        except Exception:
-            img = None
-    _signal_asset_cache = img
-    return img
-
-
-def _cover_crop(src: Image.Image, tw: int, th: int) -> Image.Image:
-    """Масштаб cover + center crop."""
-    sw, sh = src.size
-    scale = max(tw / max(1, sw), th / max(1, sh))
-    nw, nh = max(1, int(sw * scale)), max(1, int(sh * scale))
-    resized = src.resize((nw, nh), Image.Resampling.LANCZOS)
-    left = max(0, (nw - tw) // 2)
-    top = max(0, (nh - th) // 2)
-    return resized.crop((left, top, left + tw, top + th))
-
-
-def _rounded_mask(size: tuple[int, int], radius: int) -> Image.Image:
-    mask = Image.new("L", size, 0)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, size[0] - 1, size[1] - 1), radius=radius, fill=255)
-    return mask
-
-
-def _paste_rounded(
-    canvas: Image.Image,
-    src: Image.Image,
-    box: tuple[int, int, int, int],
-    *,
-    radius: int = 10,
-) -> None:
-    x0, y0, x1, y1 = box
-    tw, th = max(1, x1 - x0), max(1, y1 - y0)
-    fitted = _cover_crop(src.convert("RGBA"), tw, th)
-    mask = _rounded_mask((tw, th), radius)
-    canvas.paste(fitted, (x0, y0), mask)
-
-
-def _draw_fallback_location_thumb(draw: ImageDraw.ImageDraw, thumb: tuple[int, int, int, int]) -> None:
-    draw.rounded_rectangle(thumb, radius=10, fill=(30, 34, 28, 255), outline=(90, 100, 80, 255), width=2)
-    draw.rectangle((thumb[0] + 8, thumb[1] + 48, thumb[2] - 8, thumb[3] - 8), fill=(48, 56, 40, 255))
-    draw.polygon(
-        [
-            (thumb[0] + 20, thumb[3] - 8),
-            (thumb[0] + 70, thumb[1] + 55),
-            (thumb[0] + 120, thumb[3] - 8),
-        ],
-        fill=(62, 70, 50, 255),
-    )
-    draw.rectangle((thumb[0] + 140, thumb[1] + 70, thumb[0] + 175, thumb[3] - 8), fill=(70, 55, 40, 255))
-    draw.ellipse((thumb[0] + 40, thumb[1] + 18, thumb[0] + 95, thumb[1] + 55), fill=(95, 105, 70, 255))
-
-
-def _draw_signal_screen(
-    canvas: Image.Image,
-    screen: tuple[int, int, int, int],
-    *,
-    strength: float,
-) -> None:
-    """HD-экран детектора: фото-ассет + кольца/сканлайны по силе сигнала."""
-    x0, y0, x1, y1 = screen
-    tw, th = max(1, x1 - x0), max(1, y1 - y0)
-    strength = max(0.0, min(1.0, float(strength)))
-    draw = ImageDraw.Draw(canvas)
-    draw.rounded_rectangle(screen, radius=14, fill=(18, 20, 24, 255), outline=(80, 82, 86, 255), width=2)
-
-    asset = _load_signal_asset()
-    layer = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
-    if asset is not None:
-        fitted = _cover_crop(asset, tw, th)
-        # Затемнение при слабом сигнале, ярче при сильном.
-        dim = Image.new("RGBA", (tw, th), (0, 0, 0, int(160 * (1.0 - strength))))
-        fitted = Image.alpha_composite(fitted, dim)
-        # Лёгкий cyan tint по силе.
-        tint_a = int(40 + 70 * strength)
-        tint = Image.new("RGBA", (tw, th), (40, 120, 180, tint_a))
-        fitted = Image.blend(fitted, Image.alpha_composite(fitted, tint), 0.35)
-        layer.alpha_composite(fitted)
-    else:
-        # Fallback: процедурный овал.
-        ld = ImageDraw.Draw(layer)
-        blue = (70, 150, int(150 + 80 * strength))
-        pad = int(22 + (1.0 - strength) * 16)
-        oval = (pad, 18, tw - pad, th - 18)
-        for expand, alpha in ((16, 30), (8, 70), (0, 140)):
-            ld.ellipse(
-                (oval[0] - expand, oval[1] - expand, oval[2] + expand, oval[3] + expand),
-                fill=(*blue, alpha),
-            )
-        ld.ellipse(oval, outline=(160, 220, 255, 220), width=3)
-
-    # Концентрические кольца радара.
-    fx = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
-    fd = ImageDraw.Draw(fx)
-    cx, cy = tw // 2, th // 2
-    ring_alpha = int(35 + 90 * strength)
-    for r in (28, 48, 70, 96):
-        fd.ellipse((cx - r, cy - int(r * 1.15), cx + r, cy + int(r * 1.15)), outline=(120, 200, 230, ring_alpha))
-    # Сканлайны.
-    for yy in range(0, th, 3):
-        fd.line((0, yy, tw, yy), fill=(0, 0, 0, 28))
-    # Центральный блик-артефакт.
-    core_r = int(10 + 18 * strength)
-    for i, a in ((core_r + 14, int(40 * strength + 20)), (core_r, int(120 * strength + 40)), (max(4, core_r // 2), 220)):
-        fd.ellipse((cx - i, cy - int(i * 1.3), cx + i, cy + int(i * 1.3)), fill=(160, 220, 255, a))
-    # Угловой блик стекла.
-    fd.ellipse((12, 10, 70, 48), fill=(220, 240, 255, 35))
-    layer.alpha_composite(fx)
-
-    mask = _rounded_mask((tw, th), 12)
-    canvas.paste(layer, (x0, y0), mask)
-    ImageDraw.Draw(canvas).rounded_rectangle(screen, radius=14, outline=(100, 120, 140, 255), width=2)
 
 
 @dataclass
@@ -298,7 +132,6 @@ def get_hunt_session(storage: Storage, telegram_id: int) -> HuntSession | None:
     try:
         return HuntSession.from_dict(data)
     except Exception:
-        storage.delete_meta(_hunt_meta_key(telegram_id))
         return None
 
 
@@ -419,15 +252,10 @@ def start_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, blocked)
     if is_traveling(player):
         return ActionResult(False, "Нельзя искать арты в пути.")
-    from app.player_busy import player_busy_reason
-
-    busy = player_busy_reason(storage, telegram_id, skip="hunt")
-    if busy:
-        return ActionResult(False, busy)
     if get_hunt_session(storage, telegram_id) is not None:
         session = get_hunt_session(storage, telegram_id)
         assert session is not None
-        image = _render_for_player(storage, telegram_id, session, player)
+        image = render_hunt_frame(session, player)
         return ActionResult(
             True,
             "У тебя уже идёт вылазка. Продолжай с поля.",
@@ -448,7 +276,7 @@ def start_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
     session = _build_session(player, detector_key, detector_name)
     save_hunt_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
-    image = _render_for_player(storage, telegram_id, session, player)
+    image = render_hunt_frame(session, player)
     caption = hunt_status_caption(session, player)
     anomaly_n = len(session.anomalies)
     return ActionResult(
@@ -529,7 +357,7 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
     nx = session.player[0] + delta[0]
     ny = session.player[1] + delta[1]
     if not (0 <= nx < session.grid and 0 <= ny < session.grid):
-        image = _render_for_player(storage, telegram_id, session, player)
+        image = render_hunt_frame(session, player)
         return ActionResult(
             False,
             "Край поля — туда не пройти.",
@@ -558,19 +386,11 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
     if session.player in set(session.anomalies):
         clear_hunt_session(storage, telegram_id)
         storage.change_health(telegram_id, -10_000)
-        from app.game_logic import remember_death_cause
-
-        remember_death_cause(storage, telegram_id, "anomaly")
         return ActionResult(
             False,
             f"Ты влетел в аномалию на «{session.location}».\n"
             "Сознание гаснет… Респавн из инвентаря (мутанты обшарят рюкзак).",
-            payload={
-                "hunt_active": False,
-                "hunt_dead": True,
-                "death_location": session.location,
-                "death_cause": "anomaly",
-            },
+            payload={"hunt_active": False, "hunt_dead": True},
         )
 
     gain = _signal_gain(session.player, session.artifact)
@@ -593,7 +413,7 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
 
     save_hunt_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
-    image = _render_for_player(storage, telegram_id, session, player)
+    image = render_hunt_frame(session, player)
     note = f"Сигнал +{gain}." if gain else "Тишина в эфире."
     if rad_add:
         note += f" Рад +{rad_add}."
@@ -609,26 +429,6 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
     )
 
 
-def _hunt_rating(storage: Storage, telegram_id: int) -> int:
-    try:
-        return int(storage.get_player_stats(telegram_id).get("rating_points", 0))
-    except Exception:
-        return 0
-
-
-def render_hunt_for_player(
-    storage: Storage,
-    telegram_id: int,
-    session: HuntSession,
-    player: Character,
-) -> bytes:
-    return render_hunt_frame(session, player, rating_points=_hunt_rating(storage, telegram_id))
-
-
-def _render_for_player(storage: Storage, telegram_id: int, session: HuntSession, player: Character) -> bytes:
-    return render_hunt_for_player(storage, telegram_id, session, player)
-
-
 def _load_font(size: int) -> ImageFont.ImageFont:
     for path in FONT_CANDIDATES:
         try:
@@ -638,142 +438,189 @@ def _load_font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def _hash_noise(x: int, y: int, salt: int = 0) -> float:
-    n = (x * 374761393 + y * 668265263 + salt * 1274126177) & 0x7FFFFFFF
-    n = (n ^ (n >> 13)) * 1274126177
-    return ((n ^ (n >> 16)) & 0xFFFF) / 65535.0
+def render_hunt_frame(session: HuntSession, character: Character | None = None) -> bytes:
+    """Кадр: слева поле 6×6, справа панель детектора (в духе мокапа)."""
+    width, height = 900, 720
+    img = Image.new("RGB", (width, height), color=(28, 30, 34))
+    draw = ImageDraw.Draw(img)
 
+    # Левая зона — сетка.
+    grid_origin = (24, 24)
+    cell = 100
+    grid_px = session.grid * cell
+    anomaly_set = set(session.anomalies)
 
-def _lerp(a: float, b: float, t: float) -> float:
-    return a + (b - a) * t
-
-
-def _mix_rgb(
-    c1: tuple[int, int, int],
-    c2: tuple[int, int, int],
-    t: float,
-) -> tuple[int, int, int]:
-    return (
-        int(_lerp(c1[0], c2[0], t)),
-        int(_lerp(c1[1], c2[1], t)),
-        int(_lerp(c1[2], c2[2], t)),
-    )
-
-
-def _draw_rock_cell(
-    base: Image.Image,
-    left: int,
-    top: int,
-    size: int,
-    gx: int,
-    gy: int,
-) -> None:
-    """Плитка земли/бетона с сеткой — ближе к мокапу."""
-    pix = base.load()
-    for yy in range(size):
-        for xx in range(size):
-            n1 = _hash_noise(gx * size + xx, gy * size + yy, 1)
-            n2 = _hash_noise(gx * size + xx, gy * size + yy, 7)
-            shade = 72 + int(n1 * 38) - int(n2 * 12)
-            # Лёгкий градиент «освещения».
-            shade = int(shade + (xx + yy) * 0.04)
-            shade = max(48, min(130, shade))
-            # Серо-коричневый камень.
-            r = shade
-            g = max(40, shade - 4)
-            b = max(36, shade - 10)
-            # Мелкие трещины.
-            if n2 > 0.92:
-                r = g = b = max(30, shade - 25)
-            pix[left + xx, top + yy] = (r, g, b, 255)
-
-    draw = ImageDraw.Draw(base)
-    # Рамка клетки как на референсе.
-    draw.rectangle(
-        (left, top, left + size - 1, top + size - 1),
-        outline=(28, 28, 30),
+    # Фон поля.
+    draw.rounded_rectangle(
+        (grid_origin[0] - 8, grid_origin[1] - 8, grid_origin[0] + grid_px + 8, grid_origin[1] + grid_px + 8),
+        radius=12,
+        fill=(42, 44, 48),
+        outline=(70, 74, 80),
         width=2,
     )
-    # Внутренний скос.
-    draw.line((left + 1, top + 1, left + size - 2, top + 1), fill=(95, 95, 92))
-    draw.line((left + 1, top + 1, left + 1, top + size - 2), fill=(90, 90, 88))
+
+    for y in range(session.grid):
+        for x in range(session.grid):
+            left = grid_origin[0] + x * cell
+            top = grid_origin[1] + y * cell
+            right = left + cell - 2
+            bottom = top + cell - 2
+            # Камень/земля.
+            base = (58 + (x * 7 + y * 3) % 18, 56 + (x * 5 + y * 11) % 14, 52 + (x + y) % 10)
+            draw.rectangle((left, top, right, bottom), fill=base, outline=(40, 40, 42))
+            # Трещины.
+            draw.line((left + 12, top + 20, left + 40, top + 55), fill=(45, 44, 42), width=1)
+            draw.line((left + 55, top + 15, left + 80, top + 70), fill=(48, 46, 44), width=1)
+
+            pos = (x, y)
+            cx = (left + right) // 2
+            cy = (top + bottom) // 2
+
+            if pos in anomaly_set:
+                color = _anomaly_color(pos, session.artifact)
+                _draw_glow_orb(draw, cx, cy, 22, color)
+
+            if pos == session.player:
+                # Зелёная обводка активной клетки + игрок.
+                draw.ellipse((cx - 32, cy - 32, cx + 32, cy + 32), outline=(80, 220, 90), width=4)
+                _draw_player_token(draw, cx, cy, character)
+
+    # Правая панель.
+    panel_left = grid_origin[0] + grid_px + 28
+    panel_right = width - 20
+    draw.rounded_rectangle(
+        (panel_left, 24, panel_right, height - 24),
+        radius=14,
+        fill=(48, 50, 54),
+        outline=(90, 92, 96),
+        width=2,
+    )
+
+    title_font = _load_font(28)
+    body_font = _load_font(20)
+    small_font = _load_font(16)
+
+    # Превью локации.
+    thumb = (panel_left + 18, 40, panel_right - 18, 150)
+    draw.rounded_rectangle(thumb, radius=10, fill=(34, 38, 32), outline=(70, 80, 60), width=2)
+    # Простая «зона».
+    draw.rectangle((thumb[0] + 10, thumb[1] + 40, thumb[2] - 10, thumb[3] - 10), fill=(55, 62, 48))
+    draw.ellipse((thumb[0] + 30, thumb[1] + 20, thumb[0] + 70, thumb[1] + 55), fill=(70, 78, 55))
+    draw.text((panel_left + 22, 158), session.location, fill=(230, 230, 230), font=title_font)
+
+    # Детектор + кружки.
+    det_y = 210
+    draw.rounded_rectangle(
+        (panel_left + 18, det_y, panel_left + 78, det_y + 60),
+        radius=8,
+        fill=(30, 32, 36),
+        outline=(120, 160, 90),
+        width=2,
+    )
+    draw.rectangle((panel_left + 28, det_y + 12, panel_left + 68, det_y + 28), fill=(60, 90, 50))
+    draw.text(
+        (panel_left + 90, det_y + 8),
+        f"«{session.detector_name}»",
+        fill=(220, 220, 220),
+        font=body_font,
+    )
+    # Кружки-индикаторы.
+    filled = min(session.circles_filled, session.circles_needed)
+    circle_y = det_y + 42
+    start_x = panel_left + 90
+    for i in range(session.circles_needed):
+        cx = start_x + i * 28
+        if i < filled:
+            draw.ellipse((cx - 9, circle_y - 9, cx + 9, circle_y + 9), fill=(70, 220, 90), outline=(40, 120, 50))
+        else:
+            draw.ellipse((cx - 9, circle_y - 9, cx + 9, circle_y + 9), fill=(55, 58, 60), outline=(90, 90, 90))
+
+    # «Радар» / экран.
+    screen = (panel_left + 18, 300, panel_right - 18, 480)
+    draw.rounded_rectangle(screen, radius=12, fill=(28, 30, 34), outline=(70, 72, 76), width=2)
+    # Овал сигнала — ярче, если ближе.
+    dist = _chebyshev(session.player, session.artifact)
+    glow = max(40, 160 - dist * 25)
+    oval = (screen[0] + 40, screen[1] + 30, screen[2] - 40, screen[3] - 30)
+    draw.ellipse(oval, fill=(30, 40, glow // 3 + 30), outline=(100, 180, 220), width=3)
+    draw.text(
+        (panel_left + 28, 490),
+        f"Сигнал: {filled}/{session.circles_needed}",
+        fill=(180, 220, 255),
+        font=body_font,
+    )
+    draw.text(
+        (panel_left + 28, 520),
+        f"Ход {session.moves}/{session.max_moves}",
+        fill=(200, 200, 200),
+        font=small_font,
+    )
+    draw.text(
+        (panel_left + 28, 545),
+        f"Аномалий: {len(session.anomalies)}",
+        fill=(200, 160, 120),
+        font=small_font,
+    )
+
+    # Полоски HP / рад / энергия.
+    bar_top = 590
+    bar_w = 28
+    bar_h = 90
+    gap = 36
+    bx = panel_left + 40
+    hp = character.health if character else 60
+    max_hp = effective_max_health(character) if character else 100
+    rad = character.radiation if character else 0
+    energy = character.energy if character else 50
+    max_energy = character.max_energy if character else 100
+    _draw_vbar(draw, bx, bar_top, bar_w, bar_h, hp / max(1, max_hp), (180, 40, 40), "HP")
+    _draw_vbar(draw, bx + gap, bar_top, bar_w, bar_h, min(1.0, rad / 100), (40, 40, 40), "RAD")
+    _draw_vbar(draw, bx + gap * 2, bar_top, bar_w, bar_h, energy / max(1, max_energy), (40, 90, 180), "EN")
+
+    buf = BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
 
 
-def _paste_anomaly_icon(canvas: Image.Image, cx: int, cy: int, *, diameter: int = HUNT_ANOMALY_ICON_DIAMETER) -> None:
-    sprite = mission_icon_image(ANOMALY_ICON_KEY)
-    if sprite is not None:
-        token = sprite.convert("RGBA").resize((diameter, diameter), Image.Resampling.LANCZOS)
-        mask = Image.new("L", (diameter, diameter), 0)
-        ImageDraw.Draw(mask).ellipse((1, 1, diameter - 2, diameter - 2), fill=255)
-        canvas.paste(token, (cx - diameter // 2, cy - diameter // 2), mask)
-        return
-    _draw_glow_orb_layer(canvas, cx, cy, 28, (255, 120, 40))
+def _anomaly_color(pos: tuple[int, int], artifact: tuple[int, int]) -> tuple[int, int, int]:
+    # Разноцветные орбы как на мокапе.
+    palette = [
+        (255, 140, 40),
+        (255, 90, 30),
+        (80, 220, 90),
+        (220, 220, 230),
+        (255, 180, 60),
+    ]
+    return palette[(pos[0] * 3 + pos[1] * 5) % len(palette)]
 
 
-def _paste_circle(
-    canvas: Image.Image,
-    token: Image.Image,
-    cx: int,
-    cy: int,
-    diameter: int,
-    *,
-    ring_color: tuple[int, int, int] = (70, 210, 85),
-    ring_width: int = 5,
-) -> None:
-    token = token.convert("RGBA").resize((diameter, diameter), Image.Resampling.LANCZOS)
-    mask = Image.new("L", (diameter, diameter), 0)
-    ImageDraw.Draw(mask).ellipse((1, 1, diameter - 2, diameter - 2), fill=255)
-    ring = Image.new("RGBA", (diameter + ring_width * 2, diameter + ring_width * 2), (0, 0, 0, 0))
-    rd = ImageDraw.Draw(ring)
-    outer = diameter + ring_width * 2 - 1
-    rd.ellipse((0, 0, outer, outer), outline=(*ring_color, 255), width=ring_width)
-    # Мягкое свечение кольца.
-    glow = Image.new("RGBA", ring.size, (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glow)
-    gd.ellipse((2, 2, outer - 2, outer - 2), outline=(*ring_color, 70), width=ring_width + 4)
-    ox = cx - ring.size[0] // 2
-    oy = cy - ring.size[1] // 2
-    canvas.alpha_composite(glow, (ox, oy))
-    canvas.alpha_composite(ring, (ox, oy))
-    canvas.paste(token, (cx - diameter // 2, cy - diameter // 2), mask)
-
-
-def _draw_glow_orb_layer(
-    layer: Image.Image,
+def _draw_glow_orb(
+    draw: ImageDraw.ImageDraw,
     cx: int,
     cy: int,
     radius: int,
     color: tuple[int, int, int],
 ) -> None:
-    overlay = Image.new("RGBA", layer.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
     r, g, b = color
-    for i, alpha in (
-        (radius + 22, 22),
-        (radius + 14, 48),
-        (radius + 6, 110),
-        (radius, 200),
-    ):
-        draw.ellipse((cx - i, cy - i, cx + i, cy + i), fill=(r, g, b, alpha))
-    # Яркое ядро как на мокапе.
-    core = max(6, radius // 2)
-    draw.ellipse((cx - core, cy - core, cx + core, cy + core), fill=(255, 250, 230, 235))
-    draw.ellipse(
-        (cx - core // 2, cy - core // 2, cx + core // 3, cy + core // 3),
-        fill=(255, 255, 255, 200),
-    )
-    layer.alpha_composite(overlay)
+    for i, alpha_scale in ((radius + 10, 0.25), (radius + 4, 0.45), (radius, 1.0)):
+        rr = int(r * alpha_scale + 30 * (1 - alpha_scale))
+        gg = int(g * alpha_scale + 30 * (1 - alpha_scale))
+        bb = int(b * alpha_scale + 30 * (1 - alpha_scale))
+        draw.ellipse((cx - i, cy - i, cx + i, cy + i), fill=(rr, gg, bb))
 
 
-def _draw_detector_icon(draw: ImageDraw.ImageDraw, x: int, y: int, w: int = 70, h: int = 54) -> None:
-    draw.rounded_rectangle((x, y, x + w, y + h), radius=8, fill=(32, 34, 36), outline=(110, 150, 80), width=2)
-    draw.rounded_rectangle((x + 10, y + 10, x + w - 10, y + 26), radius=4, fill=(55, 85, 45))
-    draw.rectangle((x + 16, y + 30, x + 28, y + 42), fill=(70, 75, 70))
-    draw.rectangle((x + 32, y + 30, x + 44, y + 42), fill=(50, 120, 60))
-    draw.ellipse((x + w - 22, y + 30, x + w - 10, y + 42), fill=(40, 200, 70))
+def _draw_player_token(draw: ImageDraw.ImageDraw, cx: int, cy: int, character: Character | None) -> None:
+    # Упрощённый сталкер: шлем + тело.
+    draw.ellipse((cx - 18, cy - 22, cx + 18, cy + 14), fill=(70, 78, 60), outline=(30, 35, 28), width=2)
+    draw.ellipse((cx - 12, cy - 18, cx + 12, cy - 2), fill=(45, 50, 42))  # визор
+    draw.rectangle((cx - 14, cy + 8, cx + 14, cy + 26), fill=(90, 70, 45), outline=(40, 30, 20))
+    if character and character.faction == "Долг":
+        draw.rectangle((cx - 6, cy + 10, cx + 6, cy + 16), fill=(180, 40, 40))
+    elif character and character.faction == "Свобода":
+        draw.rectangle((cx - 6, cy + 10, cx + 6, cy + 16), fill=(40, 140, 60))
 
 
-def _draw_status_tube(
+def _draw_vbar(
     draw: ImageDraw.ImageDraw,
     x: int,
     top: int,
@@ -782,217 +629,11 @@ def _draw_status_tube(
     ratio: float,
     color: tuple[int, int, int],
     label: str,
-    value_text: str,
-    font: ImageFont.ImageFont,
-    small: ImageFont.ImageFont,
 ) -> None:
     ratio = max(0.0, min(1.0, float(ratio)))
-    # Корпус колбы.
-    draw.rounded_rectangle((x, top, x + w, top + h), radius=8, fill=(22, 22, 26), outline=(95, 95, 100), width=2)
-    inner_top = top + 6
-    inner_bottom = top + h - 6
-    inner_h = inner_bottom - inner_top
-    fill_h = int(inner_h * ratio)
+    draw.rectangle((x, top, x + w, top + h), fill=(25, 25, 28), outline=(80, 80, 80))
+    fill_h = int(h * ratio)
     if fill_h > 0:
-        fy0 = inner_bottom - fill_h
-        # Градиент заливки.
-        for i in range(fill_h):
-            t = i / max(1, fill_h - 1)
-            c = _mix_rgb(_mix_rgb((20, 20, 20), color, 0.55), color, t)
-            y = fy0 + i
-            draw.line((x + 4, y, x + w - 4, y), fill=c)
-        # Блик слева.
-        draw.rectangle((x + 5, fy0, x + 8, inner_bottom - 1), fill=(210, 210, 215, 255))
-    draw.text((x + w // 2, top + h + 6), label, fill=(210, 210, 210), font=small, anchor="ma")
-    draw.text((x + w // 2, top + h + 24), value_text, fill=(235, 235, 235), font=font, anchor="ma")
-
-
-def render_hunt_frame(
-    session: HuntSession,
-    character: Character | None = None,
-    *,
-    rating_points: int = 0,
-) -> bytes:
-    """HD-кадр: поле слева, PDA-панель справа (референс-мокап)."""
-    cell = HUNT_GRID_CELL_PX
-    grid = session.grid
-    grid_px = grid * cell
-    margin = 28
-    panel_w = 340
-    width = margin + grid_px + 24 + panel_w + margin
-    # Панель чуть выше сетки, чтобы колбы HP/RAD/EN не обрезались.
-    height = max(margin + grid_px + margin, 820)
-    canvas = Image.new("RGBA", (width, height), (18, 20, 22, 255))
-
-    # Атмосферный фон (не плоский).
-    bg = ImageDraw.Draw(canvas)
-    for y in range(height):
-        t = y / max(1, height - 1)
-        shade = int(18 + t * 8)
-        n = int((_hash_noise(0, y, 3) - 0.5) * 6)
-        c = max(10, min(36, shade + n))
-        bg.line((0, y, width, y), fill=(c, c + 1, c + 2, 255))
-
-    draw = ImageDraw.Draw(canvas)
-    field_bg = (margin - 10, margin - 10, margin + grid_px + 10, margin + grid_px + 10)
-    draw.rounded_rectangle(field_bg, radius=16, fill=(36, 38, 42, 255), outline=(75, 78, 84, 255), width=3)
-
-    for gy in range(grid):
-        for gx in range(grid):
-            left = margin + gx * cell
-            top = margin + gy * cell
-            _draw_rock_cell(canvas, left, top, cell, gx, gy)
-
-    for ax, ay in session.anomalies:
-        cx = margin + ax * cell + cell // 2
-        cy = margin + ay * cell + cell // 2
-        _paste_anomaly_icon(canvas, cx, cy)
-
-    # Близкий арт — бледный пинг на поле.
-    if session.circles_filled >= max(1, session.circles_needed - 1):
-        acx = margin + session.artifact[0] * cell + cell // 2
-        acy = margin + session.artifact[1] * cell + cell // 2
-        _draw_glow_orb_layer(canvas, acx, acy, 22, (150, 210, 255))
-
-    px, py = session.player
-    pcx = margin + px * cell + cell // 2
-    pcy = margin + py * cell + cell // 2
-    token = None
-    if character is not None:
-        try:
-            from app.avatar_render import render_avatar
-
-            token = render_avatar(character, rating_points=rating_points, width=160, height=160)
-        except Exception:
-            token = None
-    if token is None:
-        token = Image.new("RGBA", (160, 160), (0, 0, 0, 0))
-        td = ImageDraw.Draw(token)
-        td.ellipse((20, 10, 140, 130), fill=(75, 85, 65), outline=(30, 35, 28), width=3)
-        td.ellipse((45, 35, 115, 85), fill=(40, 48, 40))
-        td.rectangle((45, 120, 115, 155), fill=(95, 75, 50))
-    _paste_circle(canvas, token, pcx, pcy, 78, ring_color=(72, 220, 90), ring_width=5)
-
-    panel_left = margin + grid_px + 24
-    panel_right = width - margin
-    panel_top = margin - 10
-    panel_bottom = height - margin + 10
-    draw = ImageDraw.Draw(canvas)
-    draw.rounded_rectangle(
-        (panel_left, panel_top, panel_right, panel_bottom),
-        radius=18,
-        fill=(52, 54, 58, 255),
-        outline=(110, 112, 116, 255),
-        width=2,
-    )
-    draw.rounded_rectangle(
-        (panel_left + 8, panel_top + 10, panel_right - 8, panel_bottom - 10),
-        radius=14,
-        fill=(44, 46, 50, 255),
-        outline=(70, 72, 76, 255),
-        width=1,
-    )
-
-    title_font = _load_font(32)
-    body_font = _load_font(20)
-    small_font = _load_font(16)
-    tiny_font = _load_font(14)
-
-    # Фото локации — слот справа сверху над названием.
-    thumb = (panel_left + 18, panel_top + 16, panel_right - 18, panel_top + 152)
-    loc_img = _load_location_thumb(session.location)
-    if loc_img is not None:
-        _paste_rounded(canvas, loc_img, thumb, radius=12)
-        ImageDraw.Draw(canvas).rounded_rectangle(thumb, radius=12, outline=(120, 130, 110, 255), width=2)
-    else:
-        _draw_fallback_location_thumb(draw, thumb)
-
-    loc = session.location
-    draw = ImageDraw.Draw(canvas)
-    loc_font = title_font if len(loc) <= 14 else _load_font(24)
-    draw.text((panel_left + 24, panel_top + 160), loc, fill=(245, 245, 245, 255), font=loc_font)
-
-    det_y = panel_top + 202
-    _draw_detector_icon(draw, panel_left + 24, det_y, 72, 52)
-    draw.text(
-        (panel_left + 110, det_y),
-        f"«{session.detector_name}»",
-        fill=(230, 230, 230, 255),
-        font=body_font,
-    )
-    filled = min(session.circles_filled, session.circles_needed)
-    led_y = det_y + 34
-    led_x0 = panel_left + 110
-    for i in range(session.circles_needed):
-        cx = led_x0 + i * 32
-        if i < filled:
-            draw.ellipse((cx - 14, led_y - 14, cx + 14, led_y + 14), fill=(40, 120, 50, 80))
-            draw.ellipse((cx - 9, led_y - 9, cx + 9, led_y + 9), fill=(90, 230, 100, 255), outline=(40, 140, 55, 255))
-            draw.ellipse((cx - 4, led_y - 5, cx + 1, led_y - 1), fill=(220, 255, 220, 200))
-        else:
-            draw.ellipse((cx - 9, led_y - 9, cx + 9, led_y + 9), fill=(48, 50, 52, 255), outline=(85, 85, 88, 255))
-
-    # HD-экран сигнала детектора.
-    screen = (panel_left + 22, panel_top + 275, panel_right - 22, panel_top + 440)
-    dist = _chebyshev(session.player, session.artifact)
-    strength = max(0.12, min(1.0, 1.0 - dist / 6.0))
-    strength = max(strength, 0.18 + 0.16 * (filled / max(1, session.circles_needed)))
-    _draw_signal_screen(canvas, screen, strength=strength)
-    draw = ImageDraw.Draw(canvas)
-
-    info_y = panel_top + 452
-    draw.text(
-        (panel_left + 28, info_y),
-        f"Сигнал  {filled}/{session.circles_needed}",
-        fill=(170, 220, 255, 255),
-        font=body_font,
-    )
-    draw.text(
-        (panel_left + 28, info_y + 26),
-        f"Ход  {session.moves}/{session.max_moves}   ·   Аномалий  {len(session.anomalies)}",
-        fill=(195, 195, 195, 255),
-        font=small_font,
-    )
-    draw.text(
-        (panel_left + 28, info_y + 48),
-        f"Рад за вылазку  +{session.rad_gained}",
-        fill=(210, 180, 140, 255),
-        font=small_font,
-    )
-
-    hp = int(character.health) if character else 0
-    max_hp = int(effective_max_health(character)) if character else 100
-    rad = int(character.radiation) if character else 0
-    energy = int(character.energy) if character else 0
-    max_energy = int(character.max_energy) if character else 100
-    hunger = int(character.hunger) if character else 0
-    thirst = int(character.thirst) if character else 0
-
-    bar_top = panel_top + 530
-    bar_w = 44
-    bar_h = 115
-    gap = 62
-    bx = panel_left + 40
-    _draw_status_tube(
-        draw, bx, bar_top, bar_w, bar_h, hp / max(1, max_hp),
-        (220, 70, 45), "HP", f"{hp}/{max_hp}", tiny_font, tiny_font,
-    )
-    _draw_status_tube(
-        draw, bx + gap, bar_top, bar_w, bar_h, min(1.0, rad / 100.0),
-        (120, 200, 70), "RAD", f"{rad}", tiny_font, tiny_font,
-    )
-    _draw_status_tube(
-        draw, bx + gap * 2, bar_top, bar_w, bar_h, energy / max(1, max_energy),
-        (55, 130, 220), "EN", f"{energy}/{max_energy}", tiny_font, tiny_font,
-    )
-    draw.text(
-        (panel_left + 28, panel_bottom - 42),
-        f"Голод {hunger} · Жажда {thirst}",
-        fill=(160, 160, 160, 255),
-        font=tiny_font,
-    )
-
-    out = canvas.convert("RGB")
-    buf = BytesIO()
-    out.save(buf, format="PNG", optimize=True)
-    return buf.getvalue()
+        draw.rectangle((x + 2, top + h - fill_h, x + w - 2, top + h - 2), fill=color)
+    font = _load_font(12)
+    draw.text((x - 2, top + h + 4), label, fill=(180, 180, 180), font=font)
