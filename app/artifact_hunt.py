@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import random
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -38,27 +37,13 @@ _QUEST_GRID_CELL_PX = 108
 HUNT_ANOMALY_ICON_DIAMETER = round(MISSION_ICON_GRID_DIAMETER * HUNT_GRID_CELL_PX / _QUEST_GRID_CELL_PX)
 
 
-import logging
-
-logger = logging.getLogger(__name__)
-
 HUNT_META_PREFIX = "artifact_hunt:"
-HUNT_ACTIVE_IDS_META = "artifact_hunt:active_ids"
-HUNT_IDLE_HOURS = 4
 HUNT_GRID_SIZE = 6
 HUNT_MAX_MOVES = 24
 HUNT_RAD_EVERY_STEPS = 2
 HUNT_RAD_PER_TICK = 1
 HUNT_MINUTE_MOVES = 6
 HUNT_RAD_PER_MINUTE = 5
-MAX_ANOMALIES_ON_FIELD = 12
-ANOMALY_SEARCH_BONUS_PER_ANOMALY = 1
-
-ELECTRA_HP_DAMAGE = 25
-ZHARKA_HP_DAMAGE_PER_TURN = 8
-ZHARKA_THIRST_PER_TURN = 12
-GRAVI_ESCAPE_CHANCE = 0.40
-HOLODEC_RESPAWN_DELAY = 1
 
 # Лучший детектор → меньше кружков до находки.
 DETECTOR_CIRCLES_NEEDED: dict[str, int] = {
@@ -74,11 +59,6 @@ MOVE_DELTAS: dict[str, tuple[int, int]] = {
     "left": (-1, 0),
     "right": (1, 0),
 }
-
-DIAG_DELTAS: list[tuple[int, int]] = [
-    (-1, -1), (1, -1), (-1, 1), (1, 1),
-    (0, -1), (0, 1), (-1, 0), (1, 0),
-]
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "DejaVuSans.ttf"
@@ -250,34 +230,6 @@ def _draw_signal_screen(
 
 
 @dataclass
-class ActiveAnomaly:
-    kind: str  # "electra", "zharka", "gravi", "holodec"
-    pos: tuple[int, int]
-    hidden: bool = False  # gravi: visible only after stepping; holodec: hiding
-    cooldown: int = 0  # holodec: turns until re-appear
-    deactivated: bool = False  # zharka: shot → becomes static anomaly
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "kind": self.kind,
-            "pos": list(self.pos),
-            "hidden": self.hidden,
-            "cooldown": self.cooldown,
-            "deactivated": self.deactivated,
-        }
-
-    @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> ActiveAnomaly:
-        return cls(
-            kind=str(raw.get("kind") or "electra"),
-            pos=(int(raw["pos"][0]), int(raw["pos"][1])),
-            hidden=bool(raw.get("hidden", False)),
-            cooldown=int(raw.get("cooldown") or 0),
-            deactivated=bool(raw.get("deactivated", False)),
-        )
-
-
-@dataclass
 class HuntSession:
     location: str
     detector_key: str
@@ -292,14 +244,9 @@ class HuntSession:
     rad_gained: int
     grid: int = HUNT_GRID_SIZE
     max_moves: int = HUNT_MAX_MOVES
-    turn_seq: int = 0
-    started_at: str | None = None
-    active_anomalies: list[ActiveAnomaly] | None = None
-    gravi_trapped: bool = False
-    hunt_mode: str = "normal"
 
     def to_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {
+        return {
             "location": self.location,
             "detector_key": self.detector_key,
             "detector_name": self.detector_name,
@@ -313,20 +260,10 @@ class HuntSession:
             "rad_gained": self.rad_gained,
             "grid": self.grid,
             "max_moves": self.max_moves,
-            "turn_seq": self.turn_seq,
-            "started_at": self.started_at,
-            "gravi_trapped": self.gravi_trapped,
-            "hunt_mode": self.hunt_mode,
         }
-        if self.active_anomalies is not None:
-            d["active_anomalies"] = [a.to_dict() for a in self.active_anomalies]
-        return d
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> HuntSession:
-        active = None
-        if "active_anomalies" in raw and raw["active_anomalies"] is not None:
-            active = [ActiveAnomaly.from_dict(a) for a in raw["active_anomalies"]]
         return cls(
             location=str(raw.get("location") or ""),
             detector_key=str(raw.get("detector_key") or ""),
@@ -341,16 +278,7 @@ class HuntSession:
             rad_gained=int(raw.get("rad_gained") or 0),
             grid=int(raw.get("grid") or HUNT_GRID_SIZE),
             max_moves=int(raw.get("max_moves") or HUNT_MAX_MOVES),
-            turn_seq=int(raw.get("turn_seq") or 0),
-            started_at=raw.get("started_at"),
-            active_anomalies=active,
-            gravi_trapped=bool(raw.get("gravi_trapped", False)),
-            hunt_mode=str(raw.get("hunt_mode") or "normal"),
         )
-
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _hunt_meta_key(telegram_id: int) -> str:
@@ -376,117 +304,10 @@ def get_hunt_session(storage: Storage, telegram_id: int) -> HuntSession | None:
 
 def save_hunt_session(storage: Storage, telegram_id: int, session: HuntSession) -> None:
     storage.set_meta(_hunt_meta_key(telegram_id), json.dumps(session.to_dict(), ensure_ascii=False))
-    _register_active_hunt(storage, telegram_id)
 
 
 def clear_hunt_session(storage: Storage, telegram_id: int) -> None:
     storage.delete_meta(_hunt_meta_key(telegram_id))
-    _unregister_active_hunt(storage, telegram_id)
-
-
-def _register_active_hunt(storage: Storage, telegram_id: int) -> None:
-    raw = storage.get_meta(HUNT_ACTIVE_IDS_META)
-    ids: list[int] = []
-    if raw:
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, list):
-                ids = [int(x) for x in parsed]
-        except json.JSONDecodeError:
-            ids = []
-    tid = int(telegram_id)
-    if tid not in ids:
-        ids.append(tid)
-    storage.set_meta(HUNT_ACTIVE_IDS_META, json.dumps(ids, ensure_ascii=False))
-
-
-def _unregister_active_hunt(storage: Storage, telegram_id: int) -> None:
-    raw = storage.get_meta(HUNT_ACTIVE_IDS_META)
-    if not raw:
-        return
-    try:
-        parsed = json.loads(raw)
-        if not isinstance(parsed, list):
-            return
-        ids = [int(x) for x in parsed if int(x) != int(telegram_id)]
-    except json.JSONDecodeError:
-        return
-    if ids:
-        storage.set_meta(HUNT_ACTIVE_IDS_META, json.dumps(ids, ensure_ascii=False))
-    else:
-        storage.delete_meta(HUNT_ACTIVE_IDS_META)
-
-
-def list_active_hunt_player_ids(storage: Storage) -> list[int]:
-    raw = storage.get_meta(HUNT_ACTIVE_IDS_META)
-    if not raw:
-        return []
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, list):
-            return [int(x) for x in parsed]
-    except json.JSONDecodeError:
-        pass
-    return []
-
-
-def _save_hunt_if_turn_ok(
-    storage: Storage,
-    telegram_id: int,
-    session: HuntSession,
-    expected_seq: int,
-) -> bool:
-    from app.tactical_turn import save_turn_if_seq_ok
-
-    tid = int(telegram_id)
-    return save_turn_if_seq_ok(
-        storage,
-        meta_key=_hunt_meta_key(tid),
-        session=session,
-        from_dict=HuntSession.from_dict,
-        save_fn=lambda st, sess: save_hunt_session(st, tid, sess),
-        expected_seq=expected_seq,
-    )
-
-
-def check_hunt_session_timeout(storage: Storage, telegram_id: int) -> ActionResult | None:
-    session = get_hunt_session(storage, telegram_id)
-    if session is None:
-        _unregister_active_hunt(storage, telegram_id)
-        return None
-    if session.moves >= session.max_moves:
-        clear_hunt_session(storage, telegram_id)
-        return ActionResult(
-            False,
-            f"Время вылазки вышло на «{session.location}».\n"
-            f"Сигнал {session.circles_filled}/{session.circles_needed}, арт не взят.\n"
-            f"Рад за вылазку +{session.rad_gained}.",
-            payload={"hunt_active": False, "hunt_done": True, "hunt_timeout": True},
-        )
-    if session.started_at:
-        try:
-            started = datetime.fromisoformat(str(session.started_at))
-            if started.tzinfo is None:
-                started = started.replace(tzinfo=timezone.utc)
-        except ValueError:
-            started = _utc_now()
-        if _utc_now() > started + timedelta(hours=HUNT_IDLE_HOURS):
-            clear_hunt_session(storage, telegram_id)
-            return ActionResult(
-                False,
-                f"Поиск артефактов на «{session.location}» заброшен — слишком долго без движения.",
-                payload={"hunt_active": False, "hunt_done": True, "hunt_timeout": True},
-            )
-    return None
-
-
-def process_hunt_timeouts(storage: Storage) -> list[tuple[int, ActionResult]]:
-    outcomes: list[tuple[int, ActionResult]] = []
-    for telegram_id in list_active_hunt_player_ids(storage):
-        result = check_hunt_session_timeout(storage, telegram_id)
-        if result is not None:
-            outcomes.append((telegram_id, result))
-    return outcomes
 
 
 def _pick_best_detector(character: Character) -> tuple[str, str, int] | None:
@@ -502,15 +323,15 @@ def location_anomaly_count(location: str) -> int:
     """Чем севернее (меньше Y на карте) — тем больше аномалий."""
     point = MAP_TRAVEL_POINTS.get(location)
     if point is None:
-        return 8
+        return 5
     _x, y = point
     if y >= 450:
-        return 6
+        return 3
     if y >= 300:
-        return 8
+        return 5
     if y >= 180:
-        return 10
-    return 12
+        return 7
+    return 9
 
 
 def _chebyshev(a: tuple[int, int], b: tuple[int, int]) -> int:
@@ -536,292 +357,19 @@ def _random_free_cell(
     return random.choice(free)
 
 
-def _grid_neighbors(cell: tuple[int, int], grid: int) -> list[tuple[int, int]]:
-    """Соседние клетки (8 направлений, включая диагонали)."""
-    x, y = cell
-    neighbors: list[tuple[int, int]] = []
-    for dx in (-1, 0, 1):
-        for dy in (-1, 0, 1):
-            if dx == 0 and dy == 0:
-                continue
-            nx, ny = x + dx, y + dy
-            if 0 <= nx < grid and 0 <= ny < grid:
-                neighbors.append((nx, ny))
-    return neighbors
-
-
-def _cells_adjacent_to_any(
-    cells: list[tuple[int, int]],
-    grid: int,
-    *,
-    forbidden: set[tuple[int, int]],
-) -> list[tuple[int, int]]:
-    """Свободные клетки рядом хотя бы с одной из переданных (для арта у аномалий)."""
-    candidates: set[tuple[int, int]] = set()
-    for cell in cells:
-        for neighbor in _grid_neighbors(cell, grid):
-            if neighbor not in forbidden:
-                candidates.add(neighbor)
-    return list(candidates)
-
-
-def _all_occupied(session: HuntSession) -> set[tuple[int, int]]:
-    occupied: set[tuple[int, int]] = {session.player, session.artifact}
-    occupied.update(session.anomalies)
-    if session.active_anomalies:
-        for a in session.active_anomalies:
-            occupied.add(a.pos)
-    return occupied
-
-
-def _total_anomaly_count(session: HuntSession) -> int:
-    n = len(session.anomalies)
-    if session.active_anomalies:
-        n += len(session.active_anomalies)
-    return n
-
-
-def _anomaly_search_bonus(session: HuntSession) -> int:
-    return min(_total_anomaly_count(session), MAX_ANOMALIES_ON_FIELD) * ANOMALY_SEARCH_BONUS_PER_ANOMALY
-
-
-def _spawn_active_anomalies(grid: int, forbidden: set[tuple[int, int]], anomaly_n: int) -> list[ActiveAnomaly]:
-    active: list[ActiveAnomaly] = []
-    kinds = ["electra", "zharka", "gravi", "holodec"]
-    count = max(1, anomaly_n // 3)
-    for _ in range(count):
-        kind = random.choice(kinds)
-        cell = _random_free_cell(grid, forbidden)
-        hidden = kind in ("gravi", "holodec")
-        active.append(ActiveAnomaly(kind=kind, pos=cell, hidden=hidden))
-        forbidden.add(cell)
-    return active
-
-
-def _move_electra(a: ActiveAnomaly, grid: int, occupied: set[tuple[int, int]]) -> None:
-    candidates = []
-    for dx, dy in DIAG_DELTAS:
-        nx, ny = a.pos[0] + dx, a.pos[1] + dy
-        if 0 <= nx < grid and 0 <= ny < grid and (nx, ny) not in occupied:
-            candidates.append((nx, ny))
-    if candidates:
-        a.pos = random.choice(candidates)
-
-
-def _zharka_affected_cells(a: ActiveAnomaly, grid: int) -> set[tuple[int, int]]:
-    if a.deactivated:
-        return set()
-    cells: set[tuple[int, int]] = set()
-    for dx in (-1, 0, 1):
-        for dy in (-1, 0, 1):
-            nx, ny = a.pos[0] + dx, a.pos[1] + dy
-            if 0 <= nx < grid and 0 <= ny < grid:
-                cells.add((nx, ny))
-    return cells
-
-
-def _tick_active_anomalies(session: HuntSession) -> list[str]:
-    """Двигает активные аномалии и возвращает лог-строки событий."""
-    if not session.active_anomalies:
-        return []
-    notes: list[str] = []
-    occupied = _all_occupied(session)
-    for a in session.active_anomalies:
-        if a.cooldown > 0:
-            a.cooldown -= 1
-            if a.cooldown == 0 and a.kind == "holodec":
-                new_pos = _random_free_cell(session.grid, occupied)
-                a.pos = new_pos
-                a.hidden = True
-                occupied.add(new_pos)
-            continue
-        if a.kind == "electra" and not a.deactivated:
-            _move_electra(a, session.grid, occupied)
-    return notes
-
-
-def _check_active_anomaly_effects(
-    session: HuntSession,
-    storage: Storage,
-    telegram_id: int,
-) -> tuple[str | None, bool]:
-    """Проверяет эффекты активных аномалий на позиции игрока.
-    Возвращает (текст_эффекта, dead).
-    """
-    if not session.active_anomalies:
-        return None, False
-    px, py = session.player
-    notes: list[str] = []
-    dead = False
-
-    for a in list(session.active_anomalies):
-        if a.cooldown > 0 or a.deactivated:
-            continue
-
-        if a.kind == "electra" and a.pos == (px, py):
-            storage.change_health(telegram_id, -ELECTRA_HP_DAMAGE)
-            dropped = _electra_drop_items(storage, telegram_id)
-            session.active_anomalies.remove(a)
-            drop_text = f", выбило: {', '.join(dropped)}" if dropped else ""
-            notes.append(f"⚡ Электра! −{ELECTRA_HP_DAMAGE} HP{drop_text}.")
-            a.hidden = False
-            player = storage.get_character(telegram_id, refresh_energy=False)
-            if player and player.health <= 0:
-                dead = True
-
-        elif a.kind == "zharka" and not a.deactivated:
-            affected = _zharka_affected_cells(a, session.grid)
-            if (px, py) in affected:
-                storage.change_health(telegram_id, -ZHARKA_HP_DAMAGE_PER_TURN)
-                storage.adjust_survival(telegram_id, thirst_delta=ZHARKA_THIRST_PER_TURN)
-                notes.append(f"🔥 Жарка жжёт! −{ZHARKA_HP_DAMAGE_PER_TURN} HP, жажда +{ZHARKA_THIRST_PER_TURN}.")
-                player = storage.get_character(telegram_id, refresh_energy=False)
-                if player and player.health <= 0:
-                    dead = True
-
-        elif a.kind == "gravi" and a.pos == (px, py):
-            a.hidden = False
-            if not session.gravi_trapped:
-                session.gravi_trapped = True
-                notes.append("🌀 Гравитационная аномалия! Ты застрял.")
-            if random.random() < GRAVI_ESCAPE_CHANCE:
-                session.gravi_trapped = False
-                notes.append("🌀 Вырвался из грави!")
-            else:
-                notes.append("🌀 Не можешь выбраться (40% шанс).")
-
-        elif a.kind == "holodec" and a.pos == (px, py):
-            a.hidden = False
-            dead = True
-            notes.append("🟢 Холодец! Мгновенная смерть.")
-
-    text = "\n".join(notes) if notes else None
-    return text, dead
-
-
-def _electra_drop_items(storage: Storage, telegram_id: int) -> list[str]:
-    player = storage.get_character(telegram_id, refresh_energy=False)
-    if player is None:
-        return []
-    consumables = ["medkit", "medkit_army", "medkit_science", "antirad", "energy_drink", "stew", "water"]
-    droppable = [(k, v) for k, v in player.inventory.items() if k in consumables and int(v) > 0]
-    if not droppable:
-        return []
-    dropped: list[str] = []
-    n = random.randint(1, min(3, len(droppable)))
-    chosen = random.sample(droppable, min(n, len(droppable)))
-    for key, qty in chosen:
-        lose = random.randint(1, min(2, int(qty)))
-        storage.remove_item(telegram_id, key, lose)
-        label = ITEM_LABELS.get(key, key)
-        dropped.append(f"{label} x{lose}")
-    return dropped
-
-
-def _shoot_active_anomaly(
-    session: HuntSession,
-    storage: Storage,
-    telegram_id: int,
-    direction: str,
-    weapon_range: int,
-) -> str | None:
-    """Стрельба по активной аномалии в заданном направлении. Возвращает лог или None."""
-    delta = MOVE_DELTAS.get(direction)
-    if delta is None:
-        return None
-    px, py = session.player
-    for step in range(1, weapon_range + 1):
-        tx, ty = px + delta[0] * step, py + delta[1] * step
-        if not (0 <= tx < session.grid and 0 <= ty < session.grid):
-            break
-        for a in list(session.active_anomalies or []):
-            if a.pos != (tx, ty) or a.cooldown > 0:
-                continue
-
-            if a.kind == "electra":
-                session.active_anomalies.remove(a)
-                _zone_response_spawn(session)
-                return "⚡ Электра уничтожена выстрелом."
-
-            elif a.kind == "zharka" and not a.deactivated:
-                a.deactivated = True
-                session.anomalies.append(a.pos)
-                _zone_response_spawn(session)
-                return "🔥 Жарка деактивирована — стала обычной аномалией."
-
-            elif a.kind == "holodec":
-                a.cooldown = HOLODEC_RESPAWN_DELAY
-                a.hidden = True
-                _zone_response_spawn(session)
-                return "🟢 Холодец спрятался — появится через 1 ход."
-
-            elif a.kind == "gravi":
-                session.active_anomalies.remove(a)
-                session.anomalies.append(a.pos)
-                if session.gravi_trapped:
-                    session.gravi_trapped = False
-                _zone_response_spawn(session)
-                return "🌀 Грави уничтожена выстрелом."
-
-    return None
-
-
-def _zone_response_spawn(session: HuntSession) -> None:
-    """Ответ Зоны: при уничтожении аномалии — спавн новой, если не достигнут лимит."""
-    if _total_anomaly_count(session) >= MAX_ANOMALIES_ON_FIELD:
-        return
-    occupied = _all_occupied(session)
-    kinds = ["electra", "zharka", "gravi", "holodec"]
-    kind = random.choice(kinds)
-    cell = _random_free_cell(session.grid, occupied)
-    hidden = kind in ("gravi", "holodec")
-    if session.active_anomalies is None:
-        session.active_anomalies = []
-    session.active_anomalies.append(ActiveAnomaly(kind=kind, pos=cell, hidden=hidden))
-
-
-def artifact_beside_anomaly(session: HuntSession) -> bool:
-    """Артефакт на соседней с аномалией клетке (для тестов и отладки)."""
-    anomaly_set = set(session.anomalies)
-    for neighbor in _grid_neighbors(session.artifact, session.grid):
-        if neighbor in anomaly_set:
-            return True
-    return False
-
-
-def _build_session(
-    character: Character,
-    detector_key: str,
-    detector_name: str,
-    *,
-    hunt_mode: str = "normal",
-) -> HuntSession:
-    from app.artifact_features import (
-        ARTIFACT_DEEP_HUNT_CIRCLES_DELTA,
-        ARTIFACT_DEEP_HUNT_MAX_MOVES,
-    )
-
+def _build_session(character: Character, detector_key: str, detector_name: str) -> HuntSession:
     grid = HUNT_GRID_SIZE
     anomaly_n = location_anomaly_count(character.location)
     player = (random.randrange(grid), random.randrange(grid))
     forbidden: set[tuple[int, int]] = {player}
+    artifact = _random_free_cell(grid, forbidden)
+    forbidden.add(artifact)
     anomalies: list[tuple[int, int]] = []
     for _ in range(anomaly_n):
         cell = _random_free_cell(grid, forbidden)
         anomalies.append(cell)
         forbidden.add(cell)
-    adjacent_to_anomalies = _cells_adjacent_to_any(anomalies, grid, forbidden=forbidden)
-    if adjacent_to_anomalies:
-        artifact = random.choice(adjacent_to_anomalies)
-    else:
-        artifact = _random_free_cell(grid, forbidden)
     circles_needed = DETECTOR_CIRCLES_NEEDED.get(detector_key, 5)
-    if hunt_mode == "deep":
-        circles_needed = max(3, circles_needed + ARTIFACT_DEEP_HUNT_CIRCLES_DELTA)
-    active = _spawn_active_anomalies(grid, forbidden, anomaly_n)
-    max_moves = HUNT_MAX_MOVES
-    if hunt_mode == "deep":
-        max_moves = ARTIFACT_DEEP_HUNT_MAX_MOVES
     session = HuntSession(
         location=character.location,
         detector_key=detector_key,
@@ -834,10 +382,6 @@ def _build_session(
         moves=0,
         steps=0,
         rad_gained=0,
-        started_at=_utc_now().isoformat(),
-        active_anomalies=active,
-        max_moves=max_moves,
-        hunt_mode=hunt_mode,
     )
     # Стартовый замер сигнала на месте появления.
     session.circles_filled = min(
@@ -845,29 +389,26 @@ def _build_session(
         _signal_gain(session.player, session.artifact),
     )
     return session
-    
+
+
+def hunt_status_caption(session: HuntSession, character: Character | None = None) -> str:
+    filled = min(session.circles_filled, session.circles_needed)
+    dots = "●" * filled + "○" * max(0, session.circles_needed - filled)
+    lines = [
+        f"📡 Вылазка за артом · «{session.location}»",
+        f"Детектор «{session.detector_name}»: {dots} ({filled}/{session.circles_needed})",
+        f"Ход {session.moves}/{session.max_moves} · рад за вылазку +{session.rad_gained}",
+    ]
     if character is not None:
         lines.append(
             f"HP {character.health}/{effective_max_health(character)} · "
             f"☢ {character.radiation} · ⚡ {character.energy}"
         )
-    active_n = len(session.active_anomalies) if session.active_anomalies else 0
-    bonus = _anomaly_search_bonus(session)
-    lines.append(f"Аномалий: {len(session.anomalies)} обычных + {active_n} активных · бонус поиска +{bonus}%")
-    if session.gravi_trapped:
-        lines.append("🌀 Застрял в гравитационной аномалии!")
-    if session.hunt_mode == "deep":
-        lines.append("🔍 Режим глубокого поиска: больше ходов, выше шанс дропа.")
-    lines.append("Стрельба: ↑↓←→ для уничтожения активных аномалий.")
+    lines.append("Аномалия = смерть. Схрон не трогают.")
     return "\n".join(lines)
 
 
-def start_artifact_hunt(
-    storage: Storage,
-    telegram_id: int,
-    *,
-    hunt_mode: str = "normal",
-) -> ActionResult:
+def start_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")
@@ -904,13 +445,24 @@ def start_artifact_hunt(
     if not storage.spend_energy(telegram_id, energy_cost):
         return ActionResult(False, f"Не хватает энергии для поиска артов (нужно {energy_cost}).")
 
-    session = _build_session(player, detector_key, detector_name, hunt_mode=hunt_mode)
+    session = _build_session(player, detector_key, detector_name)
     save_hunt_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = _render_for_player(storage, telegram_id, session, player)
     caption = hunt_status_caption(session, player)
     anomaly_n = len(session.anomalies)
-    mode_note = " (глубокий поиск)" if hunt_mode == "deep" else ""
+    return ActionResult(
+        True,
+        f"Вылазка на «{session.location}».\n"
+        f"Детектор «{detector_name}»: нужно {session.circles_needed} кружка(ов).\n"
+        f"Аномалий на поле: {anomaly_n}. Энергия −{energy_cost}.",
+        payload={
+            "hunt_image": image,
+            "hunt_active": True,
+            "caption": caption,
+            "hunt_started": True,
+        },
+    )
 
 
 def abandon_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
@@ -927,29 +479,17 @@ def abandon_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
 
 
 def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) -> ActionResult:
-    from app.artifact_features import ARTIFACT_DEEP_HUNT_DROP_MULT, coop_hunt_drop_multiplier
-
+    clear_hunt_session(storage, telegram_id)
     player = storage.get_character(telegram_id, refresh_energy=False)
     base_chance = 17
     for key, _name, chance in ARTIFACT_DETECTORS:
         if key == session.detector_key:
             base_chance = chance
             break
-    base_chance += _anomaly_search_bonus(session)
-    drop_mult = coop_hunt_drop_multiplier(storage, telegram_id, session.location)
-    if session.hunt_mode == "deep":
-        drop_mult *= ARTIFACT_DEEP_HUNT_DROP_MULT
-    art_key = roll_location_artifact_drop(
-        session.location,
-        base_chance,
-        storage,
-        detector_key=session.detector_key,
-        drop_mult=drop_mult,
-    )
+    art_key = roll_location_artifact_drop(session.location, base_chance)
     survival_text = _apply_active_survival(storage, telegram_id)
     spawn_hint = describe_location_artifact_spawns(session.location)
     if art_key is None:
-        clear_hunt_session(storage, telegram_id)
         return ActionResult(
             True,
             f"Сигнал пойман на «{session.location}», но арт сорвался в аномалию.\n"
@@ -958,30 +498,15 @@ def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) ->
             payload={"hunt_active": False, "hunt_done": True},
         )
     storage.add_item(telegram_id, art_key, 1)
-    on_artifact_found(
-        storage,
-        telegram_id,
-        art_key,
-        location=session.location,
-        source="hunt",
-        detector_name=session.detector_name,
-    )
+    storage.add_player_stat(telegram_id, "artifacts_found", 1)
     label = ITEM_LABELS.get(art_key, art_key)
     kind = "мусорный артефакт (без бонусов)" if art_key in ARTIFACT_JUNK_KEYS else "артефакт"
-    bonus_note = ""
-    from app.game_logic import daily_artifact_hunt_done_today, mark_daily_artifact_hunt_done, DAILY_ARTIFACT_HUNT_BONUS_RU
-
-    if art_key not in ARTIFACT_JUNK_KEYS and not daily_artifact_hunt_done_today(storage, telegram_id):
-        mark_daily_artifact_hunt_done(storage, telegram_id)
-        storage.change_money(telegram_id, DAILY_ARTIFACT_HUNT_BONUS_RU)
-        bonus_note = f"\n🗓 Ежедневный поиск: +{DAILY_ARTIFACT_HUNT_BONUS_RU} RU к цене арта."
-    clear_hunt_session(storage, telegram_id)
     return ActionResult(
         True,
         f"Арт найден на «{session.location}»!\n"
         f"Детектор «{session.detector_name}»: {session.circles_filled}/{session.circles_needed}.\n"
         f"Найден {kind}: {label} x1.\n"
-        f"Ходов: {session.moves}, рад за вылазку +{session.rad_gained}.{bonus_note}{survival_text}",
+        f"Ходов: {session.moves}, рад за вылазку +{session.rad_gained}.{survival_text}",
         payload={"hunt_active": False, "hunt_done": True, "art_key": art_key},
     )
 
@@ -1015,64 +540,21 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             },
         )
 
-    if session.gravi_trapped:
-        if random.random() < GRAVI_ESCAPE_CHANCE:
-            session.gravi_trapped = False
-        else:
-            session.moves += 1
-            expected_seq = session.turn_seq
-            session.turn_seq = expected_seq + 1
-            _tick_active_anomalies(session)
-            if not _save_hunt_if_turn_ok(storage, telegram_id, session, expected_seq):
-                from app.tactical_combat import STALE_TURN_MESSAGE
-                return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
-            effect_text, dead = _check_active_anomaly_effects(session, storage, telegram_id)
-            seq2 = session.turn_seq
-            session.turn_seq = seq2 + 1
-            if not _save_hunt_if_turn_ok(storage, telegram_id, session, seq2):
-                from app.tactical_combat import STALE_TURN_MESSAGE
-                return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
-            if dead:
-                clear_hunt_session(storage, telegram_id)
-                storage.change_health(telegram_id, -10_000)
-                from app.game_logic import remember_death_cause
-                remember_death_cause(storage, telegram_id, "anomaly")
-                cause = effect_text or "Аномалия убила."
-                return ActionResult(False, cause, payload={"hunt_active": False, "hunt_dead": True, "death_cause": "anomaly"})
-            player = storage.get_character(telegram_id, refresh_energy=False) or player
-            image = _render_for_player(storage, telegram_id, session, player)
-            msg = "🌀 Не удалось вырваться из грави."
-            if effect_text:
-                msg += "\n" + effect_text
-            return ActionResult(False, msg, payload={"hunt_image": image, "hunt_active": True, "caption": hunt_status_caption(session, player)})
-
     session.player = (nx, ny)
     session.moves += 1
     session.steps += 1
 
-    _tick_active_anomalies(session)
-
+    # Радиация: каждые 2 шага +1, каждые 6 ходов +5.
     rad_add = 0
     if session.steps % HUNT_RAD_EVERY_STEPS == 0:
         rad_add += HUNT_RAD_PER_TICK
     if session.moves % HUNT_MINUTE_MOVES == 0:
         rad_add += HUNT_RAD_PER_MINUTE
-
-    gain = _signal_gain(session.player, session.artifact)
-    if gain > 0:
-        session.circles_filled = min(session.circles_needed, session.circles_filled + gain)
-
-    expected_seq = session.turn_seq
-    session.turn_seq = expected_seq + 1
-    if not _save_hunt_if_turn_ok(storage, telegram_id, session, expected_seq):
-        from app.tactical_combat import STALE_TURN_MESSAGE
-
-        return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
-
     if rad_add > 0:
         storage.adjust_survival(telegram_id, radiation_delta=rad_add)
         session.rad_gained += rad_add
 
+    # Аномалия = смерть.
     if session.player in set(session.anomalies):
         clear_hunt_session(storage, telegram_id)
         storage.change_health(telegram_id, -10_000)
@@ -1091,19 +573,12 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             },
         )
 
-    effect_text, effect_dead = _check_active_anomaly_effects(session, storage, telegram_id)
-    if effect_dead:
-        clear_hunt_session(storage, telegram_id)
-        storage.change_health(telegram_id, -10_000)
-        from app.game_logic import remember_death_cause
-        remember_death_cause(storage, telegram_id, "anomaly")
-        cause = effect_text or "Аномалия убила."
-        return ActionResult(
-            False, cause,
-            payload={"hunt_active": False, "hunt_dead": True, "death_cause": "anomaly"},
-        )
+    gain = _signal_gain(session.player, session.artifact)
+    if gain > 0:
+        session.circles_filled = min(session.circles_needed, session.circles_filled + gain)
 
     if session.circles_filled >= session.circles_needed:
+        save_hunt_session(storage, telegram_id, session)  # на случай сбоя до clear
         return _finish_success(storage, telegram_id, session)
 
     if session.moves >= session.max_moves:
@@ -1116,18 +591,12 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             payload={"hunt_active": False, "hunt_done": True},
         )
 
-    seq2 = session.turn_seq
-    session.turn_seq = seq2 + 1
-    if not _save_hunt_if_turn_ok(storage, telegram_id, session, seq2):
-        from app.tactical_combat import STALE_TURN_MESSAGE
-        return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
+    save_hunt_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = _render_for_player(storage, telegram_id, session, player)
     note = f"Сигнал +{gain}." if gain else "Тишина в эфире."
     if rad_add:
         note += f" Рад +{rad_add}."
-    if effect_text:
-        note += "\n" + effect_text
     return ActionResult(
         True,
         note,
@@ -1136,69 +605,6 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             "hunt_active": True,
             "caption": hunt_status_caption(session, player),
             "move_note": note,
-        },
-    )
-
-
-def shoot_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
-    """Стрельба по активной аномалии на поле поиска артефактов."""
-    session = get_hunt_session(storage, telegram_id)
-    if session is None:
-        return ActionResult(False, "Сначала начни поиск артефактов.")
-    player = storage.get_character(telegram_id, refresh_energy=False)
-    if player is None:
-        return ActionResult(False, "Сначала создай персонажа.")
-    if _is_dead(player):
-        clear_hunt_session(storage, telegram_id)
-        return ActionResult(False, _dead_block_text())
-
-    weapon = (player.equipment or {}).get("weapon", "Нож")
-    from app.tactical_combat import weapon_shoot_range
-    w_range = weapon_shoot_range(weapon)
-
-    if not session.active_anomalies:
-        image = _render_for_player(storage, telegram_id, session, player)
-        return ActionResult(False, "На поле нет активных аномалий.", payload={
-            "hunt_image": image, "hunt_active": True,
-            "caption": hunt_status_caption(session, player),
-        })
-
-    shot_result = _shoot_active_anomaly(session, storage, telegram_id, direction, w_range)
-    if shot_result is None:
-        image = _render_for_player(storage, telegram_id, session, player)
-        return ActionResult(False, "Промах — в этом направлении нет активных аномалий.", payload={
-            "hunt_image": image, "hunt_active": True,
-            "caption": hunt_status_caption(session, player),
-        })
-
-    session.moves += 1
-    expected_seq = session.turn_seq
-    session.turn_seq = expected_seq + 1
-    if not _save_hunt_if_turn_ok(storage, telegram_id, session, expected_seq):
-        from app.tactical_combat import STALE_TURN_MESSAGE
-        return ActionResult(False, STALE_TURN_MESSAGE, payload={"hunt_active": True})
-
-    if session.circles_filled >= session.circles_needed:
-        return _finish_success(storage, telegram_id, session)
-
-    if session.moves >= session.max_moves:
-        clear_hunt_session(storage, telegram_id)
-        return ActionResult(
-            False,
-            f"Время вылазки вышло на «{session.location}».\n"
-            f"Сигнал {session.circles_filled}/{session.circles_needed}, арт не взят.\n"
-            f"Рад за вылазку +{session.rad_gained}.",
-            payload={"hunt_active": False, "hunt_done": True},
-        )
-
-    player = storage.get_character(telegram_id, refresh_energy=False) or player
-    image = _render_for_player(storage, telegram_id, session, player)
-    return ActionResult(
-        True, shot_result,
-        payload={
-            "hunt_image": image, "hunt_active": True,
-            "caption": hunt_status_caption(session, player),
-            "move_note": shot_result,
         },
     )
 
@@ -1304,57 +710,6 @@ def _paste_anomaly_icon(canvas: Image.Image, cx: int, cy: int, *, diameter: int 
     _draw_glow_orb_layer(canvas, cx, cy, 28, (255, 120, 40))
 
 
-_ACTIVE_ANOMALY_COLORS: dict[str, tuple[int, int, int]] = {
-    "electra": (100, 180, 255),
-    "zharka": (255, 100, 30),
-    "gravi": (180, 120, 255),
-    "holodec": (60, 220, 100),
-}
-
-_ACTIVE_ANOMALY_LABELS: dict[str, str] = {
-    "electra": "⚡",
-    "zharka": "🔥",
-    "gravi": "🌀",
-    "holodec": "🟢",
-}
-
-
-def _draw_active_anomaly_on_field(
-    canvas: Image.Image,
-    cx: int,
-    cy: int,
-    anomaly: ActiveAnomaly,
-    cell_size: int,
-) -> None:
-    color = _ACTIVE_ANOMALY_COLORS.get(anomaly.kind, (200, 200, 200))
-    radius = cell_size // 3
-
-    if anomaly.kind == "zharka" and not anomaly.deactivated:
-        overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        od = ImageDraw.Draw(overlay)
-        field_r = cell_size + cell_size // 2
-        od.ellipse(
-            (cx - field_r, cy - field_r, cx + field_r, cy + field_r),
-            fill=(255, 60, 10, 28),
-        )
-        canvas.alpha_composite(overlay)
-
-    _draw_glow_orb_layer(canvas, cx, cy, radius, color)
-
-    draw = ImageDraw.Draw(canvas)
-    label = _ACTIVE_ANOMALY_LABELS.get(anomaly.kind, "?")
-    try:
-        from app.image_text import render_emoji_glyph
-        glyph = render_emoji_glyph(label, cell_size // 3)
-        if glyph is not None:
-            canvas.paste(glyph, (cx - glyph.size[0] // 2, cy - glyph.size[1] // 2), glyph)
-            return
-    except Exception:
-        pass
-    font = _load_font(max(14, cell_size // 4))
-    draw.text((cx, cy), label, fill=(255, 255, 255), font=font, anchor="mm")
-
-
 def _paste_circle(
     canvas: Image.Image,
     token: Image.Image,
@@ -1368,19 +723,18 @@ def _paste_circle(
     token = token.convert("RGBA").resize((diameter, diameter), Image.Resampling.LANCZOS)
     mask = Image.new("L", (diameter, diameter), 0)
     ImageDraw.Draw(mask).ellipse((1, 1, diameter - 2, diameter - 2), fill=255)
-    if ring_width > 0:
-        ring = Image.new("RGBA", (diameter + ring_width * 2, diameter + ring_width * 2), (0, 0, 0, 0))
-        rd = ImageDraw.Draw(ring)
-        outer = diameter + ring_width * 2 - 1
-        rd.ellipse((0, 0, outer, outer), outline=(*ring_color, 255), width=ring_width)
-        # Мягкое свечение кольца.
-        glow = Image.new("RGBA", ring.size, (0, 0, 0, 0))
-        gd = ImageDraw.Draw(glow)
-        gd.ellipse((2, 2, outer - 2, outer - 2), outline=(*ring_color, 70), width=ring_width + 4)
-        ox = cx - ring.size[0] // 2
-        oy = cy - ring.size[1] // 2
-        canvas.alpha_composite(glow, (ox, oy))
-        canvas.alpha_composite(ring, (ox, oy))
+    ring = Image.new("RGBA", (diameter + ring_width * 2, diameter + ring_width * 2), (0, 0, 0, 0))
+    rd = ImageDraw.Draw(ring)
+    outer = diameter + ring_width * 2 - 1
+    rd.ellipse((0, 0, outer, outer), outline=(*ring_color, 255), width=ring_width)
+    # Мягкое свечение кольца.
+    glow = Image.new("RGBA", ring.size, (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse((2, 2, outer - 2, outer - 2), outline=(*ring_color, 70), width=ring_width + 4)
+    ox = cx - ring.size[0] // 2
+    oy = cy - ring.size[1] // 2
+    canvas.alpha_composite(glow, (ox, oy))
+    canvas.alpha_composite(ring, (ox, oy))
     canvas.paste(token, (cx - diameter // 2, cy - diameter // 2), mask)
 
 
@@ -1483,39 +837,16 @@ def render_hunt_frame(
     field_bg = (margin - 10, margin - 10, margin + grid_px + 10, margin + grid_px + 10)
     draw.rounded_rectangle(field_bg, radius=16, fill=(36, 38, 42, 255), outline=(75, 78, 84, 255), width=3)
 
-    thumb = _load_location_thumb(session.location)
-    if thumb is not None:
-        field = _cover_crop(thumb, grid_px, grid_px).convert("RGBA")
-        field.putalpha(170)
-        canvas.paste(field, (margin, margin), field)
-
     for gy in range(grid):
         for gx in range(grid):
             left = margin + gx * cell
             top = margin + gy * cell
-            if thumb is None:
-                _draw_rock_cell(canvas, left, top, cell, gx, gy)
-            else:
-                overlay = Image.new("RGBA", (cell, cell), (8, 10, 12, 50))
-                canvas.alpha_composite(overlay, (left, top))
-                ImageDraw.Draw(canvas).rectangle(
-                    (left, top, left + cell - 1, top + cell - 1),
-                    outline=(28, 28, 30),
-                    width=2,
-                )
+            _draw_rock_cell(canvas, left, top, cell, gx, gy)
 
     for ax, ay in session.anomalies:
         cx = margin + ax * cell + cell // 2
         cy = margin + ay * cell + cell // 2
         _paste_anomaly_icon(canvas, cx, cy)
-
-    if session.active_anomalies:
-        for a in session.active_anomalies:
-            if a.hidden or a.cooldown > 0:
-                continue
-            acx = margin + a.pos[0] * cell + cell // 2
-            acy = margin + a.pos[1] * cell + cell // 2
-            _draw_active_anomaly_on_field(canvas, acx, acy, a, cell)
 
     # Близкий арт — бледный пинг на поле.
     if session.circles_filled >= max(1, session.circles_needed - 1):
