@@ -846,14 +846,6 @@ def _build_session(
     )
     return session
 
-
-def hunt_status_caption(session: HuntSession, character: Character | None = None) -> str:
-    filled = min(session.circles_filled, session.circles_needed)
-    dots = "●" * filled + "○" * max(0, session.circles_needed - filled)
-    lines = [
-        f"📡 Вылазка за артом · «{session.location}»",
-        f"Детектор «{session.detector_name}»: {dots} ({filled}/{session.circles_needed})",
-        f"Ход {session.moves}/{session.max_moves} · рад за вылазку +{session.rad_gained}",
     ]
     if character is not None:
         lines.append(
@@ -920,17 +912,6 @@ def start_artifact_hunt(
     caption = hunt_status_caption(session, player)
     anomaly_n = len(session.anomalies)
     mode_note = " (глубокий поиск)" if hunt_mode == "deep" else ""
-    return ActionResult(
-        True,
-        f"Вылазка на «{session.location}»{mode_note}.\n"
-        f"Детектор «{detector_name}»: нужно {session.circles_needed} кружка(ов).\n"
-        f"Аномалий на поле: {anomaly_n}. Энергия −{energy_cost}.",
-        payload={
-            "hunt_image": image,
-            "hunt_active": True,
-            "caption": caption,
-            "hunt_started": True,
-        },
     )
 
 
