@@ -911,7 +911,6 @@ def start_artifact_hunt(
     caption = hunt_status_caption(session, player)
     anomaly_n = len(session.anomalies)
     mode_note = " (глубокий поиск)" if hunt_mode == "deep" else ""
-    )
 
 
 def abandon_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
