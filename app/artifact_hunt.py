@@ -845,8 +845,7 @@ def _build_session(
         _signal_gain(session.player, session.artifact),
     )
     return session
-
-    ]
+    
     if character is not None:
         lines.append(
             f"HP {character.health}/{effective_max_health(character)} · "
