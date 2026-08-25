@@ -1026,10 +1026,7 @@ def _render_for_player(storage: Storage, telegram_id: int, session: QuestMission
 
 
 def mission_status_caption(session: QuestMissionSession, character: Character | None = None) -> str:
-    kind_label = _mission_kind_label(session.kind, session.title)
     lines = [
-        f"📋 {session.title}",
-        f"{kind_label} · «{session.location}»",
         f"Ход {session.moves}/{session.max_moves}",
     ]
     threat_bits: list[str] = []

@@ -561,7 +561,11 @@ def smuggle_mission_keyboard() -> InlineKeyboardMarkup:
 def quest_mission_keyboard(*, medkits: int = 0, shoot_available: bool = False) -> InlineKeyboardMarkup:
     med_label = f"💊 Аптечка ({medkits})" if medkits > 0 else "💊 Аптечка"
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="⬆️ Вперёд", callback_data="qmission:up")],
+        [
+            InlineKeyboardButton(text=med_label, callback_data="qmission:medkit"),
+            InlineKeyboardButton(text="⬆️ Вперёд", callback_data="qmission:up"),
+            InlineKeyboardButton(text="🔄 Обновить", callback_data="qmission:refresh"),
+        ],
         [
             InlineKeyboardButton(text="⬅️ Влево", callback_data="qmission:left"),
             InlineKeyboardButton(text="⬇️ Назад", callback_data="qmission:down"),
@@ -579,15 +583,7 @@ def quest_mission_keyboard(*, medkits: int = 0, shoot_available: bool = False) -
                 ],
             ]
         )
-    rows.extend(
-        [
-            [
-                InlineKeyboardButton(text=med_label, callback_data="qmission:medkit"),
-                InlineKeyboardButton(text="🔄", callback_data="qmission:refresh"),
-            ],
-            [InlineKeyboardButton(text="🏃 Свалить", callback_data="qmission:leave")],
-        ]
-    )
+    rows.append([InlineKeyboardButton(text="🏃 Свалить", callback_data="qmission:leave")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
