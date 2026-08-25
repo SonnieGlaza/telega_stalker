@@ -3388,7 +3388,15 @@ def build_quick_status_text(storage: Storage, telegram_id: int) -> str:
     busy = player_busy_reason(storage, telegram_id, auto_recover=True)
     status = busy if busy else "свободен"
     travel = ""
-    if player.travel_destination:
+    if is_traveling(player):
+        remaining = format_remaining_travel(player.travel_arrives_at)
+        transport = player.travel_transport or "пешком"
+        labels = {"foot": "пешком", "bicycle": "на велосипеде", "niva": "на Ниве", "truck": "на грузовике"}
+        travel = (
+            f"\n🚶 В пути → {player.travel_destination} "
+            f"({labels.get(transport, transport)}), осталось: {remaining}"
+        )
+    elif player.travel_destination:
         travel = f"\n🚶 В пути → {player.travel_destination}"
     return (
         "📡 Статус\n"
@@ -3396,6 +3404,7 @@ def build_quick_status_text(storage: Storage, telegram_id: int) -> str:
         f"• 📍 {player.location}\n"
         f"• ❤️ {player.health}  ⚡ {player.energy}/{player.max_energy}  💰 {player.money} RU\n"
         f"• 🛡 сила {player.gear_power}\n"
+        f"• ☢ {player.radiation}/100  🍗 {player.hunger}/100  💧 {player.thirst}/100\n"
         f"• Состояние: {status}"
         f"{travel}"
     )
