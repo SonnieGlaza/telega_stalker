@@ -539,6 +539,17 @@ def _load_location_thumb(location: str) -> Image.Image | None:
         return None
 
 
+_DETECTOR_SIGNAL_PATH = PROJECT_ROOT / "assets" / "hunt" / "detector_signal.png"
+
+
+def _load_detector_signal() -> Image.Image | None:
+    try:
+        signal = Image.open(_DETECTOR_SIGNAL_PATH).convert("RGB")
+        return signal.crop((70, 100, 450, 570))
+    except Exception:
+        return None
+
+
 def _cover_crop(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
     src_w, src_h = img.size
     if src_w <= 0 or src_h <= 0:
@@ -663,7 +674,7 @@ def render_hunt_frame(session: HuntSession, character: Character | None = None) 
     loc_bg = _load_location_thumb(session.location)
     if loc_bg is not None:
         field_img = _cover_crop(loc_bg, grid_px, grid_px).convert("RGBA")
-        field_img.putalpha(160)
+        field_img.putalpha(235)
         canvas.paste(field_img, (margin, margin), field_img)
 
     for gy in range(grid):
@@ -673,7 +684,7 @@ def render_hunt_frame(session: HuntSession, character: Character | None = None) 
             if loc_bg is None:
                 _draw_cell(canvas, left, top, cell)
             else:
-                overlay = Image.new("RGBA", (cell, cell), (12, 14, 16, 55))
+                overlay = Image.new("RGBA", (cell, cell), (12, 14, 16, 32))
                 canvas.alpha_composite(overlay, (left, top))
                 ImageDraw.Draw(canvas).rectangle(
                     (left, top, left + cell - 1, top + cell - 1),
@@ -733,21 +744,36 @@ def render_hunt_frame(session: HuntSession, character: Character | None = None) 
     draw.text((pl + 18, pt + 158), "Поиск артефакта", fill=(180, 200, 150), font=body)
 
     det_y = pt + 190
-    draw.text((pl + 18, det_y), f"«{session.detector_name}»", fill=(220, 220, 220), font=body)
+    draw.rounded_rectangle(
+        (pl + 18, det_y, pl + 78, det_y + 52),
+        radius=8,
+        fill=(30, 32, 36),
+        outline=(120, 160, 90),
+        width=2,
+    )
+    draw.rectangle((pl + 28, det_y + 12, pl + 68, det_y + 28), fill=(60, 90, 50))
+    draw.text((pl + 90, det_y + 4), f"«{session.detector_name}»", fill=(220, 220, 220), font=body)
     filled = min(session.circles_filled, session.circles_needed)
-    circle_y = det_y + 28
+    circle_y = det_y + 38
     for i in range(session.circles_needed):
-        cx = pl + 22 + i * 28
+        cx = pl + 90 + i * 28
         if i < filled:
             draw.ellipse((cx - 9, circle_y - 9, cx + 9, circle_y + 9), fill=(70, 220, 90), outline=(40, 120, 50))
         else:
             draw.ellipse((cx - 9, circle_y - 9, cx + 9, circle_y + 9), fill=(55, 58, 60), outline=(90, 90, 90))
 
-    info_y = det_y + 56
-    draw.text((pl + 18, info_y), f"Сигнал: {filled}/{session.circles_needed}", fill=(180, 220, 255), font=body)
-    draw.text((pl + 18, info_y + 24), f"Ход {session.moves}/{session.max_moves}", fill=(200, 200, 200), font=small)
-    draw.text((pl + 18, info_y + 44), f"Аномалий: {len(session.anomalies)}", fill=(200, 160, 120), font=small)
-    draw.text((pl + 18, info_y + 64), "Аномалия = смерть", fill=(200, 100, 80), font=small)
+    screen = (pl + 18, det_y + 72, pr - 18, det_y + 242)
+    draw.rounded_rectangle(screen, radius=12, fill=(18, 30, 38), outline=(90, 130, 150), width=2)
+    signal = _load_detector_signal()
+    if signal is not None:
+        _paste_rounded(canvas, signal, screen, radius=12)
+        draw = ImageDraw.Draw(canvas)
+        draw.rounded_rectangle(screen, radius=12, outline=(90, 130, 150), width=2)
+
+    info_y = screen[3] + 14
+    draw.text((pl + 22, info_y), f"Сигнал: {filled}/{session.circles_needed}", fill=(180, 220, 255), font=body)
+    draw.text((pl + 22, info_y + 25), f"Ход {session.moves}/{session.max_moves} · Аномалий {len(session.anomalies)}", fill=(200, 200, 200), font=small)
+    draw.text((pl + 22, info_y + 46), f"Рад за вылазку +{session.rad_gained}", fill=(200, 160, 120), font=small)
 
     hp = int(character.health) if character else 0
     max_hp = int(effective_max_health(character)) if character else 100
@@ -755,7 +781,7 @@ def render_hunt_frame(session: HuntSession, character: Character | None = None) 
     max_energy = int(character.max_energy) if character else 100
     rad = int(character.radiation) if character else 0
 
-    bar_top = info_y + 90
+    bar_top = info_y + 76
     draw.rounded_rectangle((pl + 18, bar_top, pr - 18, bar_top + 28), radius=8, fill=(30, 30, 34), outline=(90, 90, 95))
     fill_w = int((pr - pl - 44) * (hp / max(1, max_hp)))
     if fill_w > 0:
