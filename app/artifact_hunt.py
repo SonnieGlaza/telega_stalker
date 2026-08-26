@@ -29,6 +29,7 @@ from app.storage import Character, Storage
 
 
 HUNT_META_PREFIX = "artifact_hunt:"
+HUNT_ACTIVE_IDS_META = "artifact_hunt:active_ids"
 HUNT_GRID_SIZE = 6
 HUNT_MAX_MOVES = 24
 HUNT_RAD_EVERY_STEPS = 2
@@ -135,12 +136,60 @@ def get_hunt_session(storage: Storage, telegram_id: int) -> HuntSession | None:
         return None
 
 
+def _register_active_hunt(storage: Storage, telegram_id: int) -> None:
+    raw = storage.get_meta(HUNT_ACTIVE_IDS_META)
+    ids: list[int] = []
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                ids = [int(x) for x in parsed]
+        except json.JSONDecodeError:
+            ids = []
+    tid = int(telegram_id)
+    if tid not in ids:
+        ids.append(tid)
+    storage.set_meta(HUNT_ACTIVE_IDS_META, json.dumps(ids, ensure_ascii=False))
+
+
+def _unregister_active_hunt(storage: Storage, telegram_id: int) -> None:
+    raw = storage.get_meta(HUNT_ACTIVE_IDS_META)
+    if not raw:
+        return
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            return
+        ids = [int(x) for x in parsed if int(x) != int(telegram_id)]
+    except json.JSONDecodeError:
+        return
+    if ids:
+        storage.set_meta(HUNT_ACTIVE_IDS_META, json.dumps(ids, ensure_ascii=False))
+    else:
+        storage.delete_meta(HUNT_ACTIVE_IDS_META)
+
+
+def list_active_hunt_player_ids(storage: Storage) -> list[int]:
+    raw = storage.get_meta(HUNT_ACTIVE_IDS_META)
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [int(x) for x in parsed]
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
 def save_hunt_session(storage: Storage, telegram_id: int, session: HuntSession) -> None:
     storage.set_meta(_hunt_meta_key(telegram_id), json.dumps(session.to_dict(), ensure_ascii=False))
+    _register_active_hunt(storage, telegram_id)
 
 
 def clear_hunt_session(storage: Storage, telegram_id: int) -> None:
     storage.delete_meta(_hunt_meta_key(telegram_id))
+    _unregister_active_hunt(storage, telegram_id)
 
 
 def _pick_best_detector(character: Character) -> tuple[str, str, int] | None:
@@ -333,6 +382,30 @@ def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) ->
         f"Ходов: {session.moves}, рад за вылазку +{session.rad_gained}.{survival_text}",
         payload={"hunt_active": False, "hunt_done": True, "art_key": art_key},
     )
+
+
+def process_hunt_timeouts(storage: Storage) -> list[tuple[int, ActionResult]]:
+    outcomes: list[tuple[int, ActionResult]] = []
+    for telegram_id in list_active_hunt_player_ids(storage):
+        session = get_hunt_session(storage, telegram_id)
+        if session is None:
+            _unregister_active_hunt(storage, telegram_id)
+            continue
+        if session.moves >= session.max_moves:
+            clear_hunt_session(storage, telegram_id)
+            outcomes.append(
+                (
+                    telegram_id,
+                    ActionResult(
+                        False,
+                        "Время вылазки вышло на «" + session.location + "».\n"
+                        "Сигнал " + str(session.circles_filled) + "/" + str(session.circles_needed) + ", арт не взят.\n"
+                        "Рад за вылазку +" + str(session.rad_gained) + ".",
+                        payload={"hunt_active": False, "hunt_done": True, "hunt_timeout": True},
+                    ),
+                )
+            )
+    return outcomes
 
 
 def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
