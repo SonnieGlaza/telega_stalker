@@ -507,6 +507,39 @@ def _load_font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
+def render_hunt_for_player(
+    storage: Storage,
+    telegram_id: int,
+    session: HuntSession,
+    player: Character,
+) -> bytes:
+    return render_hunt_frame(session, player)
+
+
+def shoot_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
+    session = get_hunt_session(storage, telegram_id)
+    if session is None:
+        return ActionResult(False, "Сначала начни поиск артефактов.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        clear_hunt_session(storage, telegram_id)
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        clear_hunt_session(storage, telegram_id)
+        return ActionResult(False, _dead_block_text())
+    image = render_hunt_frame(session, player)
+    return ActionResult(
+        False,
+        "На поле нет целей для стрельбы — только аномалии и арт.",
+        payload={
+            "hunt_image": image,
+            "hunt_active": True,
+            "caption": hunt_status_caption(session, player),
+            "move_note": "Стрелять некого.",
+        },
+    )
+
+
 def render_hunt_frame(session: HuntSession, character: Character | None = None) -> bytes:
     """Кадр: слева поле 6×6, справа панель детектора (в духе мокапа)."""
     width, height = 900, 720
