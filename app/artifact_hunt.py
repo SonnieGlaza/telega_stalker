@@ -507,6 +507,86 @@ def _load_font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
+_LOCATION_THUMB_DIR = PROJECT_ROOT / "assets" / "locations"
+
+_LOCATION_THUMB_MAP: dict[str, str] = {
+    "Кордон": "kordon.png",
+    "Свалка": "svalka.png",
+    "Росток": "rostok.png",
+    "Армейские склады": "army_warehouses.png",
+    "НИИ Агропром": "agroprom.png",
+    "Янтарь": "yantar.png",
+    "Болото": "boloto.png",
+    "Темная долина": "dark_valley.png",
+    "Рыжий лес": "red_forest.png",
+    "Радар": "radar.png",
+}
+
+
+def _load_location_thumb(location: str) -> Image.Image | None:
+    filename = _LOCATION_THUMB_MAP.get(location)
+    if filename is None:
+        return None
+    path = _LOCATION_THUMB_DIR / filename
+    try:
+        return Image.open(path).convert("RGB")
+    except Exception:
+        return None
+
+
+def _cover_crop(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
+    src_w, src_h = img.size
+    if src_w <= 0 or src_h <= 0:
+        return img.resize((target_w, target_h))
+    scale = max(target_w / src_w, target_h / src_h)
+    new_w = max(target_w, int(src_w * scale))
+    new_h = max(target_h, int(src_h * scale))
+    resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    left = (new_w - target_w) // 2
+    top = (new_h - target_h) // 2
+    return resized.crop((left, top, left + target_w, top + target_h))
+
+
+def _paste_circle(
+    canvas: Image.Image,
+    token: Image.Image,
+    cx: int,
+    cy: int,
+    diameter: int,
+    *,
+    ring_color: tuple[int, int, int] | None = None,
+    ring_width: int = 3,
+) -> None:
+    token = token.convert("RGBA").resize((diameter, diameter), Image.Resampling.LANCZOS)
+    mask = Image.new("L", (diameter, diameter), 0)
+    ImageDraw.Draw(mask).ellipse((1, 1, diameter - 2, diameter - 2), fill=255)
+    ox = cx - diameter // 2
+    oy = cy - diameter // 2
+    canvas.paste(token, (ox, oy), mask)
+    if ring_color is not None:
+        ImageDraw.Draw(canvas).ellipse(
+            (ox, oy, ox + diameter - 1, oy + diameter - 1),
+            outline=ring_color,
+            width=ring_width,
+        )
+
+
+def _paste_rounded(
+    canvas: Image.Image,
+    img: Image.Image,
+    box: tuple[int, int, int, int],
+    *,
+    radius: int = 10,
+) -> None:
+    x0, y0, x1, y1 = box
+    w = max(1, x1 - x0)
+    h = max(1, y1 - y0)
+    img = img.convert("RGBA").resize((w, h), Image.Resampling.LANCZOS)
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, w - 1, h - 1), radius=radius, fill=255)
+    canvas.paste(img, (x0, y0), mask)
+
+
 def render_hunt_for_player(
     storage: Storage,
     telegram_id: int,
