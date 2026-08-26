@@ -228,7 +228,6 @@ def hunt_status_caption(session: HuntSession, character: Character | None = None
     filled = min(session.circles_filled, session.circles_needed)
     dots = "●" * filled + "○" * max(0, session.circles_needed - filled)
     lines = [
-        f"📡 Вылазка за артом · «{session.location}»",
         f"Детектор «{session.detector_name}»: {dots} ({filled}/{session.circles_needed})",
         f"Ход {session.moves}/{session.max_moves} · рад за вылазку +{session.rad_gained}",
     ]
@@ -278,12 +277,9 @@ def start_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = render_hunt_frame(session, player)
     caption = hunt_status_caption(session, player)
-    anomaly_n = len(session.anomalies)
     return ActionResult(
         True,
-        f"Вылазка на «{session.location}».\n"
-        f"Детектор «{detector_name}»: нужно {session.circles_needed} кружка(ов).\n"
-        f"Аномалий на поле: {anomaly_n}. Энергия −{energy_cost}.",
+        f"Энергия −{energy_cost}.",
         payload={
             "hunt_image": image,
             "hunt_active": True,
