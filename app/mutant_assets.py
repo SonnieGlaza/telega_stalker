@@ -153,24 +153,32 @@ def apply_controller_aura_db(
     return [f"🧠 Контролёр давит разум: −{CONTROLLER_AURA_DAMAGE} HP."]
 
 
+def _read_sprite_file(directory: Path, name: str) -> bytes | None:
+    for ext in (".png", ".jpg", ".jpeg"):
+        path = directory / f"{name}{ext}"
+        if path.is_file():
+            return path.read_bytes()
+    return None
+
+
 @lru_cache(maxsize=32)
 def load_mutant_grid_sprite(kind: str) -> bytes | None:
     """PNG 88×88 для отрисовки на поле миссии."""
     resolved = MUTANT_SPRITE_FALLBACKS.get(kind, kind)
-    path = MUTANTS_GRID_DIR / f"{resolved}.png"
-    if not path.is_file():
-        return None
-    return path.read_bytes()
+    raw = _read_sprite_file(MUTANTS_GRID_DIR, resolved)
+    if raw is None:
+        raw = _read_sprite_file(MUTANTS_SOURCE_DIR, resolved)
+    return raw
 
 
 @lru_cache(maxsize=32)
 def load_mutant_card_sprite(kind: str) -> bytes | None:
     """PNG 256×256 для карточек/PDA (будущие задания)."""
     resolved = MUTANT_SPRITE_FALLBACKS.get(kind, kind)
-    path = MUTANTS_CARD_DIR / f"{resolved}.png"
-    if not path.is_file():
-        return None
-    return path.read_bytes()
+    raw = _read_sprite_file(MUTANTS_CARD_DIR, resolved)
+    if raw is None:
+        raw = _read_sprite_file(MUTANTS_SOURCE_DIR, resolved)
+    return raw
 
 
 def mutant_grid_diameter(kind: str, *, default: int = MISSION_MUTANT_GRID_DIAMETER) -> int:
