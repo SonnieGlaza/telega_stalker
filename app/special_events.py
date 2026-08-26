@@ -1,7 +1,7 @@
 """Особые события Зоны.
 
 Волна 1: вертушка, шторм, бандиты, тёмный сталкер.
-Волна 2: спасение пленного (Завод), Гигант, колонна Монолита.
+Волна 2: спасение пленного (Припять), Гигант, колонна Монолита.
 """
 
 from __future__ import annotations
@@ -333,7 +333,7 @@ def _build_dark_stalker(location: str, now: datetime) -> dict[str, Any]:
 
 
 def _build_monolith_rescue(now: datetime) -> dict[str, Any]:
-    loc = "Завод"
+    loc = "Припять"
     return {
         "id": now.strftime("%Y%m%d%H%M%S"),
         "kind": "monolith_rescue",
@@ -654,7 +654,7 @@ def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
         )
 
     if kind == "monolith_rescue":
-        loc = str(event.get("location") or "Завод")
+        loc = str(event.get("location") or "Припять")
         if player.location != loc:
             return ActionResult(
                 False,
@@ -662,7 +662,7 @@ def join_special_event(storage: Storage, telegram_id: int) -> ActionResult:
             )
         rescued = {int(x) for x in (event.get("rescued_by") or [])}
         if telegram_id in rescued:
-            return ActionResult(False, "Ты уже вывел пленного с Завода.")
+            return ActionResult(False, "Ты уже вывел пленного с Припяти.")
         # Тяжёлый эскорт: патроны/аптечка желательны, иначе откат на hard.
         diff = "heavy"
         ammo = int(player.inventory.get("ammo_pack", 0))
@@ -847,7 +847,7 @@ def complete_special_event_objective(
         storage.add_item(telegram_id, "medkit", 1)
         player = storage.get_character(telegram_id, refresh_energy=False)
         nick = player.nickname if player else str(telegram_id)
-        return f"Пленник спасён ({nick}). +1200 RU и аптечка. Монолит отступил с Завода."
+        return f"Пленник спасён ({nick}). +1200 RU и аптечка. Монолит отступил с Припяти."
 
     if kind == "giant" and title_l.startswith("Гигант:"):
         hp = int(event.get("boss_hp") or 0)
@@ -1004,7 +1004,7 @@ def special_event_button_label(storage: Storage) -> str | None:
         "anomaly_storm": "🌪 Искать проход в шторме",
         "bandit_blockade": "🔫 Штурмовать логово бандитов",
         "dark_stalker": "🕶 Вызвать Тёмного сталкера",
-        "monolith_rescue": "⛓ Спасти пленного на Заводе",
+        "monolith_rescue": "⛓ Спасти пленного на Припяти",
         "giant": "Атаковать псевдогиганта",
         "monolith_march": "☢ Перехватить колонну Монолита",
     }.get(kind)
@@ -1035,6 +1035,6 @@ def special_events_status_line(storage: Storage) -> str:
             f"· стычки {event.get('ambush_hits')}/{event.get('hits_needed')}"
         )
     if kind == "monolith_rescue":
-        extra = " · эскорт с Завода"
+        extra = " · эскорт с Припяти"
     loc_part = f" «{loc}»" if loc else ""
     return f"{title}{loc_part} (~{mins} мин){extra}."

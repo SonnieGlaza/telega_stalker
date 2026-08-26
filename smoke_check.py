@@ -572,17 +572,17 @@ def run_smoke_check() -> None:
         _clear_mission()
 
         # Волна 2: пленник / Гигант / колонна Монолита.
-        assert "Завод" in {loc["name"] for loc in storage.get_locations()}
+        assert "Припять" in {loc["name"] for loc in storage.get_locations()}
         storage.restore_energy(111, 100)
         rescue = start_special_event(storage, kind="monolith_rescue")
-        assert rescue["kind"] == "monolith_rescue" and rescue["location"] == "Завод"
-        storage.set_location(111, "Завод")
+        assert rescue["kind"] == "monolith_rescue" and rescue["location"] == "Припять"
+        storage.set_location(111, "Припять")
         storage.add_item(111, "ammo_pack", 5)
         storage.add_item(111, "medkit", 2)
         rescue_join = join_special_event(storage, 111)
         assert rescue_join.ok, rescue_join.text
         rescue_note = complete_special_event_objective(
-            storage, 111, title="Спасение пленного: Завод"
+            storage, 111, title="Спасение пленного: Припять"
         )
         assert rescue_note and "Пленник" in rescue_note
         _clear_mission()
@@ -2478,7 +2478,7 @@ def run_smoke_check() -> None:
             session_id="r1",
             raid_id=1,
             raid_kind="lair",
-            location_label="Завод",
+            location_label="Припять",
             attacker_faction="Долг",
             player_ids=[111, 222],
             hp={"111": 0, "222": 55},
