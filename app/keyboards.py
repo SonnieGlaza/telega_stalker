@@ -115,7 +115,7 @@ def quests_keyboard(
     if show_cancel:
         rows.append([InlineKeyboardButton(text="❌ Отменить контракт", callback_data="contract:cancel")])
     rows.append([InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")])
-    rows.append([InlineKeyboardButton(text="📦 Поиск схрона", callback_data="stash:search")])
+    rows.append([InlineKeyboardButton(text="📦 Поиск хабара", callback_data="stash:search")])
     if show_help:
         rows.append([InlineKeyboardButton(text="🆘 Помочь по рации", callback_data="help_event:join")])
     if show_special:
@@ -476,7 +476,7 @@ def trader_buy_repair_keyboard() -> InlineKeyboardMarkup:
 def inventory_equipment_keyboard(*, money: int | None = None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="🧰 Расходники", callback_data="inventory:consumables")],
-        [InlineKeyboardButton(text="🗄 Схрон", callback_data="stash:menu")],
+        [InlineKeyboardButton(text="🗄 Хабар", callback_data="stash:menu")],
         [InlineKeyboardButton(text="🛒 Купить тайник (от 2000)", callback_data="invbuyqty:stash_case")],
         [InlineKeyboardButton(text="📦 Открыть тайник", callback_data="use:stash_case")],
         [InlineKeyboardButton(text="⚙️ Экипировка", callback_data="equip:root")],
@@ -511,21 +511,19 @@ def artifact_hunt_keyboard(*, deep_available: bool = True) -> InlineKeyboardMark
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def stash_hunt_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="⬆️ Вперёд", callback_data="sthunt:up")],
-            [
-                InlineKeyboardButton(text="⬅️ Влево", callback_data="sthunt:left"),
-                InlineKeyboardButton(text="⬇️ Назад", callback_data="sthunt:down"),
-                InlineKeyboardButton(text="➡️ Вправо", callback_data="sthunt:right"),
-            ],
-            [
-                InlineKeyboardButton(text="🏃 Уйти", callback_data="sthunt:leave"),
-                InlineKeyboardButton(text="🔄 Обновить", callback_data="sthunt:refresh"),
-            ],
+def stash_hunt_keyboard(door_count: int = 0) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for i in range(door_count):
+        rows.append(
+            [InlineKeyboardButton(text=f"🚪 Дверь {i + 1}", callback_data=f"sthunt:door:{i}")]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(text="🏃 Уйти", callback_data="sthunt:leave"),
+            InlineKeyboardButton(text="🔄 Обновить", callback_data="sthunt:refresh"),
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def equip_artifact_slot_picker_keyboard(item_key: str, slots_cap: int) -> InlineKeyboardMarkup:
@@ -609,8 +607,8 @@ def quest_mission_keyboard(*, medkits: int = 0, shoot_available: bool = False) -
 def personal_stash_menu_keyboard(*, at_home: bool) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if at_home:
-        rows.append([InlineKeyboardButton(text="📥 Положить в схрон", callback_data="stash:putlist:0")])
-        rows.append([InlineKeyboardButton(text="📤 Забрать из схрона", callback_data="stash:takelist:0")])
+        rows.append([InlineKeyboardButton(text="📥 Положить в хабар", callback_data="stash:putlist:0")])
+        rows.append([InlineKeyboardButton(text="📤 Забрать из хабара", callback_data="stash:takelist:0")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад в инвентарь", callback_data="inventory:open")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -642,7 +640,7 @@ def personal_stash_items_keyboard(
                 InlineKeyboardButton(text="➡️", callback_data=f"{page_prefix}:{page + 1}")
             )
         rows.append(nav)
-    rows.append([InlineKeyboardButton(text="⬅️ К схрону", callback_data="stash:menu")])
+    rows.append([InlineKeyboardButton(text="⬅️ К хабару", callback_data="stash:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

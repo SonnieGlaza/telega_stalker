@@ -569,7 +569,7 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
                 payload={"hunt_active": False, "hunt_dead": True},
             )
 
-    # Шанс найти координаты схрона во время охоты.
+    # Шанс найти координаты хабара во время охоты.
     from app.stash_hunt import try_random_stash_coordinates
     try_random_stash_coordinates(storage, telegram_id)
 

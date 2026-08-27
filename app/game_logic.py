@@ -260,7 +260,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "gasoline_can": {"name": "Канистра бензина (+5)", "buy_price": 100, "sell_price": 44},
     "fuel_can": {"name": "Канистра дизеля (+5)", "buy_price": 199, "sell_price": 89},
     "stash_case": {"name": "Тайник", "buy_price": 2000, "sell_price": 500},
-    "stash_coordinates": {"name": "Координаты схрона", "buy_price": 3500, "sell_price": 0},
+    "stash_coordinates": {"name": "Координаты хабара", "buy_price": 3500, "sell_price": 0},
 }
 
 # Сила снаряги: рейтинги и цены оружия/брони масштабированы ×18/11,
@@ -596,7 +596,7 @@ ITEM_LABELS = {
     "sleeping_bag": "Спальник",
     "bicycle": "Велосипед",
     "stash_case": "Тайник",
-    "stash_coordinates": "Координаты схрона",
+    "stash_coordinates": "Координаты хабара",
     "armor_leather": "Кожаная куртка",
     "armor_stalker_vest": "Сталкерский бронежилет",
     "armor_psz7d": "ПСЗ-7 «Долг»",
@@ -1279,7 +1279,7 @@ FACTION_LORE: dict[str, str] = {
         "получилась сеть: Сидорович, проводники, вольные сталкеры без знамени.\n\n"
         "🎯 Цель в Зоне\n"
         "Выжить и заработать, не становясь пушечным мясом группировок. "
-        "Нейтралы держат тропы, базары и схроны. Деньги в казну — это еда новичкам, "
+        "Нейтралы держат тропы, базары и хабар. Деньги в казну — это еда новичкам, "
         "патроны проводникам и шанс не остаться одному, когда попрёт Выброс."
     ),
     "Бандиты": (
@@ -2258,7 +2258,7 @@ def build_death_log_text(storage: Storage, telegram_id: int) -> str:
 
 
 def _apply_death_inventory_loot(storage: Storage, telegram_id: int) -> str:
-    """Оставить ~20% каждого стака в инвентаре. Экипировка и схрон не трогаются."""
+    """Оставить ~20% каждого стака в инвентаре. Экипировка и хабар не трогаются."""
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ""
@@ -2291,12 +2291,12 @@ def _apply_death_inventory_loot(storage: Storage, telegram_id: int) -> str:
 def format_personal_stash(storage: Storage, telegram_id: int) -> str:
     stash = storage.get_personal_stash(telegram_id)
     if not stash:
-        return "🗄 Личный схрон пуст."
+        return "🗄 Личный хабар пуст."
     lines = [
         f"• {ITEM_LABELS.get(key, key)} x{amount}"
         for key, amount in sorted(stash.items())
     ]
-    return "🗄 Личный схрон:\n" + "\n".join(lines)
+    return "🗄 Личный хабар:\n" + "\n".join(lines)
 
 
 def deposit_to_personal_stash(
@@ -2325,7 +2325,7 @@ def deposit_to_personal_stash(
     storage.set_personal_stash(telegram_id, stash)
     return ActionResult(
         True,
-        f"В схрон убрано: {ITEM_LABELS.get(key, key)} x{amount}.",
+        f"В хабар убрано: {ITEM_LABELS.get(key, key)} x{amount}.",
     )
 
 
@@ -2351,7 +2351,7 @@ def withdraw_from_personal_stash(
     stash = storage.get_personal_stash(telegram_id)
     have = int(stash.get(key, 0))
     if have < amount:
-        return ActionResult(False, f"В схроне недостаточно: {ITEM_LABELS.get(key, key)}.")
+        return ActionResult(False, f"В хабаре недостаточно: {ITEM_LABELS.get(key, key)}.")
     left = have - amount
     if left <= 0:
         stash.pop(key, None)
@@ -2361,7 +2361,7 @@ def withdraw_from_personal_stash(
     storage.add_item(telegram_id, key, amount)
     return ActionResult(
         True,
-        f"Из схрона взято: {ITEM_LABELS.get(key, key)} x{amount}.",
+        f"Из хабара взято: {ITEM_LABELS.get(key, key)} x{amount}.",
     )
 
 
@@ -6945,7 +6945,7 @@ def shop_gear_button_title(item_key: str) -> str:
     if key == "stash_case":
         return _telegram_button_title(f"Тайник · от {price}")
     if key == "stash_coordinates":
-        return _telegram_button_title(f"Координаты схрона · {price}")
+        return _telegram_button_title(f"Координаты хабара · {price}")
     return _telegram_button_title(f"{name} · {price}")
 
 
@@ -10805,7 +10805,7 @@ TUTORIAL_PAGES: tuple[tuple[str, str], ...] = (
         "Патроны теперь в «🔫 Оружие» у бармена, не в еде.\n"
         "Опасные контракты жрут патроны. Нож в коопе — это ты уже труп.\n\n"
         "👉 Бармен → Оружие: патроны пачкой + ствол. Броню — рядом. "
-        "Схрон на базе прячет лут от смерти. Без схрона рюкзак — подарок мутантам.",
+        "Хабар на базе прячет лут от смерти. Без хабара рюкзак — подарок мутантам.",
     ),
     (
         "Выброс не спрашивает имя",

@@ -49,6 +49,7 @@ from app.stash_hunt import (
     render_stash_frame,
     stash_status_caption,
     start_stash_hunt,
+    _rooms_for,
 )
 from app.quest_mission import (
     abandon_quest_mission,
@@ -3034,7 +3035,7 @@ async def stash_put_list_callback(callback: CallbackQuery) -> None:
         return
     await edit_menu_message(
         callback,
-        "📥 Что положить в схрон?\nВыбери предмет, затем количество.",
+        "📥 Что положить в хабар?\nВыбери предмет, затем количество.",
         personal_stash_items_keyboard(
             buttons,
             page=safe_page,
@@ -3063,7 +3064,7 @@ async def stash_take_list_callback(callback: CallbackQuery) -> None:
         return
     await edit_menu_message(
         callback,
-        "📤 Что забрать из схрона?\nВыбери предмет, затем количество.",
+        "📤 Что забрать из хабара?\nВыбери предмет, затем количество.",
         personal_stash_items_keyboard(
             buttons,
             page=safe_page,
@@ -3091,7 +3092,7 @@ async def stash_put_pick_callback(callback: CallbackQuery) -> None:
 
     await edit_menu_message(
         callback,
-        f"📥 В схрон: {ITEM_LABELS.get(item_key, item_key)}\nСколько положить? (есть {have})",
+        f"📥 В хабар: {ITEM_LABELS.get(item_key, item_key)}\nСколько положить? (есть {have})",
         personal_stash_amount_keyboard("put", item_key, have),
     )
 
@@ -3104,13 +3105,13 @@ async def stash_take_pick_callback(callback: CallbackQuery) -> None:
     storage = get_storage()
     have = int(storage.get_personal_stash(callback.from_user.id).get(item_key, 0))
     if have <= 0:
-        await callback.answer("Этого предмета уже нет в схроне.", show_alert=True)
+        await callback.answer("Этого предмета уже нет в хабаре.", show_alert=True)
         return
     from app.game_logic import ITEM_LABELS
 
     await edit_menu_message(
         callback,
-        f"📤 Из схрона: {ITEM_LABELS.get(item_key, item_key)}\nСколько забрать? (есть {have})",
+        f"📤 Из хабара: {ITEM_LABELS.get(item_key, item_key)}\nСколько забрать? (есть {have})",
         personal_stash_amount_keyboard("take", item_key, have),
     )
 
@@ -6882,10 +6883,11 @@ async def _send_or_edit_stash_frame(
     image_bytes: bytes,
     caption: str,
     note: str | None = None,
+    door_count: int = 0,
 ) -> None:
     media = BufferedInputFile(image_bytes, filename="stash_hunt.png")
     text = caption if not note else f"{caption}\n\n{note}"
-    markup = stash_hunt_keyboard()
+    markup = stash_hunt_keyboard(door_count=door_count)
     try:
         if callback.message and callback.message.photo:
             await callback.message.edit_media(
@@ -6922,11 +6924,19 @@ async def stash_search_callback(callback: CallbackQuery) -> None:
     payload = result.payload or {}
     image = payload.get("stash_image")
     if image and payload.get("stash_active"):
+        from app.stash_hunt import _rooms_for, get_stash_session
+        sess = get_stash_session(get_storage(), callback.from_user.id)
+        dc = 0
+        if sess is not None:
+            rooms = _rooms_for(sess.location)
+            if sess.current_room < len(rooms):
+                dc = len(rooms[sess.current_room].doors)
         await _send_or_edit_stash_frame(
             callback,
             image_bytes=image,
             caption=str(payload.get("caption") or result.text),
             note=result.text if payload.get("stash_started") else None,
+            door_count=dc,
         )
         return
     await reply_action_result(callback, result.text)
@@ -6954,21 +6964,29 @@ async def stash_hunt_callback(callback: CallbackQuery) -> None:
             session = get_stash_session(storage, telegram_id)
             player = storage.get_character(telegram_id, refresh_energy=False)
             if session is None or player is None:
-                await callback.answer("Активного поиска схрона нет.", show_alert=True)
+                await callback.answer("Активного поиска хабара нет.", show_alert=True)
                 return
             image = render_stash_frame(session, player)
+            rooms = _rooms_for(session.location)
+            dc = len(rooms[session.current_room].doors) if session.current_room < len(rooms) else 0
             await _send_or_edit_stash_frame(
                 callback,
                 image_bytes=image,
                 caption=stash_status_caption(session, player),
+                door_count=dc,
             )
             return
 
-        if action not in {"up", "down", "left", "right"}:
+        if action.startswith("door:"):
+            door_idx_str = action.removeprefix("door:")
+            if not door_idx_str.isdigit():
+                await callback.answer("Неизвестное действие.", show_alert=True)
+                return
+            result = move_stash_hunt(storage, telegram_id, int(door_idx_str))
+        else:
             await callback.answer("Неизвестное действие.", show_alert=True)
             return
 
-        result = move_stash_hunt(storage, telegram_id, action)
         payload = result.payload or {}
 
         if payload.get("stash_dead"):
@@ -6985,15 +7003,22 @@ async def stash_hunt_callback(callback: CallbackQuery) -> None:
         if not image:
             await reply_action_result(callback, result.text)
             return
+        sess = get_stash_session(storage, telegram_id)
+        dc = 0
+        if sess is not None:
+            rooms = _rooms_for(sess.location)
+            if sess.current_room < len(rooms):
+                dc = len(rooms[sess.current_room].doors)
         await _send_or_edit_stash_frame(
             callback,
             image_bytes=image,
             caption=str(payload.get("caption") or ""),
             note=str(payload.get("move_note") or result.text),
+            door_count=dc,
         )
     except Exception:
         logger.exception("Stash hunt callback failed for %s action=%s", telegram_id, action)
-        await safe_callback_answer(callback, "Ошибка поиска схрона. Попробуй ещё раз или /fixme", show_alert=True)
+        await safe_callback_answer(callback, "Ошибка поиска хабара. Попробуй ещё раз или /fixme", show_alert=True)
 
 
 @router.message(Command("pay"), F.chat.type == "private")
