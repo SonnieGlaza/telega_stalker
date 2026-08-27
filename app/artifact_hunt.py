@@ -380,7 +380,7 @@ def start_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
     if get_hunt_session(storage, telegram_id) is not None:
         session = get_hunt_session(storage, telegram_id)
         assert session is not None
-        image = render_hunt_frame(session, player)
+        image = render_hunt_for_player(storage, telegram_id, session, player)
         return ActionResult(
             True,
             "У тебя уже идёт вылазка. Продолжай с поля.",
@@ -401,7 +401,7 @@ def start_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
     session = _build_session(player, detector_key, detector_name)
     save_hunt_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
-    image = render_hunt_frame(session, player)
+    image = render_hunt_for_player(storage, telegram_id, session, player)
     caption = hunt_status_caption(session, player)
     return ActionResult(
         True,
@@ -503,7 +503,7 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
     nx = session.player[0] + delta[0]
     ny = session.player[1] + delta[1]
     if not (0 <= nx < session.grid and 0 <= ny < session.grid):
-        image = render_hunt_frame(session, player)
+        image = render_hunt_for_player(storage, telegram_id, session, player)
         return ActionResult(
             False,
             "Край поля — туда не пройти.",
@@ -593,7 +593,7 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
 
     save_hunt_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
-    image = render_hunt_frame(session, player)
+    image = render_hunt_for_player(storage, telegram_id, session, player)
     note = f"Сигнал +{gain}." if gain else "Тишина в эфире."
     if rad_add:
         note += f" Рад +{rad_add}."
@@ -786,14 +786,24 @@ def _cover_crop(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
     return resized.crop((left, top, left + target_w, top + target_h))
 
 
-def _player_grid_token(character: Any | None = None, *, size: int = 160) -> Image.Image:
-    """Иконка персонажа для сетки охоты/схрона: аватар или stalker_default."""
+def _player_grid_token(
+    character: Any | None = None,
+    *,
+    size: int = 160,
+    rating_points: int = 0,
+) -> Image.Image:
+    """Иконка персонажа для сетки: скин по группировке + рейтингу."""
     token: Image.Image | None = None
     if character is not None:
         try:
             from app.avatar_render import render_avatar
 
-            token = render_avatar(character, width=size, height=size)
+            token = render_avatar(
+                character,
+                rating_points=max(0, int(rating_points)),
+                width=size,
+                height=size,
+            )
         except Exception:
             token = None
     if token is None:
@@ -814,6 +824,13 @@ def _player_grid_token(character: Any | None = None, *, size: int = 160) -> Imag
         td.ellipse((size * 0.28, size * 0.22, size * 0.72, size * 0.52), fill=(40, 48, 40))
         td.rectangle((size * 0.28, size * 0.75, size * 0.72, size * 0.97), fill=(95, 75, 50))
     return token
+
+
+def _character_rating_points(storage: Storage, telegram_id: int) -> int:
+    try:
+        return max(0, int(storage.get_player_stats(telegram_id).get("rating_points", 0)))
+    except Exception:
+        return 0
 
 
 def _paste_circle(
@@ -862,7 +879,11 @@ def render_hunt_for_player(
     session: HuntSession,
     player: Character,
 ) -> bytes:
-    return render_hunt_frame(session, player)
+    return render_hunt_frame(
+        session,
+        player,
+        rating_points=_character_rating_points(storage, telegram_id),
+    )
 
 
 def shoot_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
@@ -876,7 +897,7 @@ def shoot_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> A
     if _is_dead(player):
         clear_hunt_session(storage, telegram_id)
         return ActionResult(False, _dead_block_text())
-    image = render_hunt_frame(session, player)
+    image = render_hunt_for_player(storage, telegram_id, session, player)
     return ActionResult(
         False,
         "На поле нет целей для стрельбы — только аномалии и арт.",
@@ -909,7 +930,12 @@ def _glow(img: Image.Image, cx: int, cy: int, color: tuple[int, int, int], radiu
     img.alpha_composite(overlay)
 
 
-def render_hunt_frame(session: HuntSession, character: Character | None = None) -> bytes:
+def render_hunt_frame(
+    session: HuntSession,
+    character: Character | None = None,
+    *,
+    rating_points: int = 0,
+) -> bytes:
     """Кадр вылазки за артом: поле 15×15 со спрайтами + панель детектора."""
     cell = 44
     grid = session.grid
@@ -958,7 +984,7 @@ def render_hunt_frame(session: HuntSession, character: Character | None = None) 
     px, py = session.player
     pcx = margin + px * cell + cell // 2
     pcy = margin + py * cell + cell // 2
-    token = _player_grid_token(character, size=160)
+    token = _player_grid_token(character, size=160, rating_points=rating_points)
     _paste_circle(canvas, token, pcx, pcy, 40, ring_color=(72, 220, 90), ring_width=3)
 
     pl = margin + grid_px + 16
