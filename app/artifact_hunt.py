@@ -685,17 +685,18 @@ def _load_hunt_map(location: str, marked: bool = False) -> Image.Image | None:
 
 
 def _load_location_thumb(location: str) -> Image.Image | None:
-    """Возвращает картинку локации.
-
-    Сначала берётся превью из assets/locations (качественные иллюстрации
-    локаций), затем — карта из assets/maps как запасной вариант.
-    """
+    """Превью локации из assets/locations (для панели справа сверху)."""
     filename = _LOCATION_THUMB_MAP.get(location)
-    if filename is not None:
-        try:
-            return Image.open(_LOCATION_THUMB_DIR / filename).convert("RGB")
-        except Exception:
-            pass
+    if filename is None:
+        return None
+    try:
+        return Image.open(_LOCATION_THUMB_DIR / filename).convert("RGB")
+    except Exception:
+        return None
+
+
+def _load_hunt_field_background(location: str) -> Image.Image | None:
+    """Фон поля охоты/схрона: карта из assets/maps."""
     return _load_hunt_map(location)
 
 
@@ -893,7 +894,7 @@ def render_hunt_frame(session: HuntSession, character: Character | None = None) 
     field = (margin - 6, margin - 6, margin + grid_px + 6, margin + grid_px + 6)
     draw.rounded_rectangle(field, radius=10, fill=(34, 36, 40, 255), outline=(70, 74, 80), width=2)
 
-    loc_bg = _load_location_thumb(session.location)
+    loc_bg = _load_hunt_field_background(session.location)
     if loc_bg is not None:
         field_img = _cover_crop(loc_bg, grid_px, grid_px).convert("RGBA")
         field_img.putalpha(225)

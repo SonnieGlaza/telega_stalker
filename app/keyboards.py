@@ -511,19 +511,21 @@ def artifact_hunt_keyboard(*, deep_available: bool = True) -> InlineKeyboardMark
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def stash_hunt_keyboard(door_count: int = 0) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for i in range(door_count):
-        rows.append(
-            [InlineKeyboardButton(text=f"🚪 Дверь {i + 1}", callback_data=f"sthunt:door:{i}")]
-        )
-    rows.append(
-        [
-            InlineKeyboardButton(text="🏃 Уйти", callback_data="sthunt:leave"),
-            InlineKeyboardButton(text="🔄 Обновить", callback_data="sthunt:refresh"),
+def stash_hunt_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⬆️ Вперёд", callback_data="sthunt:up")],
+            [
+                InlineKeyboardButton(text="⬅️ Влево", callback_data="sthunt:left"),
+                InlineKeyboardButton(text="⬇️ Назад", callback_data="sthunt:down"),
+                InlineKeyboardButton(text="➡️ Вправо", callback_data="sthunt:right"),
+            ],
+            [
+                InlineKeyboardButton(text="🏃 Уйти", callback_data="sthunt:leave"),
+                InlineKeyboardButton(text="🔄 Обновить", callback_data="sthunt:refresh"),
+            ],
         ]
     )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def equip_artifact_slot_picker_keyboard(item_key: str, slots_cap: int) -> InlineKeyboardMarkup:
