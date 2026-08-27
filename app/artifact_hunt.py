@@ -228,6 +228,14 @@ def _chebyshev(a: tuple[int, int], b: tuple[int, int]) -> int:
     return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
 
 
+def artifact_beside_anomaly(session: HuntSession) -> bool:
+    """Проверяет, что артефакт находится рядом хотя бы с одной аномалией."""
+    for anomaly in session.anomalies:
+        if _chebyshev(session.artifact, anomaly) <= 1:
+            return True
+    return False
+
+
 def _signal_gain(player: tuple[int, int], artifact: tuple[int, int]) -> int:
     dist = _chebyshev(player, artifact)
     if dist <= 1:
@@ -289,16 +297,37 @@ def _build_session(character: Character, detector_key: str, detector_name: str) 
             anomalies.append(cell)
             forbidden.add(cell)
     anomaly_n = location_anomaly_count(character.location)
-    while len(anomalies) < anomaly_n:
+
+    # Гарантируем, что арт рядом хотя бы с одной аномалией.
+    _has_beside = any(_chebyshev(artifact, a) <= 1 for a in anomalies)
+    if not _has_beside:
+        neighbors = [
+            (artifact[0] + dx, artifact[1] + dy)
+            for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+            if (dx, dy) != (0, 0) and 0 <= artifact[0] + dx < grid and 0 <= artifact[1] + dy < grid
+        ]
+        for nb in neighbors:
+            if nb in forbidden or nb in anomalies:
+                continue
+            test_blocked = set(anomalies) | {nb}
+            if _bfs_reachable(grid, player, artifact, test_blocked):
+                anomalies.append(nb)
+                forbidden.add(nb)
+                _has_beside = True
+                break
+
+    attempts = 0
+    while len(anomalies) < anomaly_n and attempts < 500:
+        attempts += 1
         cell = _random_free_cell(grid, forbidden)
-        # Не блокируем путь к артефакту: если новая аномалия отрезает игрока,
-        # пробуем ещё до 50 раз, потом оставляем как есть.
+        if cell in forbidden:
+            break
         test_blocked = set(anomalies) | {cell}
         if _bfs_reachable(grid, player, artifact, test_blocked):
             anomalies.append(cell)
             forbidden.add(cell)
         else:
-            forbidden.add(cell)  # больше не выбираем эту клетку
+            forbidden.add(cell)
     circles_needed = DETECTOR_CIRCLES_NEEDED.get(detector_key, 8)
     session = HuntSession(
         location=character.location,

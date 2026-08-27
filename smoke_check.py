@@ -331,8 +331,8 @@ def run_smoke_check() -> None:
         sess = get_hunt_session(storage, 111)
         assert sess is not None
         assert artifact_beside_anomaly(sess), "artifact must spawn next to an anomaly"
-        assert location_anomaly_count("Кордон") == 6
-        assert location_anomaly_count("Радар") == 12
+        assert location_anomaly_count("Кордон") == 8
+        assert location_anomaly_count("Радар") == 20
         assert len(sess.anomalies) == location_anomaly_count("Кордон")
         step = move_artifact_hunt(storage, 111, "right")
         assert step.payload is not None
