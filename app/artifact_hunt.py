@@ -685,16 +685,18 @@ def _load_hunt_map(location: str, marked: bool = False) -> Image.Image | None:
 
 
 def _load_location_thumb(location: str) -> Image.Image | None:
-    hunt_map = _load_hunt_map(location)
-    if hunt_map is not None:
-        return hunt_map
+    """Возвращает картинку локации.
+
+    Сначала берётся превью из assets/locations (качественные иллюстрации
+    локаций), затем — карта из assets/maps как запасной вариант.
+    """
     filename = _LOCATION_THUMB_MAP.get(location)
-    if filename is None:
-        return None
-    try:
-        return Image.open(_LOCATION_THUMB_DIR / filename).convert("RGB")
-    except Exception:
-        return None
+    if filename is not None:
+        try:
+            return Image.open(_LOCATION_THUMB_DIR / filename).convert("RGB")
+        except Exception:
+            pass
+    return _load_hunt_map(location)
 
 
 def _marked_cells_from_image(image: Image.Image, grid: int, color: str) -> list[tuple[int, int]]:
@@ -755,15 +757,19 @@ def _marked_hunt_cells(location: str, grid: int) -> tuple[list[tuple[int, int]],
     return artifact_cells, anomaly_cells
 
 
-_DETECTOR_SIGNAL_PATH = PROJECT_ROOT / "assets" / "hunt" / "detector_signal.png"
+_DETECTOR_SIGNAL_PATHS = (
+    PROJECT_ROOT / "assets" / "hunt" / "detector_signal.webp",
+    PROJECT_ROOT / "assets" / "hunt" / "detector_signal.png",
+)
 
 
 def _load_detector_signal() -> Image.Image | None:
-    try:
-        signal = Image.open(_DETECTOR_SIGNAL_PATH).convert("RGB")
-        return signal.crop((70, 100, 450, 570))
-    except Exception:
-        return None
+    for path in _DETECTOR_SIGNAL_PATHS:
+        try:
+            return Image.open(path).convert("RGB")
+        except Exception:
+            continue
+    return None
 
 
 def _cover_crop(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
