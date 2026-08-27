@@ -786,6 +786,36 @@ def _cover_crop(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
     return resized.crop((left, top, left + target_w, top + target_h))
 
 
+def _player_grid_token(character: Any | None = None, *, size: int = 160) -> Image.Image:
+    """Иконка персонажа для сетки охоты/схрона: аватар или stalker_default."""
+    token: Image.Image | None = None
+    if character is not None:
+        try:
+            from app.avatar_render import render_avatar
+
+            token = render_avatar(character, width=size, height=size)
+        except Exception:
+            token = None
+    if token is None:
+        for candidate in (
+            PROJECT_ROOT / "assets" / "avatars" / "stalker_default.png",
+            PROJECT_ROOT / "assets" / "avatars" / "realistic" / "stalker_default.png",
+        ):
+            try:
+                if candidate.is_file():
+                    token = Image.open(candidate).convert("RGBA")
+                    break
+            except Exception:
+                continue
+    if token is None:
+        token = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        td = ImageDraw.Draw(token)
+        td.ellipse((size * 0.12, size * 0.06, size * 0.88, size * 0.82), fill=(75, 85, 65), outline=(30, 35, 28), width=3)
+        td.ellipse((size * 0.28, size * 0.22, size * 0.72, size * 0.52), fill=(40, 48, 40))
+        td.rectangle((size * 0.28, size * 0.75, size * 0.72, size * 0.97), fill=(95, 75, 50))
+    return token
+
+
 def _paste_circle(
     canvas: Image.Image,
     token: Image.Image,
@@ -928,21 +958,8 @@ def render_hunt_frame(session: HuntSession, character: Character | None = None) 
     px, py = session.player
     pcx = margin + px * cell + cell // 2
     pcy = margin + py * cell + cell // 2
-    token = None
-    if character is not None:
-        try:
-            from app.avatar_render import render_avatar
-
-            token = render_avatar(character, width=80, height=80)
-        except Exception:
-            token = None
-    if token is None:
-        token = Image.new("RGBA", (80, 80), (0, 0, 0, 0))
-        td = ImageDraw.Draw(token)
-        td.ellipse((10, 5, 70, 65), fill=(75, 85, 65), outline=(30, 35, 28), width=2)
-        td.ellipse((22, 18, 58, 42), fill=(40, 48, 40))
-        td.rectangle((22, 60, 58, 78), fill=(95, 75, 50))
-    _paste_circle(canvas, token, pcx, pcy, 34, ring_color=(72, 220, 90), ring_width=3)
+    token = _player_grid_token(character, size=160)
+    _paste_circle(canvas, token, pcx, pcy, 40, ring_color=(72, 220, 90), ring_width=3)
 
     pl = margin + grid_px + 16
     pr = width - margin

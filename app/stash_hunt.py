@@ -19,6 +19,7 @@ from app.artifact_hunt import (
     _load_location_thumb,
     _paste_circle,
     _paste_rounded,
+    _player_grid_token,
 )
 from app.game_logic import (
     ActionResult,
@@ -430,21 +431,8 @@ def render_stash_frame(session: StashSession, character: Any | None = None) -> b
     px, py = session.player
     pcx = margin + px * cell + cell // 2
     pcy = margin + py * cell + cell // 2
-    token = None
-    if character is not None:
-        try:
-            from app.avatar_render import render_avatar
-
-            token = render_avatar(character, width=80, height=80)
-        except Exception:
-            token = None
-    if token is None:
-        token = Image.new("RGBA", (80, 80), (0, 0, 0, 0))
-        td = ImageDraw.Draw(token)
-        td.ellipse((10, 5, 70, 65), fill=(75, 85, 65), outline=(30, 35, 28), width=2)
-        td.ellipse((22, 18, 58, 42), fill=(40, 48, 40))
-        td.rectangle((22, 60, 58, 78), fill=(95, 75, 50))
-    _paste_circle(canvas, token, pcx, pcy, 34, ring_color=(72, 220, 90), ring_width=3)
+    token = _player_grid_token(character, size=160)
+    _paste_circle(canvas, token, pcx, pcy, 40, ring_color=(72, 220, 90), ring_width=3)
 
     dist = _chebyshev(session.player, session.stash)
     if dist <= 3:
