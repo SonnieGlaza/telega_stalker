@@ -554,14 +554,15 @@ def _draw_minimap(
     y0: int,
     size: int,
 ) -> None:
-    """Рисует мини-карту комнат: точки — комнаты, линии — двери."""
+    """Рисует мини-карту комнат: точки — комнаты, линии — двери с номерами."""
+    import math
+
     n = len(rooms)
     if n == 0:
         return
     cx = x0 + size // 2
     cy = y0 + size // 2
-    radius = size // 2 - 20
-    import math
+    radius = size // 2 - 24
 
     positions: list[tuple[float, float]] = []
     for i in range(n):
@@ -576,20 +577,52 @@ def _draw_minimap(
     draw.rounded_rectangle(
         (x0, y0, x0 + size, y0 + size),
         radius=10,
-        fill=(20, 22, 26, 200),
+        fill=(20, 22, 26, 220),
         outline=(60, 64, 70),
         width=1,
     )
 
-    # Линии дверей
+    mm_font = _load_font(10)
+
+    # Линии дверей с номерами
     for i, room in enumerate(rooms):
-        for door in room.doors:
-            if door > i:
-                x1, y1 = positions[i]
-                x2, y2 = positions[door]
-                visited = i in session.visited_rooms and door in session.visited_rooms
-                color = (90, 110, 80, 200) if visited else (50, 52, 56, 150)
-                draw.line((x1, y1, x2, y2), fill=color, width=2)
+        for di, door in enumerate(room.doors):
+            if door <= i:
+                continue
+            x1, y1 = positions[i]
+            x2, y2 = positions[door]
+            visited = i in session.visited_rooms and door in session.visited_rooms
+            is_current_edge = i == session.current_room or door == session.current_room
+            if is_current_edge:
+                color = (120, 200, 100, 230)
+                width = 3
+            elif visited:
+                color = (90, 110, 80, 200)
+                width = 2
+            else:
+                color = (50, 52, 56, 150)
+                width = 1
+            draw.line((x1, y1, x2, y2), fill=color, width=width)
+
+            # Номер двери на середине линии (только для дверей текущей комнаты)
+            if is_current_edge:
+                mid_x = (x1 + x2) / 2
+                mid_y = (y1 + y2) / 2
+                badge_r = 9
+                draw.ellipse(
+                    (mid_x - badge_r, mid_y - badge_r, mid_x + badge_r, mid_y + badge_r),
+                    fill=(60, 90, 50, 240),
+                    outline=(120, 200, 100),
+                    width=1,
+                )
+                num_text = str(di + 1)
+                num_w = draw.textlength(num_text, font=mm_font)
+                draw.text(
+                    (mid_x - num_w / 2, mid_y - 5),
+                    num_text,
+                    fill=(220, 255, 200),
+                    font=mm_font,
+                )
 
     # Точки комнат
     for i, (px, py) in enumerate(positions):
@@ -608,6 +641,10 @@ def _draw_minimap(
         else:
             r = 5
             draw.ellipse((px - r, py - r, px + r, py + r), fill=(60, 62, 66), outline=(90, 92, 96), width=1)
+
+    # Заголовок мини-карты
+    title_font = _load_font(11)
+    draw.text((x0 + 8, y0 + 4), "Карта", fill=(180, 180, 180), font=title_font)
 
 
 def render_stash_frame(session: StashSession, character: Any | None = None) -> bytes:
@@ -674,39 +711,85 @@ def render_stash_frame(session: StashSession, character: Any | None = None) -> b
     for li, line in enumerate(lines[:3]):
         draw.text((margin + 24, margin + 80 + li * 18), line, fill=(200, 200, 200), font=body_font)
 
-    # Двери — кнопки-метки на стенах комнаты
+    # Двери — метки на стенах комнаты с номерами
     door_count = len(room.doors)
-    door_font = _load_font(18)
+    door_font = _load_font(20)
+    door_label_font = _load_font(13)
+
+    # Раскладываем двери по четырём стенкам: top, right, bottom, left
+    wall_positions = [
+        ("top", view_w // 2, 0),
+        ("right", view_w, view_h // 2),
+        ("bottom", view_w // 2, view_h),
+        ("left", 0, view_h // 2),
+    ]
+
     for di, target_idx in enumerate(room.doors):
         target_room = rooms[target_idx] if target_idx < len(rooms) else None
-        label = f"🚪 {target_room.name}" if target_room else f"🚪 Дверь {di + 1}"
+        target_name = target_room.name if target_room else f"Дверь {di + 1}"
         visited = target_idx in session.visited_rooms
 
-        # Распределяем двери вертикально по правой стене
-        door_y = margin + 150 + di * 52
-        door_box = (margin + 24, door_y, margin + view_w - 24, door_y + 44)
-        bg = (40, 42, 46, 220) if not visited else (35, 50, 40, 220)
-        border = (100, 140, 80) if not visited else (70, 100, 60)
-        draw.rounded_rectangle(door_box, radius=8, fill=bg, outline=border, width=2)
+        wall, wx, wy = wall_positions[di % 4]
+        badge_d = 46
+        badge_r = badge_d // 2
 
-        # Номер двери
-        num_box = (door_box[0] + 8, door_box[1] + 8, door_box[0] + 34, door_box[1] + 36)
-        draw.ellipse(num_box, fill=(60, 80, 50), outline=(100, 140, 80), width=1)
+        if wall == "top":
+            bx = margin + wx - badge_r
+            by = margin + 6
+        elif wall == "right":
+            bx = margin + view_w - badge_d - 6
+            by = margin + wy - badge_r
+        elif wall == "bottom":
+            bx = margin + wx - badge_r
+            by = margin + view_h - badge_d - 6
+        else:  # left
+            bx = margin + 6
+            by = margin + wy - badge_r
+
+        bg_color = (50, 70, 45, 235) if not visited else (35, 50, 35, 235)
+        border_color = (120, 200, 100) if not visited else (80, 120, 70)
+
+        # Тень/контур дверного проёма
+        draw.rounded_rectangle(
+            (bx, by, bx + badge_d, by + badge_d),
+            radius=10,
+            fill=bg_color,
+            outline=border_color,
+            width=3,
+        )
+
+        # Иконка двери
+        door_icon_y = by + 6
+        draw.text(
+            (bx + badge_d / 2 - 10, door_icon_y),
+            "🚪",
+            fill=(255, 255, 255),
+            font=_load_font(16),
+        )
+
+        # Номер двери крупно
         num_text = str(di + 1)
         num_w = draw.textlength(num_text, font=door_font)
         draw.text(
-            (num_box[0] + (26 - num_w) / 2, door_box[1] + 10),
+            (bx + (badge_d - num_w) / 2, by + 20),
             num_text,
             fill=(220, 255, 200),
             font=door_font,
         )
 
-        # Название целевой комнаты
-        text_color = (180, 220, 160) if not visited else (140, 160, 130)
-        draw.text((door_box[0] + 44, door_box[1] + 12), label, fill=text_color, font=body_font)
+        # Подсказка о посещении
+        if visited:
+            tag = "✓ осмотр."
+            tag_w = draw.textlength(tag, font=door_label_font)
+            draw.text(
+                (bx + (badge_d - tag_w) / 2, by + badge_d - 14),
+                tag,
+                fill=(160, 180, 140),
+                font=door_label_font,
+            )
 
-    # Мини-карта в левом нижнем углу
-    mm_size = 160
+    # Мини-карта в правом нижнем углу
+    mm_size = 150
     _draw_minimap(
         canvas,
         rooms,
@@ -715,6 +798,21 @@ def render_stash_frame(session: StashSession, character: Any | None = None) -> b
         margin + view_h - mm_size - 16,
         mm_size,
     )
+
+    # Легенда дверей в левом нижнем углу
+    legend_x = margin + 16
+    legend_y = margin + view_h - 16 - max(door_count * 18, 36)
+    legend_box = (legend_x, legend_y, legend_x + 230, margin + view_h - 16)
+    draw.rounded_rectangle(legend_box, radius=8, fill=(0, 0, 0, 180), outline=(60, 64, 70), width=1)
+    draw.text((legend_x + 10, legend_y + 6), "Двери:", fill=(200, 200, 200), font=small_font)
+    for di, target_idx in enumerate(room.doors):
+        target_room = rooms[target_idx] if target_idx < len(rooms) else None
+        target_name = target_room.name if target_room else f"Дверь {di + 1}"
+        visited = target_idx in session.visited_rooms
+        line_y = legend_y + 22 + di * 18
+        draw.text((legend_x + 10, line_y), f"{di + 1}.", fill=(120, 200, 100), font=small_font)
+        color = (160, 180, 140) if visited else (200, 220, 180)
+        draw.text((legend_x + 32, line_y), target_name, fill=color, font=small_font)
 
     # --- Боковая панель ---
     pl = margin + view_w + 16
