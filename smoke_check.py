@@ -2935,13 +2935,25 @@ def run_smoke_check() -> None:
         assert "👥" in named
         from app.image_text import contains_emoji, iter_text_runs, render_emoji_glyph
 
+        emoji_font = Path(__file__).resolve().parent / "assets" / "fonts" / "NotoColorEmoji.ttf"
+        assert emoji_font.is_file(), "missing assets/fonts/NotoColorEmoji.ttf"
+        # Полный Noto Color Emoji ~10MB; урезанный файл даёт квадраты вместо эмодзи на картинках.
+        assert emoji_font.stat().st_size > 5_000_000, (
+            f"NotoColorEmoji.ttf looks truncated ({emoji_font.stat().st_size} bytes)"
+        )
+
         assert contains_emoji("🛠 👥")
+        assert contains_emoji("🔥 Схрон очень близко!")
+        assert contains_emoji("❄ Холодно")
         assert not contains_emoji("Игрок: mercury")
         assert any(is_emoji and "👥" in chunk for is_emoji, chunk in iter_text_runs("Игрок: mercury 👥"))
         wrench = render_emoji_glyph("🛠", 24)
         people = render_emoji_glyph("👥", 24)
+        fire = render_emoji_glyph("🔥", 24)
+        snow = render_emoji_glyph("❄", 24)
         assert wrench is not None and people is not None
-        for glyph in (wrench, people):
+        assert fire is not None and snow is not None
+        for glyph in (wrench, people, fire, snow):
             pix = glyph.load()
             colors = {
                 pix[x, y][:3]
