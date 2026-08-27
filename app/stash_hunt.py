@@ -199,9 +199,7 @@ def start_stash_hunt(storage: Storage, telegram_id: int, *, source: str = "found
             payload={"stash_image": image, "stash_active": True, "caption": stash_status_caption(existing, player)},
         )
 
-    if source == "buy":
-        if not storage.change_money(telegram_id, -STASH_COORDINATE_PRICE):
-            return ActionResult(False, f"Не хватает денег (нужно {STASH_COORDINATE_PRICE} RU).")
+    # buy_item already deducted the price before calling us; no double-charge.
 
     session = _build_stash_session(player, source)
     save_stash_session(storage, telegram_id, session)

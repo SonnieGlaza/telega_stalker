@@ -6945,6 +6945,8 @@ def shop_gear_button_title(item_key: str) -> str:
         return _telegram_button_title(f"Спальник · энергия ×2 · {price}")
     if key == "stash_case":
         return _telegram_button_title(f"Тайник · от {price}")
+    if key == "stash_coordinates":
+        return _telegram_button_title(f"Координаты схрона · {price}")
     return _telegram_button_title(f"{name} · {price}")
 
 

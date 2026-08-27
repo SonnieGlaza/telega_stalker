@@ -89,6 +89,7 @@ _BARKEEP_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
         "diesel_can",
         "gasoline_can",
         "stash_case",
+        "stash_coordinates",
         "weapon_pm",
         "weapon_fort12",
         "weapon_fora12",
