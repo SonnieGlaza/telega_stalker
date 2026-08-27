@@ -362,7 +362,7 @@ def hunt_status_caption(session: HuntSession, character: Character | None = None
             f"HP {character.health}/{effective_max_health(character)} · "
             f"☢ {character.radiation} · ⚡ {character.energy}"
         )
-    lines.append("Аномалия = смерть. Схрон не трогают.")
+    lines.append("Аномалия = смерть. Дойди до сигнала детектора.")
     return "\n".join(lines)
 
 
@@ -571,7 +571,10 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
 
     # Шанс найти координаты хабара во время охоты.
     from app.stash_hunt import try_random_stash_coordinates
-    try_random_stash_coordinates(storage, telegram_id)
+
+    stash_note = ""
+    if try_random_stash_coordinates(storage, telegram_id):
+        stash_note = " Нашёл координаты хабара — после вылазки открой «Поиск схрона»."
 
     gain = _signal_gain(session.player, session.artifact)
     if gain > 0:
@@ -600,6 +603,8 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
     note += f" Энергия −{HUNT_ENERGY_PER_MOVE}."
     if ambush_note:
         note += ambush_note
+    if stash_note:
+        note += stash_note
     return ActionResult(
         True,
         note,

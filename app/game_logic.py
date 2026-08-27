@@ -4636,11 +4636,18 @@ def _compute_emission_protect_until(storage: Storage, now: datetime) -> datetime
     if phase in ("wave1", "wave2", "wave3"):
         raw_wave_at = storage.get_meta(EMISSION_META_WAVE_AT)
         wave_at = _parse_meta_datetime(raw_wave_at, now)
+        # wave_at — момент текущей/следующей волны в активной фазе.
+        # Нужно перекрыть все оставшиеся волны до конца Выброса.
         if phase == "wave1":
-            end = wave_at + timedelta(minutes=EMISSION_WAVE_GAP_MINUTES)
+            # wave1 → +gap wave2 → +gap wave3
+            end = wave_at + waves_span
         elif phase == "wave2":
-            end = wave_at
+            # wave2 → +gap wave3
+            end = wave_at + timedelta(minutes=EMISSION_WAVE_GAP_MINUTES)
         else:
+            # Последняя волна: держим до её момента (+ буфер ниже).
+            end = wave_at
+        if end < now:
             end = now
         return end + buffer
     raw_at = storage.get_meta(EMISSION_META_AT)

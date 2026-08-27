@@ -281,6 +281,30 @@ def run_smoke_check() -> None:
         killed, killed_ids = _kill_players_in_locations(storage, {"Радар"}, safe_bases)
         assert 555 not in killed_ids
         assert storage.get_character(555, refresh_energy=False).health > 0
+
+        # Антибиотик mid-Выброс должен перекрывать оставшиеся волны, не только ближайшую.
+        from app.game_logic import (
+            EMISSION_META_WAVE_AT,
+            EMISSION_PROTECT_BUFFER_MINUTES,
+            EMISSION_WAVE_GAP_MINUTES,
+            _compute_emission_protect_until,
+            _emission_protect_meta_key,
+        )
+
+        storage.add_item(555, "antibiotic", 1)
+        storage.delete_meta(_emission_protect_meta_key(555))
+        now_mid = datetime.now(timezone.utc)
+        wave2_at = now_mid + timedelta(minutes=3)
+        storage.set_meta(EMISSION_META_PHASE, "wave2")
+        storage.set_meta(EMISSION_META_WAVE_AT, wave2_at.isoformat())
+        assert use_antibiotic(storage, 555).ok
+        until_mid = _compute_emission_protect_until(storage, now_mid)
+        need_until = wave2_at + timedelta(
+            minutes=EMISSION_WAVE_GAP_MINUTES + EMISSION_PROTECT_BUFFER_MINUTES
+        )
+        assert until_mid >= need_until - timedelta(seconds=2)
+        assert has_emission_protection(storage, 555, wave2_at + timedelta(minutes=EMISSION_WAVE_GAP_MINUTES))
+
         # Скидка техника.
         discounted, pct = apply_tech_repair_discount(storage, 111, 1000)
         assert pct == 8 and discounted == 920

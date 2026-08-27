@@ -202,6 +202,12 @@ def start_stash_hunt(storage: Storage, telegram_id: int, *, source: str = "found
             payload={"stash_image": image, "stash_active": True, "caption": stash_status_caption(existing, player)},
         )
 
+    from app.player_busy import player_busy_reason
+
+    busy = player_busy_reason(storage, telegram_id, skip="stash", auto_recover=False)
+    if busy:
+        return ActionResult(False, busy)
+
     # buy_item already deducted the price before calling us; no double-charge.
 
     session = _build_stash_session(player, source)
