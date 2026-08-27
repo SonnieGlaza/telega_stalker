@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 from app.artifact_hunt import (
     FONT_CANDIDATES,
     PROJECT_ROOT,
+    _character_rating_points,
     _cover_crop,
     _draw_cell,
     _glow,
@@ -194,7 +195,7 @@ def start_stash_hunt(storage: Storage, telegram_id: int, *, source: str = "found
 
     existing = get_stash_session(storage, telegram_id)
     if existing is not None and not existing.found:
-        image = render_stash_frame(existing, player)
+        image = render_stash_for_player(storage, telegram_id, existing, player)
         return ActionResult(
             False,
             "У тебя уже идёт поиск схрона. Продолжай с карты.",
@@ -206,7 +207,7 @@ def start_stash_hunt(storage: Storage, telegram_id: int, *, source: str = "found
     session = _build_stash_session(player, source)
     save_stash_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
-    image = render_stash_frame(session, player)
+    image = render_stash_for_player(storage, telegram_id, session, player)
     caption = stash_status_caption(session, player)
     if source == "buy":
         note = f"Координаты схрона куплены за {STASH_COORDINATE_PRICE} RU."
@@ -320,7 +321,7 @@ def move_stash_hunt(storage: Storage, telegram_id: int, direction: str) -> Actio
     nx = session.player[0] + delta[0]
     ny = session.player[1] + delta[1]
     if not (0 <= nx < session.grid and 0 <= ny < session.grid):
-        image = render_stash_frame(session, player)
+        image = render_stash_for_player(storage, telegram_id, session, player)
         return ActionResult(
             False,
             "Край карты — туда не пройти.",
@@ -366,7 +367,7 @@ def move_stash_hunt(storage: Storage, telegram_id: int, direction: str) -> Actio
 
     save_stash_session(storage, telegram_id, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
-    image = render_stash_frame(session, player)
+    image = render_stash_for_player(storage, telegram_id, session, player)
 
     if dist <= 3:
         note = "Рядом! Схрон где-то совсем близко."
@@ -393,7 +394,25 @@ def move_stash_hunt(storage: Storage, telegram_id: int, direction: str) -> Actio
     )
 
 
-def render_stash_frame(session: StashSession, character: Any | None = None) -> bytes:
+def render_stash_for_player(
+    storage: Storage,
+    telegram_id: int,
+    session: StashSession,
+    player: Any | None,
+) -> bytes:
+    return render_stash_frame(
+        session,
+        player,
+        rating_points=_character_rating_points(storage, telegram_id),
+    )
+
+
+def render_stash_frame(
+    session: StashSession,
+    character: Any | None = None,
+    *,
+    rating_points: int = 0,
+) -> bytes:
     cell = 44
     grid = session.grid
     grid_px = grid * cell
@@ -431,7 +450,7 @@ def render_stash_frame(session: StashSession, character: Any | None = None) -> b
     px, py = session.player
     pcx = margin + px * cell + cell // 2
     pcy = margin + py * cell + cell // 2
-    token = _player_grid_token(character, size=160)
+    token = _player_grid_token(character, size=160, rating_points=rating_points)
     _paste_circle(canvas, token, pcx, pcy, 40, ring_color=(72, 220, 90), ring_width=3)
 
     dist = _chebyshev(session.player, session.stash)

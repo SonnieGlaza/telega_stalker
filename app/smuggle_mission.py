@@ -583,7 +583,12 @@ def _draw_route_lines(
         draw.line((points[i], points[i + 1]), fill=color, width=3)
 
 
-def render_smuggle_frame(session: SmuggleMissionSession, character: Character | None = None) -> bytes:
+def render_smuggle_frame(
+    session: SmuggleMissionSession,
+    character: Character | None = None,
+    *,
+    rating_points: int = 0,
+) -> bytes:
     cell = 108
     grid = session.grid
     grid_px = grid * cell
@@ -645,7 +650,7 @@ def render_smuggle_frame(session: SmuggleMissionSession, character: Character | 
     px, py = session.player
     pcx = margin + px * cell + cell // 2
     pcy = margin + py * cell + cell // 2
-    token = _transport_token(session.transport, character)
+    token = _transport_token(session.transport, character, rating_points=rating_points)
     _paste_transport_token(
         canvas,
         token,
@@ -717,7 +722,11 @@ def render_smuggle_for_player(
     session: SmuggleMissionSession,
     player: Character,
 ) -> bytes:
-    return render_smuggle_frame(session, player)
+    try:
+        rating = max(0, int(storage.get_player_stats(telegram_id).get("rating_points", 0)))
+    except Exception:
+        rating = 0
+    return render_smuggle_frame(session, player, rating_points=rating)
 
 
 def _abort_smuggle_combat_death(storage: Storage, telegram_id: int, reason: str) -> str:

@@ -47,6 +47,7 @@ from app.stash_hunt import (
     get_stash_session,
     move_stash_hunt,
     render_stash_frame,
+    render_stash_for_player,
     stash_status_caption,
     start_stash_hunt,
 )
@@ -6956,7 +6957,7 @@ async def stash_hunt_callback(callback: CallbackQuery) -> None:
             if session is None or player is None:
                 await callback.answer("Активного поиска хабара нет.", show_alert=True)
                 return
-            image = render_stash_frame(session, player)
+            image = render_stash_for_player(storage, telegram_id, session, player)
             await _send_or_edit_stash_frame(
                 callback,
                 image_bytes=image,
