@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+from collections import deque
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -35,19 +36,21 @@ from app.storage import Character, Storage
 
 HUNT_META_PREFIX = "artifact_hunt:"
 HUNT_ACTIVE_IDS_META = "artifact_hunt:active_ids"
-HUNT_GRID_SIZE = 6
-HUNT_MAX_MOVES = 24
-HUNT_RAD_EVERY_STEPS = 2
+HUNT_GRID_SIZE = 15
+HUNT_MAX_MOVES = 60
+HUNT_RAD_EVERY_STEPS = 3
 HUNT_RAD_PER_TICK = 1
-HUNT_MINUTE_MOVES = 6
+HUNT_MINUTE_MOVES = 10
 HUNT_RAD_PER_MINUTE = 5
+HUNT_ENERGY_PER_MOVE = 2
+HUNT_AMBUSH_CHANCE = 7  # %
 
 # Лучший детектор → меньше кружков до находки.
 DETECTOR_CIRCLES_NEEDED: dict[str, int] = {
-    "detector_otklik": 5,
-    "detector_medved": 4,
-    "detector_veles": 3,
-    "detector_svarog": 2,
+    "detector_otklik": 8,
+    "detector_medved": 6,
+    "detector_veles": 5,
+    "detector_svarog": 4,
 }
 
 MOVE_DELTAS: dict[str, tuple[int, int]] = {
@@ -210,15 +213,15 @@ def location_anomaly_count(location: str) -> int:
     """Чем севернее (меньше Y на карте) — тем больше аномалий."""
     point = MAP_TRAVEL_POINTS.get(location)
     if point is None:
-        return 5
+        return 12
     _x, y = point
     if y >= 450:
-        return 3
+        return 8
     if y >= 300:
-        return 5
+        return 12
     if y >= 180:
-        return 7
-    return 9
+        return 16
+    return 20
 
 
 def _chebyshev(a: tuple[int, int], b: tuple[int, int]) -> int:
@@ -229,7 +232,7 @@ def _signal_gain(player: tuple[int, int], artifact: tuple[int, int]) -> int:
     dist = _chebyshev(player, artifact)
     if dist <= 1:
         return 2
-    if dist == 2:
+    if dist <= 3:
         return 1
     return 0
 
@@ -242,6 +245,33 @@ def _random_free_cell(
     if not free:
         return 0, 0
     return random.choice(free)
+
+
+def _bfs_reachable(
+    grid: int,
+    start: tuple[int, int],
+    goal: tuple[int, int],
+    blocked: set[tuple[int, int]],
+) -> bool:
+    """Проверяет, есть ли путь от start до goal через свободные клетки (4-направления)."""
+    if start in blocked or goal in blocked:
+        return False
+    visited: set[tuple[int, int]] = {start}
+    queue: deque[tuple[int, int]] = deque([start])
+    while queue:
+        cx, cy = queue.popleft()
+        if (cx, cy) == goal:
+            return True
+        for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            nx, ny = cx + dx, cy + dy
+            if not (0 <= nx < grid and 0 <= ny < grid):
+                continue
+            cell = (nx, ny)
+            if cell in visited or cell in blocked:
+                continue
+            visited.add(cell)
+            queue.append(cell)
+    return goal in visited
 
 
 def _build_session(character: Character, detector_key: str, detector_name: str) -> HuntSession:
@@ -261,9 +291,15 @@ def _build_session(character: Character, detector_key: str, detector_name: str) 
     anomaly_n = location_anomaly_count(character.location)
     while len(anomalies) < anomaly_n:
         cell = _random_free_cell(grid, forbidden)
-        anomalies.append(cell)
-        forbidden.add(cell)
-    circles_needed = DETECTOR_CIRCLES_NEEDED.get(detector_key, 5)
+        # Не блокируем путь к артефакту: если новая аномалия отрезает игрока,
+        # пробуем ещё до 50 раз, потом оставляем как есть.
+        test_blocked = set(anomalies) | {cell}
+        if _bfs_reachable(grid, player, artifact, test_blocked):
+            anomalies.append(cell)
+            forbidden.add(cell)
+        else:
+            forbidden.add(cell)  # больше не выбираем эту клетку
+    circles_needed = DETECTOR_CIRCLES_NEEDED.get(detector_key, 8)
     session = HuntSession(
         location=character.location,
         detector_key=detector_key,
@@ -449,11 +485,14 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             },
         )
 
+    if not storage.spend_energy(telegram_id, HUNT_ENERGY_PER_MOVE):
+        return ActionResult(False, f"Не хватает энергии для хода (нужно {HUNT_ENERGY_PER_MOVE}).")
+
     session.player = (nx, ny)
     session.moves += 1
     session.steps += 1
 
-    # Радиация: каждые 2 шага +1, каждые 6 ходов +5.
+    # Радиация: каждые 3 шага +1, каждые 10 ходов +5.
     rad_add = 0
     if session.steps % HUNT_RAD_EVERY_STEPS == 0:
         rad_add += HUNT_RAD_PER_TICK
@@ -474,9 +513,9 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             payload={"hunt_active": False, "hunt_dead": True},
         )
 
-    # Случайное нападение мутантов/бандитов (2-5%).
+    # Случайное нападение мутантов/бандитов (7%).
     ambush_note = ""
-    if random.random() * 100 < random.randint(2, 5):
+    if random.random() * 100 < HUNT_AMBUSH_CHANCE:
         from app.stash_hunt import AMBUSH_TYPES
 
         name, short, enemy_power = random.choice(AMBUSH_TYPES)
@@ -529,6 +568,7 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
     note = f"Сигнал +{gain}." if gain else "Тишина в эфире."
     if rad_add:
         note += f" Рад +{rad_add}."
+    note += f" Энергия −{HUNT_ENERGY_PER_MOVE}."
     if ambush_note:
         note += ambush_note
     return ActionResult(
@@ -582,10 +622,10 @@ _HUNT_MARKED_MAP_FILES: dict[str, str] = {
 }
 
 _MANUAL_HUNT_CELLS: dict[str, tuple[tuple[int, int], tuple[tuple[int, int], ...]]] = {
-    "Кордон": ((3, 4), ((1, 1), (4, 1), (1, 3), (4, 4))),
-    "Янтарь": ((3, 3), ((1, 1), (4, 1), (1, 4), (4, 4))),
-    "Припять": ((2, 2), ((1, 1), (4, 1), (1, 4), (4, 4))),
-    "ЧАЭС": ((3, 2), ((1, 1), (4, 1), (1, 4), (4, 4))),
+    "Кордон": ((7, 10), ((3, 3), (10, 3), (3, 8), (10, 8), (5, 12), (12, 5))),
+    "Янтарь": ((8, 8), ((3, 3), (10, 3), (3, 10), (10, 10), (6, 6), (12, 5))),
+    "Припять": ((6, 6), ((3, 3), (10, 3), (3, 10), (10, 10), (5, 7), (7, 12), (12, 7))),
+    "ЧАЭС": ((8, 6), ((3, 3), (10, 3), (3, 10), (10, 10), (5, 5), (12, 12), (6, 12))),
 }
 
 _LOCATION_THUMB_MAP: dict[str, str] = {
@@ -804,24 +844,24 @@ def _glow(img: Image.Image, cx: int, cy: int, color: tuple[int, int, int], radiu
 
 
 def render_hunt_frame(session: HuntSession, character: Character | None = None) -> bytes:
-    """Кадр вылазки за артом: поле 6×6 со спрайтами + панель детектора."""
-    cell = 108
+    """Кадр вылазки за артом: поле 15×15 со спрайтами + панель детектора."""
+    cell = 44
     grid = session.grid
     grid_px = grid * cell
-    margin = 24
-    panel_w = 320
-    width = margin + grid_px + 20 + panel_w + margin
-    height = max(margin + grid_px + margin, 760)
+    margin = 20
+    panel_w = 280
+    width = margin + grid_px + 16 + panel_w + margin
+    height = max(margin + grid_px + margin, 720)
     canvas = Image.new("RGBA", (width, height), (16, 18, 20, 255))
     draw = ImageDraw.Draw(canvas)
 
-    field = (margin - 8, margin - 8, margin + grid_px + 8, margin + grid_px + 8)
-    draw.rounded_rectangle(field, radius=14, fill=(34, 36, 40, 255), outline=(70, 74, 80), width=2)
+    field = (margin - 6, margin - 6, margin + grid_px + 6, margin + grid_px + 6)
+    draw.rounded_rectangle(field, radius=10, fill=(34, 36, 40, 255), outline=(70, 74, 80), width=2)
 
     loc_bg = _load_location_thumb(session.location)
     if loc_bg is not None:
         field_img = _cover_crop(loc_bg, grid_px, grid_px).convert("RGBA")
-        field_img.putalpha(235)
+        field_img.putalpha(225)
         canvas.paste(field_img, (margin, margin), field_img)
 
     for gy in range(grid):
@@ -831,7 +871,7 @@ def render_hunt_frame(session: HuntSession, character: Character | None = None) 
             if loc_bg is None:
                 _draw_cell(canvas, left, top, cell)
             else:
-                overlay = Image.new("RGBA", (cell, cell), (12, 14, 16, 32))
+                overlay = Image.new("RGBA", (cell, cell), (12, 14, 16, 28))
                 canvas.alpha_composite(overlay, (left, top))
                 ImageDraw.Draw(canvas).rectangle(
                     (left, top, left + cell - 1, top + cell - 1),
@@ -839,15 +879,15 @@ def render_hunt_frame(session: HuntSession, character: Character | None = None) 
                     width=1,
                 )
 
-    anomaly_set = set(session.anomalies)
+    anomaly_diameter = max(28, cell - 12)
     for ax, ay in session.anomalies:
         cx = margin + ax * cell + cell // 2
         cy = margin + ay * cell + cell // 2
         sprite = mission_icon_image(ANOMALY_ICON_KEY)
         if sprite is not None:
-            _paste_circle(canvas, sprite, cx, cy, MISSION_ICON_GRID_DIAMETER)
+            _paste_circle(canvas, sprite, cx, cy, anomaly_diameter)
         else:
-            _glow(canvas, cx, cy, (255, 120, 40), 24)
+            _glow(canvas, cx, cy, (255, 120, 40), 16)
 
     px, py = session.player
     pcx = margin + px * cell + cell // 2
@@ -857,59 +897,60 @@ def render_hunt_frame(session: HuntSession, character: Character | None = None) 
         try:
             from app.avatar_render import render_avatar
 
-            token = render_avatar(character, width=160, height=160)
+            token = render_avatar(character, width=80, height=80)
         except Exception:
             token = None
     if token is None:
-        token = Image.new("RGBA", (160, 160), (0, 0, 0, 0))
+        token = Image.new("RGBA", (80, 80), (0, 0, 0, 0))
         td = ImageDraw.Draw(token)
-        td.ellipse((20, 10, 140, 130), fill=(75, 85, 65), outline=(30, 35, 28), width=3)
-        td.ellipse((45, 35, 115, 85), fill=(40, 48, 40))
-        td.rectangle((45, 120, 115, 155), fill=(95, 75, 50))
-    _paste_circle(canvas, token, pcx, pcy, 72, ring_color=(72, 220, 90), ring_width=5)
+        td.ellipse((10, 5, 70, 65), fill=(75, 85, 65), outline=(30, 35, 28), width=2)
+        td.ellipse((22, 18, 58, 42), fill=(40, 48, 40))
+        td.rectangle((22, 60, 58, 78), fill=(95, 75, 50))
+    _paste_circle(canvas, token, pcx, pcy, 34, ring_color=(72, 220, 90), ring_width=3)
 
-    pl = margin + grid_px + 20
+    pl = margin + grid_px + 16
     pr = width - margin
-    pt = margin - 8
-    pb = height - margin + 8
+    pt = margin - 6
+    pb = height - margin + 6
     draw = ImageDraw.Draw(canvas)
-    draw.rounded_rectangle((pl, pt, pr, pb), radius=16, fill=(48, 50, 54, 255), outline=(100, 104, 110), width=2)
+    draw.rounded_rectangle((pl, pt, pr, pb), radius=14, fill=(48, 50, 54, 255), outline=(100, 104, 110), width=2)
 
-    thumb = (pl + 16, pt + 14, pr - 16, pt + 120)
+    thumb = (pl + 12, pt + 10, pr - 12, pt + 100)
     loc_img = _load_location_thumb(session.location)
     if loc_img is not None:
-        _paste_rounded(canvas, loc_img, thumb, radius=10)
-        ImageDraw.Draw(canvas).rounded_rectangle(thumb, radius=10, outline=(110, 120, 100), width=2)
+        _paste_rounded(canvas, loc_img, thumb, radius=8)
+        ImageDraw.Draw(canvas).rounded_rectangle(thumb, radius=8, outline=(110, 120, 100), width=2)
     else:
-        ImageDraw.Draw(canvas).rounded_rectangle(thumb, radius=10, fill=(30, 34, 28), outline=(90, 100, 80), width=2)
+        ImageDraw.Draw(canvas).rounded_rectangle(thumb, radius=8, fill=(30, 34, 28), outline=(90, 100, 80), width=2)
 
-    title_font = _load_font(22)
-    body = _load_font(17)
-    small = _load_font(14)
-    loc_font = title_font if len(session.location) <= 14 else _load_font(18)
-    draw.text((pl + 18, pt + 128), session.location, fill=(245, 245, 245), font=loc_font)
-    draw.text((pl + 18, pt + 158), "Поиск артефакта", fill=(180, 200, 150), font=body)
+    title_font = _load_font(20)
+    body = _load_font(16)
+    small = _load_font(13)
+    loc_font = title_font if len(session.location) <= 14 else _load_font(16)
+    draw.text((pl + 14, pt + 106), session.location, fill=(245, 245, 245), font=loc_font)
+    draw.text((pl + 14, pt + 132), "Поиск артефакта", fill=(180, 200, 150), font=body)
 
-    det_y = pt + 190
+    det_y = pt + 160
     draw.rounded_rectangle(
-        (pl + 18, det_y, pl + 78, det_y + 52),
+        (pl + 14, det_y, pl + 64, det_y + 44),
         radius=8,
         fill=(30, 32, 36),
         outline=(120, 160, 90),
         width=2,
     )
-    draw.rectangle((pl + 28, det_y + 12, pl + 68, det_y + 28), fill=(60, 90, 50))
-    draw.text((pl + 90, det_y + 4), f"«{session.detector_name}»", fill=(220, 220, 220), font=body)
+    draw.rectangle((pl + 22, det_y + 10, pl + 56, det_y + 24), fill=(60, 90, 50))
+    draw.text((pl + 74, det_y + 2), f"«{session.detector_name}»", fill=(220, 220, 220), font=body)
     filled = min(session.circles_filled, session.circles_needed)
-    circle_y = det_y + 38
+    circle_y = det_y + 32
+    circle_spacing = 22
     for i in range(session.circles_needed):
-        cx = pl + 90 + i * 28
+        cx = pl + 74 + i * circle_spacing
         if i < filled:
-            draw.ellipse((cx - 9, circle_y - 9, cx + 9, circle_y + 9), fill=(70, 220, 90), outline=(40, 120, 50))
+            draw.ellipse((cx - 7, circle_y - 7, cx + 7, circle_y + 7), fill=(70, 220, 90), outline=(40, 120, 50))
         else:
-            draw.ellipse((cx - 9, circle_y - 9, cx + 9, circle_y + 9), fill=(55, 58, 60), outline=(90, 90, 90))
+            draw.ellipse((cx - 7, circle_y - 7, cx + 7, circle_y + 7), fill=(55, 58, 60), outline=(90, 90, 90))
 
-    screen = (pl + 18, det_y + 72, pr - 18, det_y + 242)
+    screen = (pl + 14, det_y + 58, pr - 14, det_y + 198)
     draw.rounded_rectangle(screen, radius=12, fill=(18, 30, 38), outline=(90, 130, 150), width=2)
     signal = _load_detector_signal()
     if signal is not None:
@@ -917,10 +958,10 @@ def render_hunt_frame(session: HuntSession, character: Character | None = None) 
         draw = ImageDraw.Draw(canvas)
         draw.rounded_rectangle(screen, radius=12, outline=(90, 130, 150), width=2)
 
-    info_y = screen[3] + 14
-    draw.text((pl + 22, info_y), f"Сигнал: {filled}/{session.circles_needed}", fill=(180, 220, 255), font=body)
-    draw.text((pl + 22, info_y + 25), f"Ход {session.moves}/{session.max_moves} · Аномалий {len(session.anomalies)}", fill=(200, 200, 200), font=small)
-    draw.text((pl + 22, info_y + 46), f"Рад за вылазку +{session.rad_gained}", fill=(200, 160, 120), font=small)
+    info_y = screen[3] + 12
+    draw.text((pl + 16, info_y), f"Сигнал: {filled}/{session.circles_needed}", fill=(180, 220, 255), font=body)
+    draw.text((pl + 16, info_y + 22), f"Ход {session.moves}/{session.max_moves} · Аномалий {len(session.anomalies)}", fill=(200, 200, 200), font=small)
+    draw.text((pl + 16, info_y + 40), f"Рад за вылазку +{session.rad_gained}", fill=(200, 160, 120), font=small)
 
     hp = int(character.health) if character else 0
     max_hp = int(effective_max_health(character)) if character else 100
@@ -928,27 +969,27 @@ def render_hunt_frame(session: HuntSession, character: Character | None = None) 
     max_energy = int(character.max_energy) if character else 100
     rad = int(character.radiation) if character else 0
 
-    bar_top = info_y + 76
-    draw.rounded_rectangle((pl + 18, bar_top, pr - 18, bar_top + 28), radius=8, fill=(30, 30, 34), outline=(90, 90, 95))
-    fill_w = int((pr - pl - 44) * (hp / max(1, max_hp)))
+    bar_top = info_y + 66
+    draw.rounded_rectangle((pl + 12, bar_top, pr - 12, bar_top + 24), radius=6, fill=(30, 30, 34), outline=(90, 90, 95))
+    fill_w = int((pr - pl - 36) * (hp / max(1, max_hp)))
     if fill_w > 0:
-        draw.rounded_rectangle((pl + 20, bar_top + 2, pl + 20 + fill_w, bar_top + 26), radius=6, fill=(200, 60, 50))
-    draw.text((pl + 24, bar_top + 5), f"HP {hp}/{max_hp}", fill=(255, 255, 255), font=small)
+        draw.rounded_rectangle((pl + 14, bar_top + 2, pl + 14 + fill_w, bar_top + 22), radius=4, fill=(200, 60, 50))
+    draw.text((pl + 16, bar_top + 4), f"HP {hp}/{max_hp}", fill=(255, 255, 255), font=small)
 
-    draw.rounded_rectangle((pl + 18, bar_top + 40, pr - 18, bar_top + 68), radius=8, fill=(30, 30, 34), outline=(90, 90, 95))
-    fill_w = int((pr - pl - 44) * min(1.0, rad / 100))
+    draw.rounded_rectangle((pl + 12, bar_top + 34, pr - 12, bar_top + 58), radius=6, fill=(30, 30, 34), outline=(90, 90, 95))
+    fill_w = int((pr - pl - 36) * min(1.0, rad / 100))
     if fill_w > 0:
-        draw.rounded_rectangle((pl + 20, bar_top + 42, pl + 20 + fill_w, bar_top + 66), radius=6, fill=(180, 200, 40))
-    draw.text((pl + 24, bar_top + 45), f"RAD {rad}", fill=(255, 255, 255), font=small)
+        draw.rounded_rectangle((pl + 14, bar_top + 36, pl + 14 + fill_w, bar_top + 56), radius=4, fill=(180, 200, 40))
+    draw.text((pl + 16, bar_top + 38), f"RAD {rad}", fill=(255, 255, 255), font=small)
 
-    draw.rounded_rectangle((pl + 18, bar_top + 80, pr - 18, bar_top + 108), radius=8, fill=(30, 30, 34), outline=(90, 90, 95))
-    fill_w = int((pr - pl - 44) * (energy / max(1, max_energy)))
+    draw.rounded_rectangle((pl + 12, bar_top + 68, pr - 12, bar_top + 92), radius=6, fill=(30, 30, 34), outline=(90, 90, 95))
+    fill_w = int((pr - pl - 36) * (energy / max(1, max_energy)))
     if fill_w > 0:
-        draw.rounded_rectangle((pl + 20, bar_top + 82, pl + 20 + fill_w, bar_top + 106), radius=6, fill=(50, 120, 210))
-    draw.text((pl + 24, bar_top + 85), f"EN {energy}/{max_energy}", fill=(255, 255, 255), font=small)
+        draw.rounded_rectangle((pl + 14, bar_top + 70, pl + 14 + fill_w, bar_top + 90), radius=4, fill=(50, 120, 210))
+    draw.text((pl + 16, bar_top + 72), f"EN {energy}/{max_energy}", fill=(255, 255, 255), font=small)
 
-    draw.text((pl + 18, pb - 50), "Дойди до сигнала детектора", fill=(210, 210, 210), font=small)
-    draw.text((pl + 18, pb - 28), "Стрелки - ход, кнопка - бросить", fill=(190, 190, 190), font=small)
+    draw.text((pl + 14, pb - 42), "Дойди до сигнала детектора", fill=(210, 210, 210), font=small)
+    draw.text((pl + 14, pb - 24), "Стрелки - ход, кнопка - бросить", fill=(190, 190, 190), font=small)
 
     out = canvas.convert("RGB")
     buf = BytesIO()
