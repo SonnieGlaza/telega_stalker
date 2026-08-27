@@ -42,6 +42,14 @@ from app.artifact_hunt import (
     shoot_artifact_hunt,
     start_artifact_hunt,
 )
+from app.stash_hunt import (
+    abandon_stash_hunt,
+    get_stash_session,
+    move_stash_hunt,
+    render_stash_frame,
+    stash_status_caption,
+    start_stash_hunt,
+)
 from app.quest_mission import (
     abandon_quest_mission,
     get_mission_session,
@@ -370,6 +378,7 @@ from app.keyboards import (
     personal_stash_items_keyboard,
     personal_stash_amount_keyboard,
     artifact_hunt_keyboard,
+    stash_hunt_keyboard,
     quest_mission_keyboard,
     smuggle_mission_keyboard,
     dead_character_keyboard,
@@ -6865,6 +6874,126 @@ async def artifact_hunt_callback(callback: CallbackQuery) -> None:
     except Exception:
         logger.exception("Artifact hunt callback failed for %s action=%s", telegram_id, action)
         await safe_callback_answer(callback, "Ошибка охоты. Попробуй ещё раз или /fixme", show_alert=True)
+
+
+async def _send_or_edit_stash_frame(
+    callback: CallbackQuery,
+    *,
+    image_bytes: bytes,
+    caption: str,
+    note: str | None = None,
+) -> None:
+    media = BufferedInputFile(image_bytes, filename="stash_hunt.png")
+    text = caption if not note else f"{caption}\n\n{note}"
+    markup = stash_hunt_keyboard()
+    try:
+        if callback.message and callback.message.photo:
+            await callback.message.edit_media(
+                media=InputMediaPhoto(media=media, caption=text),
+                reply_markup=markup,
+            )
+        elif callback.message:
+            await callback.message.answer_photo(photo=media, caption=text, reply_markup=markup)
+            try:
+                await callback.message.delete()
+            except TelegramBadRequest:
+                pass
+        else:
+            await callback.bot.send_photo(
+                callback.from_user.id,
+                photo=media,
+                caption=text,
+                reply_markup=markup,
+            )
+    except TelegramBadRequest:
+        await callback.bot.send_photo(
+            callback.from_user.id,
+            photo=media,
+            caption=text,
+            reply_markup=markup,
+        )
+    finally:
+        await safe_callback_answer(callback)
+
+
+@router.callback_query(F.data == "stash:search")
+async def stash_search_callback(callback: CallbackQuery) -> None:
+    result = start_stash_hunt(get_storage(), callback.from_user.id, source="found")
+    payload = result.payload or {}
+    image = payload.get("stash_image")
+    if image and payload.get("stash_active"):
+        await _send_or_edit_stash_frame(
+            callback,
+            image_bytes=image,
+            caption=str(payload.get("caption") or result.text),
+            note=result.text if payload.get("stash_started") else None,
+        )
+        return
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data.startswith("sthunt:"))
+async def stash_hunt_callback(callback: CallbackQuery) -> None:
+    action = (callback.data or "").removeprefix("sthunt:").strip()
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    dead = resolve_dead_player(storage, telegram_id, refresh_survival=False)
+    if dead is not None:
+        await _ensure_death_keyboard(callback, telegram_id)
+        return
+
+    try:
+        if action == "leave":
+            result = abandon_stash_hunt(storage, telegram_id)
+            await reply_action_result(callback, result.text, ephemeral=True)
+            return
+
+        if action == "refresh":
+            session = get_stash_session(storage, telegram_id)
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if session is None or player is None:
+                await callback.answer("Активного поиска схрона нет.", show_alert=True)
+                return
+            image = render_stash_frame(session, player)
+            await _send_or_edit_stash_frame(
+                callback,
+                image_bytes=image,
+                caption=stash_status_caption(session, player),
+            )
+            return
+
+        if action not in {"up", "down", "left", "right"}:
+            await callback.answer("Неизвестное действие.", show_alert=True)
+            return
+
+        result = move_stash_hunt(storage, telegram_id, action)
+        payload = result.payload or {}
+
+        if payload.get("stash_dead"):
+            await _handle_quest_mission_death_callback(
+                callback, telegram_id, payload, fallback_text=result.text
+            )
+            return
+
+        if payload.get("stash_done") or payload.get("stash_active") is False:
+            await reply_action_result(callback, result.text, ephemeral=True)
+            return
+
+        image = payload.get("stash_image")
+        if not image:
+            await reply_action_result(callback, result.text)
+            return
+        await _send_or_edit_stash_frame(
+            callback,
+            image_bytes=image,
+            caption=str(payload.get("caption") or ""),
+            note=str(payload.get("move_note") or result.text),
+        )
+    except Exception:
+        logger.exception("Stash hunt callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка поиска схрона. Попробуй ещё раз или /fixme", show_alert=True)
 
 
 @router.message(Command("pay"), F.chat.type == "private")

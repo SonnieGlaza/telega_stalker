@@ -115,6 +115,7 @@ def quests_keyboard(
     if show_cancel:
         rows.append([InlineKeyboardButton(text="❌ Отменить контракт", callback_data="contract:cancel")])
     rows.append([InlineKeyboardButton(text="📡 Поиск артефактов", callback_data="artifact:search")])
+    rows.append([InlineKeyboardButton(text="📦 Поиск схрона", callback_data="stash:search")])
     if show_help:
         rows.append([InlineKeyboardButton(text="🆘 Помочь по рации", callback_data="help_event:join")])
     if show_special:
@@ -455,6 +456,7 @@ def trader_buy_gear_keyboard(
         (shop_gear_button_title("truck"), "buy:truck", "truck"),
         (shop_gear_button_title("sleeping_bag"), "buy:sleeping_bag", "sleeping_bag"),
         (shop_gear_button_title("stash_case"), "buyqty:stash_case", "stash_case"),
+        (shop_gear_button_title("stash_coordinates"), "buy:stash_coordinates", "stash_coordinates"),
     ]
     items = _filter_shop_rows(catalog, unlocked_keys)
     return _trader_page_keyboard(
@@ -507,6 +509,23 @@ def artifact_hunt_keyboard(*, deep_available: bool = True) -> InlineKeyboardMark
             [InlineKeyboardButton(text="🔍 Глубокий поиск (12 ходов)", callback_data="artifact:search:deep")],
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def stash_hunt_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⬆️ Вперёд", callback_data="sthunt:up")],
+            [
+                InlineKeyboardButton(text="⬅️ Влево", callback_data="sthunt:left"),
+                InlineKeyboardButton(text="⬇️ Назад", callback_data="sthunt:down"),
+                InlineKeyboardButton(text="➡️ Вправо", callback_data="sthunt:right"),
+            ],
+            [
+                InlineKeyboardButton(text="🏃 Уйти", callback_data="sthunt:leave"),
+                InlineKeyboardButton(text="🔄 Обновить", callback_data="sthunt:refresh"),
+            ],
+        ]
+    )
 
 
 def equip_artifact_slot_picker_keyboard(item_key: str, slots_cap: int) -> InlineKeyboardMarkup:

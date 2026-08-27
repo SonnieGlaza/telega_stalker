@@ -474,6 +474,37 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
             payload={"hunt_active": False, "hunt_dead": True},
         )
 
+    # Случайное нападение мутантов/бандитов (2-5%).
+    ambush_note = ""
+    if random.random() * 100 < random.randint(2, 5):
+        from app.stash_hunt import AMBUSH_TYPES
+
+        name, short, enemy_power = random.choice(AMBUSH_TYPES)
+        player_char = storage.get_character(telegram_id, refresh_energy=False) or player
+        player_power = max(1, int(player_char.gear_power))
+        if player_power >= enemy_power * 2:
+            dmg = random.randint(3, 8)
+        elif player_power >= enemy_power:
+            dmg = random.randint(8, 18)
+        else:
+            dmg = random.randint(15, 30)
+        storage.change_health(telegram_id, -dmg)
+        ambush_note = f" ⚠ Нападение: {name}! Урон −{dmg} HP."
+        updated = storage.get_character(telegram_id, refresh_energy=False)
+        if updated is not None and updated.health <= 0:
+            clear_hunt_session(storage, telegram_id)
+            return ActionResult(
+                False,
+                f"На тебя напали — {name}!\n"
+                f"Урон: {dmg} HP. Ты погиб в Зоне.\n"
+                "Респавн из инвентаря (мутанты обшарят рюкзак).",
+                payload={"hunt_active": False, "hunt_dead": True},
+            )
+
+    # Шанс найти координаты схрона во время охоты.
+    from app.stash_hunt import try_random_stash_coordinates
+    try_random_stash_coordinates(storage, telegram_id)
+
     gain = _signal_gain(session.player, session.artifact)
     if gain > 0:
         session.circles_filled = min(session.circles_needed, session.circles_filled + gain)
@@ -498,6 +529,8 @@ def move_artifact_hunt(storage: Storage, telegram_id: int, direction: str) -> Ac
     note = f"Сигнал +{gain}." if gain else "Тишина в эфире."
     if rad_add:
         note += f" Рад +{rad_add}."
+    if ambush_note:
+        note += ambush_note
     return ActionResult(
         True,
         note,

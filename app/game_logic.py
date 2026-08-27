@@ -260,6 +260,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "gasoline_can": {"name": "Канистра бензина (+5)", "buy_price": 100, "sell_price": 44},
     "fuel_can": {"name": "Канистра дизеля (+5)", "buy_price": 199, "sell_price": 89},
     "stash_case": {"name": "Тайник", "buy_price": 2000, "sell_price": 500},
+    "stash_coordinates": {"name": "Координаты схрона", "buy_price": 3500, "sell_price": 0},
 }
 
 # Сила снаряги: рейтинги и цены оружия/брони масштабированы ×18/11,
@@ -595,6 +596,7 @@ ITEM_LABELS = {
     "sleeping_bag": "Спальник",
     "bicycle": "Велосипед",
     "stash_case": "Тайник",
+    "stash_coordinates": "Координаты схрона",
     "armor_leather": "Кожаная куртка",
     "armor_stalker_vest": "Сталкерский бронежилет",
     "armor_psz7d": "ПСЗ-7 «Долг»",
@@ -5245,6 +5247,13 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
             "Установи их в разделе «Экипировка»."
             f"{achievements_text}",
         )
+    if item_key == "stash_coordinates":
+        from app.stash_hunt import start_stash_hunt, STASH_COORDINATE_PRICE
+
+        result = start_stash_hunt(storage, telegram_id, source="buy")
+        if not result.ok:
+            storage.change_money(telegram_id, total_price)
+        return result
     if item_key == "artifact_slot":
         if has_purchased_artifact_slot_upgrade(character):
             storage.change_money(telegram_id, total_price)
@@ -5318,6 +5327,7 @@ TRADER_SELL_CATALOG: dict[str, tuple[str, ...]] = {
         "niva",
         "truck",
         "stash_case",
+        "stash_coordinates",
         "armor_upgrade",
     ),
     "armor": (
