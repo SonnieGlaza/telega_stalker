@@ -6982,10 +6982,23 @@ async def stash_hunt_callback(callback: CallbackQuery) -> None:
             if not door_idx_str.isdigit():
                 await callback.answer("Неизвестное действие.", show_alert=True)
                 return
-            result = move_stash_hunt(storage, telegram_id, int(door_idx_str))
+            door_index = int(door_idx_str)
         else:
-            await callback.answer("Неизвестное действие.", show_alert=True)
-            return
+            legacy_directions = {"up": 0, "down": 1, "left": 2, "right": 3}
+            if action not in legacy_directions:
+                await callback.answer("Неизвестное действие.", show_alert=True)
+                return
+            session = get_stash_session(storage, telegram_id)
+            if session is None:
+                await callback.answer("Активного поиска хабара нет.", show_alert=True)
+                return
+            rooms = _rooms_for(session.location)
+            doors = rooms[session.current_room].doors if session.current_room < len(rooms) else ()
+            if not doors:
+                await callback.answer("Из этой комнаты нет выхода.", show_alert=True)
+                return
+            door_index = min(legacy_directions[action], len(doors) - 1)
+        result = move_stash_hunt(storage, telegram_id, door_index)
 
         payload = result.payload or {}
 
