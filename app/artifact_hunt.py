@@ -246,13 +246,20 @@ def _random_free_cell(
 
 def _build_session(character: Character, detector_key: str, detector_name: str) -> HuntSession:
     grid = HUNT_GRID_SIZE
-    anomaly_n = location_anomaly_count(character.location)
     player = (random.randrange(grid), random.randrange(grid))
+    marked_artifact, marked_anomalies = _marked_hunt_cells(character.location, grid)
+    anomaly_set = set(marked_anomalies)
     forbidden: set[tuple[int, int]] = {player}
-    artifact = _random_free_cell(grid, forbidden)
+    artifact_candidates = [c for c in marked_artifact if c not in forbidden and c not in anomaly_set]
+    artifact = random.choice(artifact_candidates) if artifact_candidates else _random_free_cell(grid, forbidden)
     forbidden.add(artifact)
     anomalies: list[tuple[int, int]] = []
-    for _ in range(anomaly_n):
+    for cell in marked_anomalies:
+        if cell not in forbidden and cell not in anomalies:
+            anomalies.append(cell)
+            forbidden.add(cell)
+    anomaly_n = location_anomaly_count(character.location)
+    while len(anomalies) < anomaly_n:
         cell = _random_free_cell(grid, forbidden)
         anomalies.append(cell)
         forbidden.add(cell)
@@ -513,6 +520,40 @@ def _load_font(size: int) -> ImageFont.ImageFont:
 
 
 _LOCATION_THUMB_DIR = PROJECT_ROOT / "assets" / "locations"
+_HUNT_MAP_DIR = PROJECT_ROOT / "assets" / "maps"
+
+_HUNT_MAP_FILES: dict[str, str] = {
+    "Кордон": "Кордон.jpg",
+    "Свалка": "свалка.jpg",
+    "Росток": "росток.jpg",
+    "Армейские склады": "арм склады.jpg",
+    "НИИ Агропром": "НИИ Агропром.jpg",
+    "Янтарь": "Янтарь.jpg",
+    "Болото": "болото.jpg",
+    "Темная долина": "темная долина.jpg",
+    "Рыжий лес": "лес.jpg",
+    "Радар": "радар.jpg",
+    "Припять": "припять.jpg",
+    "ЧАЭС": "завод.jpg",
+}
+
+_HUNT_MARKED_MAP_FILES: dict[str, str] = {
+    "Свалка": "свалка метки.jpg",
+    "Росток": "росток метки.jpg",
+    "Армейские склады": "арм склады метки.jpg",
+    "НИИ Агропром": "нии агропром метки.jpg",
+    "Болото": "болото метки.jpg",
+    "Темная долина": "темная долина метки.jpg",
+    "Рыжий лес": "лес метки.jpg",
+    "Радар": "радар метки.jpg",
+}
+
+_MANUAL_HUNT_CELLS: dict[str, tuple[tuple[int, int], tuple[tuple[int, int], ...]]] = {
+    "Кордон": ((3, 4), ((1, 1), (4, 1), (1, 3), (4, 4))),
+    "Янтарь": ((3, 3), ((1, 1), (4, 1), (1, 4), (4, 4))),
+    "Припять": ((2, 2), ((1, 1), (4, 1), (1, 4), (4, 4))),
+    "ЧАЭС": ((3, 2), ((1, 1), (4, 1), (1, 4), (4, 4))),
+}
 
 _LOCATION_THUMB_MAP: dict[str, str] = {
     "Кордон": "kordon.png",
@@ -530,15 +571,86 @@ _LOCATION_THUMB_MAP: dict[str, str] = {
 }
 
 
+def _load_hunt_map(location: str, marked: bool = False) -> Image.Image | None:
+    files = _HUNT_MARKED_MAP_FILES if marked else _HUNT_MAP_FILES
+    filename = files.get(location)
+    if filename is None:
+        return None
+    try:
+        return Image.open(_HUNT_MAP_DIR / filename).convert("RGB")
+    except Exception:
+        return None
+
+
 def _load_location_thumb(location: str) -> Image.Image | None:
+    hunt_map = _load_hunt_map(location)
+    if hunt_map is not None:
+        return hunt_map
     filename = _LOCATION_THUMB_MAP.get(location)
     if filename is None:
         return None
-    path = _LOCATION_THUMB_DIR / filename
     try:
-        return Image.open(path).convert("RGB")
+        return Image.open(_LOCATION_THUMB_DIR / filename).convert("RGB")
     except Exception:
         return None
+
+
+def _marked_cells_from_image(image: Image.Image, grid: int, color: str) -> list[tuple[int, int]]:
+    sample_w = 160
+    sample_h = max(1, round(image.height * sample_w / max(1, image.width)))
+    sample = image.resize((sample_w, sample_h), Image.Resampling.BILINEAR)
+    pixels = sample.load()
+    mask: set[tuple[int, int]] = set()
+    for y in range(sample_h):
+        for x in range(sample_w):
+            r, g, b = pixels[x, y]
+            if color == "red":
+                active = r > 170 and r > g * 1.45 and r > b * 1.45
+            else:
+                active = r > 190 and g > 190 and b > 190 and max(r, g, b) - min(r, g, b) < 45
+            if active:
+                mask.add((x, y))
+    components: list[list[tuple[int, int]]] = []
+    while mask:
+        start = mask.pop()
+        stack = [start]
+        component = [start]
+        while stack:
+            x, y = stack.pop()
+            for nx in range(max(0, x - 1), min(sample_w, x + 2)):
+                for ny in range(max(0, y - 1), min(sample_h, y + 2)):
+                    point = (nx, ny)
+                    if point in mask:
+                        mask.remove(point)
+                        stack.append(point)
+                        component.append(point)
+        if len(component) >= 10:
+            components.append(component)
+    cells: list[tuple[int, int]] = []
+    for component in components:
+        cx = sum(point[0] for point in component) / len(component)
+        cy = sum(point[1] for point in component) / len(component)
+        cell = (min(grid - 1, int(cx * grid / sample_w)), min(grid - 1, int(cy * grid / sample_h)))
+        if cell not in cells:
+            cells.append(cell)
+    return cells
+
+
+def _marked_hunt_cells(location: str, grid: int) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    marked = _load_hunt_map(location, marked=True)
+    if marked is None:
+        manual = _MANUAL_HUNT_CELLS.get(location)
+        if manual is None:
+            return [], []
+        return [manual[0]], list(manual[1])
+    artifact_cells = _marked_cells_from_image(marked, grid, "red")
+    anomaly_cells = _marked_cells_from_image(marked, grid, "white")
+    manual = _MANUAL_HUNT_CELLS.get(location)
+    if not artifact_cells and manual is not None:
+        artifact_cells = [manual[0]]
+    if not anomaly_cells and manual is not None:
+        anomaly_cells = list(manual[1])
+    return artifact_cells, anomaly_cells
 
 
 _DETECTOR_SIGNAL_PATH = PROJECT_ROOT / "assets" / "hunt" / "detector_signal.png"
