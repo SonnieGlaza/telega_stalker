@@ -685,17 +685,18 @@ def _load_hunt_map(location: str, marked: bool = False) -> Image.Image | None:
 
 
 def _load_location_thumb(location: str) -> Image.Image | None:
-    """Возвращает картинку локации.
-
-    Сначала берётся превью из assets/locations (качественные иллюстрации
-    локаций), затем — карта из assets/maps как запасной вариант.
-    """
+    """Превью локации из assets/locations (для панели справа сверху)."""
     filename = _LOCATION_THUMB_MAP.get(location)
-    if filename is not None:
-        try:
-            return Image.open(_LOCATION_THUMB_DIR / filename).convert("RGB")
-        except Exception:
-            pass
+    if filename is None:
+        return None
+    try:
+        return Image.open(_LOCATION_THUMB_DIR / filename).convert("RGB")
+    except Exception:
+        return None
+
+
+def _load_hunt_field_background(location: str) -> Image.Image | None:
+    """Фон поля охоты/схрона: карта из assets/maps."""
     return _load_hunt_map(location)
 
 
@@ -783,6 +784,36 @@ def _cover_crop(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
     left = (new_w - target_w) // 2
     top = (new_h - target_h) // 2
     return resized.crop((left, top, left + target_w, top + target_h))
+
+
+def _player_grid_token(character: Any | None = None, *, size: int = 160) -> Image.Image:
+    """Иконка персонажа для сетки охоты/схрона: аватар или stalker_default."""
+    token: Image.Image | None = None
+    if character is not None:
+        try:
+            from app.avatar_render import render_avatar
+
+            token = render_avatar(character, width=size, height=size)
+        except Exception:
+            token = None
+    if token is None:
+        for candidate in (
+            PROJECT_ROOT / "assets" / "avatars" / "stalker_default.png",
+            PROJECT_ROOT / "assets" / "avatars" / "realistic" / "stalker_default.png",
+        ):
+            try:
+                if candidate.is_file():
+                    token = Image.open(candidate).convert("RGBA")
+                    break
+            except Exception:
+                continue
+    if token is None:
+        token = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        td = ImageDraw.Draw(token)
+        td.ellipse((size * 0.12, size * 0.06, size * 0.88, size * 0.82), fill=(75, 85, 65), outline=(30, 35, 28), width=3)
+        td.ellipse((size * 0.28, size * 0.22, size * 0.72, size * 0.52), fill=(40, 48, 40))
+        td.rectangle((size * 0.28, size * 0.75, size * 0.72, size * 0.97), fill=(95, 75, 50))
+    return token
 
 
 def _paste_circle(
@@ -893,7 +924,7 @@ def render_hunt_frame(session: HuntSession, character: Character | None = None) 
     field = (margin - 6, margin - 6, margin + grid_px + 6, margin + grid_px + 6)
     draw.rounded_rectangle(field, radius=10, fill=(34, 36, 40, 255), outline=(70, 74, 80), width=2)
 
-    loc_bg = _load_location_thumb(session.location)
+    loc_bg = _load_hunt_field_background(session.location)
     if loc_bg is not None:
         field_img = _cover_crop(loc_bg, grid_px, grid_px).convert("RGBA")
         field_img.putalpha(225)
@@ -927,21 +958,8 @@ def render_hunt_frame(session: HuntSession, character: Character | None = None) 
     px, py = session.player
     pcx = margin + px * cell + cell // 2
     pcy = margin + py * cell + cell // 2
-    token = None
-    if character is not None:
-        try:
-            from app.avatar_render import render_avatar
-
-            token = render_avatar(character, width=80, height=80)
-        except Exception:
-            token = None
-    if token is None:
-        token = Image.new("RGBA", (80, 80), (0, 0, 0, 0))
-        td = ImageDraw.Draw(token)
-        td.ellipse((10, 5, 70, 65), fill=(75, 85, 65), outline=(30, 35, 28), width=2)
-        td.ellipse((22, 18, 58, 42), fill=(40, 48, 40))
-        td.rectangle((22, 60, 58, 78), fill=(95, 75, 50))
-    _paste_circle(canvas, token, pcx, pcy, 34, ring_color=(72, 220, 90), ring_width=3)
+    token = _player_grid_token(character, size=160)
+    _paste_circle(canvas, token, pcx, pcy, 40, ring_color=(72, 220, 90), ring_width=3)
 
     pl = margin + grid_px + 16
     pr = width - margin

@@ -49,7 +49,6 @@ from app.stash_hunt import (
     render_stash_frame,
     stash_status_caption,
     start_stash_hunt,
-    _rooms_for,
 )
 from app.quest_mission import (
     abandon_quest_mission,
@@ -6883,11 +6882,10 @@ async def _send_or_edit_stash_frame(
     image_bytes: bytes,
     caption: str,
     note: str | None = None,
-    door_count: int = 0,
 ) -> None:
     media = BufferedInputFile(image_bytes, filename="stash_hunt.png")
     text = caption if not note else f"{caption}\n\n{note}"
-    markup = stash_hunt_keyboard(door_count=door_count)
+    markup = stash_hunt_keyboard()
     try:
         if callback.message and callback.message.photo:
             await callback.message.edit_media(
@@ -6924,19 +6922,11 @@ async def stash_search_callback(callback: CallbackQuery) -> None:
     payload = result.payload or {}
     image = payload.get("stash_image")
     if image and payload.get("stash_active"):
-        from app.stash_hunt import _rooms_for, get_stash_session
-        sess = get_stash_session(get_storage(), callback.from_user.id)
-        dc = 0
-        if sess is not None:
-            rooms = _rooms_for(sess.location)
-            if sess.current_room < len(rooms):
-                dc = len(rooms[sess.current_room].doors)
         await _send_or_edit_stash_frame(
             callback,
             image_bytes=image,
             caption=str(payload.get("caption") or result.text),
             note=result.text if payload.get("stash_started") else None,
-            door_count=dc,
         )
         return
     await reply_action_result(callback, result.text)
@@ -6967,38 +6957,17 @@ async def stash_hunt_callback(callback: CallbackQuery) -> None:
                 await callback.answer("Активного поиска хабара нет.", show_alert=True)
                 return
             image = render_stash_frame(session, player)
-            rooms = _rooms_for(session.location)
-            dc = len(rooms[session.current_room].doors) if session.current_room < len(rooms) else 0
             await _send_or_edit_stash_frame(
                 callback,
                 image_bytes=image,
                 caption=stash_status_caption(session, player),
-                door_count=dc,
             )
             return
 
-        if action.startswith("door:"):
-            door_idx_str = action.removeprefix("door:")
-            if not door_idx_str.isdigit():
-                await callback.answer("Неизвестное действие.", show_alert=True)
-                return
-            door_index = int(door_idx_str)
-        else:
-            legacy_directions = {"up": 0, "down": 1, "left": 2, "right": 3}
-            if action not in legacy_directions:
-                await callback.answer("Неизвестное действие.", show_alert=True)
-                return
-            session = get_stash_session(storage, telegram_id)
-            if session is None:
-                await callback.answer("Активного поиска хабара нет.", show_alert=True)
-                return
-            rooms = _rooms_for(session.location)
-            doors = rooms[session.current_room].doors if session.current_room < len(rooms) else ()
-            if not doors:
-                await callback.answer("Из этой комнаты нет выхода.", show_alert=True)
-                return
-            door_index = min(legacy_directions[action], len(doors) - 1)
-        result = move_stash_hunt(storage, telegram_id, door_index)
+        if action not in {"up", "down", "left", "right"}:
+            await callback.answer("Неизвестное действие.", show_alert=True)
+            return
+        result = move_stash_hunt(storage, telegram_id, action)
 
         payload = result.payload or {}
 
@@ -7016,18 +6985,11 @@ async def stash_hunt_callback(callback: CallbackQuery) -> None:
         if not image:
             await reply_action_result(callback, result.text)
             return
-        sess = get_stash_session(storage, telegram_id)
-        dc = 0
-        if sess is not None:
-            rooms = _rooms_for(sess.location)
-            if sess.current_room < len(rooms):
-                dc = len(rooms[sess.current_room].doors)
         await _send_or_edit_stash_frame(
             callback,
             image_bytes=image,
             caption=str(payload.get("caption") or ""),
             note=str(payload.get("move_note") or result.text),
-            door_count=dc,
         )
     except Exception:
         logger.exception("Stash hunt callback failed for %s action=%s", telegram_id, action)
