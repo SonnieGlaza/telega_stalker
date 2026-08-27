@@ -4321,6 +4321,9 @@ def run_contract_work(storage: Storage, telegram_id: int) -> ActionResult:
         return ActionResult(False, "Сначала создай персонажа через /start.")
     if _is_dead(character):
         return ActionResult(False, _dead_block_text())
+    blocked = _reject_if_player_busy(storage, telegram_id, skip="quest")
+    if blocked is not None:
+        return blocked
     blocked = travel_block_text(character)
     if blocked:
         return ActionResult(False, blocked)

@@ -387,6 +387,12 @@ def start_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
             payload={"hunt_image": image, "hunt_active": True, "caption": hunt_status_caption(session, player)},
         )
 
+    from app.player_busy import player_busy_reason
+
+    busy = player_busy_reason(storage, telegram_id, skip="hunt", auto_recover=False)
+    if busy:
+        return ActionResult(False, busy)
+
     chosen = _pick_best_detector(player)
     if chosen is None:
         return ActionResult(

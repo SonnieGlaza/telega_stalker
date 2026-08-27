@@ -352,6 +352,14 @@ def run_smoke_check() -> None:
         hunt = start_artifact_hunt(storage, 111)
         assert hunt.ok, hunt.text
         assert hunt.payload and hunt.payload.get("hunt_image")
+        from app.stash_hunt import start_stash_hunt
+
+        blocked_stash = start_stash_hunt(storage, 111, source="found")
+        assert not blocked_stash.ok, blocked_stash.text
+        assert "охот" in blocked_stash.text.lower()
+        resume_hunt = start_artifact_hunt(storage, 111)
+        assert resume_hunt.ok, resume_hunt.text
+        assert not (resume_hunt.payload or {}).get("hunt_started")
         sess = get_hunt_session(storage, 111)
         assert sess is not None
         assert artifact_beside_anomaly(sess), "artifact must spawn next to an anomaly"
