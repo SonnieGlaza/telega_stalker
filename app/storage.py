@@ -260,6 +260,7 @@ class Storage:
             self.snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
         except Exception:
             # Не ломаем игру, если backup временно недоступен или данные не сериализуются.
+            logger.exception("Failed to write player snapshot to %s", self.snapshot_path)
             return
 
     def _restore_from_snapshot_if_needed(self, conn: DbConnection) -> None:
@@ -354,8 +355,9 @@ class Storage:
                     energy, max_energy, energy_updated_at, health, gear_power, location,
                     inventory_json, equipment_json, truck_owned, truck_durability, sleeping_bag_owned, fuel,
                     radiation, hunger, thirst, needs_updated_at, survival_damage_at,
-                    niva_owned, niva_durability
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    niva_owned, niva_durability, bicycle_owned, diesel, gasoline, stash_json,
+                    active_contract_json, travel_destination, travel_arrives_at, travel_transport
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(row.get("telegram_id")),
@@ -378,7 +380,7 @@ class Storage:
                     int(row.get("truck_owned", 0)),
                     int(row.get("truck_durability", 100 if int(row.get("truck_owned", 0)) else 0)),
                     int(row.get("sleeping_bag_owned", 0)),
-                    int(row.get("fuel", 0)),
+                    int(row.get("fuel", row.get("diesel", 0)) or 0),
                     int(row.get("radiation", 0)),
                     int(row.get("hunger", 0)),
                     int(row.get("thirst", 0)),
@@ -386,6 +388,14 @@ class Storage:
                     row.get("survival_damage_at") or now_iso,
                     int(row.get("niva_owned", 0)),
                     int(row.get("niva_durability", 100 if int(row.get("niva_owned", 0)) else 0)),
+                    int(row.get("bicycle_owned", 0)),
+                    int(row.get("diesel", row.get("fuel", 0)) or 0),
+                    int(row.get("gasoline", 0)),
+                    row.get("stash_json") or "{}",
+                    row.get("active_contract_json"),
+                    row.get("travel_destination"),
+                    row.get("travel_arrives_at"),
+                    row.get("travel_transport"),
                 ),
             )
         for row in topup_payments:

@@ -3678,6 +3678,17 @@ async def handle_buy(callback: CallbackQuery) -> None:
             return
     db = get_storage()
     result = buy_item(db, callback.from_user.id, item_key, amount=amount)
+    payload = result.payload or {}
+    if result.ok and item_key == "stash_coordinates":
+        image = payload.get("stash_image")
+        if image and payload.get("stash_active"):
+            await _send_or_edit_stash_frame(
+                callback,
+                image_bytes=image,
+                caption=str(payload.get("caption") or result.text),
+                note=result.text if payload.get("stash_started") else None,
+            )
+            return
     await reply_action_result(callback, result.text)
     if result.ok and item_key == "truck":
         player = db.get_character(callback.from_user.id, refresh_energy=False)
@@ -6724,11 +6735,10 @@ async def _send_or_edit_hunt_frame(
     image_bytes: bytes,
     caption: str,
     note: str | None = None,
-    deep_available: bool = True,
 ) -> None:
     media = BufferedInputFile(image_bytes, filename="artifact_hunt.png")
     text = caption if not note else f"{caption}\n\n{note}"
-    markup = artifact_hunt_keyboard(deep_available=deep_available)
+    markup = artifact_hunt_keyboard()
     try:
         if callback.message and callback.message.photo:
             await callback.message.edit_media(
@@ -6777,19 +6787,10 @@ async def artifact_search_callback(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "artifact:search:deep")
 async def artifact_search_deep_callback(callback: CallbackQuery) -> None:
-    result = start_artifact_hunt(get_storage(), callback.from_user.id, hunt_mode="deep")
-    payload = result.payload or {}
-    image = payload.get("hunt_image")
-    if image and payload.get("hunt_active"):
-        await _send_or_edit_hunt_frame(
-            callback,
-            image_bytes=image,
-            caption=str(payload.get("caption") or result.text),
-            note=result.text if payload.get("hunt_started") else None,
-            deep_available=False,
-        )
-        return
-    await reply_action_result(callback, result.text)
+    await reply_action_result(
+        callback,
+        "Глубокий поиск временно отключён. Используй обычный поиск артефактов.",
+    )
 
 
 @router.callback_query(F.data.startswith("hunt:"))

@@ -484,30 +484,25 @@ def inventory_equipment_keyboard(*, money: int | None = None) -> InlineKeyboardM
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def artifact_hunt_keyboard(*, deep_available: bool = True) -> InlineKeyboardMarkup:
+def artifact_hunt_keyboard(*, deep_available: bool = False) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="⬆️ Вперёд", callback_data="hunt:up")],
-            [
-                InlineKeyboardButton(text="⬅️ Влево", callback_data="hunt:left"),
-                InlineKeyboardButton(text="⬇️ Назад", callback_data="hunt:down"),
-                InlineKeyboardButton(text="➡️ Вправо", callback_data="hunt:right"),
-            ],
-            [
-                InlineKeyboardButton(text="🔫⬆", callback_data="hunt:shoot:up"),
-                InlineKeyboardButton(text="🔫⬅", callback_data="hunt:shoot:left"),
-                InlineKeyboardButton(text="🔫⬇", callback_data="hunt:shoot:down"),
-                InlineKeyboardButton(text="🔫➡", callback_data="hunt:shoot:right"),
-            ],
+        [
+            InlineKeyboardButton(text="⬅️ Влево", callback_data="hunt:left"),
+            InlineKeyboardButton(text="⬇️ Назад", callback_data="hunt:down"),
+            InlineKeyboardButton(text="➡️ Вправо", callback_data="hunt:right"),
+        ],
+        [
+            InlineKeyboardButton(text="🔫⬆", callback_data="hunt:shoot:up"),
+            InlineKeyboardButton(text="🔫⬅", callback_data="hunt:shoot:left"),
+            InlineKeyboardButton(text="🔫⬇", callback_data="hunt:shoot:down"),
+            InlineKeyboardButton(text="🔫➡", callback_data="hunt:shoot:right"),
+        ],
         [
             InlineKeyboardButton(text="🏃 Свалить", callback_data="hunt:leave"),
             InlineKeyboardButton(text="🔄 Обновить", callback_data="hunt:refresh"),
         ],
     ]
-    if deep_available:
-        rows.insert(
-            0,
-            [InlineKeyboardButton(text="🔍 Глубокий поиск (12 ходов)", callback_data="artifact:search:deep")],
-        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
