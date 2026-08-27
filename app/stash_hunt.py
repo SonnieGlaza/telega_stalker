@@ -45,7 +45,7 @@ STASH_RAD_PER_TICK = 1
 STASH_MINUTE_MOVES = 10
 STASH_RAD_PER_MINUTE = 5
 STASH_AMBUSH_CHANCE_MIN = 2
-STUSH_AMBUSH_CHANCE_MAX = 5
+STASH_AMBUSH_CHANCE_MAX = 5
 STASH_COORDINATE_PRICE = 3500
 STASH_COORDINATE_KEY = "stash_coordinates"
 
@@ -194,7 +194,7 @@ def start_stash_hunt(storage: Storage, telegram_id: int, *, source: str = "found
     if existing is not None and not existing.found:
         image = render_stash_frame(existing, player)
         return ActionResult(
-            True,
+            False,
             "У тебя уже идёт поиск схрона. Продолжай с карты.",
             payload={"stash_image": image, "stash_active": True, "caption": stash_status_caption(existing, player)},
         )
@@ -273,7 +273,7 @@ def _finish_stash_success(storage: Storage, telegram_id: int, session: StashSess
 
 
 def _try_ambush(storage: Storage, telegram_id: int, location: str) -> dict[str, Any] | None:
-    chance = random.randint(STASH_AMBUSH_CHANCE_MIN, STUSH_AMBUSH_CHANCE_MAX)
+    chance = random.randint(STASH_AMBUSH_CHANCE_MIN, STASH_AMBUSH_CHANCE_MAX)
     if random.random() * 100 >= chance:
         return None
     name, short, enemy_power = random.choice(AMBUSH_TYPES)

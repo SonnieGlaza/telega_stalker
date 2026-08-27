@@ -5327,7 +5327,6 @@ TRADER_SELL_CATALOG: dict[str, tuple[str, ...]] = {
         "niva",
         "truck",
         "stash_case",
-        "stash_coordinates",
         "armor_upgrade",
     ),
     "armor": (
