@@ -525,6 +525,8 @@ _LOCATION_THUMB_MAP: dict[str, str] = {
     "Темная долина": "dark_valley.png",
     "Рыжий лес": "red_forest.png",
     "Радар": "radar.png",
+    "Припять": "pripyat.png",
+    "ЧАЭС": "chaes.png",
 }
 
 
