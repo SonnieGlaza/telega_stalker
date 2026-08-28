@@ -198,6 +198,9 @@ def save_hunt_session(storage: Storage, telegram_id: int, session: HuntSession) 
 def clear_hunt_session(storage: Storage, telegram_id: int) -> None:
     storage.delete_meta(_hunt_meta_key(telegram_id))
     _unregister_active_hunt(storage, telegram_id)
+    from app.stash_hunt import clear_unplayed_stash_session
+
+    clear_unplayed_stash_session(storage, telegram_id)
 
 
 def _pick_best_detector(character: Character) -> tuple[str, str, int] | None:

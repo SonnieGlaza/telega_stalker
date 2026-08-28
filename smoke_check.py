@@ -375,6 +375,33 @@ def run_smoke_check() -> None:
         else:
             assert step.payload.get("hunt_done") or step.payload.get("hunt_dead")
 
+        # Координаты хабара во время охоты не должны блокировать игрока после вылазки.
+        from unittest.mock import patch
+
+        from app.player_busy import player_busy_reason
+        from app.stash_hunt import (
+            STASH_COORDINATE_KEY,
+            clear_stash_session,
+            get_stash_session,
+            start_stash_hunt,
+            try_random_stash_coordinates,
+        )
+
+        storage.restore_energy(111, 100)
+        assert start_artifact_hunt(storage, 111).ok
+        with patch("app.stash_hunt.random.random", return_value=0.0):
+            assert try_random_stash_coordinates(storage, 111)
+        assert get_stash_session(storage, 111) is None
+        assert int(storage.get_character(111, refresh_energy=False).inventory.get(STASH_COORDINATE_KEY, 0)) >= 1
+        assert abandon_artifact_hunt(storage, 111).ok
+        assert get_hunt_session(storage, 111) is None
+        assert get_stash_session(storage, 111) is None
+        assert player_busy_reason(storage, 111) is None
+        stash_start = start_stash_hunt(storage, 111, source="found")
+        assert stash_start.ok, stash_start.text
+        assert get_stash_session(storage, 111) is not None
+        clear_stash_session(storage, 111)
+
         ch = storage.get_character(111, refresh_energy=False)
         assert ch is not None
         if ch.health <= 0:

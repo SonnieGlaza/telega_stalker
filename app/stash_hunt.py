@@ -51,6 +51,7 @@ STASH_AMBUSH_CHANCE_MIN = 2
 STASH_AMBUSH_CHANCE_MAX = 5
 STASH_COORDINATE_PRICE = 3500
 STASH_COORDINATE_KEY = "stash_coordinates"
+STASH_COORDS_DROP_CHANCE = 3
 
 MOVE_DELTAS: dict[str, tuple[int, int]] = {
     "up": (0, -1),
@@ -207,6 +208,16 @@ def start_stash_hunt(storage: Storage, telegram_id: int, *, source: str = "found
     busy = player_busy_reason(storage, telegram_id, skip="stash", auto_recover=False)
     if busy:
         return ActionResult(False, busy)
+
+    if source == "found":
+        owned = int(player.inventory.get(STASH_COORDINATE_KEY, 0))
+        if owned <= 0:
+            return ActionResult(
+                False,
+                "Нет координат хабара. Найди их на охоте за артефактами или купи у торговца.",
+            )
+        if not storage.remove_item(telegram_id, STASH_COORDINATE_KEY, 1):
+            return ActionResult(False, "Не удалось использовать координаты хабара.")
 
     # buy_item already deducted the price before calling us; no double-charge.
 
@@ -534,15 +545,16 @@ def render_stash_frame(
     return buf.getvalue()
 
 
+def clear_unplayed_stash_session(storage: Storage, telegram_id: int) -> None:
+    """Снять «призрачную» сессию схрона, если игрок ещё не ходил по карте."""
+    session = get_stash_session(storage, telegram_id)
+    if session is not None and session.moves <= 0 and session.steps <= 0 and not session.found:
+        clear_stash_session(storage, telegram_id)
+
+
 def try_random_stash_coordinates(storage: Storage, telegram_id: int) -> bool:
-    """Small chance to find stash coordinates during normal play (called from hunt)."""
-    if random.random() * 100 < 3:
-        existing = get_stash_session(storage, telegram_id)
-        if existing is None or existing.found:
-            session = _build_stash_session(
-                storage.get_character(telegram_id, refresh_energy=False),
-                "found",
-            )
-            save_stash_session(storage, telegram_id, session)
-            return True
+    """Небольшой шанс найти координаты хабара во время охоты (предмет в инвентарь)."""
+    if random.random() * 100 < STASH_COORDS_DROP_CHANCE:
+        storage.add_item(telegram_id, STASH_COORDINATE_KEY, 1)
+        return True
     return False
