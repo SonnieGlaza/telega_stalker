@@ -1103,6 +1103,7 @@ def run_smoke_check() -> None:
             _mutants_chase_player,
             _relative_attack_side,
         )
+        from app.mutant_abilities import mutant_can_melee_attack, mutant_can_ranged_attack
 
         hard_tpl = QUEST_CONTRACTS["hard_forest"]
         hard_chase = _build_session(hard_tpl, QUESTS["hard"])
@@ -1132,6 +1133,14 @@ def run_smoke_check() -> None:
         chase_sess.enemy_kinds = ["blind_dog"]
         assert _mutant_can_adjacent_attack(chase_sess, "blind_dog", (6, 5))
         assert not _mutant_can_adjacent_attack(chase_sess, "blind_dog", (6, 6))
+
+        chase_sess.enemies = [(6, 6)]
+        chase_sess.enemy_kinds = ["tushkano"]
+        assert mutant_can_melee_attack(chase_sess, "tushkano", (6, 6))
+        chase_sess.player = (5, 5)
+        chase_sess.enemies = [(5, 2)]
+        chase_sess.enemy_kinds = ["burer"]
+        assert mutant_can_ranged_attack(chase_sess, "burer", (5, 2))
 
         # Escort: anomalies always; escort follows into previous player cell; hostiles T1 or mutants.
         escort_tpl = QUEST_CONTRACTS["easy_escort_dump"]

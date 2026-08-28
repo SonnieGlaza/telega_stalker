@@ -93,14 +93,9 @@ def bloodsucker_on_field(kinds: list[str] | tuple[str, ...] | None) -> bool:
 
 
 def mutant_field_warnings(kinds: list[str] | tuple[str, ...] | None) -> list[str]:
-    notes: list[str] = []
-    if bloodsucker_on_field(kinds):
-        notes.append("⚠️ Кровосос идёт в спину и бьёт ⬇️ со спины — держи направление хода в голове.")
-    if controller_on_field(kinds):
-        notes.append(
-            f"🧠 Контролёр на поле: каждый ход все живые −{CONTROLLER_AURA_DAMAGE} HP, пока его не убить."
-        )
-    return notes
+    from app.mutant_abilities import mutant_field_ability_warnings
+
+    return mutant_field_ability_warnings(kinds)
 
 
 def apply_controller_aura_to_hp_map(

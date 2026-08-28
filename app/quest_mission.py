@@ -39,6 +39,22 @@ from app.game_logic import (
     use_medkit_item,
 )
 from app.tactical_combat import random_hostile_shots, ray_cast_first_hit, weapon_shoot_range
+from app.mutant_abilities import (
+    BLOODSUCKER_KIND,
+    DOG_KINDS,
+    apply_mutant_turn_effects,
+    mutant_attack_ability_tag,
+    mutant_can_melee_attack,
+    mutant_can_ranged_attack,
+    mutant_chase_target,
+    mutant_damage_multiplier,
+    mutant_extra_move_step,
+    mutant_extra_radiation,
+    mutant_pick_move_step,
+    mutant_should_move_when_chasing,
+    mutant_survives_melee,
+    relative_attack_side,
+)
 from app.mutant_assets import (
     MISSION_MUTANT_GRID_DIAMETER,
     MUTANT_SPRITE_KEYS,
@@ -136,8 +152,6 @@ HOSTILE_MOVE_CHANCE = 0.5
 OPPOSITE_DIRECTION = {"up": "down", "down": "up", "left": "right", "right": "left"}
 PLAYER_LEFT_OF = {"up": "left", "down": "right", "left": "down", "right": "up"}
 PLAYER_RIGHT_OF = {"up": "right", "down": "left", "left": "up", "right": "down"}
-DOG_KINDS = frozenset({"blind_dog", "pseudodog"})
-BLOODSUCKER_KIND = "bloodsucker"
 ATTACK_SIDE_LABEL = {
     "front": "⬆️ в лоб",
     "back": "⬇️ со спины",
@@ -169,22 +183,7 @@ def _relative_attack_side(
     player_pos: tuple[int, int],
     attacker_pos: tuple[int, int],
 ) -> str:
-    if attacker_pos == player_pos:
-        return "front"
-    dx = attacker_pos[0] - player_pos[0]
-    dy = attacker_pos[1] - player_pos[1]
-    if abs(dx) >= abs(dy):
-        atk_dir = "right" if dx > 0 else "left"
-    else:
-        atk_dir = "down" if dy > 0 else "up"
-    facing = _normalize_facing(player_facing)
-    if atk_dir == facing:
-        return "front"
-    if atk_dir == OPPOSITE_DIRECTION[facing]:
-        return "back"
-    if atk_dir == PLAYER_LEFT_OF[facing]:
-        return "left"
-    return "right"
+    return relative_attack_side(player_facing, player_pos, attacker_pos)
 
 
 def _attack_side_text(side: str) -> str:
@@ -773,55 +772,6 @@ def _occupied_for_hostile_move(session: QuestMissionSession) -> set[tuple[int, i
     return blocked
 
 
-def _chase_target_for_kind(session: QuestMissionSession, kind: str | None) -> tuple[int, int]:
-    if kind == BLOODSUCKER_KIND:
-        return _behind_player_cell(session)
-    return session.player
-
-
-def _dog_straight_step(
-    pos: tuple[int, int],
-    target: tuple[int, int],
-    candidates: list[tuple[int, int]],
-) -> tuple[int, int] | None:
-    px, py = target
-    x, y = pos
-    preferred: list[tuple[int, int]] = []
-    if px == x:
-        preferred.append((x, y + (1 if py > y else -1)))
-    elif py == y:
-        preferred.append((x + (1 if px > x else -1), y))
-    else:
-        if abs(px - x) >= abs(py - y):
-            preferred.append((x + (1 if px > x else -1), y))
-        else:
-            preferred.append((x, y + (1 if py > y else -1)))
-    for cell in preferred:
-        if cell in candidates:
-            return cell
-    return None
-
-
-def _pick_chase_step(
-    pos: tuple[int, int],
-    target: tuple[int, int],
-    candidates: list[tuple[int, int]],
-    kind: str | None,
-) -> tuple[int, int] | None:
-    if kind in DOG_KINDS:
-        straight = _dog_straight_step(pos, target, candidates)
-        if straight is not None:
-            return straight
-    cur_dist = _manhattan(pos, target)
-    closer = [cell for cell in candidates if _manhattan(cell, target) < cur_dist]
-    same = [cell for cell in candidates if _manhattan(cell, target) == cur_dist]
-    if closer:
-        return random.choice(closer)
-    if same:
-        return random.choice(same)
-    return None
-
-
 def _move_hostile_units(
     units: list[tuple[int, int]],
     session: QuestMissionSession,
@@ -830,11 +780,7 @@ def _move_hostile_units(
     chase_player: bool = False,
     allow_player_cell: bool = True,
 ) -> tuple[list[tuple[int, int]], list[str] | None, int, list[tuple[str, tuple[int, int]]]]:
-    """Сдвинуть юниты на соседнюю клетку.
-
-    chase_player: шаг к цели (игрок / клетка за спиной для кровососа).
-    Собаки идут по прямой; на клетку игрока не встают, если allow_player_cell=False.
-    """
+    """Сдвинуть юниты на соседнюю клетку (у каждого типа — своя «абилка» движения)."""
     moved = 0
     result: list[tuple[int, int]] = []
     result_kinds: list[str] = []
@@ -845,6 +791,12 @@ def _move_hostile_units(
         kind = kinds[i] if kinds is not None and i < len(kinds) else None
         occupied.discard(pos)
         if not chase_player and random.random() >= HOSTILE_MOVE_CHANCE:
+            result.append(pos)
+            if kind is not None:
+                result_kinds.append(kind)
+            occupied.add(pos)
+            continue
+        if chase_player and not mutant_should_move_when_chasing(session, kind, pos):
             result.append(pos)
             if kind is not None:
                 result_kinds.append(kind)
@@ -870,14 +822,26 @@ def _move_hostile_units(
 
         nxt: tuple[int, int] | None = None
         if chase_player:
-            target = _chase_target_for_kind(session, kind)
-            nxt = _pick_chase_step(pos, target, candidates, kind)
+            target = mutant_chase_target(session, kind)
+            nxt = mutant_pick_move_step(session, kind, pos, target, candidates)
             if nxt is None:
                 result.append(pos)
                 if kind is not None:
                     result_kinds.append(kind)
                 occupied.add(pos)
                 continue
+            extra = mutant_extra_move_step(
+                kind,
+                pos,
+                nxt,
+                target,
+                grid=session.grid,
+                occupied=occupied | {player_pos},
+                player_pos=player_pos,
+            )
+            if extra is not None:
+                occupied.add(nxt)
+                nxt = extra
         else:
             nxt = random.choice(candidates)
 
@@ -962,6 +926,8 @@ def _maybe_move_hostiles(
         from app.mutant_assets import apply_controller_aura_db
 
         notes.extend(apply_controller_aura_db(storage, [telegram_id], session.enemy_kinds))
+    if storage is not None and telegram_id is not None:
+        notes.extend(apply_mutant_turn_effects(storage, telegram_id, session))
     return notes, onto_player
 
 
@@ -970,15 +936,7 @@ def _mutant_can_adjacent_attack(
     kind: str,
     enemy_pos: tuple[int, int],
 ) -> bool:
-    if _manhattan(enemy_pos, session.player) != 1:
-        return False
-    if kind in DOG_KINDS:
-        px, py = session.player
-        ex, ey = enemy_pos
-        return px == ex or py == ey
-    if kind == BLOODSUCKER_KIND:
-        return _relative_attack_side(session.player_facing, session.player, enemy_pos) == "back"
-    return _mutants_chase_player(session)
+    return mutant_can_melee_attack(session, kind, enemy_pos)
 
 
 def _remove_enemy_at_index(session: QuestMissionSession, idx: int) -> str:
@@ -992,6 +950,64 @@ def _remove_enemy_at_index(session: QuestMissionSession, idx: int) -> str:
     return killer_label_for_kind(kind, npc=False) if kind else "мутанта"
 
 
+def _apply_mutant_hit(
+    storage: Storage,
+    telegram_id: int,
+    session: QuestMissionSession,
+    player: Character,
+    kind: str,
+    attacker_pos: tuple[int, int],
+    *,
+    prior_damage: int,
+    pending: int,
+    ranged: bool = False,
+) -> tuple[int, str | None, ActionResult | None]:
+    """Один удар мутанта: урон, рад, текст. Возвращает (new_pending, note, death)."""
+    from app.death_flavor import encounter_phrase_for_kind, killer_label_for_kind
+
+    side = _relative_attack_side(session.player_facing, session.player, attacker_pos)
+    dmg = _combat_damage(
+        session.location,
+        session.difficulty,
+        player,
+        kind=kind,
+        hit_side=side,
+        npc=False,
+        enemy_kinds=session.enemy_kinds,
+    )
+    if ranged:
+        dmg = max(1, int(dmg * 0.72))
+    pending += dmg
+    rad = mutant_extra_radiation(kind, side)
+    if rad > 0:
+        storage.adjust_survival(telegram_id, radiation_delta=rad)
+    phrase = encounter_phrase_for_kind(kind, npc=False)
+    side_txt = _attack_side_text(side)
+    ability = mutant_attack_ability_tag(kind, ranged=ranged)
+    rad_txt = f" ☢+{rad}" if rad > 0 else ""
+    note = f"{'Удар' if ranged else 'Бой'} {phrase} ({side_txt}){ability}: −{dmg} HP.{rad_txt}"
+    if int(player.health) - max(0, int(prior_damage)) - pending <= 0:
+        from app.game_logic import remember_death_cause, remember_death_killer
+
+        remember_death_cause(storage, telegram_id, "mutant")
+        remember_death_killer(storage, telegram_id, killer_label_for_kind(kind, npc=False))
+        return (
+            pending,
+            note,
+            ActionResult(
+                False,
+                f"Ты пал в бою на «{session.location}».\nКонтракт сорван.",
+                payload={
+                    "mission_active": False,
+                    "mission_dead": True,
+                    "death_location": session.location,
+                    "death_cause": "mutant",
+                },
+            ),
+        )
+    return pending, note, None
+
+
 def _resolve_mutant_adjacent_attacks(
     storage: Storage,
     telegram_id: int,
@@ -1001,95 +1017,82 @@ def _resolve_mutant_adjacent_attacks(
     prior_damage: int = 0,
     onto_player: list[tuple[str, tuple[int, int]]] | None = None,
 ) -> tuple[list[str], int, ActionResult | None]:
-    """Удары мутантов с соседней клетки и заход на клетку игрока."""
-    from app.death_flavor import encounter_phrase_for_kind, killer_label_for_kind
+    """Удары мутантов: дальний (бюрер/гигант), с соседней клетки и заход на игрока."""
+    from app.combat_loot import grant_combat_loot
+    from app.death_flavor import killer_label_for_kind
 
     notes: list[str] = []
     pending = 0
     death_result: ActionResult | None = None
 
     for kind, from_pos in onto_player or []:
-        side = _relative_attack_side(session.player_facing, session.player, from_pos)
-        dmg = _combat_damage(
-            session.location,
-            session.difficulty,
+        pending, note, death_result = _apply_mutant_hit(
+            storage,
+            telegram_id,
+            session,
             player,
-            kind=kind,
-            hit_side=side,
-            npc=False,
+            kind,
+            from_pos,
+            prior_damage=prior_damage,
+            pending=pending,
         )
-        pending += dmg
-        phrase = encounter_phrase_for_kind(kind, npc=False)
-        side_txt = _attack_side_text(side)
-        for idx, pos in enumerate(session.enemies):
-            if pos == session.player:
-                _remove_enemy_at_index(session, idx)
-                break
-        from app.combat_loot import grant_combat_loot
-
-        loot = grant_combat_loot(storage, telegram_id, npc=False)
-        loot_note = f" Лут: {loot}." if loot else ""
-        notes.append(f"Бой {phrase} ({side_txt}): −{dmg} HP.{loot_note}")
-        if int(player.health) - max(0, int(prior_damage)) - pending <= 0:
-            from app.game_logic import remember_death_cause, remember_death_killer
-
-            remember_death_cause(storage, telegram_id, "mutant")
-            remember_death_killer(storage, telegram_id, killer_label_for_kind(kind, npc=False))
-            death_result = ActionResult(
-                False,
-                f"Ты пал в бою на «{session.location}».\nКонтракт сорван.",
-                payload={
-                    "mission_active": False,
-                    "mission_dead": True,
-                    "death_location": session.location,
-                    "death_cause": "mutant",
-                },
-            )
-            break
-
-    if death_result is not None:
-        return notes, pending, death_result
+        if note:
+            for idx, pos in enumerate(session.enemies):
+                if pos == session.player:
+                    _remove_enemy_at_index(session, idx)
+                    break
+            loot = grant_combat_loot(storage, telegram_id, npc=False)
+            loot_note = f" Лут: {loot}." if loot else ""
+            notes.append(note + loot_note)
+        if death_result is not None:
+            return notes, pending, death_result
 
     i = 0
     while i < len(session.enemies):
         pos = session.enemies[i]
         kind = session.enemy_kinds[i] if i < len(session.enemy_kinds) else ""
+        if mutant_can_ranged_attack(session, kind, pos):
+            pending, note, death_result = _apply_mutant_hit(
+                storage,
+                telegram_id,
+                session,
+                player,
+                kind,
+                pos,
+                prior_damage=prior_damage,
+                pending=pending,
+                ranged=True,
+            )
+            if note:
+                notes.append(note)
+            i += 1
+            if death_result is not None:
+                return notes, pending, death_result
+            continue
         if not _mutant_can_adjacent_attack(session, kind, pos):
             i += 1
             continue
-        side = _relative_attack_side(session.player_facing, session.player, pos)
-        dmg = _combat_damage(
-            session.location,
-            session.difficulty,
+        pending, note, death_result = _apply_mutant_hit(
+            storage,
+            telegram_id,
+            session,
             player,
-            kind=kind,
-            hit_side=side,
-            npc=False,
+            kind,
+            pos,
+            prior_damage=prior_damage,
+            pending=pending,
         )
-        pending += dmg
-        label = _remove_enemy_at_index(session, i)
-        from app.combat_loot import grant_combat_loot
-
-        loot = grant_combat_loot(storage, telegram_id, npc=False)
-        loot_note = f" Лут: {loot}." if loot else ""
-        side_txt = _attack_side_text(side)
-        notes.append(f"Удар {label} ({side_txt}): −{dmg} HP.{loot_note}")
-        if int(player.health) - max(0, int(prior_damage)) - pending <= 0:
-            from app.game_logic import remember_death_cause, remember_death_killer
-
-            remember_death_cause(storage, telegram_id, "mutant")
-            remember_death_killer(storage, telegram_id, label)
-            death_result = ActionResult(
-                False,
-                f"Ты пал в бою на «{session.location}».\nКонтракт сорван.",
-                payload={
-                    "mission_active": False,
-                    "mission_dead": True,
-                    "death_location": session.location,
-                    "death_cause": "mutant",
-                },
-            )
-            break
+        if note:
+            if mutant_survives_melee(kind):
+                notes.append(note + " Плоть отшатнулась — ещё жива!")
+                i += 1
+            else:
+                _remove_enemy_at_index(session, i)
+                loot = grant_combat_loot(storage, telegram_id, npc=False)
+                loot_note = f" Лут: {loot}." if loot else ""
+                notes.append(note + loot_note)
+        if death_result is not None:
+            return notes, pending, death_result
 
     return notes, pending, death_result
 
@@ -1130,6 +1133,7 @@ def _resolve_hostile_contact(
         kind=kind,
         hit_side=side,
         npc=npc,
+        enemy_kinds=session.enemy_kinds if not npc else None,
     )
     if kinds is not None and len(kinds) == len(units):
         new_units: list[tuple[int, int]] = []
@@ -1243,6 +1247,7 @@ def _combat_damage(
     kind: str = "",
     hit_side: str = "front",
     npc: bool = False,
+    enemy_kinds: list[str] | None = None,
 ) -> int:
     from app.artifact_features import artifact_outgoing_damage_mult
 
@@ -1254,10 +1259,11 @@ def _combat_damage(
     if npc:
         diff_mult *= 1.1
     raw = int(raw * diff_mult)
-    side_mult = {"front": 1.0, "left": 1.08, "right": 1.08, "back": 1.22}.get(hit_side, 1.0)
-    if kind == BLOODSUCKER_KIND and hit_side == "back":
-        side_mult = 1.45
-    raw = max(1, int(raw * side_mult))
+    if not npc and kind:
+        raw = max(1, int(raw * mutant_damage_multiplier(kind, hit_side, enemy_kinds)))
+    else:
+        side_mult = {"front": 1.0, "left": 1.08, "right": 1.08, "back": 1.22}.get(hit_side, 1.0)
+        raw = max(1, int(raw * side_mult))
     if difficulty in {"heavy", "impossible"} and not npc:
         soak = 0
         pre_defense = raw
@@ -1570,7 +1576,7 @@ def start_or_resume_quest_mission(
         f"{escort_hint}{warn_block}\n"
         "Зелёная обводка — ты и цели (собери их). Красная — враги. Аномалии без обводки.\n"
         "Дойди до целей и вернись на старт (зелёная рамка клетки).\n"
-        "Мутанты каждый ход идут к тебе (собаки — по прямой, кровосос — в спину). "
+        "Мутанты каждый ход идут к тебе — у каждого типа своя «абилка» (см. подсказки при старте). "
         "НПС чаще стреляют и сильнее на высокой сложности; на 🟠/🔴 ещё и сдвигаются к тебе. "
         "Ты смотришь в сторону хода: ⬆️ лоб / ⬅️➡️ бок / ⬇️ спина."
         + (
