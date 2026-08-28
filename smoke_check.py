@@ -375,6 +375,33 @@ def run_smoke_check() -> None:
         else:
             assert step.payload.get("hunt_done") or step.payload.get("hunt_dead")
 
+        # Координаты хабара во время охоты не должны блокировать игрока после вылазки.
+        from unittest.mock import patch
+
+        from app.player_busy import player_busy_reason
+        from app.stash_hunt import (
+            STASH_COORDINATE_KEY,
+            clear_stash_session,
+            get_stash_session,
+            start_stash_hunt,
+            try_random_stash_coordinates,
+        )
+
+        storage.restore_energy(111, 100)
+        assert start_artifact_hunt(storage, 111).ok
+        with patch("app.stash_hunt.random.random", return_value=0.0):
+            assert try_random_stash_coordinates(storage, 111)
+        assert get_stash_session(storage, 111) is None
+        assert int(storage.get_character(111, refresh_energy=False).inventory.get(STASH_COORDINATE_KEY, 0)) >= 1
+        assert abandon_artifact_hunt(storage, 111).ok
+        assert get_hunt_session(storage, 111) is None
+        assert get_stash_session(storage, 111) is None
+        assert player_busy_reason(storage, 111) is None
+        stash_start = start_stash_hunt(storage, 111, source="found")
+        assert stash_start.ok, stash_start.text
+        assert get_stash_session(storage, 111) is not None
+        clear_stash_session(storage, 111)
+
         ch = storage.get_character(111, refresh_energy=False)
         assert ch is not None
         if ch.health <= 0:
@@ -1072,7 +1099,7 @@ def run_smoke_check() -> None:
         assert mission_shoot_available(radar_sess)
         radar_sess.player = (0, 0)
         radar_sess.start = (5, 5)
-        radar_sess.enemies = [(1, 0), (2, 0)]
+        radar_sess.enemies = [(1, 0), (5, 0)]
         radar_sess.enemy_kinds = ["blind_dog", "tushkano"]
         radar_sess.npcs = []
         radar_sess.npc_kinds = []
@@ -1094,8 +1121,20 @@ def run_smoke_check() -> None:
 
         # Hostile move: 50% chance path doesn't crash and keeps count.
         before = len(imp_sess.enemies) + len(imp_sess.npcs)
-        _maybe_move_hostiles(imp_sess)
+        _maybe_move_hostiles(imp_sess)[0]
         assert len(imp_sess.enemies) + len(imp_sess.npcs) == before
+
+        # Мутанты преследуют на любой сложности.
+        from app.quest_mission import (
+            _mutant_can_adjacent_attack,
+            _mutants_chase_player,
+            _relative_attack_side,
+        )
+        from app.mutant_abilities import mutant_can_melee_attack, mutant_can_ranged_attack
+
+        hard_tpl = QUEST_CONTRACTS["hard_forest"]
+        hard_chase = _build_session(hard_tpl, QUESTS["hard"])
+        assert _mutants_chase_player(hard_chase)
 
         # 🟠/🔴: мутанты преследуют и не встают на клетку игрока.
         from app.quest_mission import _manhattan
@@ -1107,10 +1146,28 @@ def run_smoke_check() -> None:
         chase_sess.npcs = []
         chase_sess.npc_kinds = []
         chase_sess.hazards = []
+        chase_sess.player_facing = "up"
         for _ in range(16):
-            _maybe_move_hostiles(chase_sess)
+            _maybe_move_hostiles(chase_sess)[0]
             assert chase_sess.player not in chase_sess.enemies
         assert _manhattan(chase_sess.enemies[0], chase_sess.player) == 1
+
+        chase_sess.enemies = [(5, 6)]
+        chase_sess.enemy_kinds = ["bloodsucker"]
+        assert _relative_attack_side("up", (5, 5), (5, 6)) == "back"
+        assert _mutant_can_adjacent_attack(chase_sess, "bloodsucker", (5, 6))
+        chase_sess.enemies = [(6, 5)]
+        chase_sess.enemy_kinds = ["blind_dog"]
+        assert _mutant_can_adjacent_attack(chase_sess, "blind_dog", (6, 5))
+        assert not _mutant_can_adjacent_attack(chase_sess, "blind_dog", (6, 6))
+
+        chase_sess.enemies = [(6, 6)]
+        chase_sess.enemy_kinds = ["tushkano"]
+        assert mutant_can_melee_attack(chase_sess, "tushkano", (6, 6))
+        chase_sess.player = (5, 5)
+        chase_sess.enemies = [(5, 2)]
+        chase_sess.enemy_kinds = ["burer"]
+        assert mutant_can_ranged_attack(chase_sess, "burer", (5, 2))
 
         # Escort: anomalies always; escort follows into previous player cell; hostiles T1 or mutants.
         escort_tpl = QUEST_CONTRACTS["easy_escort_dump"]

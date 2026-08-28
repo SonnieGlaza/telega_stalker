@@ -88,6 +88,7 @@ class SmuggleMissionSession:
     success_chance: int
     player: tuple[int, int]
     route: list[tuple[int, int]]
+    player_facing: str = "down"
     route_index: int = 0
     hazards: list[tuple[int, int]] = field(default_factory=list)
     enemies: list[tuple[int, int]] = field(default_factory=list)
@@ -109,6 +110,7 @@ class SmuggleMissionSession:
             "transport": self.transport,
             "success_chance": self.success_chance,
             "player": list(self.player),
+            "player_facing": self.player_facing,
             "route": [list(p) for p in self.route],
             "route_index": self.route_index,
             "hazards": [list(p) for p in self.hazards],
@@ -133,6 +135,7 @@ class SmuggleMissionSession:
             transport=str(raw.get("transport") or "foot"),
             success_chance=int(raw.get("success_chance") or 50),
             player=(int(raw["player"][0]), int(raw["player"][1])),
+            player_facing=str(raw.get("player_facing") or "down"),
             route=[(int(p[0]), int(p[1])) for p in (raw.get("route") or [])],
             route_index=int(raw.get("route_index") or 0),
             hazards=[(int(p[0]), int(p[1])) for p in (raw.get("hazards") or [])],
@@ -413,6 +416,14 @@ def _as_quest_compat(session: SmuggleMissionSession) -> Any:
         @property
         def grid(self) -> int:
             return session.grid
+
+        @property
+        def player_facing(self) -> str:
+            return session.player_facing
+
+        @player_facing.setter
+        def player_facing(self, value: str) -> None:
+            session.player_facing = value
 
         @property
         def mutant_chase(self) -> bool:
@@ -809,6 +820,7 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
 
     expected_seq = session.turn_seq
     session.player = (nx, ny)
+    session.player_facing = direction
     session.moves += 1
     notes: list[str] = []
     compat = _as_quest_compat(session)
@@ -858,7 +870,7 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
     if route_note:
         notes.append(route_note)
 
-    notes.extend(_maybe_move_hostiles(compat))
+    notes.extend(_maybe_move_hostiles(compat)[0])
     _fight("мутанта", "enemies", kinds_attr="enemy_kinds")
     _fight("НПС", "npcs", kinds_attr="npc_kinds", npc=True)
 

@@ -103,6 +103,36 @@ def random_cardinal_direction() -> str:
     return random.choice(list(MOVE_DELTAS.keys()))
 
 
+def aim_hostile_shot_direction(
+    origin: tuple[int, int],
+    *,
+    grid: int,
+    max_range: int,
+    player_positions: dict[int, tuple[int, int]],
+    blockers: set[tuple[int, int]],
+) -> str | None:
+    """Подобрать направление выстрела по ближайшей видимой цели."""
+    best_dir: str | None = None
+    best_dist = 10**9
+    targets = {player_positions[pid]: str(pid) for pid in player_positions}
+    for direction in MOVE_DELTAS:
+        hit_cell, _hit_kind = ray_cast_first_hit(
+            origin,
+            direction,
+            grid=grid,
+            max_range=max_range,
+            blockers=blockers,
+            targets=targets,
+        )
+        if hit_cell is None:
+            continue
+        dist = abs(hit_cell[0] - origin[0]) + abs(hit_cell[1] - origin[1])
+        if dist < best_dist:
+            best_dist = dist
+            best_dir = direction
+    return best_dir
+
+
 def random_hostile_shots(
     hostiles: list[tuple[int, int]],
     weapons: list[str],
@@ -114,17 +144,29 @@ def random_hostile_shots(
     cover: set[tuple[int, int]],
     base_cover: set[tuple[int, int]],
     damage_fn: Callable[[str], int],
+    shoot_chance: float = 0.55,
+    aim_at_players: bool = False,
 ) -> list[str]:
-    """«Танчики»: каждый враждебный юнит с шансом стреляет в случайном направлении."""
+    """Каждый враждебный юнит с шансом стреляет (по умолчанию в случайном направлении)."""
     notes: list[str] = []
     if not hostiles:
         return notes
     for idx, pos in enumerate(hostiles):
-        if random.random() > 0.55:
+        if random.random() > shoot_chance:
             continue
         weapon = weapons[idx] if idx < len(weapons) else "ПМ"
-        direction = random_cardinal_direction()
         rng = weapon_shoot_range(weapon)
+        direction = None
+        if aim_at_players:
+            direction = aim_hostile_shot_direction(
+                pos,
+                grid=grid,
+                max_range=rng,
+                player_positions=player_positions,
+                blockers=cover,
+            )
+        if direction is None:
+            direction = random_cardinal_direction()
         targets = {player_positions[pid]: str(pid) for pid in player_positions}
         hit_cell, hit_kind = ray_cast_first_hit(
             pos,
