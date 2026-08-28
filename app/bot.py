@@ -614,6 +614,9 @@ async def finish_travel_eta_message(storage: Storage, telegram_id: int) -> None:
     _release_travel_eta_lock(telegram_id)
 
 
+TELEGRAM_MESSAGE_LIMIT = 4096
+
+
 def _is_stale_callback_error(exc: TelegramBadRequest) -> bool:
     message = str(exc).lower()
     return "query is too old" in message or "query id is invalid" in message
@@ -647,6 +650,8 @@ async def edit_menu_message(
         if answer_callback:
             await safe_callback_answer(callback)
         return
+    if len(text) > TELEGRAM_MESSAGE_LIMIT:
+        text = text[: TELEGRAM_MESSAGE_LIMIT - 1].rstrip() + "…"
     try:
         await message.edit_text(text, reply_markup=reply_markup)
     except TelegramBadRequest as exc:
@@ -4321,10 +4326,37 @@ def _quests_menu_payload(storage, player):
     return _quests_compact_status(storage, player), keyboard
 
 
-def _quests_info_payload(storage, player) -> tuple[str, object]:
+QUESTS_INFO_PAGE_LIMIT = 3500
+
+
+def _split_text_pages(text: str, limit: int = QUESTS_INFO_PAGE_LIMIT) -> list[str]:
+    """Режет длинный текст по строкам, чтобы каждая страница влезала в лимит Telegram."""
+    pages: list[str] = []
+    current: list[str] = []
+    length = 0
+    for raw_line in text.split("\n"):
+        parts = [raw_line[i : i + limit] for i in range(0, len(raw_line), limit)] or [""]
+        for line in parts:
+            if current and length + len(line) + 1 > limit:
+                pages.append("\n".join(current))
+                current = []
+                length = 0
+            current.append(line)
+            length += len(line) + 1
+    if current:
+        pages.append("\n".join(current))
+    return pages or [""]
+
+
+def _quests_info_payload(storage, player, page: int = 0) -> tuple[str, object]:
     overview = build_quest_overview(storage, player)
-    text = f"{_quests_rules_text()}\n\n{overview}"
-    return text, quests_info_keyboard()
+    pages = _split_text_pages(f"{_quests_rules_text()}\n\n{overview}")
+    total_pages = len(pages)
+    safe_page = max(0, min(page, total_pages - 1))
+    text = pages[safe_page]
+    if total_pages > 1:
+        text = f"{text}\n\nСтраница {safe_page + 1}/{total_pages}"
+    return text, quests_info_keyboard(page=safe_page, total_pages=total_pages)
 
 
 def _quests_vendor_payload(storage, player, vendor: str):
@@ -4416,13 +4448,16 @@ async def refresh_quests_menu(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == "quests:info")
+@router.callback_query(F.data.startswith("quests:info:"))
 async def quests_info_callback(callback: CallbackQuery) -> None:
     storage = get_storage()
     player = storage.get_character(callback.from_user.id, refresh_energy=False)
     if player is None or not player_ready(player):
         await callback.answer("Сначала создай персонажа и выбери группировку.", show_alert=True)
         return
-    text, keyboard = _quests_info_payload(storage, player)
+    raw_page = (callback.data or "").split(":")[2:3]
+    page = int(raw_page[0]) if raw_page and raw_page[0].isdigit() else 0
+    text, keyboard = _quests_info_payload(storage, player, page)
     await edit_menu_message(callback, text, keyboard)
 
 
