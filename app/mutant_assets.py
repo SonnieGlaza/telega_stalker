@@ -95,7 +95,7 @@ def bloodsucker_on_field(kinds: list[str] | tuple[str, ...] | None) -> bool:
 def mutant_field_warnings(kinds: list[str] | tuple[str, ...] | None) -> list[str]:
     notes: list[str] = []
     if bloodsucker_on_field(kinds):
-        notes.append("⚠️ На локации Кровосос — иконка без обводки, целиться сложнее.")
+        notes.append("⚠️ Кровосос идёт в спину и бьёт ⬇️ со спины — держи направление хода в голове.")
     if controller_on_field(kinds):
         notes.append(
             f"🧠 Контролёр на поле: каждый ход все живые −{CONTROLLER_AURA_DAMAGE} HP, пока его не убить."
