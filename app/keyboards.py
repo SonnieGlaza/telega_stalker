@@ -137,10 +137,22 @@ def quests_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def quests_info_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="⬅️ К заданиям", callback_data="contract:refresh")]]
-    )
+def quests_info_keyboard(*, page: int = 0, total_pages: int = 1) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if total_pages > 1:
+        nav: list[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(
+                InlineKeyboardButton(text="⬅️ Назад", callback_data=f"quests:info:{page - 1}")
+            )
+        if page < total_pages - 1:
+            nav.append(
+                InlineKeyboardButton(text="Далее ➡️", callback_data=f"quests:info:{page + 1}")
+            )
+        if nav:
+            rows.append(nav)
+    rows.append([InlineKeyboardButton(text="⬅️ К заданиям", callback_data="contract:refresh")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def travel_keyboard(
