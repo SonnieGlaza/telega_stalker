@@ -1176,9 +1176,15 @@ def run_smoke_check() -> None:
         assert _mutant_can_adjacent_attack(chase_sess, "blind_dog", (6, 5))
         assert not _mutant_can_adjacent_attack(chase_sess, "blind_dog", (6, 6))
 
-        chase_sess.enemies = [(6, 6)]
+        chase_sess.enemies = [(5, 5)]
         chase_sess.enemy_kinds = ["tushkano"]
-        assert mutant_can_melee_attack(chase_sess, "tushkano", (6, 6))
+        chase_sess.player = (4, 4)
+        assert mutant_can_melee_attack(chase_sess, "tushkano", (5, 5))
+        assert not mutant_can_melee_attack(chase_sess, "tushkano", (5, 4))
+        from app.mutant_abilities import _diagonal_cells, mutant_hostile_move_candidates
+
+        assert (5, 5) in _diagonal_cells((4, 4), chase_sess.grid)
+        assert (5, 4) not in mutant_hostile_move_candidates("tushkano", (4, 4), chase_sess.grid)
         chase_sess.player = (5, 5)
         chase_sess.enemies = [(5, 2)]
         chase_sess.enemy_kinds = ["burer"]
@@ -2158,6 +2164,17 @@ def run_smoke_check() -> None:
         assert int(SHOP_ITEMS["ammo_shotgun"]["buy_price"]) == 90
         assert int(SHOP_ITEMS["ammo_rifle"]["buy_price"]) == 120
         assert int(SHOP_ITEMS["ammo_gauss"]["buy_price"]) == 300
+        from app.game_logic import apply_n2o_to_travel_minutes, has_n2o_travel_boost, use_nitrous_oxide
+
+        assert int(SHOP_ITEMS["nitrous_oxide"]["buy_price"]) == 1250
+        storage.add_item(111, "nitrous_oxide", 1)
+        n2o_use = use_nitrous_oxide(storage, 111)
+        assert n2o_use.ok, n2o_use.text
+        assert has_n2o_travel_boost(storage, 111)
+        reduced, n2o_note = apply_n2o_to_travel_minutes(storage, 111, 20)
+        assert reduced == 10
+        assert "азота" in n2o_note.lower()
+        assert not has_n2o_travel_boost(storage, 111)
         from app.faction_bots import FACTION_BOT_COUNT_UPGRADE_COST
 
         assert FACTION_BOT_COUNT_UPGRADE_COST == 100_000

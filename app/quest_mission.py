@@ -56,6 +56,7 @@ from app.mutant_abilities import (
     mutant_damage_multiplier,
     mutant_extra_move_step,
     mutant_extra_radiation,
+    mutant_hostile_move_candidates,
     mutant_pick_move_step,
     mutant_should_move_when_chasing,
     mutant_survives_melee,
@@ -810,7 +811,7 @@ def _move_hostile_units(
             continue
 
         candidates: list[tuple[int, int]] = []
-        for cell in _adjacent_cells(pos, session.grid):
+        for cell in mutant_hostile_move_candidates(kind, pos, session.grid):
             if cell == player_pos:
                 if allow_player_cell and not chase_player:
                     candidates.append(cell)

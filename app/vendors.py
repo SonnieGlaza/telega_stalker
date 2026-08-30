@@ -104,6 +104,7 @@ _BARKEEP_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
     2: (
         "sausage",
         "mineral_water",
+        "nitrous_oxide",
         "weapon_mp5",
         "weapon_chaser13",
         "weapon_aks74u",
