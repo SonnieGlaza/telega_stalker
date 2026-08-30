@@ -38,7 +38,13 @@ from app.game_logic import (
     try_auto_turn_in_contract,
     use_medkit_item,
 )
-from app.tactical_combat import random_hostile_shots, ray_cast_first_hit, weapon_shoot_range
+from app.tactical_combat import (
+    collect_player_shot_hits,
+    consume_shot_ammo,
+    npc_weapon_damage,
+    random_hostile_shots,
+    weapon_shoot_range,
+)
 from app.mutant_abilities import (
     BLOODSUCKER_KIND,
     DOG_KINDS,
@@ -869,7 +875,6 @@ def _maybe_npc_shots(
     if len(weapons) != len(session.npcs):
         weapons = [random.choice(_npc_weapon_pool(session.difficulty)) for _ in session.npcs]
     hp_map = {str(telegram_id): player.health}
-    dmg_mult = _npc_damage_mult(session)
     notes = random_hostile_shots(
         list(session.npcs),
         weapons,
@@ -879,10 +884,7 @@ def _maybe_npc_shots(
         player_characters={telegram_id: player},
         cover=set(),
         base_cover=set(),
-        damage_fn=lambda weapon: max(
-            5,
-            int((weapon_shoot_range(weapon) * 3 + random.randint(0, 4)) * dmg_mult),
-        ),
+        damage_fn=lambda w: npc_weapon_damage(w, mult=_npc_damage_mult(session)),
         shoot_chance=_npc_shoot_chance(session),
         aim_at_players=True,
     )
@@ -1947,41 +1949,46 @@ def shoot_quest_mission(storage: Storage, telegram_id: int, direction: str) -> A
     if shoot_range <= 0:
         return ActionResult(False, "Это оружие не стреляет на дистанции.", payload={"mission_active": True})
 
+    ammo_result = consume_shot_ammo(storage, telegram_id, weapon)
+    if ammo_result is not None:
+        return ammo_result
+
     targets: dict[tuple[int, int], str] = {
         pos: "mutant" for pos in session.enemies
     }
     targets.update({pos: "npc" for pos in session.npcs})
-    hit_cell, hit_kind = ray_cast_first_hit(
+    hits = collect_player_shot_hits(
         session.player,
         direction,
         grid=session.grid,
-        max_range=shoot_range,
+        weapon_name=weapon,
         blockers=set(),
         targets=targets,
+        cover=set(),
     )
 
     expected_seq = session.turn_seq
     session.player_facing = direction
     session.moves += 1
     notes: list[str] = []
-    if hit_cell is not None and hit_kind == "npc":
-        label = _remove_npc_at(session, hit_cell)
+    if hits:
         from app.combat_loot import grant_combat_loot
 
-        loot = grant_combat_loot(storage, telegram_id, npc=True)
-        loot_note = f" Лут: {loot}." if loot else ""
-        notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).{loot_note}")
-        if session.kind == "clear_marauder" and not session.npcs:
-            notes.append("Зона зачищена от мародёров.")
-    elif hit_cell is not None and hit_kind == "mutant":
-        label = _remove_enemy_at(session, hit_cell)
-        from app.combat_loot import grant_combat_loot
-
-        loot = grant_combat_loot(storage, telegram_id, npc=False)
-        loot_note = f" Лут: {loot}." if loot else ""
-        notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).{loot_note}")
-        if session.kind == "clear_mutant" and not session.enemies:
-            notes.append("Зона зачищена от мутантов.")
+        for hit_cell, hit_kind in hits:
+            if hit_kind == "npc":
+                label = _remove_npc_at(session, hit_cell)
+                loot = grant_combat_loot(storage, telegram_id, npc=True)
+                loot_note = f" Лут: {loot}." if loot else ""
+                notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).{loot_note}")
+                if session.kind == "clear_marauder" and not session.npcs:
+                    notes.append("Зона зачищена от мародёров.")
+            elif hit_kind == "mutant":
+                label = _remove_enemy_at(session, hit_cell)
+                loot = grant_combat_loot(storage, telegram_id, npc=False)
+                loot_note = f" Лут: {loot}." if loot else ""
+                notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).{loot_note}")
+                if session.kind == "clear_mutant" and not session.enemies:
+                    notes.append("Зона зачищена от мутантов.")
     else:
         notes.append(f"{h(player.nickname)} промахнулся ({weapon}).")
 

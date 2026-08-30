@@ -45,7 +45,15 @@ from app.npc_assets import (
     pick_npc_kind,
 )
 from app.quest_mission import LOCATION_DANGER, MOVE_DELTAS, _draw_enemy_icon
-from app.tactical_combat import STALE_TURN_MESSAGE, best_step_toward, manhattan_distance, ray_cast_first_hit, weapon_shoot_range
+from app.tactical_combat import (
+    STALE_TURN_MESSAGE,
+    best_step_toward,
+    collect_player_shot_hits,
+    consume_shot_ammo,
+    manhattan_distance,
+    weapon_damage,
+    weapon_shoot_range,
+)
 from app.storage import Character, Storage
 
 COOP_MAX_PLAYERS = 3
@@ -1301,53 +1309,60 @@ def coop_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     if shoot_range <= 0:
         return ActionResult(False, "Это оружие не стреляет на дистанции.")
 
+    ammo_result = consume_shot_ammo(storage, telegram_id, weapon)
+    if ammo_result is not None:
+        return ammo_result
+
     targets: dict[tuple[int, int], str] = {pos: "mutant" for pos in session.enemies}
     targets.update({pos: "npc" for pos in session.npcs})
-    hit_cell, hit_kind = ray_cast_first_hit(
+    hits = collect_player_shot_hits(
         session.pos(telegram_id),
         direction,
         grid=session.grid,
-        max_range=shoot_range,
+        weapon_name=weapon,
         blockers=set(),
         targets=targets,
+        cover=set(),
     )
     turn_seq = session.turn_seq
-    dmg = max(4, shoot_range * 3 + random.randint(0, 4))
+    dmg = weapon_damage(weapon)
     note = f"{h(player.nickname)} промахнулся ({weapon})."
-    if hit_cell is not None and hit_kind == "mutant" and hit_cell in session.enemies:
-        idx = session.enemies.index(hit_cell)
-        while len(session.enemy_hp) < len(session.enemies):
-            session.enemy_hp.append(12)
-        session.enemy_hp[idx] = max(0, int(session.enemy_hp[idx]) - dmg)
-        kind = session.enemy_kinds[idx] if idx < len(session.enemy_kinds) else ""
-        label = killer_label_for_kind(kind, npc=False) if kind else "мутанта"
-        if session.enemy_hp[idx] <= 0:
-            session.enemies.pop(idx)
-            if idx < len(session.enemy_kinds):
-                session.enemy_kinds.pop(idx)
-            session.enemy_hp.pop(idx)
-            loot = grant_combat_loot(storage, telegram_id, npc=False)
-            loot_note = f" Лут: {loot}." if loot else ""
-            note = f"{h(player.nickname)} убил {label} ({weapon}).{loot_note}"
-        else:
-            note = f"{h(player.nickname)} попал в {label}: {session.enemy_hp[idx]} HP."
-    elif hit_cell is not None and hit_kind == "npc" and hit_cell in session.npcs:
-        idx = session.npcs.index(hit_cell)
-        while len(session.npc_hp) < len(session.npcs):
-            session.npc_hp.append(14)
-        session.npc_hp[idx] = max(0, int(session.npc_hp[idx]) - dmg)
-        kind = session.npc_kinds[idx] if idx < len(session.npc_kinds) else ""
-        label = killer_label_for_kind(kind, npc=True) if kind else "НПС"
-        if session.npc_hp[idx] <= 0:
-            session.npcs.pop(idx)
-            if idx < len(session.npc_kinds):
-                session.npc_kinds.pop(idx)
-            session.npc_hp.pop(idx)
-            loot = grant_combat_loot(storage, telegram_id, npc=True)
-            loot_note = f" Лут: {loot}." if loot else ""
-            note = f"{h(player.nickname)} убил {label} ({weapon}).{loot_note}"
-        else:
-            note = f"{h(player.nickname)} попал в {label}: {session.npc_hp[idx]} HP."
+    if hits:
+        for hit_cell, hit_kind in hits:
+            if hit_kind == "mutant" and hit_cell in session.enemies:
+                idx = session.enemies.index(hit_cell)
+                while len(session.enemy_hp) < len(session.enemies):
+                    session.enemy_hp.append(12)
+                session.enemy_hp[idx] = max(0, int(session.enemy_hp[idx]) - dmg)
+                kind = session.enemy_kinds[idx] if idx < len(session.enemy_kinds) else ""
+                label = killer_label_for_kind(kind, npc=False) if kind else "мутанта"
+                if session.enemy_hp[idx] <= 0:
+                    session.enemies.pop(idx)
+                    if idx < len(session.enemy_kinds):
+                        session.enemy_kinds.pop(idx)
+                    session.enemy_hp.pop(idx)
+                    loot = grant_combat_loot(storage, telegram_id, npc=False)
+                    loot_note = f" Лут: {loot}." if loot else ""
+                    note = f"{h(player.nickname)} убил {label} ({weapon}).{loot_note}"
+                else:
+                    note = f"{h(player.nickname)} попал в {label}: {session.enemy_hp[idx]} HP."
+            elif hit_kind == "npc" and hit_cell in session.npcs:
+                idx = session.npcs.index(hit_cell)
+                while len(session.npc_hp) < len(session.npcs):
+                    session.npc_hp.append(14)
+                session.npc_hp[idx] = max(0, int(session.npc_hp[idx]) - dmg)
+                kind = session.npc_kinds[idx] if idx < len(session.npc_kinds) else ""
+                label = killer_label_for_kind(kind, npc=True) if kind else "НПС"
+                if session.npc_hp[idx] <= 0:
+                    session.npcs.pop(idx)
+                    if idx < len(session.npc_kinds):
+                        session.npc_kinds.pop(idx)
+                    session.npc_hp.pop(idx)
+                    loot = grant_combat_loot(storage, telegram_id, npc=True)
+                    loot_note = f" Лут: {loot}." if loot else ""
+                    note = f"{h(player.nickname)} убил {label} ({weapon}).{loot_note}"
+                else:
+                    note = f"{h(player.nickname)} попал в {label}: {session.npc_hp[idx]} HP."
     session.log.append(note)
 
     if _objectives_complete(session):
