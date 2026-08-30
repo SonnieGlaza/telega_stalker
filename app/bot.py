@@ -281,6 +281,7 @@ from app.game_logic import (
     can_travel_by_truck,
     use_energy_drink,
     use_nitrous_oxide,
+    can_use_n2o_during_travel,
     use_medkit,
     use_medkit_army,
     use_medkit_science,
@@ -394,6 +395,7 @@ from app.keyboards import (
     quests_keyboard,
     quests_info_keyboard,
     travel_keyboard,
+    travel_in_transit_keyboard,
     travel_transport_keyboard,
     smuggle_transport_keyboard,
     raid_keyboard,
@@ -567,7 +569,13 @@ def clear_travel_eta_message_id(storage: Storage, telegram_id: int) -> None:
     storage.delete_meta(_travel_eta_msg_key(telegram_id))
 
 
-async def upsert_travel_eta_message(bot: Bot, telegram_id: int, text: str) -> None:
+async def upsert_travel_eta_message(
+    bot: Bot,
+    telegram_id: int,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
     """Создать или отредактировать live-сообщение о времени в пути.
 
     Всегда один активный message_id на игрока: правка под локом, без параллельных send.
@@ -580,7 +588,12 @@ async def upsert_travel_eta_message(bot: Bot, telegram_id: int, text: str) -> No
         message_id = get_travel_eta_message_id(storage, telegram_id)
         if message_id is not None:
             try:
-                await bot.edit_message_text(chat_id=telegram_id, message_id=message_id, text=clean)
+                await bot.edit_message_text(
+                    chat_id=telegram_id,
+                    message_id=message_id,
+                    text=clean,
+                    reply_markup=reply_markup,
+                )
                 return
             except TelegramBadRequest as exc:
                 low = str(exc).lower()
@@ -592,7 +605,7 @@ async def upsert_travel_eta_message(bot: Bot, telegram_id: int, text: str) -> No
             # Только meta: лок уже удерживаем, pop ломает взаимное исключение.
             storage.delete_meta(_travel_eta_msg_key(telegram_id))
         try:
-            sent = await bot.send_message(telegram_id, clean)
+            sent = await bot.send_message(telegram_id, clean, reply_markup=reply_markup)
             set_travel_eta_message_id(storage, telegram_id, sent.message_id)
         except Exception:
             logger.debug("Travel ETA send failed for %s", telegram_id, exc_info=True)
@@ -605,7 +618,9 @@ async def publish_travel_live_eta(bot: Bot, telegram_id: int) -> None:
         return
     status = travel_status_with_smuggle(storage, telegram_id) or travel_status_text(player)
     if status:
-        await upsert_travel_eta_message(bot, telegram_id, status)
+        show_n2o = can_use_n2o_during_travel(storage, telegram_id)
+        markup = travel_in_transit_keyboard(show_n2o_button=show_n2o)
+        await upsert_travel_eta_message(bot, telegram_id, status, reply_markup=markup)
 
 
 async def finish_travel_eta_message(storage: Storage, telegram_id: int) -> None:
@@ -6689,8 +6704,14 @@ async def use_energy_drink_callback(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "use:nitrous_oxide")
 async def use_nitrous_oxide_callback(callback: CallbackQuery) -> None:
-    result = use_nitrous_oxide(get_storage(), callback.from_user.id)
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    was_traveling = player is not None and is_traveling(player)
+    result = use_nitrous_oxide(storage, telegram_id)
     await reply_action_result(callback, result.text)
+    if result.ok and was_traveling:
+        await publish_travel_live_eta(callback.bot, telegram_id)
 
 
 @router.callback_query(F.data == "use:medkit")
@@ -7931,6 +7952,7 @@ async def show_travel(message: Message) -> None:
 
     locations = filter_travel_locations_for_faction(db.get_locations(), player.faction)
     traveling = is_traveling(player)
+    show_n2o = traveling and can_use_n2o_during_travel(db, player.telegram_id)
     if traveling:
         loc = format_location_display(player)
         text = (
@@ -7949,7 +7971,7 @@ async def show_travel(message: Message) -> None:
         )
     await message.answer(
         text,
-        reply_markup=travel_keyboard(locations, traveling=traveling),
+        reply_markup=travel_keyboard(locations, traveling=traveling, show_n2o_button=show_n2o),
     )
 
 
@@ -7968,7 +7990,15 @@ async def travel_status_callback(callback: CallbackQuery) -> None:
         return
     await safe_callback_answer(callback)
     # Не шлём второе «В пути» — обновляем тот же live-таймер.
-    await upsert_travel_eta_message(callback.bot, callback.from_user.id, status)
+    storage = get_storage()
+    show_n2o = can_use_n2o_during_travel(storage, callback.from_user.id)
+    markup = travel_in_transit_keyboard(show_n2o_button=show_n2o)
+    await upsert_travel_eta_message(
+        callback.bot,
+        callback.from_user.id,
+        status,
+        reply_markup=markup,
+    )
 
 
 @router.callback_query(F.data == "travel:back")
@@ -7982,7 +8012,9 @@ async def travel_back_callback(callback: CallbackQuery) -> None:
     locations = filter_travel_locations_for_faction(
         get_storage().get_locations(), player.faction
     )
-    traveling = bool(player.travel_destination)
+    storage = get_storage()
+    traveling = is_traveling(player)
+    show_n2o = traveling and can_use_n2o_during_travel(storage, player.telegram_id)
     text = (
         "Выбери локацию, затем транспорт.\n\n"
         f"{describe_travel_fuel_status(player)}"
@@ -7990,7 +8022,7 @@ async def travel_back_callback(callback: CallbackQuery) -> None:
     await edit_menu_message(
         callback,
         text,
-        travel_keyboard(locations, traveling=traveling),
+        travel_keyboard(locations, traveling=traveling, show_n2o_button=show_n2o),
     )
 
 
@@ -10273,7 +10305,14 @@ async def run_bot() -> None:
                 for user_id, text in collect_travel_eta_notices(storage):
                     try:
                         # Без action_result_text — иначе каждую секунду дергаются сайд-эффекты.
-                        await upsert_travel_eta_message(bot, user_id, text)
+                        show_n2o = can_use_n2o_during_travel(storage, user_id)
+                        markup = travel_in_transit_keyboard(show_n2o_button=show_n2o)
+                        await upsert_travel_eta_message(
+                            bot,
+                            user_id,
+                            text,
+                            reply_markup=markup,
+                        )
                     except Exception:
                         logger.debug("Failed travel live ETA for %s", user_id)
             except Exception:
