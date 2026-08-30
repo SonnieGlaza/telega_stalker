@@ -5200,7 +5200,7 @@ def accept_duel(
     return ActionResult(True, target_text, payload=payload), challenger_text
 
 
-# Расходники/топливо, которые можно брать пачкой у торговца.
+# Расходники, патроны и топливо, которые можно брать пачкой у торговца.
 BULK_BUY_ITEM_KEYS: frozenset[str] = frozenset(
     {
         "energy_drink",
@@ -5209,6 +5209,10 @@ BULK_BUY_ITEM_KEYS: frozenset[str] = frozenset(
         "medkit_army",
         "medkit_science",
         "ammo_pack",
+        "ammo_pistol",
+        "ammo_shotgun",
+        "ammo_rifle",
+        "ammo_gauss",
         "vodka",
         "antirad",
         "antibiotic",
