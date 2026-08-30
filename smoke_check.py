@@ -2164,6 +2164,11 @@ def run_smoke_check() -> None:
         assert int(SHOP_ITEMS["ammo_shotgun"]["buy_price"]) == 90
         assert int(SHOP_ITEMS["ammo_rifle"]["buy_price"]) == 120
         assert int(SHOP_ITEMS["ammo_gauss"]["buy_price"]) == 300
+        storage.change_money(111, 20_000, skip_debt_collect=True)
+        bulk_ammo = buy_item(storage, 111, "ammo_pistol", amount=10)
+        assert bulk_ammo.ok, bulk_ammo.text
+        assert "×10" in bulk_ammo.text
+        assert int(storage.get_character(111, refresh_energy=False).inventory.get("ammo_pistol", 0)) >= 10
         from app.game_logic import apply_n2o_to_travel_minutes, has_n2o_travel_boost, use_nitrous_oxide
         from app.vendors import (
             get_vendor_tier,
