@@ -68,7 +68,7 @@ VENDOR_STAGE_LABELS: dict[str, dict[int, str]] = {
     },
     "tech": {
         1: "улучшение брони, скидка на ремонт 2%",
-        2: "доп. ячейка артефакта (+1 к ячейкам брони), скидка на ремонт 4%",
+        2: "закись азота (N2O), доп. ячейка артефакта (+1 к ячейкам брони), скидка на ремонт 4%",
         3: "новых товаров нет — скидка на ремонт 6%",
         4: "новых товаров нет — скидка на ремонт 8%",
         5: "скидка на ремонт 8% (максимум)",
@@ -104,7 +104,6 @@ _BARKEEP_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
     2: (
         "sausage",
         "mineral_water",
-        "nitrous_oxide",
         "weapon_mp5",
         "weapon_chaser13",
         "weapon_aks74u",
@@ -156,7 +155,7 @@ _MEDIC_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
 
 _TECH_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
     1: ("armor_upgrade", "gear_upgrade"),
-    2: ("artifact_slot",),
+    2: ("nitrous_oxide", "artifact_slot"),
     3: (),
     4: (),
     5: (),
