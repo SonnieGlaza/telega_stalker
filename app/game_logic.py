@@ -215,6 +215,7 @@ CONTROLLED_LOCATION_RU_BONUS = 1.1
 
 SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "energy_drink": {"name": "Энергетик", "buy_price": 111, "sell_price": 50},
+    "nitrous_oxide": {"name": "Закись азота (N2O)", "buy_price": 1250, "sell_price": 500},
     "medkit": {"name": "Аптечка", "buy_price": 100, "sell_price": 46},
     "medkit_army": {"name": "Армейская аптечка", "buy_price": 200, "sell_price": 80},
     "medkit_science": {"name": "Научная аптечка", "buy_price": 300, "sell_price": 120},
@@ -440,6 +441,9 @@ for _ammo_key, _buy, _sell in (
 ):
     SHOP_ITEMS[_ammo_key]["buy_price"] = _buy
     SHOP_ITEMS[_ammo_key]["sell_price"] = _sell
+if "nitrous_oxide" in SHOP_ITEMS:
+    SHOP_ITEMS["nitrous_oxide"]["buy_price"] = 1250
+    SHOP_ITEMS["nitrous_oxide"]["sell_price"] = 500
 
 # Обрез сильнее ПМ — фиксируем цену выше ПМ (после T1×5).
 WEAPON_CATALOG["weapon_sawedoff"]["buy_price"] = 17000
@@ -572,6 +576,7 @@ ARMOR_MITIGATION_BY_NAME.setdefault(
 
 ITEM_LABELS = {
     "energy_drink": "Энергетик",
+    "nitrous_oxide": "Закись азота (N2O)",
     "medkit": "Аптечка",
     "medkit_army": "Армейская аптечка",
     "medkit_science": "Научная аптечка",
@@ -1330,6 +1335,35 @@ WAR_ALLY_SUCCESS_RATING = 10
 WAR_LOBBY_ENERGY_COST = 24
 # 1 игровая минута пути = 10 реальных секунд (отсчёт в КПК).
 TRAVEL_REAL_SECONDS_PER_GAME_MINUTE = 10
+N2O_TRAVEL_META_PREFIX = "n2o_travel:"
+N2O_TRAVEL_SPEED_MULT = 2.0
+
+
+def _n2o_travel_meta_key(telegram_id: int) -> str:
+    return f"{N2O_TRAVEL_META_PREFIX}{int(telegram_id)}"
+
+
+def has_n2o_travel_boost(storage: Storage, telegram_id: int) -> bool:
+    return bool(storage.get_meta(_n2o_travel_meta_key(telegram_id)))
+
+
+def consume_n2o_travel_boost(storage: Storage, telegram_id: int) -> bool:
+    key = _n2o_travel_meta_key(telegram_id)
+    if not storage.get_meta(key):
+        return False
+    storage.delete_meta(key)
+    return True
+
+
+def apply_n2o_to_travel_minutes(
+    storage: Storage,
+    telegram_id: int,
+    travel_minutes: int,
+) -> tuple[int, str]:
+    if not consume_n2o_travel_boost(storage, telegram_id):
+        return travel_minutes, ""
+    reduced = max(1, int(round(travel_minutes / N2O_TRAVEL_SPEED_MULT)))
+    return reduced, "\nЗакись азота: время в пути ÷2."
 ZONE_EVENT_POOL: tuple[tuple[str, int, str], ...] = (
     ("mutant_swarm", 10, "Миграция мутантов: сопротивление на локации выросло."),
     ("bandit_ambush", 7, "Бандитские засады усилили гарнизон противника."),
@@ -4508,6 +4542,29 @@ def use_energy_drink(storage: Storage, telegram_id: int) -> ActionResult:
     return ActionResult(True, "Ты выпил энергетик и восстановил 35 энергии.")
 
 
+def use_nitrous_oxide(storage: Storage, telegram_id: int) -> ActionResult:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if is_traveling(player):
+        return ActionResult(False, travel_block_text(player) or "Нельзя активировать закись в пути.")
+    blocked = _reject_if_player_busy(storage, telegram_id)
+    if blocked is not None:
+        return blocked
+    if has_n2o_travel_boost(storage, telegram_id):
+        return ActionResult(False, "Закись азота уже активирована — сначала соверши переход.")
+    if not storage.remove_item(telegram_id, "nitrous_oxide", 1):
+        return ActionResult(False, "У тебя нет закиси азота (N2O) в инвентаре.")
+    storage.set_meta(_n2o_travel_meta_key(telegram_id), "1")
+    return ActionResult(
+        True,
+        "Закись азота (N2O) активирована.\n"
+        "Следующий переход по карте займёт в 2 раза меньше времени.",
+    )
+
+
 def use_medkit_item(
     storage: Storage, telegram_id: int, item_key: str = "medkit", *, skip_busy: str | None = None
 ) -> ActionResult:
@@ -5303,6 +5360,7 @@ def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1)
 TRADER_SELL_CATALOG: dict[str, tuple[str, ...]] = {
     "consumables": (
         "energy_drink",
+        "nitrous_oxide",
         "medkit",
         "medkit_army",
         "medkit_science",
@@ -6617,6 +6675,7 @@ def travel_to(
         character.faction,
     )
     travel_minutes = max(1, int(round(base_minutes / speed_mult)))
+    travel_minutes, n2o_note = apply_n2o_to_travel_minutes(storage, telegram_id, travel_minutes)
     real_seconds = travel_minutes * TRAVEL_REAL_SECONDS_PER_GAME_MINUTE
     arrives_at = _utc_now() + timedelta(seconds=real_seconds)
 
@@ -6666,7 +6725,7 @@ def travel_to(
         True,
         f"Выехал из «{character.location}» → «{destination}» {transport_labels[transport_mode]}.\n"
         f"Затрачено энергии: {energy_cost}."
-        f"{fuel_text}{vehicle_wear_text}{note_text}",
+        f"{fuel_text}{vehicle_wear_text}{note_text}{n2o_note}",
     )
 
 
@@ -10240,6 +10299,7 @@ def begin_smuggling_travel_after_grid(storage: Storage, telegram_id: int) -> Act
         bound_transport=bound_transport,
     )
     travel_minutes = max(1, int(round(base_minutes / speed_mult)))
+    travel_minutes, n2o_note = apply_n2o_to_travel_minutes(storage, telegram_id, travel_minutes)
     real_seconds = travel_minutes * TRAVEL_REAL_SECONDS_PER_GAME_MINUTE
     arrives_at = _utc_now() + timedelta(seconds=real_seconds)
 
@@ -10270,7 +10330,7 @@ def begin_smuggling_travel_after_grid(storage: Storage, telegram_id: int) -> Act
         f"✅ Маршрут на карте пройден!\n"
         f"Выезжаешь к точке сдачи «{destination}» "
         f"({transport_labels.get(transport_mode, transport_mode)}).\n"
-        f"Прибытие через {remaining}. Шанс сдачи ~{chance}%.",
+        f"Прибытие через {remaining}. Шанс сдачи ~{chance}%.{n2o_note}",
         payload={"mission_active": False, "mission_travel_started": True},
     )
 

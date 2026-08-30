@@ -39,7 +39,7 @@ MUTANT_ABILITIES: dict[str, MutantAbility] = {
     "tushkano": MutantAbility(
         "tushkano",
         "Рой",
-        "🐀 Тушкан — лезет с любой соседней клетки, в том числе по диагонали.",
+        "🐀 Тушкан — ходит и бьёт только по диагонали (можно заранее просчитать угрозу).",
     ),
     "bloodsucker": MutantAbility(
         "bloodsucker",
@@ -189,14 +189,39 @@ def _burer_step(
     return ranked[0] if ranked else None
 
 
-def _swarm_step(
+def _is_diagonal_adjacent(a: tuple[int, int], b: tuple[int, int]) -> bool:
+    return abs(a[0] - b[0]) == 1 and abs(a[1] - b[1]) == 1
+
+
+def _diagonal_cells(pos: tuple[int, int], grid: int) -> list[tuple[int, int]]:
+    cells: list[tuple[int, int]] = []
+    x, y = pos
+    for dx in (-1, 1):
+        for dy in (-1, 1):
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < grid and 0 <= ny < grid:
+                cells.append((nx, ny))
+    return cells
+
+
+def mutant_hostile_move_candidates(kind: str | None, pos: tuple[int, int], grid: int) -> list[tuple[int, int]]:
+    """Соседние клетки для шага мутанта (тушкан — только диагональ)."""
+    if kind == "tushkano":
+        return _diagonal_cells(pos, grid)
+    return list(iter_adjacent_cells(pos, grid))
+
+
+def _diagonal_swarm_step(
     pos: tuple[int, int],
     target: tuple[int, int],
     candidates: list[tuple[int, int]],
 ) -> tuple[int, int] | None:
-    cur = _manhattan(pos, target)
-    closer = [c for c in candidates if _manhattan(c, target) < cur]
-    same = [c for c in candidates if _manhattan(c, target) == cur]
+    diag = [c for c in candidates if _is_diagonal_adjacent(pos, c)]
+    if not diag:
+        return None
+    cur = _chebyshev(pos, target)
+    closer = [c for c in diag if _chebyshev(c, target) < cur]
+    same = [c for c in diag if _chebyshev(c, target) == cur]
     pool = closer or same
     return random.choice(pool) if pool else None
 
@@ -213,7 +238,7 @@ def mutant_pick_move_step(
         if picked is not None:
             return picked
     if kind == "tushkano":
-        return _swarm_step(pos, target, candidates)
+        return _diagonal_swarm_step(pos, target, candidates)
     if kind in DOG_KINDS or kind == "giant":
         straight = _dog_straight_step(pos, target, candidates)
         if straight is not None:
@@ -263,7 +288,7 @@ def _chebyshev(a: tuple[int, int], b: tuple[int, int]) -> int:
 
 def mutant_can_melee_attack(session: Any, kind: str, enemy_pos: tuple[int, int]) -> bool:
     if kind == "tushkano":
-        return _chebyshev(enemy_pos, session.player) == 1
+        return _is_diagonal_adjacent(enemy_pos, session.player)
     if _manhattan(enemy_pos, session.player) != 1:
         return False
     if kind in DOG_KINDS:

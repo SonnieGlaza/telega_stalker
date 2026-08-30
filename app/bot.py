@@ -280,6 +280,7 @@ from app.game_logic import (
     describe_travel_fuel_status,
     can_travel_by_truck,
     use_energy_drink,
+    use_nitrous_oxide,
     use_medkit,
     use_medkit_army,
     use_medkit_science,
@@ -6683,6 +6684,12 @@ async def drink_energy(message: Message) -> None:
 @router.callback_query(F.data == "use:energy_drink")
 async def use_energy_drink_callback(callback: CallbackQuery) -> None:
     result = use_energy_drink(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "use:nitrous_oxide")
+async def use_nitrous_oxide_callback(callback: CallbackQuery) -> None:
+    result = use_nitrous_oxide(get_storage(), callback.from_user.id)
     await reply_action_result(callback, result.text)
 
 

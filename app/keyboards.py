@@ -367,6 +367,7 @@ def barkeep_food_keyboard(
 
     catalog = [
         (shop_consumable_button_title("energy_drink"), "buyqty:energy_drink", "energy_drink"),
+        (shop_consumable_button_title("nitrous_oxide"), "buyqty:nitrous_oxide", "nitrous_oxide"),
         (shop_consumable_button_title("vodka"), "buyqty:vodka", "vodka"),
         (shop_consumable_button_title("bread"), "buyqty:bread", "bread"),
         (shop_consumable_button_title("sausage"), "buyqty:sausage", "sausage"),
@@ -683,6 +684,7 @@ def inventory_consumables_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="⚡ Выпить энергетик (+35 энергии)", callback_data="use:energy_drink")],
+            [InlineKeyboardButton(text="💨 Активировать закись азота (N2O, ÷2 время пути)", callback_data="use:nitrous_oxide")],
             [InlineKeyboardButton(text="🩹 Использовать аптечку (+25 к здоровью)", callback_data="use:medkit")],
             [InlineKeyboardButton(text="🪖 Армейская аптечка (+50 к здоровью)", callback_data="use:medkit_army")],
             [InlineKeyboardButton(text="🔬 Научная аптечка (+75 к здоровью, −15 рад.)", callback_data="use:medkit_science")],
