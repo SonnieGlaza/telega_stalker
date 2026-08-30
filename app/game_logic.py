@@ -5204,6 +5204,7 @@ def accept_duel(
 BULK_BUY_ITEM_KEYS: frozenset[str] = frozenset(
     {
         "energy_drink",
+        "nitrous_oxide",
         "medkit",
         "medkit_army",
         "medkit_science",

@@ -2165,8 +2165,23 @@ def run_smoke_check() -> None:
         assert int(SHOP_ITEMS["ammo_rifle"]["buy_price"]) == 120
         assert int(SHOP_ITEMS["ammo_gauss"]["buy_price"]) == 300
         from app.game_logic import apply_n2o_to_travel_minutes, has_n2o_travel_boost, use_nitrous_oxide
+        from app.vendors import (
+            get_vendor_tier,
+            set_vendor_tier,
+            shop_item_vendor,
+            unlocked_vendor_item_keys,
+        )
 
         assert int(SHOP_ITEMS["nitrous_oxide"]["buy_price"]) == 1250
+        assert shop_item_vendor("nitrous_oxide") == "tech"
+        assert "nitrous_oxide" not in unlocked_vendor_item_keys("barkeep", 4)
+        set_vendor_tier(storage, 111, "tech", 2)
+        assert "nitrous_oxide" in unlocked_vendor_item_keys("tech", get_vendor_tier(storage, 111, "tech"))
+        storage.change_money(111, 50_000, skip_debt_collect=True)
+        bulk_n2o = buy_item(storage, 111, "nitrous_oxide", amount=5)
+        assert bulk_n2o.ok, bulk_n2o.text
+        assert "×5" in bulk_n2o.text
+        assert int(storage.get_character(111, refresh_energy=False).inventory.get("nitrous_oxide", 0)) >= 5
         storage.add_item(111, "nitrous_oxide", 1)
         n2o_use = use_nitrous_oxide(storage, 111)
         assert n2o_use.ok, n2o_use.text

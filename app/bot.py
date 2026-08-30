@@ -415,6 +415,7 @@ from app.keyboards import (
     medic_menu_keyboard,
     medic_buy_keyboard,
     tech_menu_keyboard,
+    tech_supplies_keyboard,
     vendor_upgrade_keyboard,
     trader_sell_categories_keyboard,
     trader_sell_armor_keyboard,
@@ -3463,6 +3464,23 @@ async def show_medic_buy(callback: CallbackQuery) -> None:
             "Медик — аптечки и антирад.\nВыбери товар, затем количество.",
         ),
         medic_buy_keyboard(page=page, unlocked_keys=unlocked),
+    )
+
+
+@router.callback_query(F.data.startswith("trade:tech:buy"))
+async def show_tech_buy(callback: CallbackQuery) -> None:
+    storage = get_storage()
+    from app.vendors import get_vendor_tier, unlocked_vendor_item_keys
+
+    page = _trade_category_page(callback.data, prefix="trade:tech:buy")
+    unlocked = unlocked_vendor_item_keys("tech", get_vendor_tier(storage, callback.from_user.id, "tech"))
+    await edit_menu_message(
+        callback,
+        _trader_text(
+            callback.from_user.id,
+            "Техник — закись азота (N2O): ÷2 время перехода.\nВыбери товар, затем количество.",
+        ),
+        tech_supplies_keyboard(page=page, unlocked_keys=unlocked),
     )
 
 

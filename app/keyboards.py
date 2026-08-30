@@ -335,6 +335,7 @@ def tech_menu_keyboard(*, can_buy_upgrade: bool = True, can_buy_artifact_slot: b
     rows.append([InlineKeyboardButton(text="⭐ Уровень сервиса", callback_data="trade:upgrade:tech")])
     rows.append([InlineKeyboardButton(text="🔧 Ремонт артефактов", callback_data="tech:repair:artifacts")])
     rows.append([InlineKeyboardButton(text="🔬 Крафт из мусора", callback_data="tech:craft:menu")])
+    rows.append([InlineKeyboardButton(text="💨 Закись азота (N2O)", callback_data="trade:tech:buy:0")])
     rows.append([InlineKeyboardButton(text="🛡 Страховка артов (8000 RU)", callback_data="tech:insurance:buy")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад к торговцу", callback_data="trade:menu:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -384,7 +385,6 @@ def barkeep_food_keyboard(
 
     catalog = [
         (shop_consumable_button_title("energy_drink"), "buyqty:energy_drink", "energy_drink"),
-        (shop_consumable_button_title("nitrous_oxide"), "buyqty:nitrous_oxide", "nitrous_oxide"),
         (shop_consumable_button_title("vodka"), "buyqty:vodka", "vodka"),
         (shop_consumable_button_title("bread"), "buyqty:bread", "bread"),
         (shop_consumable_button_title("sausage"), "buyqty:sausage", "sausage"),
@@ -402,6 +402,24 @@ def barkeep_food_keyboard(
         page_prefix="trade:barkeep:food",
         back_callback="trade:vendor:barkeep",
         back_text="⬅️ Назад к бармену",
+    )
+
+
+def tech_supplies_keyboard(
+    *, page: int = 0, unlocked_keys: set[str] | frozenset[str] | None = None
+) -> InlineKeyboardMarkup:
+    from app.game_logic import shop_consumable_button_title
+
+    catalog = [
+        (shop_consumable_button_title("nitrous_oxide"), "buyqty:nitrous_oxide", "nitrous_oxide"),
+    ]
+    items = _filter_shop_rows(catalog, unlocked_keys)
+    return _trader_page_keyboard(
+        items,
+        page=page,
+        page_prefix="trade:tech:buy",
+        back_callback="trade:vendor:tech",
+        back_text="⬅️ Назад к технику",
     )
 
 
@@ -457,6 +475,9 @@ def trader_buy_consumable_qty_keyboard(item_key: str, *, unit_price: int, title:
     if vendor == "medic":
         back_callback = "trade:medic:buy:0"
         back_text = "⬅️ Назад к медику"
+    elif vendor == "tech":
+        back_callback = "trade:tech:buy:0"
+        back_text = "⬅️ Назад к технику"
     elif item_key in ("ammo_pack", "ammo_pistol", "ammo_shotgun", "ammo_rifle", "ammo_gauss"):
         back_callback = "trade:barkeep:weapons:0"
         back_text = "⬅️ Назад к оружию"
