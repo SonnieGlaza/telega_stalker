@@ -2175,6 +2175,43 @@ def run_smoke_check() -> None:
         assert reduced == 10
         assert "азота" in n2o_note.lower()
         assert not has_n2o_travel_boost(storage, 111)
+        from datetime import datetime, timedelta, timezone
+
+        from app.game_logic import (
+            apply_n2o_to_active_travel,
+            can_use_n2o_during_travel,
+            has_n2o_trip_boost,
+            is_traveling,
+        )
+
+        storage.clear_travel(111)
+        arrives = datetime.now(timezone.utc) + timedelta(seconds=100)
+        storage.start_travel(111, "Янтарь", arrives, "foot")
+        storage.add_item(111, "nitrous_oxide", 1)
+        assert can_use_n2o_during_travel(storage, 111)
+        in_travel = apply_n2o_to_active_travel(storage, 111)
+        assert in_travel.ok, in_travel.text
+        assert has_n2o_trip_boost(storage, 111)
+        traveler_n2o = storage.get_character(111, refresh_energy=False)
+        assert traveler_n2o is not None and is_traveling(traveler_n2o)
+        assert traveler_n2o.travel_arrives_at is not None
+        remaining_sec = (
+            traveler_n2o.travel_arrives_at.replace(tzinfo=timezone.utc)
+            - datetime.now(timezone.utc)
+        ).total_seconds()
+        assert remaining_sec <= 55
+        assert not can_use_n2o_during_travel(storage, 111)
+        double_n2o = apply_n2o_to_active_travel(storage, 111)
+        assert not double_n2o.ok
+        storage.clear_travel(111)
+        from app.keyboards import travel_in_transit_keyboard
+
+        n2o_rows = travel_in_transit_keyboard(show_n2o_button=True).inline_keyboard
+        assert any(btn.callback_data == "use:nitrous_oxide" for row in n2o_rows for btn in row)
+        plain_rows = travel_in_transit_keyboard(show_n2o_button=False).inline_keyboard
+        assert not any(
+            btn.callback_data == "use:nitrous_oxide" for row in plain_rows for btn in row
+        )
         from app.faction_bots import FACTION_BOT_COUNT_UPGRADE_COST
 
         assert FACTION_BOT_COUNT_UPGRADE_COST == 100_000

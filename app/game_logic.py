@@ -1336,11 +1336,16 @@ WAR_LOBBY_ENERGY_COST = 24
 # 1 игровая минута пути = 10 реальных секунд (отсчёт в КПК).
 TRAVEL_REAL_SECONDS_PER_GAME_MINUTE = 10
 N2O_TRAVEL_META_PREFIX = "n2o_travel:"
+N2O_TRIP_META_PREFIX = "n2o_trip:"
 N2O_TRAVEL_SPEED_MULT = 2.0
 
 
 def _n2o_travel_meta_key(telegram_id: int) -> str:
     return f"{N2O_TRAVEL_META_PREFIX}{int(telegram_id)}"
+
+
+def _n2o_trip_meta_key(telegram_id: int) -> str:
+    return f"{N2O_TRIP_META_PREFIX}{int(telegram_id)}"
 
 
 def has_n2o_travel_boost(storage: Storage, telegram_id: int) -> bool:
@@ -1355,6 +1360,31 @@ def consume_n2o_travel_boost(storage: Storage, telegram_id: int) -> bool:
     return True
 
 
+def _clear_n2o_trip_boost(storage: Storage, telegram_id: int) -> None:
+    storage.delete_meta(_n2o_trip_meta_key(telegram_id))
+
+
+def _mark_n2o_trip_used(storage: Storage, telegram_id: int) -> None:
+    storage.set_meta(_n2o_trip_meta_key(telegram_id), "1")
+
+
+def has_n2o_trip_boost(storage: Storage, telegram_id: int) -> bool:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or not is_traveling(player):
+        _clear_n2o_trip_boost(storage, telegram_id)
+        return False
+    return bool(storage.get_meta(_n2o_trip_meta_key(telegram_id)))
+
+
+def can_use_n2o_during_travel(storage: Storage, telegram_id: int) -> bool:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None or not is_traveling(player):
+        return False
+    if has_n2o_trip_boost(storage, telegram_id):
+        return False
+    return int(player.inventory.get("nitrous_oxide", 0)) > 0
+
+
 def apply_n2o_to_travel_minutes(
     storage: Storage,
     telegram_id: int,
@@ -1364,6 +1394,33 @@ def apply_n2o_to_travel_minutes(
         return travel_minutes, ""
     reduced = max(1, int(round(travel_minutes / N2O_TRAVEL_SPEED_MULT)))
     return reduced, "\nЗакись азота: время в пути ÷2."
+
+
+def apply_n2o_to_active_travel(storage: Storage, telegram_id: int) -> ActionResult:
+    """Ускорить текущий переход: оставшееся время ÷2."""
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if not is_traveling(player):
+        return ActionResult(False, "Сейчас ты никуда не едешь.")
+    if has_n2o_trip_boost(storage, telegram_id):
+        return ActionResult(False, "Закись азота уже использована на этом переходе.")
+    if player.travel_arrives_at is None:
+        return ActionResult(False, "Не удалось определить время прибытия.")
+    if not storage.remove_item(telegram_id, "nitrous_oxide", 1):
+        return ActionResult(False, "У тебя нет закиси азота (N2O) в инвентаре.")
+    remaining_sec = max(1, int((_as_utc(player.travel_arrives_at) - _utc_now()).total_seconds()))
+    new_remaining_sec = max(1, int(round(remaining_sec / N2O_TRAVEL_SPEED_MULT)))
+    new_arrives_at = _utc_now() + timedelta(seconds=new_remaining_sec)
+    if not storage.set_travel_arrives_at(telegram_id, new_arrives_at):
+        storage.add_item(telegram_id, "nitrous_oxide", 1)
+        return ActionResult(False, "Не удалось ускорить переход.")
+    _mark_n2o_trip_used(storage, telegram_id)
+    return ActionResult(
+        True,
+        "Закись азота (N2O) активирована.\n"
+        f"Осталось ехать: {format_remaining_travel(new_arrives_at)} (÷2).",
+    )
 ZONE_EVENT_POOL: tuple[tuple[str, int, str], ...] = (
     ("mutant_swarm", 10, "Миграция мутантов: сопротивление на локации выросло."),
     ("bandit_ambush", 7, "Бандитские засады усилили гарнизон противника."),
@@ -4549,7 +4606,7 @@ def use_nitrous_oxide(storage: Storage, telegram_id: int) -> ActionResult:
     if _is_dead(player):
         return ActionResult(False, _dead_block_text())
     if is_traveling(player):
-        return ActionResult(False, travel_block_text(player) or "Нельзя активировать закись в пути.")
+        return apply_n2o_to_active_travel(storage, telegram_id)
     blocked = _reject_if_player_busy(storage, telegram_id)
     if blocked is not None:
         return blocked
@@ -6712,6 +6769,8 @@ def travel_to(
             vehicle_wear_text = f"\nИзнос Нивы: -{niva_wear}% (прочность: {niva_durability}%)."
 
     storage.start_travel(telegram_id, destination, arrives_at, transport_mode)
+    if n2o_note:
+        _mark_n2o_trip_used(storage, telegram_id)
     if transport_mode in ("niva", "truck"):
         storage.set_bound_transport(telegram_id, transport_mode)
     transport_labels = {
@@ -10305,6 +10364,8 @@ def begin_smuggling_travel_after_grid(storage: Storage, telegram_id: int) -> Act
 
     clear_smuggle_session(storage, telegram_id)
     storage.start_travel(telegram_id, destination, arrives_at, transport_mode)
+    if n2o_note:
+        _mark_n2o_trip_used(storage, telegram_id)
     active["mode"] = "travel"
     active["grid_completed_at"] = _utc_now().isoformat()
     storage.set_meta(

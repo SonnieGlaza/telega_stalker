@@ -155,15 +155,32 @@ def quests_info_keyboard(*, page: int = 0, total_pages: int = 1) -> InlineKeyboa
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def travel_in_transit_keyboard(*, show_n2o_button: bool = False) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="⏱ Статус перехода", callback_data="travel:status")],
+    ]
+    if show_n2o_button:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="💨 Закись азота (N2O, ÷2 остаток)",
+                    callback_data="use:nitrous_oxide",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def travel_keyboard(
     locations: list[dict[str, str | int | None]],
     *,
     traveling: bool = False,
+    show_n2o_button: bool = False,
     back_callback: str | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if traveling:
-        rows.append([InlineKeyboardButton(text="⏱ Статус перехода", callback_data="travel:status")])
+        rows.extend(travel_in_transit_keyboard(show_n2o_button=show_n2o_button).inline_keyboard)
     else:
         for location in locations:
             name = str(location["name"])
