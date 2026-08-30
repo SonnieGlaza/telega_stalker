@@ -439,7 +439,7 @@ def trader_buy_consumable_qty_keyboard(item_key: str, *, unit_price: int, title:
     if vendor == "medic":
         back_callback = "trade:medic:buy:0"
         back_text = "⬅️ Назад к медику"
-    elif item_key == "ammo_pack":
+    elif item_key in ("ammo_pack", "ammo_pistol", "ammo_shotgun", "ammo_rifle", "ammo_gauss"):
         back_callback = "trade:barkeep:weapons:0"
         back_text = "⬅️ Назад к оружию"
     else:
@@ -839,7 +839,10 @@ def trader_buy_weapons_keyboard(
     from app.game_logic import shop_consumable_button_title, shop_weapon_button_title
 
     catalog = [
-        (shop_consumable_button_title("ammo_pack", label="Патроны"), "buyqty:ammo_pack", "ammo_pack"),
+        (shop_consumable_button_title("ammo_pistol"), "buyqty:ammo_pistol", "ammo_pistol"),
+        (shop_consumable_button_title("ammo_shotgun"), "buyqty:ammo_shotgun", "ammo_shotgun"),
+        (shop_consumable_button_title("ammo_rifle"), "buyqty:ammo_rifle", "ammo_rifle"),
+        (shop_consumable_button_title("ammo_gauss"), "buyqty:ammo_gauss", "ammo_gauss"),
         (shop_weapon_button_title("weapon_pm"), "buy:weapon_pm", "weapon_pm"),
         (shop_weapon_button_title("weapon_fort12"), "buy:weapon_fora12", "weapon_fort12"),
         (shop_weapon_button_title("weapon_sawedoff"), "buy:weapon_sawedoff", "weapon_sawedoff"),
@@ -1247,7 +1250,7 @@ def faction_group_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🤖 +1 оборонительный бот (25000 RU)",
+                    text="🤖 +1 оборонительный бот (100000 RU)",
                     callback_data="faction:bots:count",
                 )
             ]

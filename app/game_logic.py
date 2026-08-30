@@ -218,6 +218,10 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "medkit": {"name": "Аптечка", "buy_price": 100, "sell_price": 46},
     "medkit_army": {"name": "Армейская аптечка", "buy_price": 200, "sell_price": 80},
     "medkit_science": {"name": "Научная аптечка", "buy_price": 300, "sell_price": 120},
+    "ammo_pistol": {"name": "Патроны (пистолетные)", "buy_price": 50, "sell_price": 20},
+    "ammo_shotgun": {"name": "Патроны (дробь)", "buy_price": 90, "sell_price": 36},
+    "ammo_rifle": {"name": "Патроны (винтовочные)", "buy_price": 120, "sell_price": 48},
+    "ammo_gauss": {"name": "Элементы для гаусса", "buy_price": 300, "sell_price": 120},
     "ammo_pack": {"name": "Патроны", "buy_price": 53, "sell_price": 24},
     "artifact": {"name": "Артефакт Зоны", "buy_price": 0, "sell_price": 5000},
     "artifact_power": {"name": "Арт «Сила»", "buy_price": 0, "sell_price": 1100},
@@ -416,6 +420,10 @@ _CONSUMABLE_PRICE_OVERRIDES: dict[str, tuple[int, int]] = {
     "mineral_water": (222, 73),
     "beard_tea": (554, 184),
     "ammo_pack": (53, 24),
+    "ammo_pistol": (50, 20),
+    "ammo_shotgun": (90, 36),
+    "ammo_rifle": (120, 48),
+    "ammo_gauss": (300, 120),
     "diesel_can": (199, 89),
     "gasoline_can": (100, 44),
     "fuel_can": (199, 89),
@@ -424,6 +432,14 @@ for _key, (_buy, _sell) in _CONSUMABLE_PRICE_OVERRIDES.items():
     if _key in SHOP_ITEMS:
         SHOP_ITEMS[_key]["buy_price"] = round_shop_price(_buy)
         SHOP_ITEMS[_key]["sell_price"] = round_shop_price(_sell)
+for _ammo_key, _buy, _sell in (
+    ("ammo_pistol", 50, 20),
+    ("ammo_shotgun", 90, 36),
+    ("ammo_rifle", 120, 48),
+    ("ammo_gauss", 300, 120),
+):
+    SHOP_ITEMS[_ammo_key]["buy_price"] = _buy
+    SHOP_ITEMS[_ammo_key]["sell_price"] = _sell
 
 # Обрез сильнее ПМ — фиксируем цену выше ПМ (после T1×5).
 WEAPON_CATALOG["weapon_sawedoff"]["buy_price"] = 17000
@@ -445,18 +461,18 @@ for _season_key in SEASON_REWARD_ITEM_KEYS:
 # Координаты должны совпадать с app/zone_map.py, чтобы время перехода
 # соответствовало визуальной дистанции на карте.
 MAP_TRAVEL_POINTS: dict[str, tuple[int, int]] = {
-    "Кордон": (110, 530),
-    "Свалка": (250, 470),
-    "Росток": (395, 410),
-    "Армейские склады": (195, 250),
-    "НИИ Агропром": (340, 320),
-    "Янтарь": (735, 180),
-    "Болото": (115, 365),
-    "Темная долина": (510, 520),
-    "Рыжий лес": (730, 235),
-    "Радар": (740, 125),
-    "Припять": (690, 160),
-    "ЧАЭС": (780, 80),
+    "Болото": (118, 1120),
+    "Кордон": (288, 1120),
+    "Свалка": (307, 917),
+    "НИИ Агропром": (141, 940),
+    "Темная долина": (499, 888),
+    "Янтарь": (115, 813),
+    "Росток": (250, 740),
+    "Армейские склады": (323, 678),
+    "Рыжий лес": (198, 546),
+    "Радар": (429, 531),
+    "Припять": (391, 368),
+    "ЧАЭС": (315, 135),
 }
 
 # Сила растёт по ступеням: следующий класс оружия/брони обычно сильнее предыдущего.
@@ -559,6 +575,10 @@ ITEM_LABELS = {
     "medkit": "Аптечка",
     "medkit_army": "Армейская аптечка",
     "medkit_science": "Научная аптечка",
+    "ammo_pistol": "Патроны (пистолетные)",
+    "ammo_shotgun": "Патроны (дробь)",
+    "ammo_rifle": "Патроны (винтовочные)",
+    "ammo_gauss": "Элементы для гаусса",
     "ammo_pack": "Патроны",
     "artifact": "Артефакт Зоны",
     "artifact_power": "Арт «Сила»",
@@ -723,6 +743,8 @@ ARTIFACT_JUNK_KEYS = (
     "artifact_junk_fog",
     "artifact_junk_splinter",
 )
+ARTIFACT_JUNK_POOL_PERCENT = 60.0
+ARTIFACT_JUNK_POOL_KEY = "__junk__"
 ARTIFACT_ALL_KEYS = ARTIFACT_DROP_KEYS + ARTIFACT_JUNK_KEYS
 
 # Артефакт Зоны — 0.1% на любой локации при поиске.
@@ -737,65 +759,30 @@ ARTIFACT_LOCATION_SPAWNS: dict[str, tuple[tuple[str, float], ...]] = {
     "Болото": (
         ("artifact_power", 5.0),
         ("artifact_vitality", 5.0),
-        ("artifact_junk_slime", 11.0),
-        ("artifact_junk_fog", 12.0),
-        ("artifact_junk_bolt", 7.0),
+        (ARTIFACT_JUNK_POOL_KEY, ARTIFACT_JUNK_POOL_PERCENT),
     ),
     "Радар": (
         ("artifact_power", 7.0),
         ("artifact_vitality", 6.0),
-        ("artifact_junk_flash", 12.0),
-        ("artifact_junk_battery", 10.0),
-        ("artifact_junk_splinter", 8.0),
-        ("artifact_junk_stone", 8.0),
+        (ARTIFACT_JUNK_POOL_KEY, ARTIFACT_JUNK_POOL_PERCENT),
     ),
-    "Янтарь": (
-        ("artifact_junk_battery", 12.0),
-        ("artifact_junk_flash", 10.0),
-        ("artifact_junk_stone", 10.0),
-    ),
-    "Рыжий лес": (
-        ("artifact_junk_fog", 10.0),
-        ("artifact_junk_slime", 8.0),
-        ("artifact_junk_bolt", 8.0),
-    ),
+    "Янтарь": ((ARTIFACT_JUNK_POOL_KEY, ARTIFACT_JUNK_POOL_PERCENT),),
+    "Рыжий лес": ((ARTIFACT_JUNK_POOL_KEY, ARTIFACT_JUNK_POOL_PERCENT),),
     "Темная долина": (
         ("artifact_power", 7.0),
         ("artifact_vitality", 7.0),
-        ("artifact_junk_splinter", 12.0),
-        ("artifact_junk_stone", 10.0),
-        ("artifact_junk_bolt", 8.0),
+        (ARTIFACT_JUNK_POOL_KEY, ARTIFACT_JUNK_POOL_PERCENT),
     ),
-    "НИИ Агропром": (
-        ("artifact_junk_battery", 12.0),
-        ("artifact_junk_flash", 10.0),
-        ("artifact_junk_fog", 8.0),
-    ),
-    "Свалка": (
-        ("artifact_junk_bolt", 13.0),
-        ("artifact_junk_slime", 10.0),
-        ("artifact_junk_stone", 10.0),
-        ("artifact_junk_splinter", 8.0),
-    ),
-    "Росток": (
-        ("artifact_junk_bolt", 8.0),
-        ("artifact_junk_stone", 6.0),
-    ),
-    "Кордон": (
-        ("artifact_junk_bolt", 8.0),
-        ("artifact_junk_slime", 6.0),
-    ),
-    "Армейские склады": (
-        ("artifact_junk_battery", 8.0),
-        ("artifact_junk_bolt", 6.0),
-    ),
+    "НИИ Агропром": ((ARTIFACT_JUNK_POOL_KEY, ARTIFACT_JUNK_POOL_PERCENT),),
+    "Свалка": ((ARTIFACT_JUNK_POOL_KEY, ARTIFACT_JUNK_POOL_PERCENT),),
+    "Росток": ((ARTIFACT_JUNK_POOL_KEY, ARTIFACT_JUNK_POOL_PERCENT),),
+    "Кордон": ((ARTIFACT_JUNK_POOL_KEY, ARTIFACT_JUNK_POOL_PERCENT),),
+    "Армейские склады": ((ARTIFACT_JUNK_POOL_KEY, ARTIFACT_JUNK_POOL_PERCENT),),
 }
 
 # Запасной пул мусора, если локации нет в таблице.
 ARTIFACT_DEFAULT_JUNK_SPAWNS: tuple[tuple[str, float], ...] = (
-    ("artifact_junk_bolt", 8.0),
-    ("artifact_junk_stone", 8.0),
-    ("artifact_junk_slime", 5.0),
+    (ARTIFACT_JUNK_POOL_KEY, ARTIFACT_JUNK_POOL_PERCENT),
 )
 
 # Абсолютные шансы дропа typed-артов в награде рейдов (взаимоисключающие), %:
@@ -895,11 +882,12 @@ def roll_location_artifact_drop(
     for key, chance in table:
         cumulative += float(chance)
         if roll < cumulative:
+            resolved_key = random.choice(ARTIFACT_JUNK_KEYS) if key == ARTIFACT_JUNK_POOL_KEY else key
             if detector_key:
                 from app.artifact_features import filter_roll_for_detector
 
-                return filter_roll_for_detector(detector_key, key)
-            return key
+                return filter_roll_for_detector(detector_key, resolved_key)
+            return resolved_key
     return None
 
 
@@ -911,7 +899,10 @@ def describe_location_artifact_spawns(location: str) -> str:
     for key, chance in local:
         if key == "artifact":
             continue
-        parts.append(f"{ITEM_LABELS.get(key, key)} ~{chance:g}%")
+        if key == ARTIFACT_JUNK_POOL_KEY:
+            parts.append(f"Мусор ~{chance:g}%")
+        else:
+            parts.append(f"{ITEM_LABELS.get(key, key)} ~{chance:g}%")
     return ", ".join(parts)
 
 
@@ -3772,7 +3763,10 @@ def get_active_contract_template(storage: Storage, telegram_id: int) -> QuestCon
 
 
 def build_quest_overview(storage: Storage, character: Character) -> str:
-    ammo_stock = int(character.inventory.get("ammo_pack", 0))
+    from app.tactical_combat import weapon_ammo_type
+
+    weapon_name = str(character.equipment.get("weapon", "Нож"))
+    ammo_key = weapon_ammo_type(weapon_name)
     medkit_stock = _total_medkit_stock(character)
     home = faction_home_base(character.faction)
     lines = [
@@ -3787,12 +3781,21 @@ def build_quest_overview(storage: Storage, character: Character) -> str:
         f"1 игровая минута пути ≈ {TRAVEL_REAL_SECONDS_PER_GAME_MINUTE} сек реального времени.",
         "",
         "Текущие запасы:",
-        f"• Патроны: {ammo_stock}",
-        f"• Аптечки (любые): {medkit_stock}",
-        f"• Энергия: {character.energy}/{character.max_energy}",
-        f"• Локация: {format_location_display(character)}",
-        "",
     ]
+    if ammo_key:
+        ammo_label = ITEM_LABELS.get(ammo_key, ammo_key)
+        ammo_stock = int(character.inventory.get(ammo_key, 0))
+        lines.append(f"• {ammo_label} ({weapon_name}): {ammo_stock}")
+    else:
+        lines.append(f"• Патроны: не нужны ({weapon_name})")
+    lines.extend(
+        [
+            f"• Аптечки (любые): {medkit_stock}",
+            f"• Энергия: {character.energy}/{character.max_energy}",
+            f"• Локация: {format_location_display(character)}",
+            "",
+        ]
+    )
     if is_traveling(character):
         lines.append("⏱ Отсчёт времени в пути — в отдельном сообщении с таймером.")
         lines.append("")
@@ -4111,17 +4114,23 @@ def _spend_quest_resources(
     quest: QuestType,
 ) -> ActionResult | None:
     """Списать энергию/патроны/аптечки. None = ок, иначе ошибка."""
+    from app.tactical_combat import weapon_ammo_type
+
     character = storage.get_character(telegram_id, refresh_energy=False)
     if character is None:
         return ActionResult(False, "Персонаж не найден.")
 
-    ammo_stock = int(character.inventory.get("ammo_pack", 0))
+    weapon_name = str(character.equipment.get("weapon", "Нож"))
+    ammo_key = weapon_ammo_type(weapon_name)
     medkit_stock = _total_medkit_stock(character)
-    if ammo_stock < quest.ammo_required:
-        return ActionResult(
-            False,
-            f"Недостаточно патронов. Нужно {quest.ammo_required}, у тебя {ammo_stock}.",
-        )
+    if ammo_key is not None:
+        ammo_stock = int(character.inventory.get(ammo_key, 0))
+        ammo_label = ITEM_LABELS.get(ammo_key, ammo_key)
+        if ammo_stock < quest.ammo_required:
+            return ActionResult(
+                False,
+                f"Недостаточно {ammo_label.lower()}. Нужно {quest.ammo_required}, у тебя {ammo_stock}.",
+            )
     if medkit_stock < quest.medkit_required:
         return ActionResult(
             False,
@@ -4132,11 +4141,12 @@ def _spend_quest_resources(
             False,
             f"Не хватает энергии. Нужно {quest.energy_cost} ед.",
         )
-    if not storage.remove_item(telegram_id, "ammo_pack", quest.ammo_required):
+    if ammo_key is not None and not storage.remove_item(telegram_id, ammo_key, quest.ammo_required):
         storage.restore_energy(telegram_id, quest.energy_cost)
         return ActionResult(False, "Ошибка расхода патронов.")
     if quest.medkit_required > 0 and not _consume_quest_medkits(storage, telegram_id, quest.medkit_required):
-        storage.add_item(telegram_id, "ammo_pack", quest.ammo_required)
+        if ammo_key is not None:
+            storage.add_item(telegram_id, ammo_key, quest.ammo_required)
         storage.restore_energy(telegram_id, quest.energy_cost)
         return ActionResult(False, "Ошибка расхода аптечек.")
     return None
@@ -5351,7 +5361,10 @@ TRADER_SELL_CATALOG: dict[str, tuple[str, ...]] = {
         "armor_nosorog",
     ),
     "weapons": (
-        "ammo_pack",
+        "ammo_pistol",
+        "ammo_shotgun",
+        "ammo_rifle",
+        "ammo_gauss",
         "weapon_pm",
         "weapon_fora12",
         "weapon_sawedoff",
