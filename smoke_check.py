@@ -606,7 +606,10 @@ def run_smoke_check() -> None:
 
         heli = start_special_event(storage, kind="heli_crash")
         storage.set_location(111, str(heli["location"]))
-        storage.add_item(111, "ammo_pack", 5)
+        storage.add_item(111, "ammo_pistol", 5)
+        storage.add_item(111, "ammo_shotgun", 5)
+        storage.add_item(111, "ammo_rifle", 5)
+        storage.add_item(111, "ammo_gauss", 5)
         heli_join = join_special_event(storage, 111)
         assert heli_join.ok, heli_join.text
         from app.quest_mission import get_mission_session as _get_heli_session
@@ -625,7 +628,10 @@ def run_smoke_check() -> None:
 
         dark = start_special_event(storage, kind="dark_stalker")
         storage.set_location(111, str(dark["location"]))
-        storage.add_item(111, "ammo_pack", 5)
+        storage.add_item(111, "ammo_pistol", 5)
+        storage.add_item(111, "ammo_shotgun", 5)
+        storage.add_item(111, "ammo_rifle", 5)
+        storage.add_item(111, "ammo_gauss", 5)
         dark_join = join_special_event(storage, 111)
         assert dark_join.ok, dark_join.text
         _clear_mission()
@@ -636,7 +642,10 @@ def run_smoke_check() -> None:
         rescue = start_special_event(storage, kind="monolith_rescue")
         assert rescue["kind"] == "monolith_rescue" and rescue["location"] == "Припять"
         storage.set_location(111, "Припять")
-        storage.add_item(111, "ammo_pack", 5)
+        storage.add_item(111, "ammo_pistol", 5)
+        storage.add_item(111, "ammo_shotgun", 5)
+        storage.add_item(111, "ammo_rifle", 5)
+        storage.add_item(111, "ammo_gauss", 5)
         storage.add_item(111, "medkit", 2)
         rescue_join = join_special_event(storage, 111)
         assert rescue_join.ok, rescue_join.text
@@ -651,7 +660,10 @@ def run_smoke_check() -> None:
         assert giant["kind"] == "giant"
         assert int(giant["boss_hp"]) == 100
         storage.set_location(111, str(giant["location"]))
-        storage.add_item(111, "ammo_pack", 5)
+        storage.add_item(111, "ammo_pistol", 5)
+        storage.add_item(111, "ammo_shotgun", 5)
+        storage.add_item(111, "ammo_rifle", 5)
+        storage.add_item(111, "ammo_gauss", 5)
         storage.add_item(111, "medkit", 2)
         giant_join = join_special_event(storage, 111)
         assert giant_join.ok, giant_join.text
@@ -686,7 +698,10 @@ def run_smoke_check() -> None:
         assert march["location"] == "Радар"
         assert march.get("target_base")
         storage.set_location(111, "Радар")
-        storage.add_item(111, "ammo_pack", 5)
+        storage.add_item(111, "ammo_pistol", 5)
+        storage.add_item(111, "ammo_shotgun", 5)
+        storage.add_item(111, "ammo_rifle", 5)
+        storage.add_item(111, "ammo_gauss", 5)
         storage.add_item(111, "medkit", 2)
         march_join = join_special_event(storage, 111)
         assert march_join.ok, march_join.text
@@ -1334,7 +1349,8 @@ def run_smoke_check() -> None:
         storage.set_location(333, bandit_home)
         storage.set_last_arrival_transport(333, "bicycle")
         storage.restore_energy(333, 100)
-        storage.add_item(333, "ammo_pack", 5)
+        storage.add_item(333, "ammo_pistol", 5)
+        storage.add_item(333, "ammo_rifle", 5)
         storage.add_item(333, "medkit", 5)
         bike_contract = accept_quest_contract(storage, 333, "easy_boloto")
         assert bike_contract.ok, bike_contract.text
@@ -2138,7 +2154,13 @@ def run_smoke_check() -> None:
         assert int(SHOP_ITEMS["antibiotic"]["buy_price"]) == 3500
         assert int(SHOP_ITEMS["energy_drink"]["buy_price"]) == 600
         assert int(SHOP_ITEMS["vodka"]["buy_price"]) == 300
-        assert int(SHOP_ITEMS["ammo_pack"]["buy_price"]) == 100
+        assert int(SHOP_ITEMS["ammo_pistol"]["buy_price"]) == 50
+        assert int(SHOP_ITEMS["ammo_shotgun"]["buy_price"]) == 90
+        assert int(SHOP_ITEMS["ammo_rifle"]["buy_price"]) == 120
+        assert int(SHOP_ITEMS["ammo_gauss"]["buy_price"]) == 300
+        from app.faction_bots import FACTION_BOT_COUNT_UPGRADE_COST
+
+        assert FACTION_BOT_COUNT_UPGRADE_COST == 100_000
         assert round_shop_price(886) == 900
         assert round_shop_price(332) == 300
         assert round_shop_price(53) == 100
@@ -2171,7 +2193,7 @@ def run_smoke_check() -> None:
         assert ARMOR_MITIGATION_BY_NAME["Кожаная куртка"] == 1
         assert ARMOR_MITIGATION_BY_NAME["Носорог"] == 6
         assert weapon_shoot_range("АКС-74У") == 2
-        assert weapon_shoot_range("СПАС-12") == 1
+        assert weapon_shoot_range("СПАС-12") == 2
         assert weapon_shoot_range("Винтарь ВС") == 3
         assert weapon_shoot_range("Енот") == 4
         assert weapon_shoot_range("Гаусс-пушка") == 4
@@ -2795,8 +2817,8 @@ def run_smoke_check() -> None:
         )
 
         assert TOPUP_RATE_RU_PER_STAR == 150
-        assert TRADER_SELL_CATALOG["weapons"][0] == "ammo_pack"
-        assert "ammo_pack" not in TRADER_SELL_CATALOG["consumables"]
+        assert TRADER_SELL_CATALOG["weapons"][0] == "ammo_pistol"
+        assert "ammo_pistol" not in TRADER_SELL_CATALOG["consumables"]
         assert set(FACTION_LORE) == {"Долг", "Свобода", "Нейтралы", "Бандиты", "Монолит"}
         for faction_name, lore in FACTION_LORE.items():
             assert "Как сформировал" in lore
