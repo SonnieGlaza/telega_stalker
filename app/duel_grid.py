@@ -31,11 +31,12 @@ from app.tactical_combat import (
     MOVE_DELTAS,
     STALE_TURN_MESSAGE,
     best_step_toward,
-    cover_blocks_shot,
+    collect_player_shot_hits,
+    consume_shot_ammo,
     manhattan_distance,
     move_toward,
-    ray_cast_first_hit,
     spawn_edge_positions,
+    weapon_damage,
     weapon_shoot_range,
 )
 from app.mutant_assets import pick_mutant_kind
@@ -84,6 +85,9 @@ def _parse_deadline(raw: str | None) -> datetime | None:
 
 
 def _duel_damage(attacker: Character) -> int:
+    weapon = str(attacker.equipment.get("weapon", "Нож"))
+    if weapon_shoot_range(weapon) > 0:
+        return min(15, weapon_damage(weapon))
     base = max(4, equipment_power(attacker) * 2)
     lo = max(1, base - 2)
     hi = base + 2
@@ -633,20 +637,26 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
         return ActionResult(False, "Персонаж не найден.")
     weapon = str(attacker.equipment.get("weapon", "Нож"))
     rng = weapon_shoot_range(weapon)
+    if rng <= 0:
+        return ActionResult(False, "Это оружие не стреляет на дистанции.")
+    ammo_result = consume_shot_ammo(storage, telegram_id, weapon)
+    if ammo_result is not None:
+        return ammo_result
     origin = session.pos(telegram_id)
     cover_set = set(session.cover)
     targets = {session.pos(session.opponent_of(telegram_id)): "player"}
     for mpos in session.mutants:
         targets[mpos] = "mutant"
-    hit_cell, hit_kind = ray_cast_first_hit(
+    hits = collect_player_shot_hits(
         origin,
         direction,
         grid=session.grid,
-        max_range=rng,
+        weapon_name=weapon,
         blockers=cover_set,
         targets=targets,
+        cover=cover_set,
     )
-    if hit_cell is None:
+    if not hits:
         session.log.append(f"{h(attacker.nickname)} промахнулся.")
         _advance_turn(session)
         done = _after_turn_mutants(storage, session, turn_seq)
@@ -656,30 +666,27 @@ def duel_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
             return ActionResult(False, STALE_TURN_MESSAGE)
         return ActionResult(True, "Промах — пуля не нашла цель.", payload={"duel_active": True})
 
-    if hit_kind == "mutant":
-        if hit_cell in session.mutants and not session.wave_mode:
-            _remove_mutant_at(session, hit_cell)
-        session.log.append(f"{h(attacker.nickname)} попал в мутанта.")
-        note = "Мутант поражён." if not session.wave_mode else "Мутант снова встанет в волне."
-    else:
-        defender_id = session.opponent_of(telegram_id)
-        defender = storage.get_character(defender_id, refresh_energy=False)
-        if defender is None:
-            return ActionResult(False, "Соперник не найден.")
-        if cover_blocks_shot(hit_cell, cover_set):
-            session.log.append(f"{h(defender.nickname)} укрылся — промах!")
-            _advance_turn(session)
-            done = _after_turn_mutants(storage, session, turn_seq)
-            if done:
-                return done
-            if not _save_if_turn_ok(storage, session, turn_seq):
-                return ActionResult(False, STALE_TURN_MESSAGE)
-            return ActionResult(True, "Промах — цель за укрытием.", payload={"duel_active": True})
-        raw = _duel_damage(attacker)
-        dmg = apply_incoming_damage(raw, defender, min_damage=1)
-        session.hp[str(defender_id)] = max(0, session.hp.get(str(defender_id), 0) - dmg)
-        session.log.append(f"{h(attacker.nickname)} попал в {h(defender.nickname)}: −{dmg} HP.")
-        note = f"Попадание: −{dmg} HP."
+    note = "Попадание."
+    player_damaged = False
+    for hit_cell, hit_kind in hits:
+        if hit_kind == "mutant":
+            if hit_cell in session.mutants and not session.wave_mode:
+                _remove_mutant_at(session, hit_cell)
+            session.log.append(f"{h(attacker.nickname)} попал в мутанта.")
+            note = "Мутант поражён." if not session.wave_mode else "Мутант снова встанет в волне."
+        elif hit_kind == "player":
+            defender_id = session.opponent_of(telegram_id)
+            defender = storage.get_character(defender_id, refresh_energy=False)
+            if defender is None:
+                return ActionResult(False, "Соперник не найден.")
+            raw = _duel_damage(attacker)
+            dmg = apply_incoming_damage(raw, defender, min_damage=1)
+            session.hp[str(defender_id)] = max(0, session.hp.get(str(defender_id), 0) - dmg)
+            session.log.append(f"{h(attacker.nickname)} попал в {h(defender.nickname)}: −{dmg} HP.")
+            note = f"Попадание: −{dmg} HP."
+            player_damaged = True
+
+    if player_damaged:
         done = _check_hp_end(storage, session, turn_seq)
         if done:
             return done

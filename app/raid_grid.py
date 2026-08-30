@@ -42,11 +42,11 @@ from app.tactical_combat import (
     NPC_MOVE_CHANCE,
     STALE_TURN_MESSAGE,
     best_step_toward,
-    cover_blocks_shot,
+    collect_player_shot_hits,
+    consume_shot_ammo,
     manhattan_distance,
+    npc_weapon_damage,
     random_hostile_shots,
-    ray_cast_first_hit,
-    weapon_shoot_range,
 )
 from app.tactical_hp import apply_tactical_medkit_spend, finalize_group_tactical_hp, plan_tactical_medkit
 from app.enemy_hud import draw_enemy_hud, hud_slots_from_raid
@@ -556,10 +556,10 @@ def _hostile_damage(
     faction: str | None = None,
 ) -> int:
     tier = max(1, int(bot_tier))
-    base = max(4, weapon_shoot_range(weapon) * 3 + random.randint(0, 4))
+    base = npc_weapon_damage(weapon)
     armor_name = bot_armor_for_tier(tier, faction=faction)
     armor_bonus = ARMOR_RATING_BY_NAME.get(armor_name, 0) // 3
-    return base + armor_bonus + max(0, int(defense_bonus))
+    return min(15, base + armor_bonus + max(0, int(defense_bonus)))
 
 
 def _mutant_melee_hit(
@@ -1119,21 +1119,33 @@ def rgrid_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionRes
     if attacker is None:
         return ActionResult(False, "Персонаж не найден.")
     weapon = str(attacker.equipment.get("weapon", "Нож"))
-    rng = weapon_shoot_range(weapon)
+    ammo_result = consume_shot_ammo(storage, telegram_id, weapon)
+    if ammo_result is not None:
+        return ammo_result
     origin = session.pos(telegram_id)
     cover_set = set(session.cover) | set(session.base_cover)
     targets = {pos: "host" for pos in session.hostiles}
-    hit_cell, hit_kind = ray_cast_first_hit(
-        origin, direction, grid=session.grid, max_range=rng, blockers=set(session.cover), targets=targets
+    hits = collect_player_shot_hits(
+        origin,
+        direction,
+        grid=session.grid,
+        weapon_name=weapon,
+        blockers=set(session.cover),
+        targets=targets,
+        cover=cover_set,
     )
     note = "Промах."
-    if hit_cell and hit_kind == "host":
-        if cover_blocks_shot(hit_cell, cover_set):
-            session.log.append("Враг за укрытием — промах.")
-        elif hit_cell in session.hostiles:
-            _remove_hostile_at(session, hit_cell)
+    if hits:
+        hit_any = False
+        for hit_cell, hit_kind in hits:
+            if hit_kind == "host" and hit_cell in session.hostiles:
+                _remove_hostile_at(session, hit_cell)
+                hit_any = True
+        if hit_any:
             session.log.append(f"{h(attacker.nickname)} поразил врага ({weapon}).")
             note = "Попадание!"
+        else:
+            session.log.append(f"{h(attacker.nickname)} промахнулся.")
     else:
         session.log.append(f"{h(attacker.nickname)} промахнулся.")
     done = _check_squad_wiped(storage, session)

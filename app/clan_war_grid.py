@@ -40,11 +40,11 @@ from app.tactical_combat import (
     NPC_WEAPONS,
     STALE_TURN_MESSAGE,
     best_step_toward,
-    cover_blocks_shot,
+    collect_player_shot_hits,
+    consume_shot_ammo,
     manhattan_distance,
+    npc_weapon_damage,
     random_hostile_shots,
-    ray_cast_first_hit,
-    weapon_shoot_range,
 )
 from app.tactical_hp import apply_tactical_medkit_spend, finalize_group_tactical_hp, plan_tactical_medkit
 
@@ -360,7 +360,7 @@ def _occupied(session: ClanWarGridSession, *, exclude: int | None = None) -> set
 
 def _defender_damage(session: ClanWarGridSession, weapon: str) -> int:
     bonus = max(0, session.defense_bonus)
-    return max(4, weapon_shoot_range(weapon) * 3 + random.randint(0, 4) + bonus)
+    return min(15, npc_weapon_damage(weapon) + bonus)
 
 
 def _hostile_turn(storage: Storage, session: ClanWarGridSession) -> list[str]:
@@ -807,27 +807,38 @@ def cwar_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     if attacker is None:
         return ActionResult(False, "Персонаж не найден.")
     weapon = str(attacker.equipment.get("weapon", "Нож"))
-    rng = weapon_shoot_range(weapon)
+    ammo_result = consume_shot_ammo(storage, telegram_id, weapon)
+    if ammo_result is not None:
+        return ammo_result
     origin = session.pos(telegram_id)
     cover_set = set(session.cover) | set(session.base_cover)
     targets = {pos: "def" for pos in session.defenders}
-    hit_cell, hit_kind = ray_cast_first_hit(
-        origin, direction, grid=session.grid, max_range=rng, blockers=set(session.cover), targets=targets
+    hits = collect_player_shot_hits(
+        origin,
+        direction,
+        grid=session.grid,
+        weapon_name=weapon,
+        blockers=set(session.cover),
+        targets=targets,
+        cover=cover_set,
     )
     note = "Промах."
-    if hit_cell and hit_kind == "def":
-        if cover_blocks_shot(hit_cell, cover_set):
-            session.log.append("Защитник за укрытием — промах.")
-        else:
-            if hit_cell in session.defenders:
+    if hits:
+        hit_any = False
+        for hit_cell, hit_kind in hits:
+            if hit_kind == "def" and hit_cell in session.defenders:
                 idx = session.defenders.index(hit_cell)
                 session.defenders.pop(idx)
                 if idx < len(session.defender_weapons):
                     session.defender_weapons.pop(idx)
                 if idx < len(session.defender_kinds):
                     session.defender_kinds.pop(idx)
-                session.log.append(f"{h(attacker.nickname)} снял защитника ({weapon}).")
-                note = "Попадание!"
+                hit_any = True
+        if hit_any:
+            session.log.append(f"{h(attacker.nickname)} снял защитника ({weapon}).")
+            note = "Попадание!"
+        else:
+            session.log.append(f"{h(attacker.nickname)} промахнулся.")
     else:
         session.log.append(f"{h(attacker.nickname)} промахнулся.")
     done = _check_squad_wiped(storage, session, turn_seq)

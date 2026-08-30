@@ -26,9 +26,10 @@ from app.tactical_combat import (
     MOVE_DELTAS,
     NPC_WEAPONS,
     STALE_TURN_MESSAGE,
-    cover_blocks_shot,
+    collect_player_shot_hits,
+    consume_shot_ammo,
+    npc_weapon_damage,
     random_hostile_shots,
-    ray_cast_first_hit,
     weapon_shoot_range,
 )
 from app.mutant_assets import pick_mutant_kind
@@ -729,7 +730,7 @@ def _alive_players(session: NeutralCaptureSession) -> list[int]:
 
 
 def _hostile_damage(weapon: str) -> int:
-    return max(3, weapon_shoot_range(weapon) * 2 + random.randint(0, 3))
+    return npc_weapon_damage(weapon)
 
 
 def _hostile_shoot_turn(storage: Storage, session: NeutralCaptureSession) -> list[str]:
@@ -952,26 +953,38 @@ def ncap_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     if player is None:
         return ActionResult(False, "Персонаж не найден.")
     weapon = str(player.equipment.get("weapon", "Нож"))
-    rng = weapon_shoot_range(weapon)
+    ammo_result = consume_shot_ammo(storage, telegram_id, weapon)
+    if ammo_result is not None:
+        return ammo_result
     origin = session.pos(telegram_id)
     cover_set = set(session.cover)
     targets = {pos: "host" for pos in session.hostiles}
-    hit_cell, hit_kind = ray_cast_first_hit(
-        origin, direction, grid=session.grid, max_range=rng, blockers=cover_set, targets=targets
+    hits = collect_player_shot_hits(
+        origin,
+        direction,
+        grid=session.grid,
+        weapon_name=weapon,
+        blockers=cover_set,
+        targets=targets,
+        cover=cover_set,
     )
     note = "Промах."
-    if hit_cell and hit_kind == "host":
-        if cover_blocks_shot(hit_cell, cover_set):
-            session.log.append("Враг за укрытием — промах.")
-        else:
-            idx = session.hostiles.index(hit_cell)
-            session.hostiles.pop(idx)
-            if idx < len(session.hostile_weapons):
-                session.hostile_weapons.pop(idx)
-            if idx < len(session.hostile_kinds):
-                session.hostile_kinds.pop(idx)
+    if hits:
+        hit_any = False
+        for hit_cell, hit_kind in hits:
+            if hit_kind == "host" and hit_cell in session.hostiles:
+                idx = session.hostiles.index(hit_cell)
+                session.hostiles.pop(idx)
+                if idx < len(session.hostile_weapons):
+                    session.hostile_weapons.pop(idx)
+                if idx < len(session.hostile_kinds):
+                    session.hostile_kinds.pop(idx)
+                hit_any = True
+        if hit_any:
             session.log.append(f"Попадание ({weapon})!")
             note = "Попал!"
+        else:
+            session.log.append("Промах.")
     else:
         session.log.append("Промах.")
     wipe = _check_team_wipe(storage, session)

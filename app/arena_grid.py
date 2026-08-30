@@ -31,12 +31,12 @@ from app.tactical_combat import (
     NPC_MOVE_CHANCE,
     STALE_TURN_MESSAGE,
     best_step_toward,
-    cover_blocks_shot,
+    collect_player_shot_hits,
+    consume_shot_ammo,
     manhattan_distance,
+    npc_weapon_damage,
     random_hostile_shots,
-    ray_cast_first_hit,
     spawn_edge_positions,
-    weapon_shoot_range,
 )
 from app.enemy_hud import draw_enemy_hud, hud_slots_from_kinds
 from app.tactical_render import load_tactical_font, paste_npc_sprite, paste_player_avatar
@@ -305,7 +305,7 @@ def _hostile_move_blocked(session: ArenaGridSession) -> set[tuple[int, int]]:
 
 
 def _npc_damage(weapon: str) -> int:
-    return max(4, weapon_shoot_range(weapon) * 3 + random.randint(0, 4))
+    return npc_weapon_damage(weapon)
 
 
 def _hostile_turn(storage: Storage, session: ArenaGridSession) -> list[str]:
@@ -578,24 +578,36 @@ def arena_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionRes
         return ActionResult(False, "Некорректный выстрел.")
     turn_seq = session.turn_seq
     weapon = session.player_weapon
-    rng = weapon_shoot_range(weapon)
+    ammo_result = consume_shot_ammo(storage, telegram_id, weapon)
+    if ammo_result is not None:
+        return ammo_result
     origin = session.player_pos
     cover_set = set(session.cover) | set(session.base_cover)
     targets = {pos: "host" for pos in session.hostiles}
-    hit_cell, hit_kind = ray_cast_first_hit(
-        origin, direction, grid=session.grid, max_range=rng, blockers=set(session.cover), targets=targets
+    hits = collect_player_shot_hits(
+        origin,
+        direction,
+        grid=session.grid,
+        weapon_name=weapon,
+        blockers=set(session.cover),
+        targets=targets,
+        cover=cover_set,
     )
     note = "Промах."
-    if hit_cell and hit_kind == "host":
-        if cover_blocks_shot(hit_cell, cover_set):
-            session.log.append("Враг за укрытием — промах.")
-        elif hit_cell in session.hostiles:
-            idx = session.hostiles.index(hit_cell)
-            session.hostiles.pop(idx)
-            if idx < len(session.hostile_weapons):
-                session.hostile_weapons.pop(idx)
+    if hits:
+        hit_any = False
+        for hit_cell, hit_kind in hits:
+            if hit_kind == "host" and hit_cell in session.hostiles:
+                idx = session.hostiles.index(hit_cell)
+                session.hostiles.pop(idx)
+                if idx < len(session.hostile_weapons):
+                    session.hostile_weapons.pop(idx)
+                hit_any = True
+        if hit_any:
             session.log.append(f"Попадание ({weapon})!")
             note = "Попал!"
+        else:
+            session.log.append("Промах.")
     else:
         session.log.append("Промах.")
     session.turn_seq += 1
