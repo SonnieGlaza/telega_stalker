@@ -18,7 +18,8 @@ FACTION_BOT_MAX_COUNT = 5
 
 BOT_T1_WEAPONS: tuple[str, ...] = ("ПМ", "Фора-12", "Обрез")
 BOT_T2_WEAPONS: tuple[str, ...] = ("Гадюка-5", "Чейзер-13", "АКС-74У")
-BOT_MONOLITH_WEAPONS: tuple[str, ...] = ("Гаусс-пушка", "Винтарь ВС", "АН-94")
+BOT_T3_WEAPONS: tuple[str, ...] = ("АК-74", "СПАС-12")
+BOT_MONOLITH_WEAPONS: tuple[str, ...] = BOT_T3_WEAPONS
 BOT_T1_ARMOR = "Кожаная куртка"
 BOT_T2_ARMOR = "Сталкерский бронежилет"
 BOT_MONOLITH_ARMOR = "Костюм СЕВА"
@@ -179,7 +180,7 @@ def build_faction_bots_overview(storage: Storage, faction: str) -> str:
         f"Тир {tier}: {armor}, оружие — {weapons}.",
     ]
     if faction == "Монолит":
-        lines.append("Боты Монолита: гаусс и элита (фикс. снаряга).")
+        lines.append("Боты Монолита: оружие Т3 (фикс. снаряга).")
     elif tier < 2:
         lines.append(
             f"Улучшение до Т2 ({BOT_T2_ARMOR}, {', '.join(BOT_T2_WEAPONS)}): "
@@ -216,7 +217,7 @@ def upgrade_faction_bots(storage: Storage, telegram_id: int) -> ActionResult:
     if player.faction == "Монолит":
         return ActionResult(
             False,
-            "Боты Монолита уже на элитном снаряжении — тир не улучшается.",
+            "Боты Монолита уже на снаряжении Т3 — тир не улучшается.",
         )
     leader_id = storage.get_faction_leader_id(player.faction)
     if leader_id is None or int(leader_id) != telegram_id:

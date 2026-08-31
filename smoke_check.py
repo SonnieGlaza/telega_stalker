@@ -131,10 +131,15 @@ def run_smoke_check() -> None:
         from app.faction_bots import (
             FACTION_BOT_COUNT_UPGRADE_COST,
             FACTION_BOT_UPGRADE_COST,
+            BOT_MONOLITH_WEAPONS,
+            bot_weapons_for_tier,
             get_faction_bots,
             upgrade_faction_bot_count,
             upgrade_faction_bots,
         )
+
+        assert BOT_MONOLITH_WEAPONS == ("АК-74", "СПАС-12")
+        assert bot_weapons_for_tier(1, faction="Монолит") == BOT_MONOLITH_WEAPONS
 
         storage.change_faction_treasury("Долг", FACTION_BOT_UPGRADE_COST + FACTION_BOT_COUNT_UPGRADE_COST)
         bots_before = get_faction_bots(storage, "Долг")
