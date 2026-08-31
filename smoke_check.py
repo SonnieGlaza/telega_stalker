@@ -1001,6 +1001,13 @@ def run_smoke_check() -> None:
         assert armor_defense(storage.get_character(111, refresh_energy=False)) == 1
         player_111 = storage.get_character(111, refresh_energy=False)
         assert apply_incoming_damage(10, player_111) == 9
+        from app.quest_mission import _combat_damage
+
+        for _ in range(40):
+            heavy_hit = _combat_damage("Янтарь", "heavy", player_111)
+            assert heavy_hit == 0 or 10 <= heavy_hit <= 20, heavy_hit
+            impossible_hit = _combat_damage("Радар", "impossible", player_111)
+            assert impossible_hit == 0 or 10 <= impossible_hit <= 20, impossible_hit
         upgraded2 = upgrade_armor(storage, 111)
         assert upgraded2.ok, upgraded2.text
         installed2 = install_armor_upgrade(storage, 111)
