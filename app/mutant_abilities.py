@@ -331,7 +331,7 @@ def mutant_damage_multiplier(kind: str, hit_side: str, enemy_kinds: list[str] | 
     if kind == "zombie" and hit_side in {"left", "right", "back"}:
         mult *= 0.85
     if kind == "tushkano":
-        mult *= 0.82
+        mult *= 0.50
     return mult
 
 

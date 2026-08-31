@@ -89,6 +89,8 @@ from app.storage import Character, Storage
 QUEST_NPC_WEAPONS: tuple[str, ...] = ("АК-74", "ТРс-301", "ИЛ86")
 # Сопровождение: вокруг только T1-стволы.
 QUEST_ESCORT_NPC_WEAPONS: tuple[str, ...] = ("ПМ", "Фора-12", "Обрез")
+QUEST_MONOLITH_NPC_WEAPONS: tuple[str, ...] = ("Гаусс-пушка", "Винтарь ВС", "АН-94", "ГП37")
+TUSHKANO_MAX_MELEE_PER_TURN = 2
 
 
 MISSION_META_PREFIX = "quest_mission:"
@@ -148,10 +150,15 @@ KIND_LABELS: dict[str, str] = {
 
 
 def _mission_kind_label(kind: str, title: str = "") -> str:
-    title_l = str(title or "").lower()
-    if "вертушк" in title_l or str(title or "").startswith("Обломки вертушки"):
+    title_s = str(title or "")
+    title_l = title_s.lower()
+    if title_s.startswith("Колонна Монолита"):
+        return "Перехват колонны Монолита"
+    if title_s.startswith("Дуэль: Тёмный сталкер"):
+        return "Дуэль с Тёмным сталкером"
+    if "вертушк" in title_l or title_s.startswith("Обломки вертушки"):
         return "Зачистка военных"
-    if str(title or "").startswith("Гигант:"):
+    if title_s.startswith("Гигант:"):
         return "Охота на псевдогиганта"
     return KIND_LABELS.get(kind, kind)
 
@@ -609,14 +616,68 @@ def _spawn_npcs(
     marauder: bool = False,
     weapon_pool: tuple[str, ...] | None = None,
     difficulty: str = "hard",
+    fixed_kind: str | None = None,
 ) -> None:
     pool = weapon_pool or _npc_weapon_pool(difficulty)
     for _ in range(max(0, n)):
         cell = _free_cell(grid, forbidden)
         npcs.append(cell)
-        kinds.append(pick_npc_kind(marauder=marauder))
+        if fixed_kind:
+            kinds.append(fixed_kind)
+        else:
+            kinds.append(pick_npc_kind(marauder=marauder))
         weapons.append(random.choice(pool))
         forbidden.add(cell)
+
+
+def _pick_monolith_weapon() -> str:
+    return random.choices(
+        QUEST_MONOLITH_NPC_WEAPONS,
+        weights=(45, 25, 20, 10),
+        k=1,
+    )[0]
+
+
+def _spawn_monolith_npcs(
+    n: int,
+    grid: int,
+    forbidden: set[tuple[int, int]],
+    npcs: list[tuple[int, int]],
+    kinds: list[str],
+    weapons: list[str],
+) -> None:
+    for _ in range(max(0, n)):
+        cell = _free_cell(grid, forbidden)
+        npcs.append(cell)
+        kinds.append("monolith")
+        weapons.append(_pick_monolith_weapon())
+        forbidden.add(cell)
+
+
+def _mirror_weapon_for_dark_stalker(player: Character) -> str:
+    weapon = str(player.equipment.get("weapon") or "ПМ")
+    if weapon in {"", "Нож"}:
+        return "ПМ"
+    return weapon
+
+
+def _apply_special_mission_spawn_overrides(
+    template: QuestContractTemplate,
+    session: QuestMissionSession,
+    player: Character,
+) -> None:
+    title = str(template.title or "")
+    if title.startswith("Дуэль: Тёмный сталкер"):
+        mirror_weapon = _mirror_weapon_for_dark_stalker(player)
+        session.npcs = session.npcs[:1]
+        session.npc_kinds = ["dark_stalker"] if session.npcs else []
+        session.npc_weapons = [mirror_weapon] if session.npcs else []
+        return
+    if title.startswith("Колонна Монолита"):
+        for i in range(len(session.npc_kinds)):
+            session.npc_kinds[i] = "monolith"
+        for i in range(len(session.npc_weapons)):
+            session.npc_weapons[i] = _pick_monolith_weapon()
 
 
 def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMissionSession:
@@ -669,9 +730,17 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
     heli_crash = "вертушк" in str(template.title or "").lower() or str(template.title or "").startswith(
         "Обломки вертушки"
     )
+    monolith_march = str(template.title or "").startswith("Колонна Монолита")
+    dark_stalker_duel = str(template.title or "").startswith("Дуэль: Тёмный сталкер")
     monolith_escort = "пленн" in str(template.title or "").lower() or "Монолит" in str(
         template.title or ""
     )
+    if dark_stalker_duel:
+        want_mut = False
+        want_npc = True
+    if monolith_march:
+        want_mut = False
+        want_npc = True
     if kind == "escort":
         # Аномалии всегда; вокруг — мутанты ИЛИ T1-НПС.
         anom_n = base_n + 1 + (2 if monolith_escort else 0)
@@ -681,15 +750,13 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
         if monolith_escort or random.random() < 0.5:
             _spawn_mutants(host_n, grid, forbidden, enemies, enemy_kinds)
             if monolith_escort:
-                _spawn_npcs(
+                _spawn_monolith_npcs(
                     max(2, host_n // 2),
                     grid,
                     forbidden,
                     npcs,
                     npc_kinds,
                     npc_weapons,
-                    marauder=True,
-                    weapon_pool=QUEST_ESCORT_NPC_WEAPONS,
                 )
         else:
             _spawn_npcs(
@@ -720,23 +787,40 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
                     elif i <= 5:
                         enemy_kinds[i] = "zombie"
         if want_npc:
-            npc_n = base_n + (1 if kind == "clear_marauder" else 0)
-            if heli_crash:
-                npc_n = max(npc_n, base_n + 2)
-            _spawn_npcs(
-                npc_n,
-                grid,
-                forbidden,
-                npcs,
-                npc_kinds,
-                npc_weapons,
-                marauder=False if heli_crash else (kind == "clear_marauder" or want_npc),
-                difficulty=difficulty,
-            )
-            if heli_crash and npc_kinds:
-                # Охрана обломков — только военные.
-                for i in range(len(npc_kinds)):
-                    npc_kinds[i] = "soldier"
+            if dark_stalker_duel:
+                npc_n = 1
+                _spawn_npcs(
+                    npc_n,
+                    grid,
+                    forbidden,
+                    npcs,
+                    npc_kinds,
+                    npc_weapons,
+                    marauder=False,
+                    fixed_kind="dark_stalker",
+                    difficulty=difficulty,
+                )
+            elif monolith_march:
+                npc_n = max(base_n + 2, 5 if difficulty == "heavy" else 4)
+                _spawn_monolith_npcs(npc_n, grid, forbidden, npcs, npc_kinds, npc_weapons)
+            else:
+                npc_n = base_n + (1 if kind == "clear_marauder" else 0)
+                if heli_crash:
+                    npc_n = max(npc_n, base_n + 2)
+                _spawn_npcs(
+                    npc_n,
+                    grid,
+                    forbidden,
+                    npcs,
+                    npc_kinds,
+                    npc_weapons,
+                    marauder=False if heli_crash else (kind == "clear_marauder" or want_npc),
+                    difficulty=difficulty,
+                )
+                if heli_crash and npc_kinds:
+                    # Охрана обломков — только военные.
+                    for i in range(len(npc_kinds)):
+                        npc_kinds[i] = "soldier"
 
     return QuestMissionSession(
         contract_key=template.key,
@@ -1027,8 +1111,13 @@ def _resolve_mutant_adjacent_attacks(
     notes: list[str] = []
     pending = 0
     death_result: ActionResult | None = None
+    tushkano_melee_hits = 0
 
     for kind, from_pos in onto_player or []:
+        if kind == "tushkano" and tushkano_melee_hits >= TUSHKANO_MAX_MELEE_PER_TURN:
+            continue
+        if kind == "tushkano":
+            tushkano_melee_hits += 1
         pending, note, death_result = _apply_mutant_hit(
             storage,
             telegram_id,
@@ -1075,6 +1164,11 @@ def _resolve_mutant_adjacent_attacks(
         if not _mutant_can_adjacent_attack(session, kind, pos):
             i += 1
             continue
+        if kind == "tushkano" and tushkano_melee_hits >= TUSHKANO_MAX_MELEE_PER_TURN:
+            i += 1
+            continue
+        if kind == "tushkano":
+            tushkano_melee_hits += 1
         pending, note, death_result = _apply_mutant_hit(
             storage,
             telegram_id,
@@ -1537,6 +1631,7 @@ def start_or_resume_quest_mission(
         )
 
     session = _build_session(template, quest)
+    _apply_special_mission_spawn_overrides(template, session, player)
     session.resources_spent = True
     save_mission_session(storage, telegram_id, session)
     active_contract = storage.get_active_contract(telegram_id) or {}

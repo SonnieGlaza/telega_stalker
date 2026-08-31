@@ -1088,6 +1088,51 @@ def run_smoke_check() -> None:
         assert len(heavy_sess.hazards) >= 1
         assert len(heavy_sess.npcs) >= 1
 
+        from app.game_logic import QuestContractTemplate
+        from app.quest_mission import _apply_special_mission_spawn_overrides
+
+        march_tpl = QuestContractTemplate(
+            key="march_test",
+            difficulty="hard",
+            title="Колонна Монолита: перехват",
+            work_location="Радар",
+            return_home=False,
+            mission_kind="clear_marauder",
+        )
+        march_sess = _build_session(march_tpl, QUESTS["hard"])
+        player111 = storage.get_character(111, refresh_energy=False)
+        assert player111 is not None
+        _apply_special_mission_spawn_overrides(march_tpl, march_sess, player111)
+        assert len(march_sess.npcs) >= 4
+        assert all(kind == "monolith" for kind in march_sess.npc_kinds)
+        assert all(
+            weapon in ("Гаусс-пушка", "Винтарь ВС", "АН-94", "ГП37")
+            for weapon in march_sess.npc_weapons
+        )
+        assert len(march_sess.enemies) == 0
+
+        dark_tpl = QuestContractTemplate(
+            key="dark_test",
+            difficulty="hard",
+            title="Дуэль: Тёмный сталкер (Янтарь)",
+            work_location="Янтарь",
+            return_home=False,
+            mission_kind="clear_marauder",
+        )
+        dark_sess = _build_session(dark_tpl, QUESTS["hard"])
+        _apply_special_mission_spawn_overrides(dark_tpl, dark_sess, player111)
+        assert len(dark_sess.npcs) == 1
+        assert dark_sess.npc_kinds == ["dark_stalker"]
+        expected_weapon = str(player111.equipment.get("weapon") or "ПМ")
+        if expected_weapon in {"", "Нож"}:
+            expected_weapon = "ПМ"
+        assert dark_sess.npc_weapons == [expected_weapon]
+        assert len(dark_sess.enemies) == 0
+
+        from app.mutant_abilities import mutant_damage_multiplier
+
+        assert mutant_damage_multiplier("tushkano", "front", ["tushkano"]) == 0.5
+
         from app.quest_mission import mission_shoot_available, shoot_quest_mission
 
         assert mission_shoot_available(heavy_sess)
@@ -2223,6 +2268,21 @@ def run_smoke_check() -> None:
         assert not can_use_n2o_during_travel(storage, 111)
         double_n2o = apply_n2o_to_active_travel(storage, 111)
         assert not double_n2o.ok
+        from app.game_logic import process_due_travels
+
+        past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        with storage._connect() as conn:
+            conn.execute(
+                "UPDATE characters SET travel_arrives_at = ? WHERE telegram_id = ?",
+                (past, 111),
+            )
+        process_due_travels(storage)
+        assert not has_n2o_trip_boost(storage, 111)
+        storage.start_travel(111, "Кордон", datetime.now(timezone.utc) + timedelta(seconds=80), "foot")
+        storage.add_item(111, "nitrous_oxide", 1)
+        assert can_use_n2o_during_travel(storage, 111)
+        trip2 = apply_n2o_to_active_travel(storage, 111)
+        assert trip2.ok, trip2.text
         storage.clear_travel(111)
         from app.keyboards import travel_in_transit_keyboard
 

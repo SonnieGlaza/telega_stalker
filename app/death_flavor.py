@@ -233,6 +233,8 @@ NPC_NAME_OPENERS: dict[str, str] = {
     "bandit": "Бандит",
     "mercenary": "Наёмник",
     "soldier": "Военный",
+    "monolith": "Боец Монолита",
+    "dark_stalker": "Тёмный сталкер",
 }
 NPC_GENERIC_NAME = "Мародёр"
 
@@ -252,6 +254,8 @@ NPC_NAME_INSTRUMENTAL: dict[str, str] = {
     "bandit": "с Бандитом",
     "mercenary": "с Наёмником",
     "soldier": "с Военным",
+    "monolith": "с бойцом Монолита",
+    "dark_stalker": "с Тёмным сталкером",
 }
 NPC_GENERIC_INSTRUMENTAL = "с Мародёром"
 MUTANT_GENERIC_INSTRUMENTAL = "с мутантом"
