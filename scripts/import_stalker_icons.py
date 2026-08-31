@@ -28,6 +28,7 @@ NPC_SOURCES: dict[str, tuple[Path, tuple[float, float]]] = {
     "bandit": (REFS / "bandit_wiki.png", (0.52, 0.52)),
     "mercenary": (AVATARS / "скины" / "Нейтралы" / "нейтралы2.jpg", (0.5, 0.45)),
     "soldier": (REFS / "military_swamps.jpg", (0.28, 0.55)),
+    "monolith": (AVATARS / "factions" / "monolit" / "monolit.jpg", (0.5, 0.42)),
 }
 
 SMUGGLE_SOURCES: dict[str, tuple[Path, tuple[float, float]]] = {

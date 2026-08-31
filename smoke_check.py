@@ -1110,6 +1110,11 @@ def run_smoke_check() -> None:
         _apply_special_mission_spawn_overrides(march_tpl, march_sess, player111)
         assert len(march_sess.npcs) >= 4
         assert all(kind == "monolith" for kind in march_sess.npc_kinds)
+        from app.npc_assets import MONOLITH_AVATAR_SOURCE, load_npc_grid_sprite
+
+        assert MONOLITH_AVATAR_SOURCE.is_file()
+        monolith_sprite = load_npc_grid_sprite("monolith")
+        assert monolith_sprite is not None and len(monolith_sprite) > 500
         assert all(
             weapon in ("Гаусс-пушка", "Винтарь ВС", "АН-94", "ГП37")
             for weapon in march_sess.npc_weapons
