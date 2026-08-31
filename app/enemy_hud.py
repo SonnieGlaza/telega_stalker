@@ -34,6 +34,8 @@ HP_BY_KIND: dict[str, int] = {
     "bandit": 18,
     "mercenary": 22,
     "soldier": 24,
+    "monolith": 28,
+    "dark_stalker": 24,
 }
 
 

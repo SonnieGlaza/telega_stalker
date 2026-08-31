@@ -12,7 +12,7 @@ from app.storage import Storage, utc_now
 
 logger = logging.getLogger(__name__)
 
-BETA_DEADLINE = datetime(2026, 8, 30, 23, 59, 59, tzinfo=timezone.utc)
+BETA_DEADLINE = datetime(2026, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
 BETA_MIN_RATING = 700
 SUPPORT_MEDAL_RUB = 500
 STARS_TO_RUB = 3.0  # ~50⭐ ≈ 149 ₽

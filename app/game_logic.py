@@ -1379,6 +1379,7 @@ def has_n2o_trip_boost(storage: Storage, telegram_id: int) -> bool:
 def can_use_n2o_during_travel(storage: Storage, telegram_id: int) -> bool:
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None or not is_traveling(player):
+        _clear_n2o_trip_boost(storage, telegram_id)
         return False
     if has_n2o_trip_boost(storage, telegram_id):
         return False
@@ -3577,7 +3578,10 @@ def collect_travel_eta_notices(storage: Storage) -> list[tuple[int, str]]:
 
 def process_due_travels(storage: Storage) -> list[tuple[int, str]]:
     """Завершить просроченные переходы. Возвращает (telegram_id, destination) для уведомлений."""
-    return storage.pop_due_travels()
+    completed = storage.pop_due_travels()
+    for telegram_id, _destination in completed:
+        _clear_n2o_trip_boost(storage, telegram_id)
+    return completed
 
 
 def format_location_display(character: Character) -> str:
@@ -6773,6 +6777,7 @@ def travel_to(
         else:
             vehicle_wear_text = f"\nИзнос Нивы: -{niva_wear}% (прочность: {niva_durability}%)."
 
+    _clear_n2o_trip_boost(storage, telegram_id)
     storage.start_travel(telegram_id, destination, arrives_at, transport_mode)
     if n2o_note:
         _mark_n2o_trip_used(storage, telegram_id)
@@ -10368,6 +10373,7 @@ def begin_smuggling_travel_after_grid(storage: Storage, telegram_id: int) -> Act
     arrives_at = _utc_now() + timedelta(seconds=real_seconds)
 
     clear_smuggle_session(storage, telegram_id)
+    _clear_n2o_trip_boost(storage, telegram_id)
     storage.start_travel(telegram_id, destination, arrives_at, transport_mode)
     if n2o_note:
         _mark_n2o_trip_used(storage, telegram_id)

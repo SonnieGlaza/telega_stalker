@@ -23,6 +23,8 @@ NPC_SPRITES: dict[str, str] = {
     "bandit": "Бандит",
     "mercenary": "Наёмник",
     "soldier": "Военный",
+    "monolith": "Монолит",
+    "dark_stalker": "Тёмный сталкер",
 }
 
 NPC_SPRITE_KEYS: tuple[str, ...] = tuple(NPC_SPRITES.keys())
@@ -34,11 +36,29 @@ def pick_npc_kind(*, marauder: bool = False) -> str:
     return random.choice(NPC_SPRITE_KEYS)
 
 
-@lru_cache(maxsize=32)
+def _npc_sprite_path(kind: str) -> Path | None:
+    path = NPCS_GRID_DIR / f"{kind}.png"
+    if path.is_file():
+        return path
+    fallback = {"monolith": "mercenary", "dark_stalker": "mercenary"}.get(kind)
+    if fallback:
+        alt = NPCS_GRID_DIR / f"{fallback}.png"
+        if alt.is_file():
+            return alt
+    return None
+
+
+def npc_sprite_fallback_kind(kind: str) -> str:
+    """Ключ спрайта для отрисовки (с запасным вариантом)."""
+    if (NPCS_GRID_DIR / f"{kind}.png").is_file():
+        return kind
+    return {"monolith": "mercenary", "dark_stalker": "mercenary"}.get(kind, kind)
+
+
 def load_npc_grid_sprite(kind: str) -> bytes | None:
     """PNG 88×88 для отрисовки на поле миссии."""
-    path = NPCS_GRID_DIR / f"{kind}.png"
-    if not path.is_file():
+    path = _npc_sprite_path(kind)
+    if path is None:
         return None
     return path.read_bytes()
 
