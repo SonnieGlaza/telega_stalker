@@ -296,6 +296,8 @@ def _percent_roll_defenders_win() -> bool:
 
 
 def _pay_attackers_success(storage: Storage, attacker_ids: list[int], host_faction: str, location: str) -> str:
+    from app.combat_loot import grant_combat_loot
+
     paid = 0
     for pid in attacker_ids:
         ch = storage.get_character(pid, refresh_energy=False)
@@ -307,6 +309,8 @@ def _pay_attackers_success(storage: Storage, attacker_ids: list[int], host_facti
         storage.change_money(pid, WAR_SUCCESS_PAY_RU)
         storage.add_player_stat(pid, "money_earned", WAR_SUCCESS_PAY_RU)
         _add_rating(storage, pid, RATING_REWARD["war_success"])
+        # Труп монолита: информация (дневник/флешка) попадает в инвентарь.
+        grant_combat_loot(storage, pid, npc=True, monolith=True)
         paid += 1
     from app.faction_bots import apply_location_control
 

@@ -33,7 +33,19 @@ ARTIFACT_EXTENDED_BONUSES: dict[str, dict[str, int]] = {
     "Арт «Сила»": {"power": 1, "hp": 0, "rad_pressure": 1, "cleanse_power": 0},
     "Арт «Живучесть»": {"power": 1, "hp": 10, "rad_pressure": 0, "cleanse_power": 0},
     "Арт «Кристалл»": {"power": 1, "hp": 0, "rad_pressure": 0, "cleanse_power": 3},
+    # Финальный артефакт сборки из лаб (Предел-1/2/3). Никогда не чинится —
+    # см. ARTIFACT_NO_REPAIR_NAMES и repair_equipped_artifacts.
+    "Артефакт «Предел»": {
+        "cleanse_power": 15,
+        "armor": 10,
+        "energy_regen": 10,
+        "hp_regen": 10,
+        "psy_resist": 100,
+    },
 }
+
+# Артефакты, которые нельзя восстановить ремонтом — только износ без восстановления.
+ARTIFACT_NO_REPAIR_NAMES: frozenset[str] = frozenset({"Артефакт «Предел»"})
 
 ARTIFACT_WEAR_SLOT_SUFFIX = "_wear"
 ARTIFACT_WEAR_MIN = 0
@@ -263,7 +275,7 @@ def repair_equipped_artifacts(storage: Storage, telegram_id: int) -> ActionResul
     total_missing = 0
     for slot_key in gl.ARTIFACT_EQUIP_SLOT_KEYS:
         name = str(player.equipment.get(slot_key, "Нет") or "Нет")
-        if not name or name == "Нет":
+        if not name or name == "Нет" or name in ARTIFACT_NO_REPAIR_NAMES:
             continue
         wear = get_artifact_wear(player, slot_key)
         if wear < ARTIFACT_WEAR_MAX:
@@ -275,7 +287,7 @@ def repair_equipped_artifacts(storage: Storage, telegram_id: int) -> ActionResul
         return gl.ActionResult(False, f"Нужно {cost} RU для ремонта артефактов.")
     for slot_key in gl.ARTIFACT_EQUIP_SLOT_KEYS:
         name = str(player.equipment.get(slot_key, "Нет") or "Нет")
-        if name and name != "Нет":
+        if name and name != "Нет" and name not in ARTIFACT_NO_REPAIR_NAMES:
             set_artifact_wear(storage, telegram_id, slot_key, ARTIFACT_WEAR_MAX)
     return gl.ActionResult(True, f"Артефакты восстановлены до 100% за {cost} RU.")
 
@@ -530,7 +542,49 @@ def artifact_incoming_damage_reduction(character: Character) -> int:
     for name in _equipped_names(character):
         if "Живучесть" in name or "Кристалл" in name:
             bonus += 1
+        bonus += int(artifact_bonus_entry(name).get("armor", 0))
     return bonus
+
+
+def scaled_artifact_energy_regen_bonus(character: Character) -> int:
+    """Флатный бонус к регену энергии от экипированных артов (на тик регена)."""
+    gl = _gl()
+    total = 0
+    for slot_key in gl.ARTIFACT_EQUIP_SLOT_KEYS:
+        name = str(character.equipment.get(slot_key, "Нет") or "Нет")
+        if not name or name == "Нет":
+            continue
+        stats = artifact_bonus_entry(name)
+        total += int(round(int(stats.get("energy_regen", 0)) * wear_multiplier(get_artifact_wear(character, slot_key))))
+    return total
+
+
+def scaled_artifact_hp_regen_per_minute(character: Character) -> float:
+    """Доп. пассивный хил в минуту от экипированных артов (≈/час дели на 60)."""
+    gl = _gl()
+    total = 0.0
+    for slot_key in gl.ARTIFACT_EQUIP_SLOT_KEYS:
+        name = str(character.equipment.get(slot_key, "Нет") or "Нет")
+        if not name or name == "Нет":
+            continue
+        stats = artifact_bonus_entry(name)
+        hp_regen = int(stats.get("hp_regen", 0))
+        if hp_regen:
+            total += hp_regen * wear_multiplier(get_artifact_wear(character, slot_key)) / 60.0
+    return total
+
+
+def artifact_psy_resist(character: Character) -> int:
+    """Сумма сопротивления пси-воздействию (аура контролёра/полтергейста) от экипированных артов."""
+    gl = _gl()
+    total = 0
+    for slot_key in gl.ARTIFACT_EQUIP_SLOT_KEYS:
+        name = str(character.equipment.get(slot_key, "Нет") or "Нет")
+        if not name or name == "Нет":
+            continue
+        stats = artifact_bonus_entry(name)
+        total += int(round(int(stats.get("psy_resist", 0)) * wear_multiplier(get_artifact_wear(character, slot_key))))
+    return total
 
 
 def artifact_quest_heal_per_turn(character: Character) -> int:

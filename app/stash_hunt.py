@@ -52,6 +52,7 @@ STASH_AMBUSH_CHANCE_MAX = 5
 STASH_COORDINATE_PRICE = 3500
 STASH_COORDINATE_KEY = "stash_coordinates"
 STASH_COORDS_DROP_CHANCE = 3
+STASH_INTEL_DIARY_CHANCE = 10  # независимый шанс на дневник в обычном схроне
 
 MOVE_DELTAS: dict[str, tuple[int, int]] = {
     "up": (0, -1),
@@ -250,12 +251,18 @@ def abandon_stash_hunt(storage: Storage, telegram_id: int) -> ActionResult:
     )
 
 
-def _roll_stash_loot(storage: Storage, telegram_id: int, location: str) -> list[str]:
-    loot: list[str] = []
+def _roll_stash_loot(storage: Storage, telegram_id: int, location: str) -> list[tuple[str, int]]:
+    """Лут из схрона: список (ключ предмета, количество).
+
+    Количество обычно 1; стройматериалы выпадают пачкой (20–40 шт.).
+    """
+    from app.faction_buildings import MATERIALS_ITEM_KEY
+
+    loot: list[tuple[str, int]] = []
     if random.random() * 100 < STASH_CONSUMABLE_DROP_CHANCE:
         consumable = random.choice(STASH_CONSUMABLE_KEYS)
         if random.random() * 100 < STASH_CONSUMABLE_DROP_CHANCE_BY_KEY.get(consumable, 100):
-            loot.append(consumable)
+            loot.append((consumable, 1))
     gear_roll = random.random() * 100
     cumulative = 0.0
     for tier, chance in STASH_GEAR_TIER_CHANCES:
@@ -266,10 +273,15 @@ def _roll_stash_loot(storage: Storage, telegram_id: int, location: str) -> list[
             else:
                 pool = STASH_ARMOR_BY_TIER.get(tier, ())
             if pool:
-                loot.append(random.choice(pool))
+                loot.append((random.choice(pool), 1))
             break
     if not loot:
-        loot.append(random.choice(STASH_CONSUMABLE_KEYS))
+        loot.append((random.choice(STASH_CONSUMABLE_KEYS), 1))
+    if random.random() * 100 < 70:
+        loot.append((MATERIALS_ITEM_KEY, random.randint(20, 40)))
+    # Информация: обычный схрон — только дневник, независимый ролл ~10%.
+    if random.random() * 100 < STASH_INTEL_DIARY_CHANCE:
+        loot.append(("intel_diary", 1))
     return loot
 
 
@@ -277,10 +289,13 @@ def _finish_stash_success(storage: Storage, telegram_id: int, session: StashSess
     clear_stash_session(storage, telegram_id)
     loot_keys = _roll_stash_loot(storage, telegram_id, session.location)
     labels: list[str] = []
-    for key in loot_keys:
-        storage.add_item(telegram_id, key, 1)
+    for key, qty in loot_keys:
+        storage.add_item(telegram_id, key, qty)
         label = ITEM_LABELS.get(key, key)
-        labels.append(f"{label} x1")
+        if qty == 1:
+            labels.append(f"{label} x1")
+        else:
+            labels.append(f"{label} x{qty}")
     storage.add_player_stat(telegram_id, "quests_completed", 1)
     loot_text = ", ".join(labels)
     return ActionResult(

@@ -93,6 +93,7 @@ _BARKEEP_STAGE_ITEMS: dict[int, tuple[str, ...]] = {
         "gasoline_can",
         "stash_case",
         "stash_coordinates",
+        "radio_set",
         "weapon_pm",
         "weapon_fort12",
         "weapon_fora12",
@@ -291,6 +292,8 @@ def _build_item_vendor_map() -> dict[str, str]:
 
 
 _ITEM_VENDOR_MAP = _build_item_vendor_map()
+# Рация продаётся у бармена (плюс гейт по постройке антенны — см. vendor_item_is_unlocked).
+_ITEM_VENDOR_MAP["radio_set"] = "barkeep"
 
 
 def shop_item_vendor(item_key: str) -> str | None:
@@ -321,6 +324,14 @@ def vendor_item_is_unlocked(storage: Storage, telegram_id: int, item_key: str) -
         return True
     unlocked = unlocked_vendor_item_keys(vendor, get_vendor_tier(storage, telegram_id, vendor))
     if key in unlocked:
+        if key == "radio_set":
+            # Рация у бармена появляется только когда на базе фракции построена антенна.
+            from app.faction_buildings import faction_building_active
+
+            character = storage.get_character(telegram_id, refresh_energy=False)
+            faction = character.faction if character else None
+            if not faction_building_active(storage, faction, "antenna"):
+                return False
         return True
     aliases = {
         "weapon_fora12": "weapon_fort12",
@@ -346,8 +357,19 @@ def tech_repair_discount_percent(storage: Storage, telegram_id: int) -> int:
 def apply_tech_repair_discount(
     storage: Storage, telegram_id: int, price: int
 ) -> tuple[int, int]:
-    """Вернуть (цена_со_скидкой, процент_скидки)."""
+    """Вернуть (цена_со_скидкой, процент_скидки).
+
+    Процент скидки включает скидку техника по этапу ассортимента плюс
+    доп. скидку за построенный автосервис группировки (единственная
+    точка, где применяется бонус автосервиса — действует на все виды
+    ремонта сразу).
+    """
     pct = tech_repair_discount_percent(storage, telegram_id)
+    from app.faction_buildings import repair_discount_bonus_percent
+
+    character = storage.get_character(telegram_id, refresh_energy=False)
+    faction = character.faction if character else None
+    pct = pct + repair_discount_bonus_percent(storage, faction)
     if pct <= 0 or price <= 0:
         return max(0, int(price)), 0
     discounted = max(1, int(round(int(price) * (100 - pct) / 100.0)))
@@ -366,7 +388,8 @@ def vendor_assortment_blurb(storage: Storage, telegram_id: int, vendor: str) -> 
         f"Авторитет: {reputation_progress_label(rep)}.",
     ]
     if vendor == "tech":
-        lines.append(f"Скидка на ремонт сейчас: {tech_repair_discount_percent(storage, telegram_id)}%.")
+        _discounted, _pct = apply_tech_repair_discount(storage, telegram_id, 1000)
+        lines.append(f"Скидка на ремонт сейчас: {_pct}%.")
     if tier < VENDOR_TIER_MAX:
         need = current_rep_need(tier)
         lines.append(

@@ -522,7 +522,7 @@ def run_smoke_check() -> None:
         assert after_un.equipment.get("artifact") in {"", "Нет", None}
         assert after_un.equipment.get("artifact_2") in {"", "Нет", None}
         assert after_un.equipment.get("artifact_3") in {"", "Нет", None}
-        # Вернём лёгкую броню без смягчения — дальше smoke проверяет апгрейды на −1 урона.
+        # Вернём базовую броню — дальше smoke проверяет апгрейды поверх её смягчения.
         storage.set_equipment_item(111, "armor", "Куртка новичка")
         storage.update_equipment_fields(111, {"armor_upgrade_level": 0})
 
@@ -1000,7 +1000,7 @@ def run_smoke_check() -> None:
         assert installed.ok, installed.text
         assert armor_defense(storage.get_character(111, refresh_energy=False)) == 1
         player_111 = storage.get_character(111, refresh_energy=False)
-        assert apply_incoming_damage(10, player_111) == 9
+        assert apply_incoming_damage(10, player_111) == 4
         upgraded2 = upgrade_armor(storage, 111)
         assert upgraded2.ok, upgraded2.text
         installed2 = install_armor_upgrade(storage, 111)
@@ -2190,7 +2190,7 @@ def run_smoke_check() -> None:
         assert "сила 2" in pm_label and "д." in pm_label and "10000" in pm_label
         leather_label = shop_armor_button_title("armor_leather")
         assert "сила 2" in leather_label and "10000" in leather_label
-        assert "−1" in leather_label and ("б3%" in leather_label or "блок 3%" in leather_label)
+        assert "−5" in leather_label and ("б3%" in leather_label or "блок 3%" in leather_label)
         # Цена сразу после имени — не в хвосте, который режет клиент.
         assert leather_label.index("10000") < leather_label.index("сила")
         bike_label = shop_gear_button_title("bicycle")
@@ -2334,8 +2334,8 @@ def run_smoke_check() -> None:
 
         assert ARMOR_BLOCK_CHANCE_BY_NAME["Кожаная куртка"] == 3
         assert ARMOR_BLOCK_CHANCE_BY_NAME["Носорог"] == 20
-        assert ARMOR_MITIGATION_BY_NAME["Кожаная куртка"] == 1
-        assert ARMOR_MITIGATION_BY_NAME["Носорог"] == 6
+        assert ARMOR_MITIGATION_BY_NAME["Кожаная куртка"] == 5
+        assert ARMOR_MITIGATION_BY_NAME["Носорог"] == 23
         assert weapon_shoot_range("АКС-74У") == 2
         assert weapon_shoot_range("СПАС-12") == 2
         assert weapon_shoot_range("Винтарь ВС") == 3
@@ -2346,7 +2346,7 @@ def run_smoke_check() -> None:
         ch = storage.get_character(111)
         assert ch is not None
         assert armor_block_chance(ch) == 20
-        assert armor_flat_mitigation(ch) == 6
+        assert armor_flat_mitigation(ch) == 23
         import random as _rnd
 
         _orig = _rnd.randint
@@ -2359,8 +2359,8 @@ def run_smoke_check() -> None:
         assert ch is not None
         _rnd.randint = lambda a, b: 100  # блок не срабатывает
         try:
-            # 15 − 6 смягчение − 0 апгрейд = 9
-            assert apply_incoming_damage(15, ch, min_damage=1) == 9
+            # 15 − 23 смягчение − 0 апгрейд = -8, но min_damage=1
+            assert apply_incoming_damage(15, ch, min_damage=1) == 1
         finally:
             _rnd.randint = _orig
         assert "Тяжёлая артиллерия" in buy_g.text or "Тяжёлая артиллерия" in buy_n.text or (

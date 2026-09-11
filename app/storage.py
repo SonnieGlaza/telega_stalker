@@ -2247,7 +2247,7 @@ class Storage:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT energy, max_energy, energy_updated_at, sleeping_bag_owned, equipment_json, radiation
+                SELECT energy, max_energy, energy_updated_at, sleeping_bag_owned, equipment_json, radiation, faction, health
                 FROM characters
                 WHERE telegram_id = ?
                 """,
@@ -2280,6 +2280,8 @@ class Storage:
             energy = _as_int(row["energy"], 0)
             max_energy = _as_int(row["max_energy"], 100)
             radiation = _as_int(self._row_get(row, "radiation"), 0)
+            faction = str(self._row_get(row, "faction") or "").strip() or None
+            health = _as_int(self._row_get(row, "health"), 0)
             last_update = _as_dt(row["energy_updated_at"])
             minutes_passed = int((now - last_update).total_seconds() // 60)
             if minutes_passed <= 0:
@@ -2302,7 +2304,25 @@ class Storage:
                 has_zone_artifact = False
             if has_zone_artifact:
                 regen_multiplier *= 1.05
+            if faction:
+                try:
+                    from app.faction_buildings import bar_energy_regen_bonus_multiplier
+
+                    regen_multiplier *= 1.0 + bar_energy_regen_bonus_multiplier(self, faction)
+                except ImportError:
+                    pass
             gained = int(minutes_passed * ENERGY_REGEN_PER_MINUTE * regen_multiplier)
+            try:
+                from types import SimpleNamespace
+
+                from app.artifact_features import scaled_artifact_energy_regen_bonus
+
+                equipment_for_energy = json.loads(self._row_get(row, "equipment_json", "{}") or "{}")
+                if isinstance(equipment_for_energy, dict):
+                    proxy = SimpleNamespace(equipment=equipment_for_energy)
+                    gained += minutes_passed * scaled_artifact_energy_regen_bonus(proxy)  # type: ignore[arg-type]
+            except (TypeError, json.JSONDecodeError, ImportError):
+                pass
             new_energy = min(max_energy, energy + gained)
             new_radiation = radiation
             try:
@@ -2319,7 +2339,47 @@ class Storage:
             except (TypeError, json.JSONDecodeError, ImportError):
                 new_radiation = radiation
 
-            if new_energy == energy and new_radiation == radiation and minutes_passed > 0:
+            # Пассивный хил от медпункта группировки (≈6 HP/час) + артефактов. Никогда не оживляет мёртвый персонаж — штрафы смерти не обходятся.
+            new_health = health
+            heal_total = 0.0
+            if faction and health > 0:
+                try:
+                    from app.faction_buildings import passive_heal_per_minute
+
+                    heal_total += minutes_passed * passive_heal_per_minute(self, faction)
+                except ImportError:
+                    pass
+            if health > 0:
+                try:
+                    from types import SimpleNamespace
+
+                    from app.artifact_features import scaled_artifact_hp_regen_per_minute
+
+                    equipment_for_hp = json.loads(self._row_get(row, "equipment_json", "{}") or "{}")
+                    if isinstance(equipment_for_hp, dict):
+                        proxy = SimpleNamespace(equipment=equipment_for_hp)
+                        heal_total += minutes_passed * scaled_artifact_hp_regen_per_minute(proxy)  # type: ignore[arg-type]
+                except (TypeError, json.JSONDecodeError, ImportError):
+                    pass
+            heal = int(heal_total)
+            if heal > 0:
+                try:
+                    from types import SimpleNamespace
+
+                    from app.game_logic import effective_max_health
+
+                    equipment = json.loads(self._row_get(row, "equipment_json", "{}") or "{}")
+                    max_hp = int(effective_max_health(SimpleNamespace(equipment=equipment)))
+                except Exception:
+                    max_hp = 100
+                new_health = max(0, min(max_hp, health + heal))
+
+            if (
+                new_energy == energy
+                and new_radiation == radiation
+                and new_health == health
+                and minutes_passed > 0
+            ):
                 # Даже без прироста двигаем таймер, чтобы не пересчитывать огромный gap.
                 conn.execute(
                     "UPDATE characters SET energy_updated_at = ? WHERE telegram_id = ?",
@@ -2329,10 +2389,10 @@ class Storage:
                 conn.execute(
                     """
                     UPDATE characters
-                    SET energy = ?, radiation = ?, energy_updated_at = ?
+                    SET energy = ?, radiation = ?, health = ?, energy_updated_at = ?
                     WHERE telegram_id = ?
                     """,
-                    (new_energy, new_radiation, now.isoformat(), telegram_id),
+                    (new_energy, new_radiation, new_health, now.isoformat(), telegram_id),
                 )
         self.save_snapshot()
 

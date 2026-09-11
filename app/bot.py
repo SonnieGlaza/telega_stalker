@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from html import unescape
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -33,6 +34,7 @@ from aiogram.types import (
 
 from app.fsm_nav import abort_fsm_if_nav, is_reply_menu_button, nav_button
 from app.artifact_hunt import (
+    _load_location_thumb,
     abandon_artifact_hunt,
     get_hunt_session,
     hunt_status_caption,
@@ -380,6 +382,11 @@ from app.keyboards import (
     personal_stash_menu_keyboard,
     personal_stash_items_keyboard,
     personal_stash_amount_keyboard,
+    location_zones_keyboard,
+    secret_trader_sell_keyboard,
+    lab_combat_keyboard,
+    lab_transition_keyboard,
+    lab_ambush_choice_keyboard,
     artifact_hunt_keyboard,
     stash_hunt_keyboard,
     quest_mission_keyboard,
@@ -467,6 +474,26 @@ from app.profile_card import build_character_card
 from app.faction_ranks import ranks_for_faction
 from app.storage import Character, Storage, NicknameTakenError
 from app.zone_map import TELEGRAM_PHOTO_MAX_BYTES, build_zone_map_image
+from app.location_zones import location_zones_for, start_search_zone, zone_cooldown_remaining_text
+from app.secret_trader import (
+    SECRET_TRADER_LOCATION,
+    secret_trader_menu_text,
+    sell_all_intel,
+    sell_intel_item,
+)
+from app.lab_mission import (
+    get_lab_session,
+    lab_abandon,
+    lab_ambush_choice,
+    lab_enter_level,
+    lab_interact,
+    lab_medkit,
+    lab_move,
+    lab_shoot,
+    lab_status_caption,
+    render_lab_for_player,
+    start_lab,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -813,7 +840,7 @@ TREASURY_CUSTOM_MIN_RU = 1
 TREASURY_CUSTOM_MAX_RU = 1_000_000
 WAREHOUSE_CUSTOM_MIN = 1
 WAREHOUSE_CUSTOM_MAX = 10_000
-WAREHOUSE_CUSTOM_ITEM_KEYS = frozenset({"ammo_pack", "medkit", "energy_drink", *ARTIFACT_DROP_KEYS})
+WAREHOUSE_CUSTOM_ITEM_KEYS = frozenset({"ammo_pack", "medkit", "energy_drink", "materials", *ARTIFACT_DROP_KEYS})
 FSM_CANCEL_HINT = "\nОтмена: /cancel или «⬅️ В меню»."
 
 
@@ -1735,6 +1762,20 @@ async def handle_topup(callback: CallbackQuery, bot: Bot, state: FSMContext) -> 
                 f"Донат в казну «{player.faction}».\n"
                 f"Курс: 1⭐ = {TOPUP_RATE_RU_PER_STAR} RU — всё уходит в общий котёл.",
                 reply_markup=topup_keyboard(dest="faction"),
+            )
+            await callback.answer()
+            return
+        if kind == "perks":
+            await callback.message.answer(
+                "🏴 Премиум-предложения (вне автоматической оплаты в боте, договаривается лично):\n\n"
+                "🏴 «Своя группировка» — создание своей группировки в игре:\n"
+                "• 1000 ₽ — разовое создание\n"
+                "• 300 ₽/мес — ежемесячная поддержка\n\n"
+                "Курс доната: 1 ₽ ≈ 50 RU.\n\n"
+                "Для оформления пиши автору проекта:\n"
+                "• Telegram: https://t.me/Andreyteacher1\n"
+                "• VK: vk.com/id210913516",
+                reply_markup=topup_root_keyboard(has_faction=bool(player.faction)),
             )
             await callback.answer()
             return
@@ -4307,6 +4348,7 @@ def _quests_compact_status(storage, player) -> str:
 
 
 def _quests_menu_payload(storage, player):
+    from app.faction_buildings import faction_building_active
     from app.mini_events import help_event_is_joinable
     from app.special_events import (
         special_event_button_label,
@@ -4316,7 +4358,7 @@ def _quests_menu_payload(storage, player):
     active = storage.get_active_contract(player.telegram_id)
     home = faction_home_base(player.faction)
     traveling = is_traveling(player)
-    at_home = player.location == home and not traveling
+    at_home = (player.location == home or faction_building_active(storage, player.faction, "antenna")) and not traveling
 
     contract_buttons: list[tuple[str, str]] = []
     vendor_buttons: list[tuple[str, str]] = []
@@ -4418,7 +4460,9 @@ def _quests_vendor_payload(storage, player, vendor: str):
     ]
     home = faction_home_base(player.faction)
     traveling = is_traveling(player)
-    at_home = player.location == home and not traveling
+    from app.faction_buildings import faction_building_active
+
+    at_home = (player.location == home or faction_building_active(storage, player.faction, "antenna")) and not traveling
     contract_buttons: list[tuple[str, str]] = []
     if at_home and not storage.get_active_contract(player.telegram_id):
         for template in list_vendor_contracts_for_character(player, vendor):
@@ -6363,6 +6407,70 @@ async def show_zone_map(message: Message) -> None:
         )
 
 
+@router.message(nav_button("📍 Локация"))
+async def show_location_zones(message: Message) -> None:
+    player = ensure_character(message)
+    if player is None:
+        await message.answer("Сначала создай персонажа через /start.")
+        return
+    if await reject_if_dead(message, player):
+        return
+    if is_traveling(player):
+        await message.answer("Ты в пути, вылазки недоступны.")
+        return
+
+    storage = get_storage()
+    location = player.location
+    is_home = location == faction_home_base(player.faction)
+    zones = location_zones_for(location)
+    zones_status = [
+        (
+            zone,
+            zone_cooldown_remaining_text(storage, player.telegram_id, location, zone["id"]),
+        )
+        for zone in zones
+    ]
+
+    lines = [f"📍 Локация: {location}"]
+    if is_home:
+        lines.append("Здесь расположена база — доступен торговец.")
+    is_secret_trader_spot = location == SECRET_TRADER_LOCATION
+    if is_secret_trader_spot:
+        lines.append("Здесь орудует тайный торговец — скупает информацию.")
+    if zones:
+        lines.append("")
+        lines.append("Зоны:")
+        for zone, remaining in zones_status:
+            label = str(zone.get("label") or zone.get("id") or "")
+            if zone.get("kind") == "anomaly":
+                lines.append(f"• ☢ {label} — поиск артефактов")
+            else:
+                suffix = f" (КД {remaining})" if remaining else ""
+                lines.append(f"• 🔍 {label} — обыск схрона{suffix}")
+    else:
+        lines.append("Здесь пока нет исследованных зон.")
+    caption = "\n".join(lines)
+
+    keyboard = location_zones_keyboard(
+        location,
+        zones_status,
+        is_home_base=is_home,
+        show_secret_trader=is_secret_trader_spot,
+    )
+    try:
+        thumb = _load_location_thumb(location)
+        if thumb is None:
+            await message.answer(caption, reply_markup=keyboard)
+            return
+        buf = BytesIO()
+        thumb.convert("RGB").save(buf, format="PNG", optimize=True)
+        image = BufferedInputFile(buf.getvalue(), filename="location_thumb.png")
+        await message.answer_photo(photo=image, caption=caption, reply_markup=keyboard)
+    except Exception:
+        logger.exception("Failed to send location zones for user %s", message.from_user.id)
+        await message.answer(caption, reply_markup=keyboard)
+
+
 @router.message(F.text == "👥 Игроки")
 async def show_players(message: Message) -> None:
     player = ensure_character(message)
@@ -6999,6 +7107,52 @@ async def _send_or_edit_stash_frame(
         await safe_callback_answer(callback)
 
 
+async def _send_or_edit_lab_frame(
+    callback: CallbackQuery,
+    *,
+    image_bytes: bytes,
+    caption: str,
+    note: str | None = None,
+    stage: str = "combat",
+) -> None:
+    media = BufferedInputFile(image_bytes, filename="lab_mission.png")
+    text = caption if not note else f"{caption}\n\n{note}"
+    if stage == "transition":
+        markup = lab_transition_keyboard()
+    elif stage == "ambush_choice":
+        markup = lab_ambush_choice_keyboard()
+    else:
+        markup = lab_combat_keyboard()
+    try:
+        if callback.message and callback.message.photo:
+            await callback.message.edit_media(
+                media=InputMediaPhoto(media=media, caption=text),
+                reply_markup=markup,
+            )
+        elif callback.message:
+            await callback.message.answer_photo(photo=media, caption=text, reply_markup=markup)
+            try:
+                await callback.message.delete()
+            except TelegramBadRequest:
+                pass
+        else:
+            await callback.bot.send_photo(
+                callback.from_user.id,
+                photo=media,
+                caption=text,
+                reply_markup=markup,
+            )
+    except TelegramBadRequest:
+        await callback.bot.send_photo(
+            callback.from_user.id,
+            photo=media,
+            caption=text,
+            reply_markup=markup,
+        )
+    finally:
+        await safe_callback_answer(callback)
+
+
 @router.callback_query(F.data == "stash:search")
 async def stash_search_callback(callback: CallbackQuery) -> None:
     result = start_stash_hunt(get_storage(), callback.from_user.id, source="found")
@@ -7077,6 +7231,192 @@ async def stash_hunt_callback(callback: CallbackQuery) -> None:
     except Exception:
         logger.exception("Stash hunt callback failed for %s action=%s", telegram_id, action)
         await safe_callback_answer(callback, "Ошибка поиска хабара. Попробуй ещё раз или /fixme", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("locmap:"))
+async def location_map_callback(callback: CallbackQuery) -> None:
+    action = (callback.data or "").removeprefix("locmap:").strip()
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+
+    try:
+        if action == "noop":
+            await callback.answer("Зона ещё восстанавливается.", show_alert=True)
+            return
+
+        if action == "vendor":
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if player is None:
+                await safe_callback_answer(callback, "Сначала создай персонажа через /start.", show_alert=True)
+                return
+            if player.health <= 0:
+                await show_death_screen(callback, player)
+                return
+            if await reject_if_busy(callback, telegram_id):
+                return
+            await edit_menu_message(
+                callback,
+                _trader_text(telegram_id, "Торговая зона. Выбери специалиста:"),
+                trader_keyboard(player.faction),
+            )
+            return
+
+        if action == "secrettrader":
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if player is None:
+                await safe_callback_answer(callback, "Сначала создай персонажа через /start.", show_alert=True)
+                return
+            if player.health <= 0:
+                await show_death_screen(callback, player)
+                return
+            if await reject_if_busy(callback, telegram_id):
+                return
+            await edit_menu_message(
+                callback,
+                secret_trader_menu_text(storage, telegram_id),
+                secret_trader_sell_keyboard(player.inventory),
+            )
+            return
+
+        if action == "anomaly":
+            result = start_artifact_hunt(storage, telegram_id)
+            payload = result.payload or {}
+            image = payload.get("hunt_image")
+            if image and payload.get("hunt_active"):
+                await _send_or_edit_hunt_frame(
+                    callback,
+                    image_bytes=image,
+                    caption=str(payload.get("caption") or result.text),
+                    note=result.text if payload.get("hunt_started") else None,
+                )
+                return
+            await reply_action_result(callback, result.text)
+            return
+
+        if action.startswith("search:"):
+            zone_id = action.removeprefix("search:").strip()
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if player is None:
+                await reply_action_result(callback, "Сначала создай персонажа.")
+                return
+            result = start_search_zone(storage, telegram_id, player.location, zone_id)
+            payload = result.payload or {}
+            image = payload.get("stash_image")
+            if image and payload.get("stash_active"):
+                await _send_or_edit_stash_frame(
+                    callback,
+                    image_bytes=image,
+                    caption=str(payload.get("caption") or result.text),
+                    note=result.text if payload.get("stash_started") else None,
+                )
+                return
+            await reply_action_result(callback, result.text)
+            return
+
+        if action.startswith("lab:"):
+            zone_id = action.removeprefix("lab:").strip()
+            lab_id = zone_id.removeprefix("lab_") or "limit1"
+            result = start_lab(storage, telegram_id, lab_id=lab_id)
+            payload = result.payload or {}
+            image = payload.get("lab_image")
+            if image and payload.get("lab_active"):
+                await _send_or_edit_lab_frame(
+                    callback,
+                    image_bytes=image,
+                    caption=str(payload.get("caption") or result.text),
+                    note=result.text if payload.get("lab_started") else None,
+                    stage=str(payload.get("lab_stage") or "combat"),
+                )
+                return
+            await reply_action_result(callback, result.text)
+            return
+
+        await callback.answer("Неизвестное действие.", show_alert=True)
+    except Exception:
+        logger.exception("Location map callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка карты локации. Попробуй ещё раз или /fixme", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("selltrade:"))
+async def secret_trader_sell_callback(callback: CallbackQuery) -> None:
+    """Продажа информации секретному торговцу (Припять)."""
+    action = (callback.data or "").removeprefix("selltrade:").strip()
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+
+    try:
+        if action == "all":
+            result = sell_all_intel(storage, telegram_id)
+        else:
+            result = sell_intel_item(storage, telegram_id, action)
+        await reply_action_result(callback, result.text)
+    except Exception:
+        logger.exception("Secret trader sell callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка продажи. Попробуй ещё раз или /fixme", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("labact:"))
+async def lab_action_callback(callback: CallbackQuery) -> None:
+    """Управление вылазкой в лаборатории «Предел-1»."""
+    action = (callback.data or "").removeprefix("labact:").strip()
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+
+    try:
+        if action == "leave":
+            result = lab_abandon(storage, telegram_id)
+            await reply_action_result(callback, result.text)
+            return
+
+        if action == "refresh":
+            session = get_lab_session(storage, telegram_id)
+            if session is None:
+                await safe_callback_answer(callback, "Активной вылазки в «Предел-1» нет.", show_alert=True)
+                return
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            image = render_lab_for_player(storage, telegram_id, session, player)
+            await _send_or_edit_lab_frame(
+                callback,
+                image_bytes=image,
+                caption=lab_status_caption(session, player),
+                stage=session.stage,
+            )
+            return
+
+        if action == "medkit":
+            result = lab_medkit(storage, telegram_id)
+        elif action == "interact":
+            result = lab_interact(storage, telegram_id)
+        elif action == "enter":
+            result = lab_enter_level(storage, telegram_id)
+        elif action == "giveup":
+            result = lab_ambush_choice(storage, telegram_id, give_up=True)
+        elif action == "fight":
+            result = lab_ambush_choice(storage, telegram_id, give_up=False)
+        elif action.startswith("shoot:"):
+            direction = action.removeprefix("shoot:").strip()
+            result = lab_shoot(storage, telegram_id, direction)
+        elif action in ("up", "down", "left", "right"):
+            result = lab_move(storage, telegram_id, action)
+        else:
+            await callback.answer("Неизвестное действие.", show_alert=True)
+            return
+
+        payload = result.payload or {}
+        image = payload.get("lab_image")
+        if image and payload.get("lab_active"):
+            await _send_or_edit_lab_frame(
+                callback,
+                image_bytes=image,
+                caption=str(payload.get("caption") or result.text),
+                note=str(payload.get("lab_note") or "") or None,
+                stage=str(payload.get("lab_stage") or "combat"),
+            )
+            return
+        await reply_action_result(callback, result.text)
+    except Exception:
+        logger.exception("Lab action callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка лаборатории. Попробуй ещё раз или /fixme", show_alert=True)
 
 
 @router.message(Command("pay"), F.chat.type == "private")
@@ -8919,6 +9259,28 @@ def _faction_group_keyboard_for(telegram_id: int):
     )
 
 
+def _faction_buildings_keyboard(storage, faction: str | None):
+    """Клавиатура меню построек: «Построить …» для ещё не построенных + назад."""
+    from aiogram.types import InlineKeyboardButton
+
+    from app.faction_buildings import BUILDING_KEYS, BUILDING_TITLES, get_building_state
+
+    rows: list[list[InlineKeyboardButton]] = []
+    if faction:
+        for key in BUILDING_KEYS:
+            if not get_building_state(storage, faction, key).get("built"):
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=f"🏗 Построить {BUILDING_TITLES[key]}",
+                            callback_data=f"fbuild:{key}",
+                        )
+                    ]
+                )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="faction:group")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @router.message(F.text == "🛰 События")
 async def show_events(message: Message) -> None:
     player = ensure_character(message)
@@ -9466,6 +9828,57 @@ async def faction_bots_count_callback(callback: CallbackQuery) -> None:
         f"{result.text}\n\n{overview}",
         _faction_group_keyboard_for(player.telegram_id),
     )
+
+
+@router.callback_query(F.data == "faction:buildings:menu")
+async def faction_buildings_menu_callback(callback: CallbackQuery) -> None:
+    """Меню построек базы группировки (доступно только лидеру)."""
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Персонаж не найден.", show_alert=True)
+        return
+    if not player_ready(player):
+        await callback.answer("Сначала выбери группировку.", show_alert=True)
+        return
+    if storage.get_faction_leader_id(player.faction) != callback.from_user.id:
+        await callback.answer("Меню построек доступно только лидеру группировки.", show_alert=True)
+        return
+    from app.faction_buildings import faction_buildings_status_text
+
+    text = faction_buildings_status_text(storage, player.faction)
+    await edit_menu_message(callback, text, _faction_buildings_keyboard(storage, player.faction))
+
+
+@router.callback_query(F.data.startswith("fbuild:"))
+async def faction_building_build_callback(callback: CallbackQuery) -> None:
+    """Постройка здания на базе группировки лидером (fbuild:<key>)."""
+    key = (callback.data or "").removeprefix("fbuild:")
+    storage = get_storage()
+    try:
+        from app.faction_buildings import (
+            BUILDING_KEYS,
+            build_building,
+            faction_buildings_status_text,
+        )
+
+        if key not in BUILDING_KEYS:
+            await callback.answer("Неизвестная постройка.", show_alert=True)
+            return
+        result = build_building(storage, callback.from_user.id, key)
+        await reply_action_result(callback, result.text, short_ack="Постройка")
+        player = storage.get_character(callback.from_user.id, refresh_energy=False)
+        status = faction_buildings_status_text(storage, player.faction if player else None)
+        is_leader = bool(
+            player
+            and player.faction
+            and storage.get_faction_leader_id(player.faction) == callback.from_user.id
+        )
+        keyboard = _faction_buildings_keyboard(storage, player.faction) if is_leader else None
+        await edit_menu_message(callback, status, keyboard)
+    except Exception:
+        logger.exception("Faction building build failed for user %s", callback.from_user.id)
+        await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data == "eco:menu:root")

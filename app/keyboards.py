@@ -4,7 +4,8 @@ from typing import Any
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
-from app.game_logic import ARTIFACT_DROP_KEYS, TOPUP_RATE_RU_PER_STAR, WAR_MIN_FACTION_MEMBERS, default_trader_sell_catalog_buttons
+from app.game_logic import ARTIFACT_DROP_KEYS, ITEM_LABELS, TOPUP_RATE_RU_PER_STAR, WAR_MIN_FACTION_MEMBERS, default_trader_sell_catalog_buttons
+from app.secret_trader import INTEL_ITEM_KEYS, INTEL_SELL_PRICES
 
 
 def gender_keyboard() -> InlineKeyboardMarkup:
@@ -58,7 +59,7 @@ def group_bot_link_inline_keyboard(bot_username: str | None) -> InlineKeyboardMa
 def pda_keyboard(*, is_leader: bool = False) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [
         [KeyboardButton(text="🧾 Профиль"), KeyboardButton(text="💬 Чаты")],
-        [KeyboardButton(text="🏆 Рейтинг"), KeyboardButton(text="🗺 Карта")],
+        [KeyboardButton(text="🏆 Рейтинг"), KeyboardButton(text="🗺 Карта"), KeyboardButton(text="📍 Локация")],
         [KeyboardButton(text="👥 Игроки"), KeyboardButton(text="🤝 Обмен")],
         [KeyboardButton(text="💎 Находки"), KeyboardButton(text="💎 Арты")],
         [KeyboardButton(text="📊 Дроп"), KeyboardButton(text="☠️ Смерти")],
@@ -508,6 +509,7 @@ def trader_buy_gear_keyboard(
         (shop_gear_button_title("sleeping_bag"), "buy:sleeping_bag", "sleeping_bag"),
         (shop_gear_button_title("stash_case"), "buyqty:stash_case", "stash_case"),
         (shop_gear_button_title("stash_coordinates"), "buy:stash_coordinates", "stash_coordinates"),
+        (shop_gear_button_title("radio_set"), "buy:radio_set", "radio_set"),
     ]
     items = _filter_shop_rows(catalog, unlocked_keys)
     return _trader_page_keyboard(
@@ -532,6 +534,88 @@ def inventory_equipment_keyboard(*, money: int | None = None) -> InlineKeyboardM
         [InlineKeyboardButton(text="📦 Открыть тайник", callback_data="use:stash_case")],
         [InlineKeyboardButton(text="⚙️ Экипировка", callback_data="equip:root")],
     ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def location_zones_keyboard(
+    location: str,
+    zones_status: list[tuple[dict, str | None]],
+    *,
+    is_home_base: bool,
+    show_secret_trader: bool = False,
+) -> InlineKeyboardMarkup:
+    """Клавиатура карты локации: торговец на базе + кнопки зон локации.
+
+    zones_status — список пар (zone_dict, remaining_cooldown_text_or_None):
+    для зон обыска показываем кнопку запуска либо (при активном КД)
+    информационную неактивную кнопку с остатком времени.
+    show_secret_trader=True — в Припяти добавляет вход к тайному торговцу.
+    """
+    rows: list[list[InlineKeyboardButton]] = []
+    if is_home_base:
+        rows.append(
+            [InlineKeyboardButton(text="🛒 Торговец", callback_data="locmap:vendor")]
+        )
+    if show_secret_trader:
+        rows.append(
+            [InlineKeyboardButton(text="🕵 Тайный торговец", callback_data="locmap:secrettrader")]
+        )
+    for zone, remaining in zones_status:
+        kind = str(zone.get("kind") or "")
+        zone_id = str(zone.get("id") or "")
+        label = str(zone.get("label") or zone_id)
+        if kind == "anomaly":
+            rows.append(
+                [InlineKeyboardButton(text="☢ Поиск артефактов", callback_data="locmap:anomaly")]
+            )
+        elif kind == "search":
+            if remaining is None:
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=f"🔍 {label}",
+                            callback_data=f"locmap:search:{zone_id}",
+                        )
+                    ]
+                )
+            else:
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=f"🔍 {label} (КД {remaining})",
+                            callback_data="locmap:noop",
+                        )
+                    ]
+                )
+        elif kind == "lab":
+            rows.append(
+                [InlineKeyboardButton(text=f"🧪 {label}", callback_data=f"locmap:lab:{zone_id}")]
+            )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def secret_trader_sell_keyboard(inventory_counts: dict[str, int]) -> InlineKeyboardMarkup:
+    """Кнопки продажи информации тайному торговцу (позиции с количеством > 0).
+
+    Кнопка «Продать всё» добавляется, только если есть что продавать.
+    """
+    rows: list[list[InlineKeyboardButton]] = []
+    for key in INTEL_ITEM_KEYS:
+        count = int(inventory_counts.get(key, 0))
+        if count <= 0:
+            continue
+        price = int(INTEL_SELL_PRICES.get(key, 0)) * count
+        label = ITEM_LABELS.get(key, key)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"Продать {label} x{count} — {price} RU",
+                    callback_data=f"selltrade:{key}",
+                )
+            ]
+        )
+    if rows:
+        rows.append([InlineKeyboardButton(text="💰 Продать всё", callback_data="selltrade:all")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -570,6 +654,48 @@ def stash_hunt_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🏃 Уйти", callback_data="sthunt:leave"),
                 InlineKeyboardButton(text="🔄 Обновить", callback_data="sthunt:refresh"),
             ],
+        ]
+    )
+
+
+def lab_combat_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⬆️ Вперёд", callback_data="labact:up")],
+            [
+                InlineKeyboardButton(text="⬅️ Влево", callback_data="labact:left"),
+                InlineKeyboardButton(text="⬇️ Назад", callback_data="labact:down"),
+                InlineKeyboardButton(text="➡️ Вправо", callback_data="labact:right"),
+            ],
+            [
+                InlineKeyboardButton(text="🔫⬆", callback_data="labact:shoot:up"),
+                InlineKeyboardButton(text="🔫⬅", callback_data="labact:shoot:left"),
+                InlineKeyboardButton(text="🔫⬇", callback_data="labact:shoot:down"),
+                InlineKeyboardButton(text="🔫➡", callback_data="labact:shoot:right"),
+            ],
+            [
+                InlineKeyboardButton(text="🧪 Обыск/дверь", callback_data="labact:interact"),
+                InlineKeyboardButton(text="💉 Аптечка", callback_data="labact:medkit"),
+            ],
+            [
+                InlineKeyboardButton(text="🏃 Свалить", callback_data="labact:leave"),
+                InlineKeyboardButton(text="🔄 Обновить", callback_data="labact:refresh"),
+            ],
+        ]
+    )
+
+
+def lab_transition_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="⬇ Спуститься", callback_data="labact:enter")]]
+    )
+
+
+def lab_ambush_choice_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🕊 Отдать артефакт и документы", callback_data="labact:giveup")],
+            [InlineKeyboardButton(text="⚔️ Принять бой", callback_data="labact:fight")],
         ]
     )
 
@@ -1032,6 +1158,9 @@ def topup_root_keyboard(*, has_faction: bool = False) -> InlineKeyboardMarkup:
         rows.append(
             [InlineKeyboardButton(text=f"🏛 Казна группировки (1⭐ = {rate} RU)", callback_data="topup:menu:faction")]
         )
+    rows.append(
+        [InlineKeyboardButton(text="🏴 Своя группировка (премиум)", callback_data="topup:menu:perks")]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1206,6 +1335,15 @@ def _warehouse_custom_item_rows(*, action: str) -> list[list[InlineKeyboardButto
             )
         ],
     ]
+    if action == "deposit":
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{emoji} {verb} стройматериалы — своё количество",
+                    callback_data="eco:warehouse:deposit:materials",
+                )
+            ]
+        )
     for art_key in ARTIFACT_DROP_KEYS:
         label = ITEM_LABELS.get(art_key, art_key)
         rows.append(
@@ -1278,6 +1416,7 @@ def faction_group_keyboard(
                 )
             ]
         )
+        rows.append([InlineKeyboardButton(text="🏗 Постройки", callback_data="faction:buildings:menu")])
         if faction != "Монолит":
             rows.append(
                 [

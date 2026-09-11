@@ -266,6 +266,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "fuel_can": {"name": "Канистра дизеля (+5)", "buy_price": 199, "sell_price": 89},
     "stash_case": {"name": "Тайник", "buy_price": 2000, "sell_price": 500},
     "stash_coordinates": {"name": "Координаты хабара", "buy_price": 3500, "sell_price": 0},
+    "radio_set": {"name": "Рация", "buy_price": 30000, "sell_price": 12000},
 }
 
 # Сила снаряги: рейтинги и цены оружия/брони масштабированы ×18/11,
@@ -549,29 +550,13 @@ ARMOR_BLOCK_CHANCE_BY_NAME.setdefault(
 )
 
 # Постоянное смягчение входящего урона (−HP) с 100% шансом по экипированной броне.
+# Правило баланса: 1 очко силы брони = 2.5 гашения урона (генерируется из ARMOR_RATING_BY_NAME,
+# который уже включает legacy-алиасы названий).
+ARMOR_MITIGATION_PER_POWER = 2.5
 ARMOR_MITIGATION_BY_NAME: dict[str, int] = {
-    "Куртка новичка": 0,
-    "Кожаная куртка": 1,
-    "Сталкерский бронежилет": 2,
-    "Комбинезон «Заря»": 2,
-    "ПСЗ-7 «Долг»": 3,
-    "Берилл-5М «Булат»": 3,
-    "Костюм СЕВА": 4,
-    "Научный костюм": 4,
-    "Экзоскелет": 5,
-    "Носорог": 6,
-    "Костюм «Чемпион Зоны»": 6,
-    "Бронекостюм «Бронза сезона»": 5,
+    name: int(rating * ARMOR_MITIGATION_PER_POWER + 0.5)
+    for name, rating in ARMOR_RATING_BY_NAME.items()
 }
-ARMOR_MITIGATION_BY_NAME.setdefault(
-    "Бронежилет сталкера", ARMOR_MITIGATION_BY_NAME["Сталкерский бронежилет"]
-)
-ARMOR_MITIGATION_BY_NAME.setdefault(
-    "Усиленный бронекостюм", ARMOR_MITIGATION_BY_NAME["ПСЗ-7 «Долг»"]
-)
-ARMOR_MITIGATION_BY_NAME.setdefault(
-    "Штурмовой экзоскелет", ARMOR_MITIGATION_BY_NAME["Экзоскелет"]
-)
 
 
 ITEM_LABELS = {
@@ -622,6 +607,15 @@ ITEM_LABELS = {
     "bicycle": "Велосипед",
     "stash_case": "Тайник",
     "stash_coordinates": "Координаты хабара",
+    "radio_set": "Рация",
+    "intel_document": "Документы",
+    "intel_flash": "Флешка",
+    "intel_diary": "Дневник",
+    "artifact_predel1": "Артефакт «Предел-1»",
+    "artifact_predel2": "Артефакт «Предел-2»",
+    "artifact_predel3": "Артефакт «Предел-3»",
+    "artifact_predel": "Артефакт «Предел»",
+    "materials": "Стройматериалы",
     "armor_leather": "Кожаная куртка",
     "armor_stalker_vest": "Сталкерский бронежилет",
     "armor_psz7d": "ПСЗ-7 «Долг»",
@@ -710,6 +704,7 @@ ARTIFACT_EQUIP_BONUSES: dict[str, dict[str, int]] = {
     "Арт «Сила»": {"power": 1, "hp": 0},
     "Арт «Живучесть»": {"power": 1, "hp": 10},
     "Арт «Антирад»": {"power": 2, "hp": 0},
+    "Артефакт «Предел»": {"power": 0, "hp": 20},
 }
 ARTIFACT_ENERGY_REGEN_NAMES = frozenset({"Артефакт Зоны", "Артефакт"})
 # Пассивная очистка радиации (−1 раз в N минут), пока арт экипирован.
@@ -721,6 +716,7 @@ ARTIFACT_INVENTORY_TO_NAME: dict[str, str] = {
     "artifact_power": "Арт «Сила»",
     "artifact_vitality": "Арт «Живучесть»",
     "artifact_antirad": "Арт «Антирад»",
+    "artifact_predel": "Артефакт «Предел»",
     "artifact_junk_slime": "Слизь",
     "artifact_junk_bolt": "Ржавый болт",
     "artifact_junk_battery": "Дохлая батарейка",
@@ -918,7 +914,7 @@ EQUIP_SLOT_LABELS = {
     "artifact": "Артефакты",
 }
 
-WAREHOUSE_ITEM_KEYS = ("ammo_pack", "medkit", "energy_drink", "artifact")
+WAREHOUSE_ITEM_KEYS = ("ammo_pack", "medkit", "energy_drink", "artifact", "materials")
 TREASURY_WITHDRAW_MIN_RANK = 5
 
 # Дроп контрабанды (независимые роллы при успехе).
@@ -1456,6 +1452,7 @@ RATING_REWARD = {
     "trade_action": 4,
     "duel_win": 8,
     "duel_lose": 2,
+    "predel_assembly": 70,
 }
 
 # Рейтинг за задания по сложности (успех / штраф за провал).

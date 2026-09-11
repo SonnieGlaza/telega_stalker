@@ -51,18 +51,34 @@ def grant_combat_loot(
     telegram_id: int,
     *,
     npc: bool,
+    monolith: bool = False,
 ) -> str | None:
-    """Выдаёт лут убийце. Возвращает короткую строку для лога или None."""
+    """Выдаёт лут убийце. Возвращает короткую строку для лога или None.
+
+    monolith=True — «труп монолита»: дополнительно дневник и флешка.
+    """
+    notes: list[str] = []
     drop = roll_npc_loot() if npc else roll_mutant_loot()
-    if drop is None:
+    if drop is not None:
+        item_key, amount = drop
+        if item_key == "diesel_can":
+            storage.change_diesel(telegram_id, 5 * amount)
+            notes.append("дизель +5")
+        elif item_key == "gasoline_can":
+            storage.change_gasoline(telegram_id, 5 * amount)
+            notes.append("бензин +5")
+        else:
+            storage.add_item(telegram_id, item_key, amount)
+            label = ITEM_LABELS.get(item_key, item_key)
+            notes.append(f"{label} x{amount}")
+    # Информация: обычный человеческий труп / схрон-носитель — дневник (~10%).
+    # Труп монолита — дневник и флешка, каждый со своим 10%-роллом.
+    if (npc or monolith) and random.random() * 100 < 10:
+        storage.add_item(telegram_id, "intel_diary", 1)
+        notes.append("Дневник x1")
+    if monolith and random.random() * 100 < 10:
+        storage.add_item(telegram_id, "intel_flash", 1)
+        notes.append("Флешка x1")
+    if not notes:
         return None
-    item_key, amount = drop
-    if item_key == "diesel_can":
-        storage.change_diesel(telegram_id, 5 * amount)
-        return "дизель +5"
-    if item_key == "gasoline_can":
-        storage.change_gasoline(telegram_id, 5 * amount)
-        return "бензин +5"
-    storage.add_item(telegram_id, item_key, amount)
-    label = ITEM_LABELS.get(item_key, item_key)
-    return f"{label} x{amount}"
+    return ", ".join(notes)

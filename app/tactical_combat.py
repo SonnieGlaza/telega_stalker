@@ -7,7 +7,7 @@ from typing import Callable
 
 STALE_TURN_MESSAGE = "Ход уже обработан — нажми «Обновить»."
 
-from app.game_logic import _weapon_rating, apply_incoming_damage
+from app.game_logic import WEAPON_RATING_BY_NAME, _weapon_rating, apply_incoming_damage
 from app.storage import Character, Storage
 
 MOVE_DELTAS: dict[str, tuple[int, int]] = {
@@ -60,27 +60,10 @@ WEAPON_AMMO_KEY: dict[str, str | None] = {
     "РПК «Чемпион Зоны»": AMMO_GAUSS_KEY,
 }
 
+# Сила оружия (WEAPON_RATING_BY_NAME) выступает множителем урона: 1 сила = 5 урона.
+WEAPON_DAMAGE_PER_POWER = 5
 WEAPON_DAMAGE_BY_NAME: dict[str, int] = {
-    "Нож": 3,
-    "ПМ": 5,
-    "Фора-12": 6,
-    "Обрез": 8,
-    "Гадюка-5": 7,
-    "Чейзер-13": 9,
-    "АКС-74У": 8,
-    "АК-74": 9,
-    "СПАС-12": 11,
-    "ТРс-301": 10,
-    "ИЛ86": 10,
-    "АН-94": 11,
-    "ГП37": 12,
-    "Винтарь ВС": 13,
-    "СВДм-2": 14,
-    "РП-74": 13,
-    "Енот": 12,
-    "Гаусс-пушка": 15,
-    "РПК «Чемпион Зоны»": 14,
-    "ВСС «Серебряный сталкер»": 13,
+    name: rating * WEAPON_DAMAGE_PER_POWER for name, rating in WEAPON_RATING_BY_NAME.items()
 }
 
 
@@ -118,7 +101,7 @@ def weapon_shoot_range(weapon_name: str) -> int:
 def weapon_damage(weapon_name: str, *, variance: int = 2) -> int:
     base = WEAPON_DAMAGE_BY_NAME.get(weapon_name)
     if base is None:
-        base = max(4, _weapon_rating(weapon_name) + 3)
+        base = max(4, _weapon_rating(weapon_name) * WEAPON_DAMAGE_PER_POWER)
     return max(3, base + random.randint(-variance, variance))
 
 

@@ -65,6 +65,7 @@ def _clear_solo_activity(storage: Storage, telegram_id: int) -> None:
     from app.quest_mission import clear_mission_session, get_mission_session
     from app.artifact_hunt import clear_hunt_session, get_hunt_session
     from app.stash_hunt import clear_stash_session, get_stash_session
+    from app.lab_mission import clear_lab_session, get_lab_session
 
     clear_smuggling_state(storage, telegram_id)
     _clear_group_lobbies(storage, telegram_id)
@@ -78,6 +79,9 @@ def _clear_solo_activity(storage: Storage, telegram_id: int) -> None:
 
     if get_stash_session(storage, telegram_id):
         clear_stash_session(storage, telegram_id)
+
+    if get_lab_session(storage, telegram_id):
+        clear_lab_session(storage, telegram_id)
 
 
 def _forfeit_tactical_sessions(storage: Storage, telegram_id: int) -> bool:
@@ -231,6 +235,11 @@ def player_busy_reason(storage: Storage, telegram_id: int, *, skip: str | None =
 
         if get_stash_session(storage, telegram_id):
             return "Ты ищешь схрон — сначала закончи или сваливай."
+    if skip != "lab":
+        from app.lab_mission import get_lab_session
+
+        if get_lab_session(storage, telegram_id):
+            return "Ты в лаборатории — сначала закончи или сваливай."
     if skip != "smuggle":
         from app.game_logic import get_active_smuggling
         from app.smuggle_mission import get_smuggle_session
