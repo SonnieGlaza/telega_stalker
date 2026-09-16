@@ -244,7 +244,11 @@ LAB_DEFS: dict[str, dict[str, Any]] = {
                 "rooms": {"colony_hall": "hostile"},
                 "room_cells": {"colony_hall": _room(1, 8, 2, 7)},
                 "walkable": (_room(1, 8, 2, 7) + _corridor() + [(4, 8), (4, 0)]),
-                "loot_cells": {},
+                "loot_cells": {
+                    "1,5": "medkit",
+                    "2,5": "ammo_rifle",
+                    "7,5": "ammo_pack",
+                },
                 "note_cells": {"4,4": "note_level2"},
                 "cover": [],
                 "enemies": [
@@ -283,7 +287,11 @@ LAB_DEFS: dict[str, dict[str, Any]] = {
                 "rooms": {"boss_hall": "hostile"},
                 "room_cells": {"boss_hall": _room(1, 8, 1, 5)},
                 "walkable": (_room(1, 8, 1, 5) + [(4, y) for y in range(4, 9)] + [(4, 0)]),
-                "loot_cells": {},
+                "loot_cells": {
+                    "1,3": "medkit",
+                    "7,3": "ammo_pack",
+                    "4,7": "ammo_rifle",
+                },
                 "note_cells": {},
                 "cover": [],
                 "enemies": [
@@ -295,6 +303,21 @@ LAB_DEFS: dict[str, dict[str, Any]] = {
                         "hp_mult": 2.5,
                         "hp": 250,
                         "damage_mult": 1.8,
+                    },
+                    # Прислужники образца — слепые псы в углах зала.
+                    {
+                        "pos": (2, 4),
+                        "type": "mutant",
+                        "kind": "blind_dog",
+                        "hp": 12,
+                        "damage_mult": 0.8,
+                    },
+                    {
+                        "pos": (7, 4),
+                        "type": "mutant",
+                        "kind": "blind_dog",
+                        "hp": 12,
+                        "damage_mult": 0.8,
                     },
                 ],
             },
@@ -357,6 +380,10 @@ LAB_DEFS["limit3"] = _lab_variant(
     "limit3", "Предел-3", "Радар",
     soldier_weapon="Гроза", soldier_hp=45, blood_hp=70, boss_kind="burer", boss_hp=350,
     ambush_kind="military", ambush_weapons=("РПГ-7", "Гаусс-пушка"),
+)
+# Предел-3 сложнее: четвёртый кровосос в зале колб.
+LAB_DEFS["limit3"]["levels"][2]["enemies"].append(
+    {"pos": (4, 6), "type": "mutant", "kind": "bloodsucker", "hp": 70, "damage_mult": 1.6}
 )
 
 
@@ -727,8 +754,8 @@ def _remove_enemy_at_index(session: LabSession, idx: int) -> str:
         session.enemy_max_hp.pop(idx)
     if idx < len(session.enemy_damage_mults):
         session.enemy_damage_mults.pop(idx)
-    # Босс третьего уровня: победа → дверь открывается сама.
-    if kind == "giant":
+    # Босс третьего уровня: победа → дверь открывается сама (Предел-3: бюрер).
+    if kind in ("giant", "burer"):
         session.boss_killed = True
     return _enemy_label(kind, npc=etype == "npc")
 
@@ -744,7 +771,7 @@ def _update_triggers(storage: Storage, session: LabSession) -> None:
     if session.level == 3 and session.boss_killed and not session.collected.get("boss_cleared"):
         session.collected["boss_cleared"] = True
         session.rooms["boss_hall"] = "cleared"
-        session.log.append("👹 Псевдогигант уничтожен — дверь к награде открылась.")
+        session.log.append("👹 Образец уничтожен — дверь к награде открылась.")
 
 
 def _apply_damage_to_player(
@@ -783,7 +810,7 @@ def _mutant_attack_damage(
     if ranged:
         raw = max(1, int(raw * 0.72))
     dmg = apply_incoming_damage(raw, character, min_damage=1) if character is not None else raw
-    dmg = max(1, int(round(dmg * mult)))
+    dmg = max(10, int(round(dmg * mult)))
     return dmg, side
 
 
@@ -830,7 +857,7 @@ def _npc_melee_attack(
 ) -> str:
     raw = npc_weapon_damage(weapon or "ПМ")
     dmg = apply_incoming_damage(raw, character, min_damage=1) if character is not None else raw
-    dmg = max(1, int(round(dmg * mult)))
+    dmg = max(10, int(round(dmg * mult)))
     _apply_damage_to_player(session, dmg, cause="npc", killer_name=_enemy_label(kind, npc=True))
     phrase = encounter_phrase_for_kind(kind, npc=True)
     return f"Бой {phrase}: −{dmg} HP."
@@ -884,7 +911,7 @@ def _npc_shots(storage: Storage, session: LabSession) -> list[str]:
         else:
             dmg = pre
         mult = _enemy_mult(session, i)
-        dmg = max(1, int(round(dmg * mult)))
+        dmg = max(10, int(round(dmg * mult)))
         _apply_damage_to_player(session, dmg, cause="npc", killer_name=_enemy_label(
             session.enemy_kinds[i] if i < len(session.enemy_kinds) else "dark_stalker", npc=True
         ))
@@ -1459,7 +1486,7 @@ def _try_enter_door(storage: Storage, session: LabSession, turn_seq: int) -> Act
             return _frame_result(
                 session,
                 tid,
-                "Дверь заперта: система требует уничтожить образец (Псевдогиганта).",
+                "Дверь заперта: система требует уничтожить образец на этом уровне.",
             )
     else:
         if session.enemies:
@@ -1487,10 +1514,18 @@ def _enter_next_level(storage: Storage, session: LabSession, level: int, turn_se
     session.log.append(f"Уровень {level}: {LEVEL_INTROS.get(level, '')}")
     if not _save_turn(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)
+    player = storage.get_character(tid, refresh_energy=False)
+    image = render_lab_for_player(storage, tid, session, player) if player is not None else None
     return ActionResult(
         True,
         door_text + "\n\n" + LEVEL_INTROS.get(level, ""),
-        payload={"lab_transition": True, "lab_stage": "transition", "lab_active": True},
+        payload={
+            "lab_image": image,
+            "lab_transition": True,
+            "lab_stage": "transition",
+            "lab_active": True,
+            "caption": lab_status_caption(session, player),
+        },
     )
 
 

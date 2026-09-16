@@ -79,7 +79,7 @@ def sortie_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="⚔️ Война"), KeyboardButton(text="🗺 Переход")],
             [KeyboardButton(text="⚔️ Арена"), KeyboardButton(text="🪖 Рейды")],
-            [KeyboardButton(text="👥 Совместная вылазка")],
+            [KeyboardButton(text="👥 Совместная вылазка"), KeyboardButton(text="📍 Локация")],
             [KeyboardButton(text="⬅️ В меню")],
         ],
         resize_keyboard=True,
@@ -554,6 +554,9 @@ def location_zones_keyboard(
     rows: list[list[InlineKeyboardButton]] = []
     if is_home_base:
         rows.append(
+            [InlineKeyboardButton(text="🎒 Пополнить снаряжение", callback_data="locmap:resupply")]
+        )
+        rows.append(
             [InlineKeyboardButton(text="🛒 Торговец", callback_data="locmap:vendor")]
         )
     if show_secret_trader:
@@ -566,14 +569,14 @@ def location_zones_keyboard(
         label = str(zone.get("label") or zone_id)
         if kind == "anomaly":
             rows.append(
-                [InlineKeyboardButton(text="☢ Поиск артефактов", callback_data="locmap:anomaly")]
+                [InlineKeyboardButton(text="☢ Поиск артов", callback_data="locmap:anomaly")]
             )
         elif kind == "search":
             if remaining is None:
                 rows.append(
                     [
                         InlineKeyboardButton(
-                            text=f"🔍 {label}",
+                            text=f"🏚 Поиск хабара: {label}",
                             callback_data=f"locmap:search:{zone_id}",
                         )
                     ]
@@ -582,7 +585,7 @@ def location_zones_keyboard(
                 rows.append(
                     [
                         InlineKeyboardButton(
-                            text=f"🔍 {label} (КД {remaining})",
+                            text=f"🏚 Поиск хабара: {label} (КД {remaining})",
                             callback_data="locmap:noop",
                         )
                     ]

@@ -254,7 +254,7 @@ def abandon_stash_hunt(storage: Storage, telegram_id: int) -> ActionResult:
 def _roll_stash_loot(storage: Storage, telegram_id: int, location: str) -> list[tuple[str, int]]:
     """Лут из схрона: список (ключ предмета, количество).
 
-    Количество обычно 1; стройматериалы выпадают пачкой (20–40 шт.).
+    Количество обычно 1; стройматериалы выпадают всегда, 1–3 шт. за обыск.
     """
     from app.faction_buildings import MATERIALS_ITEM_KEY
 
@@ -277,8 +277,8 @@ def _roll_stash_loot(storage: Storage, telegram_id: int, location: str) -> list[
             break
     if not loot:
         loot.append((random.choice(STASH_CONSUMABLE_KEYS), 1))
-    if random.random() * 100 < 70:
-        loot.append((MATERIALS_ITEM_KEY, random.randint(20, 40)))
+    # Стройматериалы: всегда 1–3 шт. за поиск.
+    loot.append((MATERIALS_ITEM_KEY, random.randint(1, 3)))
     # Информация: обычный схрон — только дневник, независимый ролл ~10%.
     if random.random() * 100 < STASH_INTEL_DIARY_CHANCE:
         loot.append(("intel_diary", 1))
@@ -311,17 +311,30 @@ def _try_ambush(storage: Storage, telegram_id: int, location: str) -> dict[str, 
     chance = random.randint(STASH_AMBUSH_CHANCE_MIN, STASH_AMBUSH_CHANCE_MAX)
     if random.random() * 100 >= chance:
         return None
-    name, short, enemy_power = random.choice(AMBUSH_TYPES)
+    first = random.choice(AMBUSH_TYPES)
+    # Шанс, что засада устроена сразу двумя мутантами.
+    second = None
+    if random.random() < 0.4:
+        others = [t for t in AMBUSH_TYPES if t[0] != first[0]]
+        if others:
+            second = random.choice(others)
     character = storage.get_character(telegram_id, refresh_energy=False)
     if character is None:
         return None
     player_power = max(1, int(character.gear_power))
-    if player_power >= enemy_power * 2:
-        damage = random.randint(3, 8)
-    elif player_power >= enemy_power:
-        damage = random.randint(8, 18)
-    else:
-        damage = random.randint(15, 30)
+
+    def _roll(power: int) -> int:
+        if player_power >= power * 2:
+            return random.randint(3, 8)
+        if player_power >= power:
+            return random.randint(8, 18)
+        return random.randint(15, 30)
+
+    damage = max(10, _roll(first[2]))
+    if second is not None:
+        damage = max(10, damage + _roll(second[2]))
+    name = f"{first[0]} и {second[0]}" if second is not None else first[0]
+    short = f"{first[1]} и {second[1]}" if second is not None else first[1]
     storage.change_health(telegram_id, -damage)
     survived = True
     updated = storage.get_character(telegram_id, refresh_energy=False)

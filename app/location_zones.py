@@ -11,10 +11,21 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from app.game_logic import ActionResult
+from app.game_logic import (
+    ActionResult,
+    _dead_block_text,
+    _is_dead,
+    faction_home_base,
+    is_traveling,
+)
 from app.storage import Storage
 
 SEARCH_ZONE_COOLDOWN_HOURS = 2
+
+# Пополнение снаряжения на своей базе.
+RESUPPLY_PRICE_RU = 400
+RESUPPLY_MEDKITS = 2
+RESUPPLY_AMMO_PACKS = 5
 
 # Для каждой локации ровно 2 зоны: аномальный участок + зона обыска.
 # Зоны обыска тематически названы под лор S.T.A.L.K.E.R.
@@ -158,3 +169,34 @@ def start_search_zone(
             ready_at.isoformat(),
         )
     return result
+
+
+def resupply_equipment(storage: Storage, telegram_id: int, location: str) -> ActionResult:
+    """Пополнить снаряжение на своей базе: медикаменты и патроны за деньги.
+
+    Доступно только на собственной базе группировки — оттуда же берут
+    старт обычных вылазок и рейдов.
+    """
+    from app.player_busy import player_busy_reason
+
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if is_traveling(player):
+        return ActionResult(False, "В пути пополнение недоступно.")
+    if location != faction_home_base(player.faction):
+        return ActionResult(False, "Пополнять снаряжение можно только на своей базе.")
+    busy = player_busy_reason(storage, telegram_id, skip="vendor", auto_recover=False)
+    if busy:
+        return ActionResult(False, busy)
+    if not storage.change_money(telegram_id, -RESUPPLY_PRICE_RU):
+        return ActionResult(False, f"Не хватает {RESUPPLY_PRICE_RU} RU для пополнения.")
+    storage.add_item(telegram_id, "medkit", RESUPPLY_MEDKITS)
+    storage.add_item(telegram_id, "ammo_pack", RESUPPLY_AMMO_PACKS)
+    return ActionResult(
+        True,
+        f"🎒 Снаряжение пополнено: аптечка x{RESUPPLY_MEDKITS}, "
+        f"патроны x{RESUPPLY_AMMO_PACKS}. Списано {RESUPPLY_PRICE_RU} RU.",
+    )

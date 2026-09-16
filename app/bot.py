@@ -178,6 +178,7 @@ from app.game_logic import (
     get_active_smuggling,
     roll_arrival_encounter,
     faction_home_base,
+    FACTION_HOME_BASE,
     DUEL_LOSER_MONEY_PERCENT,
     DUEL_LOSER_MONEY_CAP,
     DUEL_LOSER_HP_REMAINING,
@@ -474,7 +475,12 @@ from app.profile_card import build_character_card
 from app.faction_ranks import ranks_for_faction
 from app.storage import Character, Storage, NicknameTakenError
 from app.zone_map import TELEGRAM_PHOTO_MAX_BYTES, build_zone_map_image
-from app.location_zones import location_zones_for, start_search_zone, zone_cooldown_remaining_text
+from app.location_zones import (
+    location_zones_for,
+    resupply_equipment,
+    start_search_zone,
+    zone_cooldown_remaining_text,
+)
 from app.secret_trader import (
     SECRET_TRADER_LOCATION,
     secret_trader_menu_text,
@@ -6433,7 +6439,11 @@ async def show_location_zones(message: Message) -> None:
 
     lines = [f"📍 Локация: {location}"]
     if is_home:
-        lines.append("Здесь расположена база — доступен торговец.")
+        lines.append("Здесь расположена база твоей группировки — торговец и 🎒 пополнение снаряжения.")
+    else:
+        for owner, base in FACTION_HOME_BASE.items():
+            if location == base and owner != player.faction:
+                lines.append(f"⛔ Это база группировки «{owner}» — чужим вход запрещён, пополнение недоступно.")
     is_secret_trader_spot = location == SECRET_TRADER_LOCATION
     if is_secret_trader_spot:
         lines.append("Здесь орудует тайный торговец — скупает информацию.")
@@ -7242,6 +7252,15 @@ async def location_map_callback(callback: CallbackQuery) -> None:
     try:
         if action == "noop":
             await callback.answer("Зона ещё восстанавливается.", show_alert=True)
+            return
+
+        if action == "resupply":
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if player is None:
+                await safe_callback_answer(callback, "Сначала создай персонажа через /start.", show_alert=True)
+                return
+            result = resupply_equipment(storage, telegram_id, player.location)
+            await reply_action_result(callback, result.text)
             return
 
         if action == "vendor":

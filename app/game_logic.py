@@ -6688,6 +6688,15 @@ def travel_to(
             f"«{MONOLITH_BASE}» — закрытая база Монолита. Чужим вход запрещён.",
         )
 
+    # Базы группировок: чужим вход запрещён (пополнение/квартирование — только свои).
+    base_owner = {base: faction for faction, base in FACTION_HOME_BASE.items()}
+    owner_faction = base_owner.get(destination)
+    if owner_faction is not None and owner_faction != character.faction:
+        return ActionResult(
+            False,
+            f"«{destination}» — база группировки «{owner_faction}». Чужим вход запрещён.",
+        )
+
     bound_transport = storage.get_bound_transport(telegram_id)
     if bound_transport in ("niva", "truck"):
         vehicle_label = _vehicle_label_for_key(bound_transport)
