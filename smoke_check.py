@@ -1159,7 +1159,10 @@ def run_smoke_check() -> None:
         assert shoot.ok, shoot.text
         after_shoot = get_mission_session(storage, 111)
         assert after_shoot is not None
-        assert len(after_shoot.npcs) == 1
+        # HP-бой: выстрел снимает HP из таблицы (16+18), враг не гибнет мгновенно.
+        assert len(after_shoot.npcs) == 2
+        assert len(after_shoot.npc_hp) == 2
+        assert sum(after_shoot.npc_hp) < 34
         assert "поразил" in shoot.text.lower()
 
         # clear_mutant (Зачистка Радара): стрельба по мутантам.
@@ -1965,7 +1968,7 @@ def run_smoke_check() -> None:
 
         # Travel arrival notice on next action.
         storage.set_location(111, "Росток")
-        travel3 = travel_to(storage, 111, "Свалка")
+        travel3 = travel_to(storage, 111, "НИИ Агропром")
         assert travel3.ok, travel3.text
         past3 = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
         with storage._connect() as conn:
@@ -1974,8 +1977,8 @@ def run_smoke_check() -> None:
                 (past3, 111),
             )
         dest = storage.resolve_travel_if_due(111)
-        assert dest == "Свалка"
-        assert storage.pop_arrival_notice(111) == "Свалка"
+        assert dest == "НИИ Агропром"
+        assert storage.pop_arrival_notice(111) == "НИИ Агропром"
         assert storage.pop_arrival_notice(111) is None
 
         # Periodic travel push for idle player.

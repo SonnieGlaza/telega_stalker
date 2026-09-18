@@ -1,9 +1,9 @@
-"""Лаборатория «Предел-1» — многоуровневая тактическая мини-игра.
+"""Лаборатории «Предел-1/2/3» — многоуровневая тактическая мини-игра.
 
 Одна персистентная сессия на игрока (meta `lab:session:<telegram_id>`),
 3 уровня внутри одной сессии + эпилог-засада на поверхности. Поле 9×9
 (засада — арена 7×7), у врагов «живое» HP. Вся параметризация лабы
-(hp_mult / damage_mult / геометрия / ростер) живёт в LAB_DEFS — общие
+(ростер, записки, боссы, геометрия) живёт в LAB_DEFS — общие
 тактические модули (tactical_combat / mutant_abilities / enemy_hud /
 tactical_hp / tactical_turn / raid_grid) не изменяются.
 """
@@ -21,7 +21,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-from app.artifact_hunt import _load_location_thumb, _paste_rounded
+from app.artifact_hunt import _load_location_thumb, _paste_circle, _paste_rounded
 from app.combat_loot import grant_combat_loot
 from app.death_flavor import encounter_phrase_for_kind, killer_label_for_kind
 from app.enemy_hud import EnemyHudSlot, default_hp_for_kind, draw_enemy_hud
@@ -36,7 +36,10 @@ from app.game_logic import (
     is_traveling,
 )
 from app.mutant_abilities import (
+    apply_mutant_turn_effects,
     mutant_can_melee_attack,
+    mutant_extra_move_step,
+    mutant_field_ability_warnings,
     mutant_can_ranged_attack,
     mutant_chase_target,
     mutant_damage_multiplier,
@@ -46,8 +49,12 @@ from app.mutant_abilities import (
     mutant_should_move_when_chasing,
     relative_attack_side,
 )
-from app.mutant_assets import MISSION_MUTANT_GRID_DIAMETER, mutant_grid_diameter
-from app.npc_assets import MISSION_NPC_GRID_DIAMETER
+from app.mutant_assets import (
+    MISSION_MUTANT_GRID_DIAMETER,
+    apply_controller_aura_to_hp_map,
+    mutant_grid_diameter,
+)
+from app.npc_assets import MISSION_NPC_GRID_DIAMETER, npc_sprite_image
 from app.storage import Character, Storage
 from app.tactical_combat import (
     MOVE_DELTAS,
@@ -102,11 +109,34 @@ NOTE_FINAL_TEXT = (
     "Артефакт готов. Один из трёх готов! Осталось дождаться коллег с «Предел-2» и "
     "«Предел-3» — и тогда мы соберём самый сильный артефакт в Зоне."
 )
+# Свои записки у «Предел-2» и «Предел-3» (жалоба игроков: «записка одна и та же»).
+NOTE_LIMIT2_LEVEL2_TEXT = (
+    "Я, Ветрова Алла, ведущий инженер комплекса «Предел-2». Пси-щит на втором уровне "
+    "не выдержал: техперсонал третьей смены оглох от гула излучателя и ушёл в "
+    "зомбированные. Теперь они качаются у колб и не узнают своих. Опытный образец "
+    "увезли в бункер на уровень 3. Код шлюза, чтобы не забыть: 112358."
+)
+NOTE_LIMIT2_FINAL_TEXT = (
+    "Второй фрагмент готов — пси-ядро держит контур. Осталось дождаться коллег с "
+    "«Предел-1» и «Предел-3» — и тогда мы соберём самый сильный артефакт в Зоне."
+)
+NOTE_LIMIT3_LEVEL2_TEXT = (
+    "Я, Гордеев Матвей, куратор комплекса «Предел-3». Из зомбированных у антенного "
+    "поля вывели бюреров: телекинез вместо рук и полное послушание. Один из них теперь "
+    "держит контур сборки на уровне 3. Пароль лаборатории, чтобы не забыть: 090964."
+)
+NOTE_LIMIT3_FINAL_TEXT = (
+    "Все три фрагмента собраны! Сердце — из «Предел-1», пси-ядро — из «Предел-2», "
+    "бронированная оболочка — отсюда. В контуре сборки они сливаются в один артефакт, "
+    "самый сильный артефакт в Зоне. Выноси его на поверхность — и берегись засады: "
+    "за ним уже охотятся."
+)
 AMBUSH_INTRO_TEXT = (
     "При выходе на поверхность тебя встречает засада — 6 Хай сталкеров в хорошей "
     "броне и с оружием."
 )
 
+# Общие вступления (Предел-1); у Предел-2/3 свои — LEVEL_INTROS_LIMIT2/3 в LAB_DEFS.
 LEVEL_INTROS: dict[int, str] = {
     2: (
         "Уровень 2 — большой зал «колб». Среди пустых капсул прячутся кровососы: "
@@ -115,6 +145,27 @@ LEVEL_INTROS: dict[int, str] = {
     3: (
         "Уровень 3 — сердце комплекса. Здесь держали образец: Псевдогигант, "
         "«продукт» экспериментов Бунзова. Убей его — дверь к награде откроется сама."
+    ),
+}
+LEVEL_INTROS_LIMIT2: dict[int, str] = {
+    2: (
+        "Уровень 2 — зал пси-колб. У колб качаются зомбированные технари, в тени рыщут "
+        "кровососы. Дверь дальше открыта — нужно просто зачистить зал."
+    ),
+    3: (
+        "Уровень 3 — бункер образца: Псевдогигант на пси-цепи, рядом псевдособаки-"
+        "охранники. Убей образец — дверь к награде откроется сама."
+    ),
+}
+LEVEL_INTROS_LIMIT3: dict[int, str] = {
+    2: (
+        "Уровень 2 — зал антенных колб. Контролёр давит на разум из глубины зала, "
+        "зомбированные идут на шум, кровососы заходят с флангов. Зачисти зал — и держись "
+        "подальше от контролёра."
+    ),
+    3: (
+        "Уровень 3 — сердце комплекса: контур сборки держит бюрер. Телекинез бьёт по "
+        "прямой, зомбированные прикрывают его. Убей бюрера — дверь к награде откроется сама."
     ),
 }
 
@@ -176,9 +227,12 @@ LAB_DEFS: dict[str, dict[str, Any]] = {
         "lab_id": "limit1",
         "label": "Предел-1",
         "location": "Темная долина",
+        "note_author": "Бунзова",
+        "note_level2_text": NOTE_LEVEL2_TEXT,
+        "note_final_text": NOTE_FINAL_TEXT,
         "grid": LAB_GRID_SIZE,
         "levels": {
-            # --- Уровень 1: коридор + комнаты, солдаты с ключ-картой ---
+            # --- Уровень 1: коридор + комнаты, бойцы Монолита с ключ-картой ---
             1: {
                 "spawn": (4, 8),
                 "exit_door": (4, 0),
@@ -213,24 +267,25 @@ LAB_DEFS: dict[str, dict[str, Any]] = {
                 },
                 "note_cells": {},
                 "cover": [(2, 5), (2, 7)],
-                "hazard_cells": [(5, 2), (6, 2), (7, 2)],
+                # Жёлтые метки растяжек убраны по жалобе игроков («иконки не к месту»):
+                # на поле остаются только зелёный лут и синяя рамка двери.
                 "fog": True,
                 "enemies": [
                     {
                         "pos": (1, 6),
                         "type": "npc",
-                        "kind": "soldier",
+                        "kind": "monolith",
                         "weapon": "АК-74",
-                        "armor": "Комбинезон «Заря»",
+                        "armor": "Экзоскелет Монолита",
                         "hp": 35,
                         "damage_mult": 1.0,
                     },
                     {
                         "pos": (3, 6),
                         "type": "npc",
-                        "kind": "soldier",
+                        "kind": "monolith",
                         "weapon": "АК-74",
-                        "armor": "Комбинезон «Заря»",
+                        "armor": "Экзоскелет Монолита",
                         "hp": 35,
                         "damage_mult": 1.0,
                     },
@@ -345,45 +400,128 @@ def _lab_variant(
     label: str,
     location: str,
     *,
-    soldier_weapon: str = "АК-74",
-    soldier_hp: int = 35,
-    blood_hp: int = 50,
+    guard_weapon: str = "АК-74",
+    guard_hp: int = 35,
+    level1_extra: list[dict[str, Any]] | None = None,
+    level2_enemies: list[dict[str, Any]] | None = None,
     boss_kind: str = "giant",
     boss_hp: int = 250,
-    ambush_kind: str = "dark_stalker",
+    boss_escort: list[dict[str, Any]] | None = None,
     ambush_weapons: tuple[str, str] = ("СВДм-2", "Гаусс-пушка"),
+    note_author: str = "Бунзова",
+    note_level2_text: str = NOTE_LEVEL2_TEXT,
+    note_final_text: str = NOTE_FINAL_TEXT,
+    level_intros: dict[int, str] | None = None,
 ) -> dict[str, Any]:
-    """Клон «Предел-1» со своим именем/локацией/репером."""
+    """Вариант «Предел-1» со своим именем, локацией, ростером и записками.
+
+    Охрана у всех лаб — бойцы Монолита (kind 'monolith' — иконка/лейбл из
+    npc_assets), меняются оружие, HP и состав. Засада на поверхности
+    везде одна — хай-сталкеры (kind 'dark_stalker'), отличаются только
+    стволы.
+    """
     cfg = copy.deepcopy(LAB_DEFS["limit1"])
     cfg["lab_id"] = lab_id
     cfg["label"] = label
     cfg["location"] = location
     for enemy in cfg["levels"][1]["enemies"]:
-        enemy["weapon"] = soldier_weapon
-        enemy["hp"] = soldier_hp
-    for enemy in cfg["levels"][2]["enemies"]:
-        enemy["hp"] = blood_hp
-    for enemy in cfg["levels"][3]["enemies"]:
-        enemy["kind"] = boss_kind
-        enemy["hp"] = boss_hp
-    cfg["ambush"]["enemy_build"]["kind"] = ambush_kind
+        enemy["weapon"] = guard_weapon
+        enemy["hp"] = guard_hp
+    if level1_extra:
+        cfg["levels"][1]["enemies"].extend(copy.deepcopy(level1_extra))
+    if level2_enemies is not None:
+        cfg["levels"][2]["enemies"] = copy.deepcopy(level2_enemies)
+    boss = cfg["levels"][3]["enemies"][0]
+    boss["kind"] = boss_kind
+    boss["hp"] = boss_hp
+    if boss_escort is not None:
+        cfg["levels"][3]["enemies"] = [boss] + copy.deepcopy(boss_escort)
     cfg["ambush"]["weapons"] = list(ambush_weapons)
+    cfg["note_author"] = note_author
+    cfg["note_level2_text"] = note_level2_text
+    cfg["note_final_text"] = note_final_text
+    if level_intros:
+        cfg["level_intros"] = dict(level_intros)
     return cfg
 
 
+# Предел-2 (Янтарь): пси-лаборатория — зомбированный техперсонал + кровососы,
+# охрана Монолита усилена наёмником СБ, у босса псевдособаки вместо псов.
 LAB_DEFS["limit2"] = _lab_variant(
-    "limit2", "Предел-2", "Янтарь",
-    soldier_weapon="АКС-74У", soldier_hp=40, blood_hp=60, boss_hp=300,
-    ambush_kind="monolith", ambush_weapons=("ВСН-8", "Гаусс-пушка"),
+    "limit2",
+    "Предел-2",
+    "Янтарь",
+    guard_weapon="АКС-74У",
+    guard_hp=40,
+    level1_extra=[
+        {
+            "pos": (2, 5),
+            "type": "npc",
+            "kind": "mercenary",
+            "weapon": "СПАС-12",
+            "armor": "Бронежилет СБ комплекса",
+            "hp": 30,
+            "damage_mult": 1.1,
+        }
+    ],
+    level2_enemies=[
+        # Кровососы из экспериментов Ветровой (hp = round(28 * 1.8) = 50 → 60 с усилением).
+        {"pos": (2, 3), "type": "mutant", "kind": "bloodsucker", "hp_mult": 1.8, "hp": 60, "damage_mult": 1.6},
+        {"pos": (6, 3), "type": "mutant", "kind": "bloodsucker", "hp_mult": 1.8, "hp": 60, "damage_mult": 1.6},
+        # Зомбированный техперсонал из записки — идут в лоб и накладывают рад.
+        {"pos": (3, 5), "type": "mutant", "kind": "zombie", "hp": 24, "damage_mult": 1.0},
+        {"pos": (5, 5), "type": "mutant", "kind": "zombie", "hp": 24, "damage_mult": 1.0},
+    ],
+    boss_hp=300,
+    boss_escort=[
+        {"pos": (2, 4), "type": "mutant", "kind": "pseudodog", "hp": 24, "damage_mult": 0.9},
+        {"pos": (7, 4), "type": "mutant", "kind": "pseudodog", "hp": 24, "damage_mult": 0.9},
+    ],
+    ambush_weapons=("Винтарь ВС", "Гаусс-пушка"),
+    note_author="Ветровой",
+    note_level2_text=NOTE_LIMIT2_LEVEL2_TEXT,
+    note_final_text=NOTE_LIMIT2_FINAL_TEXT,
+    level_intros=LEVEL_INTROS_LIMIT2,
 )
+
+# Предел-3 (Радар): самый жёсткий — контролёр давит разум (аура + сбой взгляда),
+# зомбированные идут в лоб, босс-бюрер держит контур сборки. Охрана — Монолит с гауссами.
 LAB_DEFS["limit3"] = _lab_variant(
-    "limit3", "Предел-3", "Радар",
-    soldier_weapon="Гроза", soldier_hp=45, blood_hp=70, boss_kind="burer", boss_hp=350,
-    ambush_kind="military", ambush_weapons=("РПГ-7", "Гаусс-пушка"),
-)
-# Предел-3 сложнее: четвёртый кровосос в зале колб.
-LAB_DEFS["limit3"]["levels"][2]["enemies"].append(
-    {"pos": (4, 6), "type": "mutant", "kind": "bloodsucker", "hp": 70, "damage_mult": 1.6}
+    "limit3",
+    "Предел-3",
+    "Радар",
+    guard_weapon="Гаусс-пушка",
+    guard_hp=45,
+    level1_extra=[
+        {
+            "pos": (2, 7),
+            "type": "npc",
+            "kind": "monolith",
+            "weapon": "Гаусс-пушка",
+            "armor": "Экзоскелет Монолита",
+            "hp": 35,
+            "damage_mult": 1.15,
+        }
+    ],
+    level2_enemies=[
+        # Контролёр не атакует сам, но каждый ход давит разум (−HP, сбой взгляда).
+        {"pos": (4, 2), "type": "mutant", "kind": "controller", "hp": 36, "damage_mult": 1.0},
+        {"pos": (2, 3), "type": "mutant", "kind": "bloodsucker", "hp_mult": 1.8, "hp": 70, "damage_mult": 1.6},
+        {"pos": (6, 3), "type": "mutant", "kind": "bloodsucker", "hp_mult": 1.8, "hp": 70, "damage_mult": 1.6},
+        {"pos": (3, 5), "type": "mutant", "kind": "zombie", "hp": 26, "damage_mult": 1.1},
+        {"pos": (5, 5), "type": "mutant", "kind": "zombie", "hp": 26, "damage_mult": 1.1},
+    ],
+    boss_kind="burer",
+    boss_hp=350,
+    boss_escort=[
+        {"pos": (2, 4), "type": "mutant", "kind": "zombie", "hp": 26, "damage_mult": 0.9},
+        {"pos": (7, 4), "type": "mutant", "kind": "zombie", "hp": 26, "damage_mult": 0.9},
+    ],
+    ambush_weapons=("ВСС «Серебряный сталкер»", "Гаусс-пушка"),
+    note_author="Гордеева",
+    note_level2_text=NOTE_LIMIT3_LEVEL2_TEXT,
+    note_final_text=NOTE_LIMIT3_FINAL_TEXT,
+    level_intros=LEVEL_INTROS_LIMIT3,
 )
 
 
@@ -397,6 +535,13 @@ def _lab_level_cfg(lab_id: str, level: int) -> dict[str, Any]:
 
 def _ambush_cfg(lab_id: str = "limit1") -> dict[str, Any]:
     return LAB_DEFS[lab_id]["ambush"]
+
+
+def _level_intro(lab_id: str, level: int) -> str:
+    """Вступление к уровню: у каждой лабы свой текст, иначе общий LEVEL_INTROS."""
+    lab_cfg = LAB_DEFS.get(str(lab_id)) or {}
+    intro = (lab_cfg.get("level_intros") or {}).get(int(level))
+    return str(intro or LEVEL_INTROS.get(int(level), ""))
 
 
 # ---------------------------------------------------------------------------
@@ -767,7 +912,7 @@ def _update_triggers(storage: Storage, session: LabSession) -> None:
     if session.level == 1 and not session.enemies and not session.collected.get("keycard"):
         session.collected["keycard"] = True
         session.rooms["left_hostile"] = "cleared"
-        session.log.append("🗝 Ты нашёл ключ-карту у усиленных солдат.")
+        session.log.append("🗝 Ты нашёл ключ-карту у усиленных бойцов Монолита.")
     if session.level == 3 and session.boss_killed and not session.collected.get("boss_cleared"):
         session.collected["boss_cleared"] = True
         session.rooms["boss_hall"] = "cleared"
@@ -922,6 +1067,21 @@ def _npc_shots(storage: Storage, session: LabSession) -> list[str]:
     return notes
 
 
+def _controller_passives(storage: Storage, session: LabSession) -> list[str]:
+    """Пассив контролёра в лабе (как в квестовых вылазках): аура −HP и сбой взгляда."""
+    if "controller" not in session.enemy_kinds:
+        return []
+    notes = apply_controller_aura_to_hp_map(
+        session.hp,
+        session.player_ids,
+        session.enemy_kinds,
+        death_causes=session.death_causes,
+        death_killers=session.death_killers,
+    )
+    notes.extend(apply_mutant_turn_effects(storage, session.telegram_id, session))
+    return notes
+
+
 def _mutant_step(
     storage: Storage,
     session: LabSession,
@@ -950,7 +1110,19 @@ def _mutant_step(
         if cell not in occupied and cell not in player_cells
     ]
     step = mutant_pick_move_step(session, kind, pos, target, candidates)
-    return step or pos
+    if step is None or step == pos:
+        return pos
+    # Псевдособака: второй рывок по той же прямой (как в квестовых вылазках).
+    extra = mutant_extra_move_step(
+        kind,
+        pos,
+        step,
+        target,
+        grid=session.grid,
+        occupied=occupied,
+        player_pos=player_pos,
+    )
+    return extra or step
 
 
 def _npc_step(
@@ -1027,6 +1199,7 @@ def _hostile_turn(storage: Storage, session: LabSession) -> list[str]:
         occupied.add(nxt)
     session.enemies = moved
     notes.extend(_npc_shots(storage, session))
+    notes.extend(_controller_passives(storage, session))
     return notes
 
 
@@ -1168,14 +1341,14 @@ def start_lab(storage: Storage, telegram_id: int, lab_id: str = "limit1") -> Act
     session.hp[str(telegram_id)] = int(player.health)
     _load_level(session, telegram_id, 1, new_floor=False)
     session.log.append(
-        "Уровень 1: коридор и комнаты. В одной из комнат — усиленные солдаты с ключ-картой."
+        "Уровень 1: коридор и комнаты. В одной из комнат — усиленные бойцы Монолита с ключ-картой."
     )
     save_lab_session(storage, session)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = render_lab_for_player(storage, telegram_id, session, player)
     level_intro = (
         f"🧪 «{session.label}»: лаборатория в «{session.location}».\n"
-        "Уровень 1: коридор и комнаты. Зачисти комнату с усиленными солдатами — "
+        "Уровень 1: коридор и комнаты. Зачисти комнату с усиленными бойцами Монолита — "
         "у них ключ-карта (помечается сама, это не предмет). Открой дверь в конце коридора.\n"
         "Зелёные отметки — лут, синяя рамка — дверь. Враги имеют HP — стреляй несколько раз."
     )
@@ -1415,6 +1588,7 @@ def lab_interact(storage: Storage, telegram_id: int) -> ActionResult:
     pos = session.pos(telegram_id)
     cell_key = f"{pos[0]},{pos[1]}"
     cfg = _lab_level_cfg(session.lab_id, session.level)
+    lab_cfg = _lab_def(session.lab_id)
     player = storage.get_character(telegram_id, refresh_energy=False)
 
     # Лут-клетка.
@@ -1446,16 +1620,18 @@ def lab_interact(storage: Storage, telegram_id: int) -> ActionResult:
         trigger = str(note_map[cell_key])
         session.collected[trigger] = True
         if trigger == "note_level2":
-            session.log.append("📄 Ты прочитал записку Бунзова.")
+            note_text = str(lab_cfg.get("note_level2_text") or NOTE_LEVEL2_TEXT)
+            note_author = str(lab_cfg.get("note_author") or "Бунзова")
+            session.log.append(f"📄 Ты прочитал записку {note_author}.")
             if not _save_turn(storage, session, turn_seq):
                 return ActionResult(False, STALE_TURN_MESSAGE)
             return ActionResult(
                 True,
-                "📄 Записка:\n" + NOTE_LEVEL2_TEXT,
+                "📄 Записка:\n" + note_text,
                 payload={
                     "lab_active": True,
                     "lab_stage": session.stage,
-                    "lab_note": NOTE_LEVEL2_TEXT,
+                    "lab_note": note_text,
                 },
             )
 
@@ -1479,7 +1655,7 @@ def _try_enter_door(storage: Storage, session: LabSession, turn_seq: int) -> Act
             return _frame_result(
                 session,
                 tid,
-                "Дверь заперта. Нужна ключ-карта — она у усиленных солдат в комнате слева.",
+                "Дверь заперта. Нужна ключ-карта — она у усиленных бойцов Монолита в комнате слева.",
             )
     elif lock_type == "boss_kill":
         if not session.boss_killed:
@@ -1511,14 +1687,20 @@ def _enter_next_level(storage: Storage, session: LabSession, level: int, turn_se
     tid = session.telegram_id
     door_text = f"🚪 Дверь открыта! «{_lab_level_cfg(session.lab_id, session.level).get('label', session.label)}» пройден."
     _load_level(session, tid, level, new_floor=True)
-    session.log.append(f"Уровень {level}: {LEVEL_INTROS.get(level, '')}")
+    intro = _level_intro(session.lab_id, level)
+    session.log.append(f"Уровень {level}: {intro}")
     if not _save_turn(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)
     player = storage.get_character(tid, refresh_energy=False)
     image = render_lab_for_player(storage, tid, session, player) if player is not None else None
+    # Иконки мутантов уровня (не больше 3) — подсказки способностей, как в квестовых вылазках.
+    hints = mutant_field_ability_warnings(session.enemy_kinds)[:3]
+    body = door_text + "\n\n" + intro
+    if hints:
+        body += "\n" + "\n".join(hints)
     return ActionResult(
         True,
-        door_text + "\n\n" + LEVEL_INTROS.get(level, ""),
+        body,
         payload={
             "lab_image": image,
             "lab_transition": True,
@@ -1568,13 +1750,14 @@ def _grant_level3_reward(storage: Storage, session: LabSession, turn_seq: int) -
     if not _save_turn(storage, session, turn_seq):
         return ActionResult(False, STALE_TURN_MESSAGE)
     _mark_lab_done(storage, session.lab_id, tid)
+    final_note = str(_lab_def(session.lab_id).get("note_final_text") or NOTE_FINAL_TEXT)
     doc_label = ITEM_LABELS.get("intel_document", "Документы")
     art_label = ITEM_LABELS.get(art_key, f"Артефакт «{session.label}»")
     text = (
         f"🚪 Дверь открыта — комната с наградой!\n"
         f"+{doc_label} x1.\n"
         f"+{art_label} x1.\n\n"
-        f"Записка:\n«{NOTE_FINAL_TEXT}»\n\n"
+        f"Записка:\n«{final_note}»\n\n"
         f"⚠️ {AMBUSH_INTRO_TEXT}"
     )
     return ActionResult(
@@ -1668,7 +1851,8 @@ def lab_status_caption(session: LabSession, character: Character | None = None) 
     if session.collected.get("keycard"):
         lines.append("🗝 Ключ-карта получена.")
     if session.collected.get("note_level2"):
-        lines.append("📄 Записка Бунзова прочитана.")
+        note_author = str(_lab_def(session.lab_id).get("note_author") or "Бунзова")
+        lines.append(f"📄 Записка {note_author} прочитана.")
     if session.boss_killed:
         lines.append("👹 Образец уничтожен — дверь открыта.")
     if session.collected.get("reward_level3"):
@@ -1705,6 +1889,28 @@ def _lab_rating(storage: Storage, telegram_id: int) -> int:
 
 def _load_font(size: int) -> ImageFont.ImageFont:
     return load_tactical_font(size)
+
+
+def _paste_lab_npc_sprite(
+    canvas: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    *,
+    cx: int,
+    cy: int,
+    kind: str,
+    diameter: int,
+    ring_color: tuple[int, int, int],
+) -> None:
+    """Спрайт НПС по своему виду (в лабах — Монолит), а не общий стуб «Малого».
+
+    paste_npc_sprite из tactical_render игнорирует kind и всегда рисует
+    «Малого», поэтому в лабах спрайт берём напрямую из npc_assets по kind.
+    """
+    sprite = npc_sprite_image(kind)
+    if sprite is None:
+        paste_npc_sprite(canvas, draw, cx=cx, cy=cy, kind=kind, diameter=diameter, ring_color=ring_color)
+        return
+    _paste_circle(canvas, sprite, cx, cy, diameter, ring_color=ring_color, ring_width=2)
 
 
 def _apply_lab_fog(canvas: Image.Image, *, margin: int, grid_px: int, seed: int = 0) -> None:
@@ -1836,13 +2042,15 @@ def render_lab_frame(
             cx, cy = (int(p) for p in key.split(","))
             left = margin + cx * cell
             top = margin + cy * cell
+            # Жёлтые маркеры на поле убраны по жалобе игроков — записка
+            # помечается бледно-синей рамкой (дверь — синяя, лут — зелёный).
             draw.rounded_rectangle(
                 (left + 3, top + 3, left + cell - 4, top + cell - 4),
                 radius=6,
-                outline=(255, 220, 60),
+                outline=(215, 225, 240),
                 width=2,
             )
-            draw.text((left + 6, top + cell - 14), "ЗАПИСЬ", fill=(240, 215, 120), font=small)
+            draw.text((left + 6, top + cell - 14), "ЗАПИСЬ", fill=(225, 235, 250), font=small)
         door = tuple(cfg.get("exit_door") or (4, 0))
         dx, dy = int(door[0]), int(door[1])
         left = margin + dx * cell
@@ -1869,7 +2077,7 @@ def render_lab_frame(
         kind = session.enemy_kinds[i] if i < len(session.enemy_kinds) else "blind_dog"
         is_npc = i < len(session.enemy_types) and session.enemy_types[i] == "npc"
         if is_npc:
-            paste_npc_sprite(
+            _paste_lab_npc_sprite(
                 canvas,
                 draw,
                 cx=cx,
@@ -1943,7 +2151,8 @@ def render_lab_frame(
         draw.text((pl + 14, y), "🗝 Ключ-карта", fill=(255, 220, 120), font=tiny)
         y += 16
     if session.collected.get("note_level2"):
-        draw.text((pl + 14, y), "📄 Записка Бунзова", fill=(240, 215, 120), font=tiny)
+        note_author = str(_lab_def(session.lab_id).get("note_author") or "Бунзова")
+        draw.text((pl + 14, y), f"📄 Записка {note_author}", fill=(240, 215, 120), font=tiny)
         y += 16
     if session.boss_killed:
         draw.text((pl + 14, y), "👹 Образец уничтожен", fill=(220, 120, 120), font=tiny)

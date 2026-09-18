@@ -25,7 +25,7 @@ from app.game_logic import (
 )
 from app.npc_assets import NPC_SPRITE_KEYS, pick_npc_kind
 from app.storage import Character, Storage
-from app.enemy_hud import draw_enemy_hud, hud_slots_from_kinds
+from app.enemy_hud import default_hp_for_kind, draw_enemy_hud, hud_slots_from_units
 from app.tactical_render import (
     draw_tactical_cell_overlay,
     load_tactical_font,
@@ -45,6 +45,7 @@ from app.tactical_combat import (
     manhattan_distance,
     npc_weapon_damage,
     random_hostile_shots,
+    weapon_damage,
 )
 from app.tactical_hp import apply_tactical_medkit_spend, finalize_group_tactical_hp, plan_tactical_medkit
 
@@ -106,6 +107,8 @@ class ClanWarGridSession:
     defenders: list[tuple[int, int]] = field(default_factory=list)
     defender_weapons: list[str] = field(default_factory=list)
     defender_kinds: list[str] = field(default_factory=list)
+    defender_hp: list[int] = field(default_factory=list)  # текущий HP защитников
+    defender_max_hp: list[int] = field(default_factory=list)
     control_point: tuple[int, int] = (4, 4)
     positions: dict[str, list[int]] = field(default_factory=dict)
     hp: dict[str, int] = field(default_factory=dict)
@@ -153,6 +156,8 @@ class ClanWarGridSession:
             "defenders": [list(p) for p in self.defenders],
             "defender_weapons": self.defender_weapons,
             "defender_kinds": self.defender_kinds,
+            "defender_hp": [int(x) for x in self.defender_hp],
+            "defender_max_hp": [int(x) for x in self.defender_max_hp],
             "control_point": list(self.control_point),
             "positions": self.positions,
             "hp": self.hp,
@@ -177,6 +182,11 @@ class ClanWarGridSession:
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> ClanWarGridSession:
         cp = raw.get("control_point") or [4, 4]
+        defenders = [(int(p[0]), int(p[1])) for p in (raw.get("defenders") or [])]
+        defender_kinds = [str(k) for k in (raw.get("defender_kinds") or [])]
+        defender_hp, defender_max_hp = _parse_defender_hp(
+            len(defenders), defender_kinds, raw.get("defender_hp"), raw.get("defender_max_hp")
+        )
         return cls(
             session_id=str(raw.get("session_id") or ""),
             war_id=int(raw.get("war_id") or 0),
@@ -187,9 +197,11 @@ class ClanWarGridSession:
             grid=int(raw.get("grid") or CWAR_GRID_SIZE),
             cover=[(int(p[0]), int(p[1])) for p in (raw.get("cover") or [])],
             base_cover=[(int(p[0]), int(p[1])) for p in (raw.get("base_cover") or [])],
-            defenders=[(int(p[0]), int(p[1])) for p in (raw.get("defenders") or [])],
+            defenders=defenders,
             defender_weapons=[str(w) for w in (raw.get("defender_weapons") or [])],
-            defender_kinds=[str(k) for k in (raw.get("defender_kinds") or [])],
+            defender_kinds=defender_kinds,
+            defender_hp=defender_hp,
+            defender_max_hp=defender_max_hp,
             control_point=(int(cp[0]), int(cp[1])),
             positions={str(k): list(v) for k, v in (raw.get("positions") or {}).items()},
             hp={str(k): int(v) for k, v in (raw.get("hp") or {}).items()},
@@ -212,6 +224,41 @@ class ClanWarGridSession:
         )
 
 
+def _parse_defender_hp(
+    n: int,
+    kinds: list[str],
+    hp_raw: Any,
+    max_raw: Any,
+) -> tuple[list[int], list[int]]:
+    """HP защитников строго из таблицы default_hp_for_kind.
+
+    Старые сессии без HP-списков получают полные значения таблицы — а не «1 HP»,
+    из-за которого защитники Монолита умирали с одного удара.
+    """
+    if n <= 0:
+        return [], []
+    defaults = [default_hp_for_kind(kinds[i] if i < len(kinds) else "") for i in range(n)]
+
+    def _nums(raw: Any) -> list[int]:
+        if not isinstance(raw, (list, tuple)) or len(raw) != n:
+            return []
+        out: list[int] = []
+        for value in raw:
+            try:
+                out.append(max(0, int(value)))
+            except (TypeError, ValueError):
+                out.append(0)
+        return out
+
+    hp = _nums(hp_raw)
+    if not hp:
+        hp = list(defaults)
+    mx = _nums(max_raw)
+    if not mx:
+        mx = [max(current, full) for current, full in zip(hp, defaults)]
+    return hp, mx
+
+
 def _session_key(sid: str) -> str:
     return f"{SESSION_PREFIX}{sid}"
 
@@ -221,10 +268,21 @@ def _player_key(tid: int) -> str:
 
 
 def _ensure_defender_kinds(session: ClanWarGridSession) -> None:
-    while len(session.defender_kinds) < len(session.defenders):
-        session.defender_kinds.append(pick_npc_kind())
-    if len(session.defender_kinds) > len(session.defenders):
-        session.defender_kinds = session.defender_kinds[: len(session.defenders)]
+    n = len(session.defenders)
+    while len(session.defender_kinds) < n:
+        kind = pick_npc_kind()
+        session.defender_kinds.append(kind)
+    if len(session.defender_kinds) > n:
+        session.defender_kinds = session.defender_kinds[:n]
+    # HP держим синхронным с защитниками; недостающие — полные значения из таблицы.
+    while len(session.defender_hp) < n:
+        idx = len(session.defender_hp)
+        kind = session.defender_kinds[idx] if idx < len(session.defender_kinds) else ""
+        full = default_hp_for_kind(kind)
+        session.defender_hp.append(full)
+        session.defender_max_hp.append(full)
+    del session.defender_hp[n:]
+    del session.defender_max_hp[n:]
 
 
 def get_cwar_session_by_player(storage: Storage, telegram_id: int) -> ClanWarGridSession | None:
@@ -329,9 +387,14 @@ def _build_map(session: ClanWarGridSession) -> None:
     )
     for _ in range(defender_count):
         cell = _free_cell(grid, forbidden | set(session.base_cover))
+        kind = pick_npc_kind()
         session.defenders.append(cell)
         session.defender_weapons.append(random.choice(NPC_WEAPONS))
-        session.defender_kinds.append(pick_npc_kind())
+        session.defender_kinds.append(kind)
+        # HP защитника — из общей таблицы (не «1 HP»): выстрелы снимают HP по частям.
+        full = default_hp_for_kind(kind)
+        session.defender_hp.append(full)
+        session.defender_max_hp.append(full)
         forbidden.add(cell)
     spawn_cols = list(range(0, 3))
     for pid in session.player_ids:
@@ -774,14 +837,31 @@ def cwar_move(storage: Storage, telegram_id: int, direction: str) -> ActionResul
     ch = storage.get_character(telegram_id, refresh_energy=False)
     if ch and nxt in session.defenders:
         idx = session.defenders.index(nxt)
-        session.defenders.pop(idx)
-        if idx < len(session.defender_weapons):
-            session.defender_weapons.pop(idx)
-        if idx < len(session.defender_kinds):
-            session.defender_kinds.pop(idx)
         dmg = apply_incoming_damage(random.randint(8, 14), ch, min_damage=3)
         session.hp[str(telegram_id)] = max(0, session.hp.get(str(telegram_id), 0) - dmg)
-        session.log.append(f"{h(ch.nickname)} схватился с защитником: −{dmg} HP.")
+        # Защитник больше не умирает мгновенно: ответный удар снимает HP из таблицы.
+        weapon = str(ch.equipment.get("weapon", "Нож"))
+        dealt = weapon_damage(weapon)
+        _ensure_defender_kinds(session)
+        session.defender_hp[idx] = max(0, int(session.defender_hp[idx]) - dealt)
+        if session.defender_hp[idx] <= 0:
+            session.defenders.pop(idx)
+            if idx < len(session.defender_weapons):
+                session.defender_weapons.pop(idx)
+            if idx < len(session.defender_kinds):
+                session.defender_kinds.pop(idx)
+            if idx < len(session.defender_hp):
+                session.defender_hp.pop(idx)
+            if idx < len(session.defender_max_hp):
+                session.defender_max_hp.pop(idx)
+            session.log.append(
+                f"{h(ch.nickname)} снял защитника в ближнем бою ({weapon}): −{dmg} HP."
+            )
+        else:
+            session.log.append(
+                f"{h(ch.nickname)} схватился с защитником ({weapon}): "
+                f"у защитника {session.defender_hp[idx]} HP, −{dmg} HP."
+            )
     done = _check_squad_wiped(storage, session, turn_seq)
     if done:
         return done
@@ -825,17 +905,31 @@ def cwar_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionResu
     note = "Промах."
     if hits:
         hit_any = False
+        # Выстрел снимает HP из таблицы; защитник умирает только при HP ≤ 0.
+        dmg = weapon_damage(weapon)
         for hit_cell, hit_kind in hits:
             if hit_kind == "def" and hit_cell in session.defenders:
                 idx = session.defenders.index(hit_cell)
-                session.defenders.pop(idx)
-                if idx < len(session.defender_weapons):
-                    session.defender_weapons.pop(idx)
-                if idx < len(session.defender_kinds):
-                    session.defender_kinds.pop(idx)
+                _ensure_defender_kinds(session)
+                session.defender_hp[idx] = max(0, int(session.defender_hp[idx]) - dmg)
                 hit_any = True
+                if session.defender_hp[idx] <= 0:
+                    session.defenders.pop(idx)
+                    if idx < len(session.defender_weapons):
+                        session.defender_weapons.pop(idx)
+                    if idx < len(session.defender_kinds):
+                        session.defender_kinds.pop(idx)
+                    if idx < len(session.defender_hp):
+                        session.defender_hp.pop(idx)
+                    if idx < len(session.defender_max_hp):
+                        session.defender_max_hp.pop(idx)
+                    session.log.append(f"{h(attacker.nickname)} снял защитника ({weapon}).")
+                else:
+                    session.log.append(
+                        f"{h(attacker.nickname)} поразил защитника ({weapon}): "
+                        f"осталось {session.defender_hp[idx]} HP."
+                    )
         if hit_any:
-            session.log.append(f"{h(attacker.nickname)} снял защитника ({weapon}).")
             note = "Попадание!"
         else:
             session.log.append(f"{h(attacker.nickname)} промахнулся.")
@@ -1071,7 +1165,9 @@ def render_cwar_frame(storage: Storage, session: ClanWarGridSession, viewer_id: 
         y += 15
     draw_enemy_hud(
         canvas,
-        hud_slots_from_kinds([], session.defender_kinds),
+        hud_slots_from_units(
+            session.defender_kinds, session.defender_hp, session.defender_max_hp, is_npc=True
+        ),
         panel_left=pl,
         panel_top=margin,
         panel_right=width - margin,

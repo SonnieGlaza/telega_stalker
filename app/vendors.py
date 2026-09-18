@@ -11,6 +11,16 @@ VENDOR_TIER_MAX = 5
 
 VENDOR_KEYS = ("barkeep", "medic", "tech")
 
+# Бесплатное лечение у медика по этапу ассортимента (вкачке медика).
+# hp_percent — потолок лечения в % от максимального HP, rad — снятие радиации.
+MEDIC_HEAL_PLAN: dict[int, dict[str, int]] = {
+    1: {"hp_percent": 0, "rad": 0},
+    2: {"hp_percent": 25, "rad": 0},
+    3: {"hp_percent": 50, "rad": 10},
+    4: {"hp_percent": 75, "rad": 15},
+    5: {"hp_percent": 100, "rad": 20},
+}
+
 VENDOR_TITLES: dict[str, str] = {
     "barkeep": "Бармен",
     "medic": "Медик",
@@ -415,3 +425,41 @@ def vendor_purge_meta_keys(telegram_id: int) -> list[str]:
     keys = [f"{prefix}{tid}" for prefix in VENDOR_META_PREFIX.values()]
     keys.extend(f"{prefix}{tid}" for prefix in VENDOR_REP_PREFIX.values())
     return keys
+
+
+def medic_heal(storage: Storage, telegram_id: int) -> ActionResult:
+    """Бесплатное лечение у медика: сила зависит от этапа вкачки медика.
+
+    Этап 1 — лечения нет; 2 — до 25% HP; 3 — до 50% HP и −10 рад;
+    4 — до 75% HP и −15 рад; 5 — до 100% HP и −20 рад.
+    """
+    from app.game_logic import ActionResult, _dead_block_text, _is_dead, effective_max_health
+
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    tier = get_vendor_tier(storage, telegram_id, "medic")
+    plan = MEDIC_HEAL_PLAN.get(tier, MEDIC_HEAL_PLAN[1])
+    if plan["hp_percent"] <= 0:
+        return ActionResult(
+            False,
+            "Медик пока только продаёт аптечки — бесплатно лечит со 2 этапа вкачки. "
+            "Прокачай его авторитетом за задания у этого торговца.",
+        )
+    max_hp = effective_max_health(player)
+    heal_cap = max(1, int(round(max_hp * plan["hp_percent"] / 100.0)))
+    heal_amount = min(heal_cap, max(0, max_hp - int(player.health)))
+    rad_remove = min(plan["rad"], max(0, int(player.radiation)))
+    if heal_amount <= 0 and rad_remove <= 0:
+        return ActionResult(False, f"Тебе сейчас не нужно лечение (HP {int(player.health)}/{max_hp}).")
+    storage.change_health(telegram_id, heal_amount, max_health=max_hp)
+    if rad_remove > 0:
+        storage.adjust_survival(telegram_id, radiation_delta=-rad_remove)
+    parts: list[str] = []
+    if heal_amount > 0:
+        parts.append(f"+{heal_amount} HP")
+    if rad_remove > 0:
+        parts.append(f"−{rad_remove} рад")
+    return ActionResult(True, f"💉 Медик бесплатно подлечил тебя: {', '.join(parts)}.")

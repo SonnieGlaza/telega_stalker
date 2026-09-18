@@ -17,7 +17,7 @@ from app.artifact_hunt import (
     _paste_circle,
     _paste_rounded,
 )
-from app.enemy_hud import draw_enemy_hud, hud_slots_from_kinds
+from app.enemy_hud import default_hp_for_kind, draw_enemy_hud, hud_slots_from_units
 from app.game_logic import (
     CONTRACT_TURN_IN_BONUS_PERCENT,
     QUESTS,
@@ -43,6 +43,7 @@ from app.tactical_combat import (
     consume_shot_ammo,
     npc_weapon_damage,
     random_hostile_shots,
+    weapon_damage,
     weapon_shoot_range,
 )
 from app.mutant_abilities import (
@@ -235,6 +236,34 @@ def _npcs_chase_player(session: QuestMissionSession | Any) -> bool:
     return str(getattr(session, "difficulty", "") or "") in {"heavy", "impossible"}
 
 
+# Живучесть врагов: базовая таблица HP_BY_KIND × сложность (+ опасная локация).
+# До фикса врагов снимал любой удачный удар — фактически «по 1 HP».
+ENEMY_HP_DIFF_MULT: dict[str, float] = {
+    "easy": 0.8,
+    "hard": 1.0,
+    "heavy": 1.15,
+    "impossible": 1.3,
+}
+
+
+def enemy_max_hp_for_kind(kind: str, difficulty: str, location: str = "") -> int:
+    """Полный HP врага контракта: таблица default_hp_for_kind × сложность/локация."""
+    base = default_hp_for_kind(kind)
+    mult = float(ENEMY_HP_DIFF_MULT.get(str(difficulty), 1.0))
+    mult *= 1.0 + 0.05 * max(0, LOCATION_DANGER.get(str(location), 2) - 2)
+    return max(1, int(round(base * mult)))
+
+
+def _unit_hp_lists(
+    kinds: list[str],
+    difficulty: str,
+    location: str,
+) -> tuple[list[int], list[int]]:
+    """Полные и максимальные HP для списка юнитов (при спавне — полные)."""
+    values = [enemy_max_hp_for_kind(kind, difficulty, location) for kind in kinds]
+    return list(values), list(values)
+
+
 @dataclass
 class QuestMissionSession:
     contract_key: str
@@ -253,6 +282,10 @@ class QuestMissionSession:
     npcs: list[tuple[int, int]] = field(default_factory=list)  # мародёры / НПС
     npc_kinds: list[str] = field(default_factory=list)  # maloy, …
     npc_weapons: list[str] = field(default_factory=list)
+    enemy_hp: list[int] = field(default_factory=list)  # текущий HP мутантов
+    enemy_max_hp: list[int] = field(default_factory=list)
+    npc_hp: list[int] = field(default_factory=list)  # текущий HP НПС
+    npc_max_hp: list[int] = field(default_factory=list)
     escort: tuple[int, int] | None = None
     escort_kind: str = ""
     escort_alive: bool = False
@@ -282,6 +315,10 @@ class QuestMissionSession:
             "npcs": [list(p) for p in self.npcs],
             "npc_kinds": list(self.npc_kinds),
             "npc_weapons": list(self.npc_weapons),
+            "enemy_hp": [int(x) for x in self.enemy_hp],
+            "enemy_max_hp": [int(x) for x in self.enemy_max_hp],
+            "npc_hp": [int(x) for x in self.npc_hp],
+            "npc_max_hp": [int(x) for x in self.npc_max_hp],
             "escort": list(self.escort) if self.escort is not None else None,
             "escort_kind": self.escort_kind,
             "escort_alive": self.escort_alive,
@@ -300,6 +337,22 @@ class QuestMissionSession:
         escort: tuple[int, int] | None = None
         if isinstance(escort_raw, (list, tuple)) and len(escort_raw) >= 2:
             escort = (int(escort_raw[0]), int(escort_raw[1]))
+        enemies = [(int(p[0]), int(p[1])) for p in (raw.get("enemies") or [])]
+        enemy_kinds = _parse_enemy_kinds(raw.get("enemies") or [], raw.get("enemy_kinds"))
+        npcs = [(int(p[0]), int(p[1])) for p in (raw.get("npcs") or [])]
+        npc_kinds = _parse_npc_kinds(raw.get("npcs") or [], raw.get("npc_kinds"))
+        parsed_enemy_hp, parsed_enemy_max_hp = _parse_unit_hp(
+            len(enemies),
+            enemy_kinds,
+            raw.get("enemy_hp"),
+            raw.get("enemy_max_hp"),
+        )
+        parsed_npc_hp, parsed_npc_max_hp = _parse_unit_hp(
+            len(npcs),
+            npc_kinds,
+            raw.get("npc_hp"),
+            raw.get("npc_max_hp"),
+        )
         return cls(
             contract_key=str(raw.get("contract_key") or ""),
             title=str(raw.get("title") or ""),
@@ -312,11 +365,15 @@ class QuestMissionSession:
             objectives=[(int(p[0]), int(p[1])) for p in (raw.get("objectives") or [])],
             collected=[(int(p[0]), int(p[1])) for p in (raw.get("collected") or [])],
             hazards=[(int(p[0]), int(p[1])) for p in (raw.get("hazards") or [])],
-            enemies=[(int(p[0]), int(p[1])) for p in (raw.get("enemies") or [])],
-            enemy_kinds=_parse_enemy_kinds(raw.get("enemies") or [], raw.get("enemy_kinds")),
-            npcs=[(int(p[0]), int(p[1])) for p in (raw.get("npcs") or [])],
-            npc_kinds=_parse_npc_kinds(raw.get("npcs") or [], raw.get("npc_kinds")),
+            enemies=enemies,
+            enemy_kinds=enemy_kinds,
+            npcs=npcs,
+            npc_kinds=npc_kinds,
             npc_weapons=_parse_npc_weapons(raw.get("npcs") or [], raw.get("npc_weapons")),
+            enemy_hp=parsed_enemy_hp,
+            enemy_max_hp=parsed_enemy_max_hp,
+            npc_hp=parsed_npc_hp,
+            npc_max_hp=parsed_npc_max_hp,
             escort=escort,
             escort_kind=str(raw.get("escort_kind") or ""),
             escort_alive=bool(raw.get("escort_alive")),
@@ -365,6 +422,41 @@ def _parse_npc_kinds(npcs_raw: list, kinds_raw: Any) -> list[str]:
             parsed.append(key if key in NPC_SPRITES else NPC_SPRITE_KEYS[i % len(NPC_SPRITE_KEYS)])
         return parsed
     return [NPC_SPRITE_KEYS[i % len(NPC_SPRITE_KEYS)] for i in range(n)]
+
+
+def _parse_unit_hp(
+    n: int,
+    kinds: list[str],
+    hp_raw: Any,
+    max_raw: Any,
+) -> tuple[list[int], list[int]]:
+    """HP юнитов по таблице default_hp_for_kind.
+
+    Старые сессии без HP-списков (или с рассинхроном длины) получают полные
+    значения из таблицы — а не «1 HP», из-за которого враги умирали мгновенно.
+    """
+    if n <= 0:
+        return [], []
+    defaults = [default_hp_for_kind(kinds[i] if i < len(kinds) else "") for i in range(n)]
+
+    def _nums(raw: Any) -> list[int]:
+        if not isinstance(raw, (list, tuple)) or len(raw) != n:
+            return []
+        out: list[int] = []
+        for value in raw:
+            try:
+                out.append(max(0, int(value)))
+            except (TypeError, ValueError):
+                out.append(0)
+        return out
+
+    hp = _nums(hp_raw)
+    if not hp:
+        hp = list(defaults)
+    mx = _nums(max_raw)
+    if not mx:
+        mx = [max(current, full) for current, full in zip(hp, defaults)]
+    return hp, mx
 
 
 def _meta_key(telegram_id: int) -> str:
@@ -672,12 +764,18 @@ def _apply_special_mission_spawn_overrides(
         session.npcs = session.npcs[:1]
         session.npc_kinds = ["dark_stalker"] if session.npcs else []
         session.npc_weapons = [mirror_weapon] if session.npcs else []
+        session.npc_hp, session.npc_max_hp = _unit_hp_lists(
+            session.npc_kinds, session.difficulty, session.location
+        )
         return
     if title.startswith("Колонна Монолита"):
         for i in range(len(session.npc_kinds)):
             session.npc_kinds[i] = "monolith"
         for i in range(len(session.npc_weapons)):
             session.npc_weapons[i] = _pick_monolith_weapon()
+        session.npc_hp, session.npc_max_hp = _unit_hp_lists(
+            session.npc_kinds, session.difficulty, session.location
+        )
 
 
 def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMissionSession:
@@ -822,6 +920,8 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
                     for i in range(len(npc_kinds)):
                         npc_kinds[i] = "soldier"
 
+    enemy_hp, enemy_max_hp = _unit_hp_lists(enemy_kinds, difficulty, template.work_location)
+    npc_hp, npc_max_hp = _unit_hp_lists(npc_kinds, difficulty, template.work_location)
     return QuestMissionSession(
         contract_key=template.key,
         title=template.title,
@@ -837,6 +937,10 @@ def _build_session(template: QuestContractTemplate, quest: QuestType) -> QuestMi
         npcs=npcs,
         npc_kinds=npc_kinds,
         npc_weapons=npc_weapons,
+        enemy_hp=enemy_hp,
+        enemy_max_hp=enemy_max_hp,
+        npc_hp=npc_hp,
+        npc_max_hp=npc_max_hp,
         escort=escort,
         escort_kind=escort_kind,
         escort_alive=escort_alive,
@@ -1026,12 +1130,44 @@ def _mutant_can_adjacent_attack(
     return mutant_can_melee_attack(session, kind, enemy_pos)
 
 
+def _apply_unit_damage(
+    session: QuestMissionSession,
+    idx: int,
+    dmg: int,
+    *,
+    npc: bool,
+) -> tuple[int, int]:
+    """Снять HP у юнита. Возвращает (остаток, максимум).
+
+    HP всегда из таблицы default_hp_for_kind: рассинхрон списков достраивается
+    полными значениями, а не единицей.
+    """
+    if npc:
+        hp_list, max_list, kinds = session.npc_hp, session.npc_max_hp, session.npc_kinds
+    else:
+        hp_list, max_list, kinds = session.enemy_hp, session.enemy_max_hp, session.enemy_kinds
+    full = enemy_max_hp_for_kind(
+        kinds[idx] if idx < len(kinds) else "", session.difficulty, session.location
+    )
+    while len(hp_list) <= idx:
+        hp_list.append(full)
+    while len(max_list) <= idx:
+        max_list.append(full)
+    hp_list[idx] = max(0, int(hp_list[idx]) - max(0, int(dmg)))
+    max_list[idx] = max(1, int(max_list[idx]))
+    return int(hp_list[idx]), int(max_list[idx])
+
+
 def _remove_enemy_at_index(session: QuestMissionSession, idx: int) -> str:
     pos = session.enemies[idx]
     kind = session.enemy_kinds[idx] if idx < len(session.enemy_kinds) else ""
     session.enemies.pop(idx)
     if idx < len(session.enemy_kinds):
         session.enemy_kinds.pop(idx)
+    if idx < len(session.enemy_hp):
+        session.enemy_hp.pop(idx)
+    if idx < len(session.enemy_max_hp):
+        session.enemy_max_hp.pop(idx)
     from app.death_flavor import killer_label_for_kind
 
     return killer_label_for_kind(kind, npc=False) if kind else "мутанта"
@@ -1129,13 +1265,9 @@ def _resolve_mutant_adjacent_attacks(
             pending=pending,
         )
         if note:
-            for idx, pos in enumerate(session.enemies):
-                if pos == session.player:
-                    _remove_enemy_at_index(session, idx)
-                    break
-            loot = grant_combat_loot(storage, telegram_id, npc=False)
-            loot_note = f" Лут: {loot}." if loot else ""
-            notes.append(note + loot_note)
+            # Зашедшего на клетку мутанта снимает обмен в контакте ниже
+            # (_fight_on_cell → _resolve_hostile_contact): он больше не умирает мгновенно.
+            notes.append(note)
         if death_result is not None:
             return notes, pending, death_result
 
@@ -1182,14 +1314,23 @@ def _resolve_mutant_adjacent_attacks(
         if note:
             if mutant_survives_melee(kind):
                 notes.append(note + " Плоть отшатнулась — ещё жива!")
-                i += 1
             else:
-                _remove_enemy_at_index(session, i)
-                loot = grant_combat_loot(storage, telegram_id, npc=False)
-                loot_note = f" Лут: {loot}." if loot else ""
-                notes.append(note + loot_note)
+                counter = weapon_damage(str(player.equipment.get("weapon", "Нож")))
+                remaining, full = _apply_unit_damage(session, i, counter, npc=False)
+                if remaining <= 0:
+                    label = _remove_enemy_at_index(session, i)
+                    loot = grant_combat_loot(storage, telegram_id, npc=False)
+                    loot_note = f" Лут: {loot}." if loot else ""
+                    notes.append(note + f" Ответный удар снимает {label}.{loot_note}")
+                    if death_result is not None:
+                        return notes, pending, death_result
+                    continue
+                notes.append(
+                    note + f" Ответный удар: у мутанта осталось {remaining}/{full} HP."
+                )
         if death_result is not None:
             return notes, pending, death_result
+        i += 1
 
     return notes, pending, death_result
 
@@ -1232,36 +1373,58 @@ def _resolve_hostile_contact(
         npc=npc,
         enemy_kinds=session.enemy_kinds if not npc else None,
     )
-    if kinds is not None and len(kinds) == len(units):
-        new_units: list[tuple[int, int]] = []
-        new_kinds: list[str] = []
-        new_weapons: list[str] | None = None
-        weapons = list(session.npc_weapons) if npc else None
-        if weapons is not None and len(weapons) == len(units):
-            new_weapons = []
-        for i, (pos, k) in enumerate(zip(units, kinds)):
-            if pos != session.player:
-                new_units.append(pos)
-                new_kinds.append(k)
-                if new_weapons is not None and weapons is not None:
-                    new_weapons.append(weapons[i])
-        setattr(session, unit_attr, new_units)
-        setattr(session, kinds_attr, new_kinds)
-        if new_weapons is not None:
-            session.npc_weapons = new_weapons
+    # Враги на клетке игрока больше не умирают мгновенно: ответный удар снимает
+    # HP из таблицы, убираем только тех, у кого HP иссякло.
+    weapon = str(player.equipment.get("weapon", "Нож"))
+    counter = weapon_damage(weapon)
+    n_units = len(units)
+    for i in range(n_units):
+        # Выравниваем HP-списки по таблице (0 урона — только нормализация).
+        _apply_unit_damage(session, i, 0, npc=npc)
+    survivors: list[int] = []
+    killed_labels: list[str] = []
+    wounded_bits: list[str] = []
+    for i in range(n_units):
+        if units[i] != session.player:
+            survivors.append(i)
+            continue
+        unit_kind = kinds[i] if kinds is not None and i < len(kinds) else ""
+        remaining, full = _apply_unit_damage(session, i, counter, npc=npc)
+        unit_label = killer_label_for_kind(unit_kind, npc=npc) if unit_kind else label
+        if remaining <= 0:
+            killed_labels.append(unit_label)
+        else:
+            wounded_bits.append(f"{unit_label} {remaining}/{full}")
+    if npc:
+        session.npc_hp = [session.npc_hp[i] for i in survivors]
+        session.npc_max_hp = [session.npc_max_hp[i] for i in survivors]
     else:
-        if npc and session.npc_weapons and len(session.npc_weapons) == len(units):
-            session.npc_weapons = [
-                w for pos, w in zip(units, session.npc_weapons) if pos != session.player
-            ]
-        setattr(session, unit_attr, [e for e in units if e != session.player])
+        session.enemy_hp = [session.enemy_hp[i] for i in survivors]
+        session.enemy_max_hp = [session.enemy_max_hp[i] for i in survivors]
+    new_units = [units[i] for i in survivors]
+    setattr(session, unit_attr, new_units)
+    if kinds is not None and len(kinds) == n_units:
+        setattr(session, kinds_attr, [kinds[i] for i in survivors])
+    if npc:
+        weapons = list(session.npc_weapons)
+        if len(weapons) == n_units:
+            session.npc_weapons = [weapons[i] for i in survivors]
     phrase = encounter_phrase_for_kind(kind, npc=npc) if kind else f"с {label}"
     from app.combat_loot import grant_combat_loot
 
-    loot = grant_combat_loot(storage, telegram_id, npc=npc)
-    loot_note = f" Лут: {loot}." if loot else ""
+    loot_bits: list[str] = []
+    for _ in killed_labels:
+        loot = grant_combat_loot(storage, telegram_id, npc=npc)
+        if loot:
+            loot_bits.append(str(loot))
+    loot_note = (" Лут: " + ", ".join(loot_bits) + ".") if loot_bits else ""
     side_txt = _attack_side_text(side)
-    note = f"Бой {phrase} ({side_txt}): −{dmg} HP.{loot_note}"
+    exchange = ""
+    if killed_labels:
+        exchange = " Снят: " + ", ".join(killed_labels) + "."
+    elif wounded_bits:
+        exchange = " Твой ответ: " + ", ".join(wounded_bits) + "."
+    note = f"Бой {phrase} ({side_txt}): −{dmg} HP.{exchange}{loot_note}"
     # Учитываем уже накопленный урон хода (выстрелы НПС).
     if int(player.health) - max(0, int(prior_damage)) - dmg <= 0:
         from app.game_logic import remember_death_cause, remember_death_killer
@@ -1451,9 +1614,11 @@ def mission_status_caption(session: QuestMissionSession, character: Character | 
     if threat_bits:
         lines.append("Угрозы: " + ", ".join(threat_bits))
     if session.enemies:
-        lines.append(f"HP мутантов: {len(session.enemies)} живых")
+        bits = "/".join(str(hp) for hp in session.enemy_hp[:6])
+        lines.append(f"Мутанты: {len(session.enemies)} · HP {bits or '?'}")
     if session.npcs:
-        lines.append(f"HP НПС: {len(session.npcs)} живых")
+        bits = "/".join(str(hp) for hp in session.npc_hp[:6])
+        lines.append(f"НПС: {len(session.npcs)} · HP {bits or '?'}")
     if session.kind == "clear_mutant":
         lines.append(f"Зачистка: мутанты осталось {len(session.enemies)}")
     elif session.kind == "clear_marauder":
@@ -1841,29 +2006,17 @@ def mission_shoot_available(session: QuestMissionSession) -> bool:
     return len(session.npcs) > 0 or len(session.enemies) > 0
 
 
-def _remove_enemy_at(session: QuestMissionSession, pos: tuple[int, int]) -> str:
-    if pos not in session.enemies:
-        return "мутанта"
-    idx = session.enemies.index(pos)
-    session.enemies.pop(idx)
-    kind = ""
-    if idx < len(session.enemy_kinds):
-        kind = session.enemy_kinds.pop(idx)
-    from app.death_flavor import killer_label_for_kind
-
-    return killer_label_for_kind(kind, npc=False) if kind else "мутанта"
-
-
-def _remove_npc_at(session: QuestMissionSession, pos: tuple[int, int]) -> str:
-    if pos not in session.npcs:
-        return "НПС"
-    idx = session.npcs.index(pos)
+def _remove_npc_at_index(session: QuestMissionSession, idx: int) -> str:
+    kind = session.npc_kinds[idx] if idx < len(session.npc_kinds) else ""
     session.npcs.pop(idx)
-    kind = ""
     if idx < len(session.npc_kinds):
-        kind = session.npc_kinds.pop(idx)
+        session.npc_kinds.pop(idx)
     if idx < len(session.npc_weapons):
         session.npc_weapons.pop(idx)
+    if idx < len(session.npc_hp):
+        session.npc_hp.pop(idx)
+    if idx < len(session.npc_max_hp):
+        session.npc_max_hp.pop(idx)
     from app.death_flavor import killer_label_for_kind
 
     return killer_label_for_kind(kind, npc=True) if kind else "НПС"
@@ -2069,22 +2222,49 @@ def shoot_quest_mission(storage: Storage, telegram_id: int, direction: str) -> A
     notes: list[str] = []
     if hits:
         from app.combat_loot import grant_combat_loot
+        from app.death_flavor import killer_label_for_kind
 
+        # Выстрел снимает HP из таблицы; враг умирает только при HP ≤ 0.
+        dmg = weapon_damage(weapon)
         for hit_cell, hit_kind in hits:
             if hit_kind == "npc":
-                label = _remove_npc_at(session, hit_cell)
-                loot = grant_combat_loot(storage, telegram_id, npc=True)
-                loot_note = f" Лут: {loot}." if loot else ""
-                notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).{loot_note}")
-                if session.kind == "clear_marauder" and not session.npcs:
-                    notes.append("Зона зачищена от мародёров.")
+                if hit_cell not in session.npcs:
+                    continue
+                idx = session.npcs.index(hit_cell)
+                kind = session.npc_kinds[idx] if idx < len(session.npc_kinds) else ""
+                label = killer_label_for_kind(kind, npc=True) if kind else "НПС"
+                remaining, full = _apply_unit_damage(session, idx, dmg, npc=True)
+                if remaining <= 0:
+                    label = _remove_npc_at_index(session, idx)
+                    loot = grant_combat_loot(storage, telegram_id, npc=True)
+                    loot_note = f" Лут: {loot}." if loot else ""
+                    notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).{loot_note}")
+                    if session.kind == "clear_marauder" and not session.npcs:
+                        notes.append("Зона зачищена от мародёров.")
+                else:
+                    notes.append(
+                        f"{h(player.nickname)} поразил {label} ({weapon}): "
+                        f"осталось {remaining}/{full} HP."
+                    )
             elif hit_kind == "mutant":
-                label = _remove_enemy_at(session, hit_cell)
-                loot = grant_combat_loot(storage, telegram_id, npc=False)
-                loot_note = f" Лут: {loot}." if loot else ""
-                notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).{loot_note}")
-                if session.kind == "clear_mutant" and not session.enemies:
-                    notes.append("Зона зачищена от мутантов.")
+                if hit_cell not in session.enemies:
+                    continue
+                idx = session.enemies.index(hit_cell)
+                kind = session.enemy_kinds[idx] if idx < len(session.enemy_kinds) else ""
+                label = killer_label_for_kind(kind, npc=False) if kind else "мутанта"
+                remaining, full = _apply_unit_damage(session, idx, dmg, npc=False)
+                if remaining <= 0:
+                    label = _remove_enemy_at_index(session, idx)
+                    loot = grant_combat_loot(storage, telegram_id, npc=False)
+                    loot_note = f" Лут: {loot}." if loot else ""
+                    notes.append(f"{h(player.nickname)} поразил {label} ({weapon}).{loot_note}")
+                    if session.kind == "clear_mutant" and not session.enemies:
+                        notes.append("Зона зачищена от мутантов.")
+                else:
+                    notes.append(
+                        f"{h(player.nickname)} поразил {label} ({weapon}): "
+                        f"осталось {remaining}/{full} HP."
+                    )
     else:
         notes.append(f"{h(player.nickname)} промахнулся ({weapon}).")
 
@@ -2564,9 +2744,15 @@ def render_mission_frame(
     draw.text((pl + 18, pb - 50), session.title[:28], fill=(210, 210, 210), font=small)
     draw.text((pl + 18, pb - 28), "Стрелки - ход, кнопка - аптечка", fill=(190, 190, 190), font=small)
 
+    enemy_slots = hud_slots_from_units(
+        session.enemy_kinds, session.enemy_hp, session.enemy_max_hp, is_npc=False
+    )
+    enemy_slots += hud_slots_from_units(
+        session.npc_kinds, session.npc_hp, session.npc_max_hp, is_npc=True
+    )
     draw_enemy_hud(
         canvas,
-        hud_slots_from_kinds(session.enemy_kinds, session.npc_kinds),
+        enemy_slots,
         panel_left=pl,
         panel_top=pt,
         panel_right=pr,

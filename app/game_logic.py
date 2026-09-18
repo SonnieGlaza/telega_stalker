@@ -2538,6 +2538,10 @@ def respawn_character(storage: Storage, telegram_id: int) -> ActionResult:
 
     clear_all_activity_sessions(storage, telegram_id)
 
+    from app.location_walk import clear_walk_position
+
+    clear_walk_position(storage, telegram_id)
+
     pay_lines: list[str] = []
     if paid > 0:
         pay_lines.append(f"Списано {paid} RU за спасение.")

@@ -292,6 +292,60 @@ def repair_equipped_artifacts(storage: Storage, telegram_id: int) -> ActionResul
     return gl.ActionResult(True, f"Артефакты восстановлены до 100% за {cost} RU.")
 
 
+# --- Сборка финального артефакта «Предел» из трёх частей лаб ---
+PREDEL_PART_KEYS: tuple[str, ...] = ("artifact_predel1", "artifact_predel2", "artifact_predel3")
+PREDEL_FINAL_KEY = "artifact_predel"
+
+
+def has_all_predel_parts(storage: Storage, telegram_id: int) -> bool:
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return False
+    return all(int(player.inventory.get(key, 0)) >= 1 for key in PREDEL_PART_KEYS)
+
+
+def combine_predel_artifact(storage: Storage, telegram_id: int) -> ActionResult:
+    """Собрать «Артефакт «Предел»» из трёх частей (Предел-1/2/3)."""
+    gl = _gl()
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return gl.ActionResult(False, "Сначала создай персонажа.")
+    missing = [key for key in PREDEL_PART_KEYS if int(player.inventory.get(key, 0)) < 1]
+    if missing:
+        labels = [gl.ITEM_LABELS.get(key, key) for key in missing]
+        return gl.ActionResult(
+            False,
+            f"Нужны все три части: «Предел-1», «Предел-2» и «Предел-3». Не хватает: {', '.join(labels)}.",
+        )
+    for key in PREDEL_PART_KEYS:
+        if not storage.remove_item(telegram_id, key, 1):
+            return gl.ActionResult(False, "Части артефакта не нашлись в инвентаре.")
+    storage.add_item(telegram_id, PREDEL_FINAL_KEY, 1)
+    label = gl.ITEM_LABELS.get(PREDEL_FINAL_KEY, PREDEL_FINAL_KEY)
+    return gl.ActionResult(
+        True,
+        f"🧩 Части слиты: собран «{label}». Он в инвентаре — экипируй через ⚙️ Экипировка.",
+    )
+
+
+def build_predel_assembly_hint(storage: Storage, telegram_id: int) -> str:
+    """Подсказка в меню артов: есть ли части и готов ли сбор."""
+    gl = _gl()
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ""
+    have = [key for key in PREDEL_PART_KEYS if int(player.inventory.get(key, 0)) >= 1]
+    if not have:
+        return ""
+    lines = [f"🧩 Части «Предела»: {len(have)}/3 ({", ".join(gl.ITEM_LABELS.get(k, k) for k in have)})."]
+    if len(have) == 3:
+        lines.append("Можно собрать «Артефакт «Предел»» — жми кнопку сборки.")
+    else:
+        lines.append("Собери все три — в меню техника появится сборка.")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def craft_artifact_from_junk(storage: Storage, telegram_id: int, key_a: str, key_b: str) -> ActionResult:
     gl = _gl()
     key_a = str(key_a)
@@ -654,6 +708,10 @@ def build_my_artifacts_text(storage: Storage, telegram_id: int) -> str:
         )
     lines.append("")
     lines.append(build_equip_slot_hint(player))
+    hint = build_predel_assembly_hint(storage, telegram_id)
+    if hint:
+        lines.append("")
+        lines.append(hint.strip())
     return "\n".join(lines)
 
 

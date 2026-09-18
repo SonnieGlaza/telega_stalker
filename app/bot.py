@@ -53,6 +53,13 @@ from app.stash_hunt import (
     stash_status_caption,
     start_stash_hunt,
 )
+from app.location_walk import (
+    WALK_GRID,
+    get_walk_position,
+    move_walk_position,
+    render_walk_frame,
+    zone_at,
+)
 from app.quest_mission import (
     abandon_quest_mission,
     get_mission_session,
@@ -384,6 +391,7 @@ from app.keyboards import (
     personal_stash_items_keyboard,
     personal_stash_amount_keyboard,
     location_zones_keyboard,
+    location_walk_keyboard,
     secret_trader_sell_keyboard,
     lab_combat_keyboard,
     lab_transition_keyboard,
@@ -477,6 +485,7 @@ from app.storage import Character, Storage, NicknameTakenError
 from app.zone_map import TELEGRAM_PHOTO_MAX_BYTES, build_zone_map_image
 from app.location_zones import (
     location_zones_for,
+    resupply_cooldown_text,
     resupply_equipment,
     start_search_zone,
     zone_cooldown_remaining_text,
@@ -3331,6 +3340,14 @@ async def show_medic(callback: CallbackQuery) -> None:
     )
 
 
+@router.callback_query(F.data == "trade:medic:heal")
+async def medic_heal_callback(callback: CallbackQuery) -> None:
+    from app.vendors import medic_heal
+
+    result = medic_heal(get_storage(), callback.from_user.id)
+    await reply_action_result(callback, result.text)
+
+
 @router.callback_query(F.data == "trade:vendor:tech")
 async def show_tech(callback: CallbackQuery) -> None:
     storage = get_storage()
@@ -3892,15 +3909,23 @@ async def tech_craft_first_callback(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("tech:craft:b:"))
 async def tech_craft_second_callback(callback: CallbackQuery) -> None:
-    parts = (callback.data or "").split(":")
-    if len(parts) < 5:
-        await callback.answer("Некорректный выбор.", show_alert=True)
+    parts_raw = (callback.data or "").split(":")
+    if len(parts_raw) < 4:
+        await safe_callback_answer(callback, "Некорректный предмет.", show_alert=True)
         return
-    first_key = parts[3]
-    second_key = parts[4]
+    first_key = parts_raw[3]
+    second_key = parts_raw[4]
     from app.artifact_features import craft_artifact_from_junk
 
     result = craft_artifact_from_junk(get_storage(), callback.from_user.id, first_key, second_key)
+    await reply_action_result(callback, result.text)
+
+
+@router.callback_query(F.data == "tech:craft:predel")
+async def tech_craft_predel_callback(callback: CallbackQuery) -> None:
+    from app.artifact_features import combine_predel_artifact
+
+    result = combine_predel_artifact(get_storage(), callback.from_user.id)
     await reply_action_result(callback, result.text)
 
 
@@ -6461,24 +6486,56 @@ async def show_location_zones(message: Message) -> None:
         lines.append("Здесь пока нет исследованных зон.")
     caption = "\n".join(lines)
 
-    keyboard = location_zones_keyboard(
+    fallback_keyboard = location_zones_keyboard(
         location,
         zones_status,
         is_home_base=is_home,
         show_secret_trader=is_secret_trader_spot,
+        resupply_cooldown=resupply_cooldown_text(storage, player.telegram_id) if is_home else None,
     )
+
+    from app.player_busy import player_busy_reason
+
+    # «Открытая локация»: если игрок свободен — рисуем карту с прогулкой.
+    # Занят (вылазка/бой/лаборатория/путь) или ошибка рендера — старое
+    # поведение (превью + список кнопок-зон) как фолбэк.
+    busy = player_busy_reason(storage, player.telegram_id)
+    if busy is None:
+        try:
+            x, y = get_walk_position(storage, player.telegram_id)
+            current_zone = zone_at(location, x, y, player.faction)
+            walk_image = render_walk_frame(storage, player)
+            walk_keyboard = location_walk_keyboard(
+                {"x": x, "y": y, "zone": current_zone},
+                location,
+                zones_status,
+                is_home=is_home,
+                show_secret_trader=is_secret_trader_spot,
+                resupply_cooldown=resupply_cooldown_text(storage, player.telegram_id) if is_home else None,
+            )
+            walk_caption = caption + f"\n\n🗺 Ты на клетке X {x} · Y {y}"
+            if current_zone is not None:
+                walk_caption += f"\n📍 Ты в зоне: {current_zone.get('label') or current_zone.get('id')}"
+            image = BufferedInputFile(walk_image, filename="location_walk.png")
+            await message.answer_photo(photo=image, caption=walk_caption, reply_markup=walk_keyboard)
+            return
+        except Exception:
+            logger.exception("Failed to render location walk for user %s", message.from_user.id)
+    else:
+        await message.answer(busy)
+
     try:
         thumb = _load_location_thumb(location)
         if thumb is None:
-            await message.answer(caption, reply_markup=keyboard)
+            await message.answer(caption, reply_markup=fallback_keyboard)
             return
         buf = BytesIO()
         thumb.convert("RGB").save(buf, format="PNG", optimize=True)
         image = BufferedInputFile(buf.getvalue(), filename="location_thumb.png")
-        await message.answer_photo(photo=image, caption=caption, reply_markup=keyboard)
+        await message.answer_photo(photo=image, caption=caption, reply_markup=fallback_keyboard)
     except Exception:
         logger.exception("Failed to send location zones for user %s", message.from_user.id)
-        await message.answer(caption, reply_markup=keyboard)
+        await message.answer(caption, reply_markup=fallback_keyboard)
 
 
 @router.message(F.text == "👥 Игроки")
@@ -7354,6 +7411,129 @@ async def location_map_callback(callback: CallbackQuery) -> None:
     except Exception:
         logger.exception("Location map callback failed for %s action=%s", telegram_id, action)
         await safe_callback_answer(callback, "Ошибка карты локации. Попробуй ещё раз или /fixme", show_alert=True)
+
+
+async def _send_or_edit_walk_frame(
+    callback: CallbackQuery,
+    *,
+    image_bytes: bytes,
+    caption: str,
+    note: str | None = None,
+    markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    media = BufferedInputFile(image_bytes, filename="location_walk.png")
+    text = caption if not note else f"{caption}\n\n{note}"
+    try:
+        if callback.message and callback.message.photo:
+            await callback.message.edit_media(
+                media=InputMediaPhoto(media=media, caption=text),
+                reply_markup=markup,
+            )
+        elif callback.message:
+            await callback.message.answer_photo(photo=media, caption=text, reply_markup=markup)
+            try:
+                await callback.message.delete()
+            except TelegramBadRequest:
+                pass
+        else:
+            await callback.bot.send_photo(
+                callback.from_user.id,
+                photo=media,
+                caption=text,
+                reply_markup=markup,
+            )
+    except TelegramBadRequest:
+        await callback.bot.send_photo(
+            callback.from_user.id,
+            photo=media,
+            caption=text,
+            reply_markup=markup,
+        )
+    finally:
+        await safe_callback_answer(callback)
+
+
+@router.callback_query(F.data.startswith("locwalk:"))
+async def location_walk_callback(callback: CallbackQuery) -> None:
+    """Осмотр локации: шаг по сетке (бесплатно) + пересбор кадра и клавиатуры."""
+    action = (callback.data or "").removeprefix("locwalk:").strip()
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    dead = resolve_dead_player(storage, telegram_id, refresh_survival=False)
+    if dead is not None:
+        await _ensure_death_keyboard(callback, telegram_id)
+        return
+
+    try:
+        if player is None:
+            await safe_callback_answer(callback, "Сначала создай персонажа через /start.", show_alert=True)
+            return
+        if is_traveling(player):
+            await safe_callback_answer(callback, "Ты в пути, осмотр локации недоступен.", show_alert=True)
+            return
+        if action not in {"up", "down", "left", "right"}:
+            await callback.answer("Неизвестное действие.", show_alert=True)
+            return
+
+        location = str(player.location)
+        is_home = location == faction_home_base(player.faction)
+        zones_status = [
+            (
+                zone,
+                zone_cooldown_remaining_text(storage, telegram_id, location, zone["id"]),
+            )
+            for zone in location_zones_for(location)
+        ]
+
+        lines = [f"📍 Локация: {location}"]
+        if is_home:
+            lines.append("Здесь расположена база твоей группировки — торговец и 🎒 пополнение снаряжения.")
+        else:
+            for owner, base in FACTION_HOME_BASE.items():
+                if location == base and owner != player.faction:
+                    lines.append(f"⛔ Это база группировки «{owner}» — чужим вход запрещён, пополнение недоступно.")
+        if location == SECRET_TRADER_LOCATION:
+            lines.append("Здесь орудует тайный торговец — скупает информацию.")
+        if zones_status:
+            lines.append("")
+            lines.append("Зоны:")
+            for zone, remaining in zones_status:
+                label = str(zone.get("label") or zone.get("id") or "")
+                if zone.get("kind") == "anomaly":
+                    lines.append(f"• ☢ {label} — поиск артефактов")
+                else:
+                    suffix = f" (КД {remaining})" if remaining else ""
+                    lines.append(f"• 🔍 {label} — обыск схрона{suffix}")
+        else:
+            lines.append("Здесь пока нет исследованных зон.")
+        caption = "\n".join(lines)
+
+        x, y = move_walk_position(storage, telegram_id, action)
+        current_zone = zone_at(location, x, y, player.faction)
+        walk_caption = caption + f"\n\n🗺 Ты на клетке X {x} · Y {y}"
+        if current_zone is not None:
+            walk_caption += f"\n📍 Ты в зоне: {current_zone.get('label') or current_zone.get('id')}"
+
+        image = render_walk_frame(storage, player)
+        markup = location_walk_keyboard(
+            {"x": x, "y": y, "zone": current_zone},
+            location,
+            zones_status,
+            is_home=is_home,
+            show_secret_trader=location == SECRET_TRADER_LOCATION,
+            resupply_cooldown=resupply_cooldown_text(storage, telegram_id) if is_home else None,
+        )
+        await _send_or_edit_walk_frame(
+            callback,
+            image_bytes=image,
+            caption=walk_caption,
+            markup=markup,
+        )
+    except Exception:
+        logger.exception("Location walk callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка осмотра локации. Попробуй ещё раз или /fixme", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("selltrade:"))

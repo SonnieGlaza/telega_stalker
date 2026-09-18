@@ -37,7 +37,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🎒 Инвентарь"), KeyboardButton(text="📡 Статус")],
             [KeyboardButton(text="🏕 Вылазка"), KeyboardButton(text="🛒 Торговец")],
             [KeyboardButton(text="🏦 Барахолка"), KeyboardButton(text="🛰 События")],
-            [KeyboardButton(text="👥 Группировка"), KeyboardButton(text="ℹ️ Информация")],
+            [KeyboardButton(text="👥 Группировка")],
             [KeyboardButton(text="⭐ Пополнить")],
         ],
         resize_keyboard=True,
@@ -65,7 +65,7 @@ def pda_keyboard(*, is_leader: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="📊 Дроп"), KeyboardButton(text="☠️ Смерти")],
         [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="📅 Ежедневка")],
         [KeyboardButton(text="🔔 Уведомления"), KeyboardButton(text="🔥 Как не сдохнуть")],
-        [KeyboardButton(text="🏛 Клановые задачи")],
+        [KeyboardButton(text="🏛 Клановые задачи"), KeyboardButton(text="ℹ️ Информация")],
     ]
     if is_leader:
         rows[-1].append(KeyboardButton(text="📣 Сбор"))
@@ -302,6 +302,7 @@ def medic_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="💊 Аптечки и антирад", callback_data="trade:medic:buy:0")],
+            [InlineKeyboardButton(text="💉 Лечение (бесплатно)", callback_data="trade:medic:heal")],
             [InlineKeyboardButton(text="⭐ Ассортимент", callback_data="trade:upgrade:medic")],
             [InlineKeyboardButton(text="⬅️ Назад к торговцу", callback_data="trade:menu:root")],
         ]
@@ -336,6 +337,7 @@ def tech_menu_keyboard(*, can_buy_upgrade: bool = True, can_buy_artifact_slot: b
     rows.append([InlineKeyboardButton(text="⭐ Уровень сервиса", callback_data="trade:upgrade:tech")])
     rows.append([InlineKeyboardButton(text="🔧 Ремонт артефактов", callback_data="tech:repair:artifacts")])
     rows.append([InlineKeyboardButton(text="🔬 Крафт из мусора", callback_data="tech:craft:menu")])
+    rows.append([InlineKeyboardButton(text="🧩 Собрать «Предел» (3 части)", callback_data="tech:craft:predel")])
     rows.append([InlineKeyboardButton(text="💨 Закись азота (N2O)", callback_data="trade:tech:buy:0")])
     rows.append([InlineKeyboardButton(text="🛡 Страховка артов (8000 RU)", callback_data="tech:insurance:buy")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад к торговцу", callback_data="trade:menu:root")])
@@ -543,6 +545,7 @@ def location_zones_keyboard(
     *,
     is_home_base: bool,
     show_secret_trader: bool = False,
+    resupply_cooldown: str | None = None,
 ) -> InlineKeyboardMarkup:
     """Клавиатура карты локации: торговец на базе + кнопки зон локации.
 
@@ -550,12 +553,20 @@ def location_zones_keyboard(
     для зон обыска показываем кнопку запуска либо (при активном КД)
     информационную неактивную кнопку с остатком времени.
     show_secret_trader=True — в Припяти добавляет вход к тайному торговцу.
+    resupply_cooldown — остаток кулдауна бесплатного пополнения на базе.
     """
     rows: list[list[InlineKeyboardButton]] = []
     if is_home_base:
         rows.append(
             [InlineKeyboardButton(text="🎒 Пополнить снаряжение", callback_data="locmap:resupply")]
         )
+        if resupply_cooldown:
+            rows[-1] = [
+                InlineKeyboardButton(
+                    text=f"🎒 Пополнить снаряжение (КД {resupply_cooldown})",
+                    callback_data="locmap:noop",
+                )
+            ]
         rows.append(
             [InlineKeyboardButton(text="🛒 Торговец", callback_data="locmap:vendor")]
         )
@@ -594,6 +605,79 @@ def location_zones_keyboard(
             rows.append(
                 [InlineKeyboardButton(text=f"🧪 {label}", callback_data=f"locmap:lab:{zone_id}")]
             )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def location_walk_keyboard(
+    walk_state: dict[str, Any] | None,
+    location: str,
+    zones_status: list[tuple[dict, str | None]],
+    *,
+    is_home: bool = False,
+    show_secret_trader: bool = False,
+    resupply_cooldown: str | None = None,
+) -> InlineKeyboardMarkup:
+    """Клавиатура «открытой локации»: стрелки-ходы + действие зоны, в которой стоишь.
+
+    walk_state — словарь {"x", "y", "zone"}: текущая клетка и зона под ней
+    (dict из app.location_walk.zone_at) или None, если рядом зон нет.
+    Ряд действий показывается только для зоны, в которой стоит игрок; все
+    callback_data действий — существующие колбэки location_map_callback.
+    location/show_secret_trader оставлены для сигнатуры/будущих расширений.
+    """
+    del location, show_secret_trader
+    zone = walk_state.get("zone") if isinstance(walk_state, dict) else None
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="⬆️ Вперёд", callback_data="locwalk:up")],
+        [
+            InlineKeyboardButton(text="⬅️ Влево", callback_data="locwalk:left"),
+            InlineKeyboardButton(text="⬇️ Назад", callback_data="locwalk:down"),
+            InlineKeyboardButton(text="➡️ Вправо", callback_data="locwalk:right"),
+        ],
+    ]
+    if isinstance(zone, dict) and zone:
+        kind = str(zone.get("kind") or "")
+        zone_id = str(zone.get("id") or "")
+        label = str(zone.get("label") or zone_id)
+        if kind == "base":
+            action_row = [InlineKeyboardButton(text="🛒 Торговец", callback_data="locmap:vendor")]
+            if is_home:
+                if resupply_cooldown:
+                    action_row.append(
+                        InlineKeyboardButton(
+                            text=f"🎒 Пополнить (КД {resupply_cooldown})",
+                            callback_data="locmap:noop",
+                        )
+                    )
+                else:
+                    action_row.append(
+                        InlineKeyboardButton(text="🎒 Пополнить снаряжение", callback_data="locmap:resupply")
+                    )
+            rows.append(action_row)
+        elif kind == "secrettrader":
+            rows.append([InlineKeyboardButton(text="🕵 Тайный торговец", callback_data="locmap:secrettrader")])
+        elif kind == "anomaly":
+            rows.append([InlineKeyboardButton(text="☢ Поиск артов", callback_data="locmap:anomaly")])
+        elif kind == "search":
+            remaining = next(
+                (rem for z, rem in zones_status if str(z.get("id") or "") == zone_id),
+                None,
+            )
+            if remaining is None:
+                rows.append(
+                    [InlineKeyboardButton(text=f"🏚 Поиск хабара: {label}", callback_data=f"locmap:search:{zone_id}")]
+                )
+            else:
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=f"🏚 Поиск хабара: {label} (КД {remaining})",
+                            callback_data="locmap:noop",
+                        )
+                    ]
+                )
+        elif kind == "lab":
+            rows.append([InlineKeyboardButton(text=f"🧪 {label}", callback_data=f"locmap:lab:{zone_id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

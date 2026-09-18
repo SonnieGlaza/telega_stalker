@@ -22,10 +22,16 @@ from app.storage import Storage
 
 SEARCH_ZONE_COOLDOWN_HOURS = 2
 
-# Пополнение снаряжения на своей базе.
-RESUPPLY_PRICE_RU = 400
-RESUPPLY_MEDKITS = 2
-RESUPPLY_AMMO_PACKS = 5
+# Пополнение снаряжения на своей базе: бесплатно раз в RESUPPLY_COOLDOWN_HOURS.
+RESUPPLY_COOLDOWN_HOURS = 2
+RESUPPLY_ITEMS: tuple[tuple[str, int], ...] = (
+    ("medkit", 2),
+    ("stew", 1),
+    ("beard_tea", 1),
+    ("vodka", 1),
+)
+
+RESUPPLY_CD_PREFIX = "resupply_cd:"
 
 # Для каждой локации ровно 2 зоны: аномальный участок + зона обыска.
 # Зоны обыска тематически названы под лор S.T.A.L.K.E.R.
@@ -171,8 +177,42 @@ def start_search_zone(
     return result
 
 
+def _resupply_cd_key(telegram_id: int) -> str:
+    return f"{RESUPPLY_CD_PREFIX}{int(telegram_id)}"
+
+
+def resupply_ready_at(storage: Storage, telegram_id: int) -> datetime | None:
+    """Когда снова доступно пополнение; None — готово сейчас."""
+    raw = storage.get_meta(_resupply_cd_key(telegram_id))
+    if not raw:
+        return None
+    try:
+        ready_at = datetime.fromisoformat(raw)
+    except (ValueError, TypeError):
+        return None
+    if ready_at.tzinfo is None:
+        ready_at = ready_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    return ready_at if ready_at > now else None
+
+
+def resupply_cooldown_text(storage: Storage, telegram_id: int) -> str | None:
+    """Человекочитаемый остаток кулдауна пополнения; None — готово."""
+    ready_at = resupply_ready_at(storage, telegram_id)
+    if ready_at is None:
+        return None
+    total_sec = max(0, int((ready_at - datetime.now(timezone.utc)).total_seconds()))
+    hours, rem = divmod(total_sec, 3600)
+    minutes = rem // 60
+    if hours and minutes:
+        return f"{hours}ч {minutes}м"
+    if hours:
+        return f"{hours}ч"
+    return f"{minutes}м"
+
+
 def resupply_equipment(storage: Storage, telegram_id: int, location: str) -> ActionResult:
-    """Пополнить снаряжение на своей базе: медикаменты и патроны за деньги.
+    """Пополнить снаряжение на своей базе: бесплатный набор раз в 2 часа.
 
     Доступно только на собственной базе группировки — оттуда же берут
     старт обычных вылазок и рейдов.
@@ -191,12 +231,19 @@ def resupply_equipment(storage: Storage, telegram_id: int, location: str) -> Act
     busy = player_busy_reason(storage, telegram_id, skip="vendor", auto_recover=False)
     if busy:
         return ActionResult(False, busy)
-    if not storage.change_money(telegram_id, -RESUPPLY_PRICE_RU):
-        return ActionResult(False, f"Не хватает {RESUPPLY_PRICE_RU} RU для пополнения.")
-    storage.add_item(telegram_id, "medkit", RESUPPLY_MEDKITS)
-    storage.add_item(telegram_id, "ammo_pack", RESUPPLY_AMMO_PACKS)
+    remaining = resupply_cooldown_text(storage, telegram_id)
+    if remaining is not None:
+        return ActionResult(False, f"🎒 Снаряжение ещё собирают: следующее пополнение через {remaining}.")
+    given: list[str] = []
+    for key, amount in RESUPPLY_ITEMS:
+        storage.add_item(telegram_id, key, amount)
+        from app.game_logic import ITEM_LABELS
+
+        given.append(f"{ITEM_LABELS.get(key, key)} x{amount}")
+    ready_at = datetime.now(timezone.utc) + timedelta(hours=RESUPPLY_COOLDOWN_HOURS)
+    storage.set_meta(_resupply_cd_key(telegram_id), ready_at.isoformat())
     return ActionResult(
         True,
-        f"🎒 Снаряжение пополнено: аптечка x{RESUPPLY_MEDKITS}, "
-        f"патроны x{RESUPPLY_AMMO_PACKS}. Списано {RESUPPLY_PRICE_RU} RU.",
+        f"🎒 Снаряжение пополнено: {', '.join(given)}. "
+        f"Следующее пополнение через {RESUPPLY_COOLDOWN_HOURS} ч.",
     )

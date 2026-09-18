@@ -80,6 +80,34 @@ def hud_slots_from_raid(
     return slots
 
 
+def hud_slots_from_units(
+    kinds: Sequence[str],
+    hp_values: Sequence[int] | None = None,
+    max_hp_values: Sequence[int] | None = None,
+    *,
+    is_npc: bool,
+) -> list[EnemyHudSlot]:
+    """Слоты с текущим HP юнитов; без данных — полные значения из таблицы."""
+    slots: list[EnemyHudSlot] = []
+    for i, kind in enumerate(kinds or []):
+        full = default_hp_for_kind(str(kind))
+        hp = full
+        max_hp = full
+        if hp_values is not None and i < len(hp_values):
+            try:
+                hp = max(0, int(hp_values[i]))
+            except (TypeError, ValueError):
+                hp = full
+        if max_hp_values is not None and i < len(max_hp_values):
+            try:
+                max_hp = max(1, int(max_hp_values[i]))
+            except (TypeError, ValueError):
+                max_hp = full
+        max_hp = max(1, max_hp)
+        slots.append(EnemyHudSlot(str(kind), is_npc, min(hp, max_hp), max_hp))
+    return slots
+
+
 def hud_slots_from_mixed_kinds(kinds: Sequence[str] | None) -> list[EnemyHudSlot]:
     slots: list[EnemyHudSlot] = []
     for raw in kinds or []:
