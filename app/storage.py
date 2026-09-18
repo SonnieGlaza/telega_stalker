@@ -891,6 +891,7 @@ class Storage:
                     ("Радар", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                     ("Припять", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                     ("ЧАЭС", "база", "Монолит", BASE_LOCATION_NPC_POWER),
+                    ("Тунель", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                 ],
             )
             # Для существующих БД фиксируем базовые владельцы и типы ключевых точек.

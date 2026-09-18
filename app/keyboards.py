@@ -33,11 +33,9 @@ def faction_keyboard() -> InlineKeyboardMarkup:
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📟 КПК"), KeyboardButton(text="📋 Задания")],
-            [KeyboardButton(text="🎒 Инвентарь"), KeyboardButton(text="📡 Статус")],
-            [KeyboardButton(text="🏕 Вылазка"), KeyboardButton(text="🛒 Торговец")],
-            [KeyboardButton(text="🏦 Барахолка"), KeyboardButton(text="🛰 События")],
-            [KeyboardButton(text="👥 Группировка")],
+            [KeyboardButton(text="📟 КПК"), KeyboardButton(text="🎒 Инвентарь")],
+            [KeyboardButton(text="📡 Статус"), KeyboardButton(text="🏕 Вылазка")],
+            [KeyboardButton(text="🛰 События"), KeyboardButton(text="👥 Группировка")],
             [KeyboardButton(text="⭐ Пополнить")],
         ],
         resize_keyboard=True,
@@ -179,6 +177,7 @@ def travel_keyboard(
     show_n2o_button: bool = False,
     back_callback: str | None = None,
 ) -> InlineKeyboardMarkup:
+    display_names = {"Тунель": "Тунель (Барахолка)"}
     rows: list[list[InlineKeyboardButton]] = []
     if traveling:
         rows.extend(travel_in_transit_keyboard(show_n2o_button=show_n2o_button).inline_keyboard)
@@ -187,7 +186,7 @@ def travel_keyboard(
             name = str(location["name"])
             ptype = str(location["point_type"])
             owner = location["controlled_by"] or "нейтрал"
-            label = f"{name} [{ptype}, {owner}]"
+            label = f"{display_names.get(name, name)} [{ptype}, {owner}]"
             rows.append([InlineKeyboardButton(text=label, callback_data=f"travel:to:{name}")])
     if back_callback:
         rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)])
@@ -539,6 +538,14 @@ def inventory_equipment_keyboard(*, money: int | None = None) -> InlineKeyboardM
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def blockpost_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⚔️ Прорвать блокпост", callback_data="locmap:blockpost")],
+        ]
+    )
+
+
 def location_zones_keyboard(
     location: str,
     zones_status: list[tuple[dict, str | None]],
@@ -568,11 +575,17 @@ def location_zones_keyboard(
                 )
             ]
         rows.append(
+            [InlineKeyboardButton(text="📋 Задания", callback_data="locmap:quests")]
+        )
+        rows.append(
             [InlineKeyboardButton(text="🛒 Торговец", callback_data="locmap:vendor")]
+        )
+        rows.append(
+            [InlineKeyboardButton(text="🏦 Барахолка", callback_data="locmap:bazaar")]
         )
     if show_secret_trader:
         rows.append(
-            [InlineKeyboardButton(text="🕵 Тайный торговец", callback_data="locmap:secrettrader")]
+            [InlineKeyboardButton(text="🕵 Бунс (тайный торговец)", callback_data="locmap:secrettrader")]
         )
     for zone, remaining in zones_status:
         kind = str(zone.get("kind") or "")
@@ -581,6 +594,14 @@ def location_zones_keyboard(
         if kind == "anomaly":
             rows.append(
                 [InlineKeyboardButton(text="☢ Поиск артов", callback_data="locmap:anomaly")]
+            )
+        elif kind == "bazaar":
+            rows.append(
+                [InlineKeyboardButton(text="🏦 Барахолка", callback_data="locmap:bazaar")]
+            )
+        elif kind == "trade":
+            rows.append(
+                [InlineKeyboardButton(text="🛒 Торговец", callback_data="locmap:vendor")]
             )
         elif kind == "search":
             if remaining is None:
@@ -642,6 +663,8 @@ def location_walk_keyboard(
         if kind == "base":
             action_row = [InlineKeyboardButton(text="🛒 Торговец", callback_data="locmap:vendor")]
             if is_home:
+                action_row.append(InlineKeyboardButton(text="📋 Задания", callback_data="locmap:quests"))
+                action_row.append(InlineKeyboardButton(text="🏦 Барахолка", callback_data="locmap:bazaar"))
                 if resupply_cooldown:
                     action_row.append(
                         InlineKeyboardButton(
@@ -655,7 +678,11 @@ def location_walk_keyboard(
                     )
             rows.append(action_row)
         elif kind == "secrettrader":
-            rows.append([InlineKeyboardButton(text="🕵 Тайный торговец", callback_data="locmap:secrettrader")])
+            rows.append([InlineKeyboardButton(text="🕵 Бунс (тайный торговец)", callback_data="locmap:secrettrader")])
+        elif kind == "bazaar":
+            rows.append([InlineKeyboardButton(text="🏦 Барахолка", callback_data="locmap:bazaar")])
+        elif kind == "trade":
+            rows.append([InlineKeyboardButton(text="🛒 Торговец", callback_data="locmap:vendor")])
         elif kind == "anomaly":
             rows.append([InlineKeyboardButton(text="☢ Поиск артов", callback_data="locmap:anomaly")])
         elif kind == "search":
@@ -1337,9 +1364,6 @@ def war_lobby_keyboard(
     if monolith_join:
         rows.append(
             [InlineKeyboardButton(text=monolith_join_label, callback_data="monolith_war:join")]
-        )
-        rows.append(
-            [InlineKeyboardButton(text="🤖 Послать ботов Монолита", callback_data="monolith_war:bots")]
         )
         rows.append(
             [InlineKeyboardButton(text="▶ Начать бой сейчас", callback_data="monolith_war:start")]

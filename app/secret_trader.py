@@ -41,7 +41,7 @@ def secret_trader_menu_text(storage: Storage, telegram_id: int) -> str:
     character = storage.get_character(telegram_id, refresh_energy=False)
     inventory = character.inventory if character is not None else {}
     lines = [
-        "🕵 Тайный торговец в Припяти.",
+        "🕵 Бунс — тайный торговец в Припяти.",
         "Скупает информацию, добытую в Зоне: документы, флешки, дневники.",
         "Платит наличными, без лишних вопросов.",
         "",
@@ -65,7 +65,7 @@ def _guard_sell(storage: Storage, telegram_id: int) -> ActionResult | None:
     if blocked:
         return ActionResult(False, blocked)
     if not secret_trader_available(character):
-        return ActionResult(False, "Тайный торговец есть только в Припяти.")
+        return ActionResult(False, "Бунс есть только в Припяти.")
     return None
 
 

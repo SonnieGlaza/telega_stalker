@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Any
 
@@ -83,6 +83,7 @@ class StashSession:
     max_moves: int = STASH_MAX_MOVES
     found: bool = False
     source: str = "found"
+    mutants: list[tuple[int, int]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -96,10 +97,12 @@ class StashSession:
             "max_moves": self.max_moves,
             "found": self.found,
             "source": self.source,
+            "mutants": [list(m) for m in self.mutants],
         }
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> StashSession:
+        raw_mutants = raw.get("mutants") or []
         return cls(
             location=str(raw.get("location") or ""),
             player=(int(raw["player"][0]), int(raw["player"][1])),
@@ -111,6 +114,7 @@ class StashSession:
             max_moves=int(raw.get("max_moves") or STASH_MAX_MOVES),
             found=bool(raw.get("found")),
             source=str(raw.get("source") or "found"),
+            mutants=[(int(m[0]), int(m[1])) for m in raw_mutants if len(m) >= 2],
         )
 
 
@@ -158,6 +162,16 @@ def _build_stash_session(character: Any, source: str) -> StashSession:
     while _chebyshev(player, stash) < grid // 3:
         stash = _random_free_cell(grid, forbidden)
     forbidden.add(stash)
+    # Мутанты на поле: 50% — один, 25% — двое (остальное — никого).
+    mutants: list[tuple[int, int]] = []
+    roll = random.random()
+    mutant_count = 2 if roll < 0.25 else (1 if roll < 0.75 else 0)
+    for _ in range(mutant_count):
+        cell = _random_free_cell(grid, forbidden)
+        if cell == player or cell == stash:
+            continue
+        mutants.append(cell)
+        forbidden.add(cell)
     return StashSession(
         location=character.location,
         player=player,
@@ -166,6 +180,7 @@ def _build_stash_session(character: Any, source: str) -> StashSession:
         steps=0,
         rad_gained=0,
         source=source,
+        mutants=mutants,
     )
 
 
@@ -386,6 +401,44 @@ def move_stash_hunt(storage: Storage, telegram_id: int, direction: str) -> Actio
         storage.adjust_survival(telegram_id, radiation_delta=rad_add)
         session.rad_gained += rad_add
 
+    # Клетка с мутантом: урон по засаде, мутант исчезает после встречи.
+    if (nx, ny) in session.mutants:
+        session.mutants = [m for m in session.mutants if m != (nx, ny)]
+        encounter = random.choice(AMBUSH_TYPES)
+        player = storage.get_character(telegram_id, refresh_energy=False) or player
+        player_power = max(1, int(player.gear_power))
+
+        def _roll(power: int) -> int:
+            if player_power >= power * 2:
+                return random.randint(3, 8)
+            if player_power >= power:
+                return random.randint(8, 18)
+            return random.randint(15, 30)
+
+        dmg = max(10, _roll(encounter[2]))
+        storage.change_health(telegram_id, -dmg)
+        updated = storage.get_character(telegram_id, refresh_energy=False)
+        if updated is not None and updated.health <= 0:
+            clear_stash_session(storage, telegram_id)
+            return ActionResult(
+                False,
+                f"{encounter[0]} набросились: −{dmg} HP. Ты погиб.",
+                payload={"stash_active": False, "stash_dead": True},
+            )
+        save_stash_session(storage, telegram_id, session)
+        player = storage.get_character(telegram_id, refresh_energy=False) or player
+        image = render_stash_for_player(storage, telegram_id, session, player)
+        return ActionResult(
+            True,
+            f"⚔ {encounter[0]} охраняли эту клетку! −{dmg} HP.",
+            payload={
+                "stash_image": image,
+                "stash_active": True,
+                "caption": stash_status_caption(session, player),
+                "move_note": f"⚔ {encounter[0]} атаковали: −{dmg} HP. Мутант повержен.",
+            },
+        )
+
     ambush = _try_ambush(storage, telegram_id, session.location)
     if ambush is not None and not ambush["survived"]:
         clear_stash_session(storage, telegram_id)
@@ -499,9 +552,69 @@ def render_stash_frame(
     _paste_circle(canvas, token, pcx, pcy, 40, ring_color=(72, 220, 90), ring_width=3)
 
     dist = _chebyshev(session.player, session.stash)
+
+    # Вместо абстрактных маркеров — пара ящиков у схрона (декор + ориентир).
+    sx, sy = session.stash
+    scx = margin + sx * cell + cell // 2
+    scy = margin + sy * cell + cell // 2
+    crate_color = (176, 140, 80)
+    for off_x, off_y in ((-1, 0), (0, 1)):
+        if 0 <= sx + off_x < grid and 0 <= sy + off_y < grid and (sx + off_x, sy + off_y) != session.player:
+            bx = margin + (sx + off_x) * cell + 6
+            by = margin + (sy + off_y) * cell + 6
+            ImageDraw.Draw(canvas).rounded_rectangle(
+                (bx, by, bx + cell - 12, by + cell - 12),
+                radius=6,
+                fill=(90, 68, 40),
+                outline=crate_color,
+                width=3,
+            )
+            bar = ImageDraw.Draw(canvas)
+            bar.line((bx + 6, by + 6, bx + cell - 18, by + cell - 18), fill=crate_color, width=3)
+            bar.line((bx + cell - 18, by + 6, bx + 6, by + cell - 18), fill=crate_color, width=3)
+    # Сам схрон — ящик с яркой меткой.
+    ImageDraw.Draw(canvas).rounded_rectangle(
+        (scx - cell // 2 + 4, scy - cell // 2 + 4, scx + cell // 2 - 4, scy + cell // 2 - 4),
+        radius=8,
+        fill=(60, 78, 58),
+        outline=(150, 220, 120),
+        width=4,
+    )
+    bar = ImageDraw.Draw(canvas)
+    bar.line(
+        (scx - cell // 2 + 10, scy - cell // 2 + 10, scx + cell // 2 - 10, scy + cell // 2 - 10),
+        fill=(150, 220, 120),
+        width=3,
+    )
     if dist <= 3:
-        _glow(canvas, margin + session.stash[0] * cell + cell // 2,
-              margin + session.stash[1] * cell + cell // 2, (255, 200, 50), radius=16)
+        _glow(canvas, scx, scy, (255, 200, 50), radius=16)
+
+    # Мутанты на поле: красная точка-индикатор (если спрайт недоступен).
+    from app.mutant_assets import load_mutant_grid_sprite
+
+    for mx, my in getattr(session, "mutants", []):
+        mcx = margin + mx * cell + cell // 2
+        mcy = margin + my * cell + cell // 2
+        sprite = load_mutant_grid_sprite("blind_dog")
+        if sprite is not None:
+            from io import BytesIO as _Bio
+
+            img = Image.open(_Bio(sprite)).convert("RGBA")
+            img.thumbnail((cell - 8, cell - 8), Image.LANCZOS)
+            canvas.alpha_composite(img, (mcx - img.size[0] // 2, mcy - img.size[1] // 2))
+            ImageDraw.Draw(canvas).ellipse(
+                (mcx - 14, mcy - 14, mcx + 14, mcy + 14),
+                outline=(230, 70, 60),
+                width=3,
+            )
+        else:
+            ImageDraw.Draw(canvas).ellipse(
+                (mcx - 12, mcy - 12, mcx + 12, mcy + 12),
+                fill=(40, 30, 30),
+                outline=(230, 70, 60),
+                width=3,
+            )
+            ImageDraw.Draw(canvas).text((mcx - 4, mcy - 6), "M", fill=(250, 120, 100))
 
     pl = margin + grid_px + 16
     pr = width - margin

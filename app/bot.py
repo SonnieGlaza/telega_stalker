@@ -392,6 +392,7 @@ from app.keyboards import (
     personal_stash_amount_keyboard,
     location_zones_keyboard,
     location_walk_keyboard,
+    blockpost_keyboard,
     secret_trader_sell_keyboard,
     lab_combat_keyboard,
     lab_transition_keyboard,
@@ -6453,6 +6454,20 @@ async def show_location_zones(message: Message) -> None:
     storage = get_storage()
     location = player.location
     is_home = location == faction_home_base(player.faction)
+    from app.location_zones import location_requires_blockpost
+
+    if location_requires_blockpost(storage, player):
+        owner = str((storage.get_location(location) or {}).get("controlled_by") or "")
+        text = (
+            f"🚧 Блокпост «{owner}»\n\n"
+            "Локация под контролем чужой группировки. Вход только через блокпост:\n"
+            "2 лёгких бойца. Прорвись силой (урон и шанс зависят от твоей силы) — "
+            "и ходи по локации свободно.\n\n"
+            "После прорыва блокпост остаётся прорванным для тебя."
+        )
+        await message.answer(text, reply_markup=blockpost_keyboard())
+        return
+
     zones = location_zones_for(location)
     zones_status = [
         (
@@ -6471,7 +6486,7 @@ async def show_location_zones(message: Message) -> None:
                 lines.append(f"⛔ Это база группировки «{owner}» — чужим вход запрещён, пополнение недоступно.")
     is_secret_trader_spot = location == SECRET_TRADER_LOCATION
     if is_secret_trader_spot:
-        lines.append("Здесь орудует тайный торговец — скупает информацию.")
+        lines.append("Здесь орудует Бунс — тайный торговец, скупает информацию")
     if zones:
         lines.append("")
         lines.append("Зоны:")
@@ -7337,6 +7352,96 @@ async def location_map_callback(callback: CallbackQuery) -> None:
             )
             return
 
+        if action == "quests":
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if player is None or not player_ready(player):
+                await safe_callback_answer(callback, "Сначала создай персонажа и выбери группировку.", show_alert=True)
+                return
+            if await reject_if_busy(callback, telegram_id, skip="travel"):
+                return
+            auto = try_auto_turn_in_contract(storage, telegram_id)
+            player = storage.get_character(telegram_id, refresh_energy=False) or player
+            text, keyboard = _quests_menu_payload(storage, player)
+            if auto:
+                text = f"{auto}\n\n{text}"
+            await edit_menu_message(callback, text, keyboard)
+            return
+
+        if action == "bazaar":
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if player is None:
+                await safe_callback_answer(callback, "Сначала создай персонажа через /start.", show_alert=True)
+                return
+            if player.health <= 0:
+                await show_death_screen(callback, player)
+                return
+            if await reject_if_busy(callback, telegram_id):
+                return
+            text = build_economy_overview(storage, telegram_id)
+            await edit_menu_message(callback, text, economy_keyboard())
+            return
+
+        if action == "blockpost":
+            from app.location_zones import fight_blockpost, location_requires_blockpost
+
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if player is None:
+                await safe_callback_answer(callback, "Сначала создай персонажа через /start.", show_alert=True)
+                return
+            if player.health <= 0:
+                await show_death_screen(callback, player)
+                return
+            result = fight_blockpost(storage, telegram_id, player.location)
+            if not result.ok and player.health <= 0:
+                await show_death_screen(callback, storage.get_character(telegram_id, refresh_energy=False))
+                return
+            if not location_requires_blockpost(storage, player) and result.ok:
+                # Прорыв удался — открываем карту локации.
+                from app.location_walk import (
+                    get_walk_position,
+                    render_walk_frame,
+                    zone_at,
+                )
+                from app.keyboards import location_walk_keyboard
+
+                x, y = get_walk_position(storage, telegram_id)
+                current_zone = zone_at(player.location, x, y, player.faction)
+                try:
+                    image_bytes = render_walk_frame(storage, player)
+                except Exception:
+                    image_bytes = None
+                zones = location_zones_for(player.location)
+                zones_status = [
+                    (zone, zone_cooldown_remaining_text(storage, telegram_id, player.location, zone["id"]))
+                    for zone in zones
+                ]
+                is_home = player.location == faction_home_base(player.faction)
+                caption = (
+                    f"📍 Локация: {player.location}\n"
+                    f"Координаты: {x},{y} · Зона: {current_zone.get('label') if current_zone else '—'}\n\n"
+                    f"{result.text}"
+                )
+                markup = location_walk_keyboard(
+                    {"x": x, "y": y, "zone": current_zone},
+                    player.location,
+                    zones_status,
+                    is_home=is_home,
+                    show_secret_trader=player.location == SECRET_TRADER_LOCATION,
+                    resupply_cooldown=resupply_cooldown_text(storage, telegram_id) if is_home else None,
+                )
+                if image_bytes:
+                    from io import BytesIO
+                    from aiogram.types import BufferedInputFile
+
+                    buf = BytesIO(image_bytes)
+                    image = BufferedInputFile(buf.getvalue(), filename="walk.png")
+                    await _send_or_edit_walk_frame(callback, image_bytes=image_bytes, caption=caption, markup=markup)
+                    return
+                await edit_menu_message(callback, caption, markup)
+                return
+            await reply_action_result(callback, result.text)
+            return
+
         if action == "secrettrader":
             player = storage.get_character(telegram_id, refresh_energy=False)
             if player is None:
@@ -7495,7 +7600,7 @@ async def location_walk_callback(callback: CallbackQuery) -> None:
                 if location == base and owner != player.faction:
                     lines.append(f"⛔ Это база группировки «{owner}» — чужим вход запрещён, пополнение недоступно.")
         if location == SECRET_TRADER_LOCATION:
-            lines.append("Здесь орудует тайный торговец — скупает информацию.")
+            lines.append("Здесь орудует Бунс — тайный торговец, скупает информацию")
         if zones_status:
             lines.append("")
             lines.append("Зоны:")

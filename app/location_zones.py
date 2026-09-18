@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import random
 
 from app.game_logic import (
     ActionResult,
@@ -21,6 +22,75 @@ from app.game_logic import (
 from app.storage import Storage
 
 SEARCH_ZONE_COOLDOWN_HOURS = 2
+
+# Блокпост на подконтрольных чужих локациях.
+BLOCKPOST_META_PREFIX = "blockpost:"
+BLOCKPOST_GUARDS = 2
+
+
+def _blockpost_meta_key(telegram_id: int, location: str) -> str:
+    return f"{BLOCKPOST_META_PREFIX}{int(telegram_id)}:{location}"
+
+
+def blockpost_passed(storage: Storage, telegram_id: int, location: str) -> bool:
+    """Игрок уже прорвал блокпост на этой локации."""
+    return str(storage.get_meta(_blockpost_meta_key(telegram_id, location)) or "") == "1"
+
+
+def mark_blockpost_passed(storage: Storage, telegram_id: int, location: str) -> None:
+    storage.set_meta(_blockpost_meta_key(telegram_id, location), "1")
+
+
+def location_requires_blockpost(storage: Storage, player) -> bool:
+    """Нужен ли блокпост: чужая подконтрольная локация (не база, не своя)."""
+    if player is None or not player.faction:
+        return False
+    loc = storage.get_location(player.location)
+    if loc is None:
+        return False
+    owner = str(loc.get("controlled_by") or "")
+    if not owner or owner == player.faction:
+        return False
+    if player.location == faction_home_base(player.faction):
+        return False
+    return not blockpost_passed(storage, player.telegram_id, player.location)
+
+
+def fight_blockpost(storage: Storage, telegram_id: int, location: str) -> ActionResult:
+    """Прорыв блокпоста: 2 лёгких бойца ГП, урон и шанс по силе игрока."""
+    from app.game_logic import effective_max_health, weapon_damage
+
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    owner = str((storage.get_location(location) or {}).get("controlled_by") or "")
+    if not owner or owner == player.faction or location == faction_home_base(player.faction):
+        return ActionResult(False, "Здесь блокпоста нет.")
+    if blockpost_passed(storage, telegram_id, location):
+        return ActionResult(False, "Блокпост уже прорван — проходи.")
+
+    power = max(1, int(player.gear_power))
+    # 2 лёгких бойца: урон ~14-22 суммарно, шанс по силе.
+    guard_power = 10 + power // 4
+    chance = min(95, 35 + power * 3)
+    damage = max(10, random.randint(14, 22))
+    if random.randint(1, 100) <= chance:
+        mark_blockpost_passed(storage, telegram_id, location)
+        return ActionResult(
+            True,
+            f"🚧 Блокпост «{owner}» прорван! Два лёгких бойца отброшены "
+            f"(−{max(0, damage // 2)} HP). Проходи на локацию.",
+        )
+    storage.change_health(telegram_id, -damage)
+    updated = storage.get_character(telegram_id, refresh_energy=False)
+    if updated is not None and updated.health <= 0:
+        return ActionResult(False, f"Блокпост «{owner}» расстрелял тебя: −{damage} HP. Ты погиб.")
+    return ActionResult(
+        False,
+        f"🚧 Блокпост «{owner}» отбил атаку: −{damage} HP. Попробуй ещё раз.",
+    )
 
 # Пополнение снаряжения на своей базе: бесплатно раз в RESUPPLY_COOLDOWN_HOURS.
 RESUPPLY_COOLDOWN_HOURS = 2
@@ -86,6 +156,10 @@ LOCATION_ZONES: dict[str, list[dict]] = {
     "ЧАЭС": [
         {"id": "anomaly", "kind": "anomaly", "label": "Аномальный участок"},
         {"id": "search_1", "kind": "search", "label": "Машинный зал"},
+    ],
+    "Тунель": [
+        {"id": "bazaar", "kind": "bazaar", "label": "Барахолка"},
+        {"id": "trade", "kind": "trade", "label": "Торговец"},
     ],
 }
 

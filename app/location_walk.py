@@ -52,6 +52,8 @@ ZONE_COLORS: dict[str, tuple[int, int, int]] = {
     "anomaly": (80, 230, 255),
     "lab": (186, 130, 255),
     "secrettrader": (255, 170, 90),
+    "bazaar": (255, 190, 80),
+    "trade": (80, 170, 255),
 }
 
 ZONE_LEGEND_LABELS: dict[str, str] = {
@@ -59,11 +61,13 @@ ZONE_LEGEND_LABELS: dict[str, str] = {
     "search": "Зона обыска",
     "anomaly": "Аномальный участок",
     "lab": "Лаборатория",
-    "secrettrader": "Тайный торговец",
+    "secrettrader": "Бунс",
+    "bazaar": "Барахолка",
+    "trade": "Торговец",
 }
 
 _BASE_ZONE: dict[str, str] = {"id": "base", "kind": "base", "label": "База группировки"}
-_SECRET_ZONE: dict[str, str] = {"id": "secrettrader", "kind": "secrettrader", "label": "Тайный торговец"}
+_SECRET_ZONE: dict[str, str] = {"id": "secrettrader", "kind": "secrettrader", "label": "Бунс"}
 
 _DEFAULT_ZONE_RADIUS = 2
 _BASE_SPOT: tuple[int, int, int] = (11, 11, _DEFAULT_ZONE_RADIUS)
@@ -127,6 +131,10 @@ LOCATION_WALK_SPOTS: dict[str, dict[str, tuple[int, int, int]]] = {
         "anomaly": (4, 11, 2),
         "search_1": (11, 4, 2),
         "base": (11, 11, 2),
+    },
+    "Тунель": {
+        "bazaar": (4, 4, 2),
+        "trade": (11, 11, 2),
     },
 }
 
@@ -275,15 +283,25 @@ def _draw_zone(
     cy: int,
     radius: int,
 ) -> None:
-    """Полупрозрачный круг зоны + кольцо (у базы кольцо «радужное» из дуг)."""
+    """Полупрозрачный квадрат зоны + жирная обводка (у базы — «радужная» рамка)."""
+    cell = 44
+    # cx/cy — центр в пикселях, radius — «пиксельный радиус» (круг был 2*radius,
+    # квадрат занимает тот же периметр: сторона = 2*radius).
+    half = max(1, int(radius))
+    left = cx - half
+    top = cy - half
+    right = cx + half
+    bottom = cy + half
+
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    ImageDraw.Draw(overlay).ellipse(
-        (cx - radius, cy - radius, cx + radius, cy + radius),
-        fill=(*color, 52),
+    ImageDraw.Draw(overlay).rounded_rectangle(
+        (left, top, right, bottom),
+        radius=max(6, cell // 3),
+        fill=(*color, 46),
     )
     canvas.alpha_composite(overlay)
     draw = ImageDraw.Draw(canvas)
-    bbox = (cx - radius, cy - radius, cx + radius, cy + radius)
+    box = (left, top, right, bottom)
     if kind == "base":
         rainbow = (
             (255, 80, 80),
@@ -293,13 +311,39 @@ def _draw_zone(
             (80, 170, 255),
             (180, 120, 240),
         )
-        step = 360 // len(rainbow)
-        for index, arc_color in enumerate(rainbow):
-            draw.arc(bbox, start=index * step, end=(index + 1) * step + 1, fill=arc_color, width=4)
+        segments = 4 * len(rainbow)
+        step = 1.0 / (len(rainbow) * 4)
+        w, h = right - left, bottom - top
+        for idx, arc_color in enumerate(rainbow):
+            for seg in range(4):
+                start = idx * 4 + seg
+                f0, f1 = start * step, (start + 1) * step
+                if seg == 0:  # top
+                    a, b, c, d = (
+                        left + f0 * w, top, left + f1 * w, top + 8
+                    )
+                elif seg == 1:  # right
+                    a, b, c, d = (
+                        right - 8, top + f0 * h, right, top + f1 * h
+                    )
+                elif seg == 2:  # bottom
+                    a, b, c, d = (
+                        right - f1 * w, bottom - 8, right - f0 * w, bottom
+                    )
+                else:  # left
+                    a, b, c, d = (
+                        left, bottom - f1 * h, left + 8, bottom - f0 * h
+                    )
+                draw.rectangle((a, b, c, d), fill=arc_color)
     else:
-        draw.ellipse(bbox, outline=color, width=4)
+        draw.rounded_rectangle(
+            box,
+            radius=max(6, cell // 3),
+            outline=color,
+            width=5,
+        )
     if kind == "anomaly":
-        # «Пузырьки» аномалий — маленькие окружности вокруг центра зоны.
+        # «Пузырьки» аномалий — маленькие окружности внутри квадрата.
         offsets = (
             (-0.55, -0.45),
             (0.45, -0.6),
@@ -309,14 +353,21 @@ def _draw_zone(
             (0.15, 0.8),
         )
         for fx, fy in offsets[: 3 + 3 * max(0, min(1, radius - 1))]:
-            br = max(4, radius // 5)
-            bx = cx + int(fx * radius)
-            by = cy + int(fy * radius)
+            br = max(4, cell // 2)
+            bx = int(left + (fx + 1) / 2 * (right - left))
+            by = int(top + (fy + 1) / 2 * (bottom - top))
             draw.ellipse((bx - br, by - br, bx + br, by + br), outline=(*color, 220), width=2)
     if kind == "lab":
         glyph = render_emoji_glyph("🧪", 26)
         if glyph is not None:
-            canvas.paste(glyph, (cx - glyph.size[0] // 2, cy - glyph.size[1] // 2), glyph)
+            canvas.paste(
+                glyph,
+                (
+                    (left + right) // 2 - glyph.size[0] // 2,
+                    (top + bottom) // 2 - glyph.size[1] // 2,
+                ),
+                glyph,
+            )
 
 
 def render_walk_frame(storage: Storage, player: Character) -> bytes:

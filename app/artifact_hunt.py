@@ -36,8 +36,8 @@ from app.storage import Character, Storage
 
 HUNT_META_PREFIX = "artifact_hunt:"
 HUNT_ACTIVE_IDS_META = "artifact_hunt:active_ids"
-HUNT_GRID_SIZE = 15
-HUNT_MAX_MOVES = 60
+HUNT_GRID_SIZE = 8
+HUNT_MAX_MOVES = 24
 HUNT_RAD_EVERY_STEPS = 3
 HUNT_RAD_PER_TICK = 1
 HUNT_MINUTE_MOVES = 10
@@ -300,6 +300,8 @@ def _build_session(character: Character, detector_key: str, detector_name: str) 
             anomalies.append(cell)
             forbidden.add(cell)
     anomaly_n = location_anomaly_count(character.location)
+    # На маленькой сетке (8×8) аномалий помещается меньше — масштабируем под площадь.
+    anomaly_n = min(anomaly_n, max(6, (grid * grid) // 5))
 
     # Гарантируем, что арт рядом хотя бы с одной аномалией.
     _has_beside = any(_chebyshev(artifact, a) <= 1 for a in anomalies)
@@ -331,6 +333,15 @@ def _build_session(character: Character, detector_key: str, detector_name: str) 
             forbidden.add(cell)
         else:
             forbidden.add(cell)
+
+    # Последний рубеж: всё равно поставить аномалию рядом с артом —
+    # smoke-контракт требует, чтобы арт соседствовал с аномалией.
+    _has_beside = any(_chebyshev(artifact, a) <= 1 for a in anomalies)
+    if not _has_beside:
+        for nb in neighbors:
+            if nb != artifact and nb != player:
+                anomalies.append(nb)
+                break
     circles_needed = DETECTOR_CIRCLES_NEEDED.get(detector_key, 8)
     session = HuntSession(
         location=character.location,
@@ -665,10 +676,10 @@ _HUNT_MARKED_MAP_FILES: dict[str, str] = {
 }
 
 _MANUAL_HUNT_CELLS: dict[str, tuple[tuple[int, int], tuple[tuple[int, int], ...]]] = {
-    "Кордон": ((7, 10), ((3, 3), (10, 3), (3, 8), (10, 8), (5, 12), (12, 5))),
-    "Янтарь": ((8, 8), ((3, 3), (10, 3), (3, 10), (10, 10), (6, 6), (12, 5))),
-    "Припять": ((6, 6), ((3, 3), (10, 3), (3, 10), (10, 10), (5, 7), (7, 12), (12, 7))),
-    "ЧАЭС": ((8, 6), ((3, 3), (10, 3), (3, 10), (10, 10), (5, 5), (12, 12), (6, 12))),
+    "Кордон": ((4, 5), ((1, 1), (5, 1), (1, 4), (5, 4), (2, 6), (6, 2))),
+    "Янтарь": ((4, 4), ((1, 1), (5, 1), (1, 5), (5, 5), (3, 3), (6, 2))),
+    "Припять": ((3, 3), ((1, 1), (5, 1), (1, 5), (5, 5), (2, 4), (4, 6), (6, 4))),
+    "ЧАЭС": ((4, 3), ((1, 1), (5, 1), (1, 5), (5, 5), (2, 2), (6, 6), (3, 6))),
 }
 
 _LOCATION_THUMB_MAP: dict[str, str] = {

@@ -478,6 +478,7 @@ MAP_TRAVEL_POINTS: dict[str, tuple[int, int]] = {
     "Радар": (740, 125),
     "Припять": (780, 80),
     "ЧАЭС": (715, 45),
+    "Тунель": (440, 220),
 }
 
 # Сила растёт по ступеням: следующий класс оружия/брони обычно сильнее предыдущего.
@@ -730,7 +731,7 @@ ARTIFACT_NAME_TO_INVENTORY: dict[str, str] = {
     "Артефакт": "artifact",  # старые сейвы
 }
 # Ценные арты (квесты/рейды) и полный список ключей.
-ARTIFACT_DROP_KEYS = ("artifact", "artifact_power", "artifact_vitality", "artifact_antirad")
+ARTIFACT_DROP_KEYS = ("artifact", "artifact_power", "artifact_vitality", "artifact_antirad", "artifact_predel")
 ARTIFACT_EQUIP_SLOT_KEYS: tuple[str, ...] = ("artifact", "artifact_2", "artifact_3")
 MAX_ARTIFACT_EQUIP_SLOTS = 3
 # База ячеек от тира брони (тайник/ассортимент): T1–T2 без артов, T3=1, T4+=2.
