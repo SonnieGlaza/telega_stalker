@@ -57,9 +57,9 @@ ZONE_COLORS: dict[str, tuple[int, int, int]] = {
 }
 
 ZONE_LEGEND_LABELS: dict[str, str] = {
-    "base": "База / торговец",
-    "search": "Зона обыска",
-    "anomaly": "Аномальный участок",
+    "base": "База",
+    "search": "Обыск",
+    "anomaly": "Аномалия",
     "lab": "Лаборатория",
     "secrettrader": "Бунс",
     "bazaar": "Барахолка",
@@ -481,6 +481,19 @@ def render_walk_frame(storage: Storage, player: Character) -> bytes:
         dot_y = entry_y + 9
         draw.ellipse((pl + 22, dot_y - 6, pl + 34, dot_y + 6), fill=ZONE_COLORS.get(kind, (200, 200, 200)))
         draw.text((pl + 44, entry_y), ZONE_LEGEND_LABELS.get(kind, kind), fill=(210, 210, 210), font=small)
+        entry_y += 24
+    # Постоянная легенда цветов зон (видна на любой локации).
+    for kind, label in (
+        ("lab", "Лаборатория"),
+        ("search", "Обыск"),
+        ("anomaly", "Аномалия"),
+        ("base", "База"),
+    ):
+        if kind in seen_kinds:
+            continue
+        dot_y = entry_y + 9
+        draw.ellipse((pl + 22, dot_y - 6, pl + 34, dot_y + 6), fill=ZONE_COLORS.get(kind, (200, 200, 200)))
+        draw.text((pl + 44, entry_y), label, fill=(210, 210, 210), font=small)
         entry_y += 24
 
     draw.text((pl + 14, pb - 42), "Стрелки — шаг по локации (бесплатно)", fill=(210, 210, 210), font=small)
