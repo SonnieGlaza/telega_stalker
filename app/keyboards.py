@@ -548,6 +548,14 @@ def blockpost_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def lobby_join_keyboard(callback_data: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🤝 Присоединиться к лобби", callback_data=callback_data)]
+        ]
+    )
+
+
 def _special_event_button(special_label: str | None) -> list[InlineKeyboardButton] | None:
     if not special_label:
         return None

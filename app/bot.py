@@ -8513,6 +8513,17 @@ async def coop_callback(callback: CallbackQuery, bot: Bot) -> None:
                 coop_menu_text(storage, telegram_id),
                 coop_menu_keyboard(in_lobby=True, is_host=True, lobby_id=lobby.lobby_id if lobby else None),
             )
+            from app.coop_mission import COOP_MISSION_TYPES
+
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            nick = h(player.nickname) if player else str(telegram_id)
+            mission_title = COOP_MISSION_TYPES.get(lobby.mission_kind, {}).get("title", "Кооп") if lobby else "Кооп"
+            await _announce_lobby_to_common_chat(
+                bot,
+                title=f"🫂 {nick} создал кооп-лобби!",
+                text=f"📍 {lobby.location} · Тип: {mission_title}" if lobby else "",
+                join_callback=f"coop:join:{lobby.lobby_id}" if lobby else "coop:list",
+            )
             return
 
         if action == "missions":
@@ -8938,13 +8949,34 @@ async def war_lobby_section_callback(callback: CallbackQuery, bot: Bot) -> None:
 
 async def _announce_monolith_to_common_chat(bot: Bot, html: str) -> None:
     """Объявление окна/исхода Монолита в общий чат Зоны."""
-    from aiogram.enums import ParseMode
     from app.season_chat_titles import ZONE_COMMON_CHAT_ID
 
     try:
+
         await bot.send_message(ZONE_COMMON_CHAT_ID, html, parse_mode=ParseMode.HTML)
     except Exception:
         logger.exception("Failed to post monolith war announce to common chat")
+
+
+async def _announce_lobby_to_common_chat(
+    bot: Bot,
+    *,
+    title: str,
+    text: str,
+    join_callback: str,
+) -> None:
+    """Одно уведомление о новом лобби в общий чат Зоны + кнопка «Присоединиться»."""
+    from app.season_chat_titles import ZONE_COMMON_CHAT_ID
+    from app.keyboards import lobby_join_keyboard
+
+    try:
+        await bot.send_message(
+            ZONE_COMMON_CHAT_ID,
+            f"{title}\n{text}",
+            reply_markup=lobby_join_keyboard(join_callback),
+        )
+    except Exception:
+        logger.exception("Failed to post lobby announcement to common chat")
 
 
 @router.callback_query(F.data == "war:section:monolith_attack")
@@ -9128,6 +9160,14 @@ async def war_lobby_create_callback(callback: CallbackQuery, bot: Bot) -> None:
     await reply_action_result(callback, result.text)
     if result.ok:
         await _refresh_war_lobby_menu(callback, bot)
+        player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+        nick = h(player.nickname) if player else str(callback.from_user.id)
+        await _announce_lobby_to_common_chat(
+            bot,
+            title=f"⚔️ {nick} создал военное лобби!",
+            text=f"Цель: «{location}» · фракция: {player.faction if player else '—'}",
+            join_callback="war_lobby:join",
+        )
 
 
 @router.callback_query(F.data == "war_lobby:join")
@@ -9387,6 +9427,15 @@ async def create_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
     result = create_or_join_faction_raid(get_storage(), callback.from_user.id, location)
     await reply_action_result(callback, result.text, bot=bot)
     await apply_action_notifies(bot, result)
+    if result.ok:
+        player = get_storage().get_character(callback.from_user.id, refresh_energy=False)
+        nick = h(player.nickname) if player else str(callback.from_user.id)
+        await _announce_lobby_to_common_chat(
+            bot,
+            title=f"🪖 {nick} создал открытый рейд!",
+            text=f"Цель: «{location}»" + (f" · фракция: {player.faction}" if player and player.faction else ""),
+            join_callback="raid:join",
+        )
 
 
 @router.callback_query(F.data.startswith("raid:depot:"))
