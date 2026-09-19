@@ -1075,7 +1075,7 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject,
             await show_death_screen(message, dead, bot=bot)
             return
         args = str(command.args or "").strip()
-        if args.startswith("lobby:"):
+        if args.startswith("lobby_"):
             await _open_lobby_from_payload(message, args)
             return
         hint = maybe_daily_login_hint(db, telegram_id)
@@ -8527,7 +8527,7 @@ async def coop_callback(callback: CallbackQuery, bot: Bot) -> None:
                 telegram_id,
                 title=f"🫂 {nick} создал кооп-лобби!",
                 text=f"📍 {lobby.location} · Тип: {mission_title}" if lobby else "",
-                lobby_payload=f"lobby:coop:{lobby.lobby_id}" if lobby else "lobby:coop",
+                lobby_payload=f"lobby_coop_{lobby.lobby_id}" if lobby else "lobby_coop",
             )
             return
 
@@ -8992,14 +8992,15 @@ async def _announce_lobby_to_common_chat(
 
 
 async def _open_lobby_from_payload(message: Message, args: str) -> None:
-    """Открыть меню лобби из deep-link при /start lobby:..."""
+    """Открыть меню лобби из deep-link при /start lobby_..."""
     storage = get_storage()
     telegram_id = message.from_user.id
-    raw = args.removeprefix("lobby:").strip()
-    kind = raw.split(":", maxsplit=1)[0]
+    raw = args.removeprefix("lobby_").strip()
+    kind = raw.split("_", maxsplit=1)[0]
+    payload_rest = raw.split("_", maxsplit=1)[1] if "_" in raw else ""
     try:
         if kind == "coop":
-            lobby_id = raw.split(":", maxsplit=1)[1] if ":" in raw else ""
+            lobby_id = payload_rest
             if lobby_id:
                 from app.coop_mission import join_coop_lobby
 
@@ -9033,6 +9034,11 @@ async def _open_lobby_from_payload(message: Message, args: str) -> None:
             if player is None:
                 await message.answer("Сначала создай персонажа.")
                 return
+            lobby = find_open_war_lobby_for_character(db, player)
+            if lobby is not None:
+                result = create_or_join_war_lobby(db, telegram_id, str(lobby["location"]))
+                await message.answer(f"{result.text}\n\n{build_war_lobby_overview(db, telegram_id)}")
+                return
             overview = build_war_lobby_overview(db, telegram_id)
             can_dissolve = can_dissolve_war_lobby(db, telegram_id)
             from app.monolith_war import monolith_join_button_visible, monolith_join_button_label
@@ -9050,6 +9056,26 @@ async def _open_lobby_from_payload(message: Message, args: str) -> None:
             player = db.get_character(telegram_id, refresh_energy=False)
             if player is None or player.faction is None:
                 await message.answer("Сначала создай персонажа и выбери группировку.")
+                return
+            open_raid = db.get_open_raid_for_faction(player.faction)
+            if open_raid is not None:
+                raid_kind = resolve_open_raid_kind(open_raid)
+                if raid_kind in DEPOT_RAID_KINDS:
+                    result = create_or_join_depot_raid(
+                        db,
+                        telegram_id,
+                        str(open_raid.get("target_faction") or ""),
+                        depot=raid_kind,
+                    )
+                else:
+                    result = create_or_join_faction_raid(db, telegram_id, str(open_raid["location"]))
+                text = f"{result.text}\n\n{build_raids_overview(db, telegram_id)}"
+                markup = raid_keyboard(
+                    db.get_locations(),
+                    led_raids=db.list_open_raids_led_by(telegram_id),
+                    war_enemy_factions=list_war_enemy_factions(db, player.faction),
+                )
+                await message.answer(text, reply_markup=markup)
                 return
             led_raids = db.list_open_raids_led_by(telegram_id)
             war_enemies = list_war_enemy_factions(db, player.faction)
@@ -9251,7 +9277,7 @@ async def war_lobby_create_callback(callback: CallbackQuery, bot: Bot) -> None:
             callback.from_user.id,
             title=f"⚔️ {nick} создал военное лобби!",
             text=f"Цель: «{location}» · фракция: {player.faction if player else '—'}",
-            lobby_payload="lobby:war",
+            lobby_payload="lobby_war",
         )
 
 
@@ -9520,7 +9546,7 @@ async def create_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
             callback.from_user.id,
             title=f"🪖 {nick} создал открытый рейд!",
             text=f"Цель: «{location}»" + (f" · фракция: {player.faction}" if player and player.faction else ""),
-            lobby_payload="lobby:raid",
+            lobby_payload="lobby_raid",
         )
 
 
