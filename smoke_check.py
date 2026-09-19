@@ -539,6 +539,7 @@ def run_smoke_check() -> None:
             process_help_event_cycle,
             thanks_text,
         )
+        from app.quest_mission import clear_mission_session as _clear_help_mission
 
         storage.set_meta(HELP_EVENT_NEXT_META, datetime.now(timezone.utc).isoformat())
         radio = process_help_event_cycle(storage)
@@ -547,8 +548,11 @@ def run_smoke_check() -> None:
         assert event is not None
         assert help_event_is_joinable(storage, 111)
         idle_join = join_help_event(storage, 111)
-        assert not idle_join.ok
-        assert "локаци" in idle_join.text.lower()
+        # По рации можно откликнуться из любой точки Зоны — полевая вылазка стартует сразу.
+        assert idle_join.ok, idle_join.text
+        assert "откликнулся" in idle_join.text.lower()
+        _clear_help_mission(storage, 111)
+        storage.set_active_contract(111, None)
         thanks = thanks_text({"helper_names": ["Старый"], "helper_factions": ["Долг"], "thanks_speaker": "Группа учёных"})
         assert "Старый" in thanks and "Долг" in thanks
 
