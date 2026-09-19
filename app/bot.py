@@ -7652,6 +7652,11 @@ async def location_walk_callback(callback: CallbackQuery) -> None:
         if current_zone is not None:
             walk_caption += f"\n📍 Ты в зоне: {current_zone.get('label') or current_zone.get('id')}"
 
+        from app.special_events import (
+            special_event_button_label,
+            special_event_is_joinable,
+        )
+
         image = render_walk_frame(storage, player)
         markup = location_walk_keyboard(
             {"x": x, "y": y, "zone": current_zone},
