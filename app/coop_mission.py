@@ -781,11 +781,11 @@ def _combat_damage(location: str, character: Character) -> int:
     raw = random.randint(6 + danger * 4, 12 + danger * 7)
     soak = min(12, equipment_power(character))
     pre = max(4, raw - soak)
-    return apply_incoming_damage(pre, character, min_damage=1)
+    return apply_incoming_damage(pre, character, min_damage=10)
 
 
 def _hazard_damage(character: Character) -> int:
-    return apply_incoming_damage(random.randint(14, 22), character, min_damage=1)
+    return apply_incoming_damage(random.randint(14, 22), character, min_damage=10)
 
 
 def _occupied(session: CoopMissionSession, *, exclude: int | None = None) -> set[tuple[int, int]]:
