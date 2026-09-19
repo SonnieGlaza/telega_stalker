@@ -47,10 +47,10 @@ WALK_DIRECTION_KEYS = frozenset(MOVE_DELTAS)
 # Цвета зон на поле: base/торговец — «радужная» база (заливка голубая, кольцо дугами),
 # search — жёлтая, anomaly — сине-бирюзовая, lab — фиолетовая, тайный торговец — янтарная.
 ZONE_COLORS: dict[str, tuple[int, int, int]] = {
-    "base": (80, 170, 255),
+    "base": (220, 60, 60),
     "search": (245, 210, 70),
-    "anomaly": (80, 230, 255),
-    "lab": (186, 130, 255),
+    "anomaly": (240, 240, 240),
+    "lab": (70, 200, 90),
     "secrettrader": (255, 170, 90),
     "bazaar": (255, 190, 80),
     "trade": (80, 170, 255),
@@ -128,9 +128,7 @@ LOCATION_WALK_SPOTS: dict[str, dict[str, tuple[int, int, int]]] = {
         "secrettrader": (7, 10, 1),
     },
     "ЧАЭС": {
-        "anomaly": (4, 11, 2),
-        "search_1": (11, 4, 2),
-        "base": (11, 11, 2),
+        "base": (7, 7, 4),
     },
     "Тунель": {
         "bazaar": (4, 4, 2),
