@@ -964,8 +964,7 @@ def _map_death_cause(raw: str | None) -> str:
 
 
 def _reward_players(storage: Storage, session: CoopMissionSession) -> str:
-    danger = LOCATION_DANGER.get(session.location, 2)
-    base_money = 120 + danger * 80
+    base_money = 1600
     alive_ids = [pid for pid in session.player_ids if session.hp.get(str(pid), 0) > 0]
     per_player = base_money + 40 * max(0, len(alive_ids) - 1)
     lines = [f"✅ Кооп-вылазка на «{session.location}» успешна!"]
