@@ -10148,13 +10148,17 @@ async def faction_bots_upgrade_callback(callback: CallbackQuery) -> None:
     if player is None:
         await callback.answer("Персонаж не найден.", show_alert=True)
         return
-    result = upgrade_faction_bots(storage, callback.from_user.id)
-    overview = build_faction_group_overview(storage, player.telegram_id)
-    await edit_menu_message(
-        callback,
-        f"{result.text}\n\n{overview}",
-        _faction_group_keyboard_for(player.telegram_id),
-    )
+    try:
+        result = upgrade_faction_bots(storage, callback.from_user.id)
+        overview = build_faction_group_overview(storage, player.telegram_id)
+        await edit_menu_message(
+            callback,
+            f"{result.text}\n\n{overview}",
+            _faction_group_keyboard_for(player.telegram_id),
+        )
+    except Exception:
+        logger.exception("Faction bots upgrade callback failed for %s", callback.from_user.id)
+        await safe_callback_answer(callback, "Ошибка улучшения ботов. Попробуй ещё раз.", show_alert=True)
 
 
 @router.callback_query(F.data == "faction:bots:count")
@@ -10166,13 +10170,17 @@ async def faction_bots_count_callback(callback: CallbackQuery) -> None:
     if player is None:
         await callback.answer("Персонаж не найден.", show_alert=True)
         return
-    result = upgrade_faction_bot_count(storage, callback.from_user.id)
-    overview = build_faction_group_overview(storage, player.telegram_id)
-    await edit_menu_message(
-        callback,
-        f"{result.text}\n\n{overview}",
-        _faction_group_keyboard_for(player.telegram_id),
-    )
+    try:
+        result = upgrade_faction_bot_count(storage, callback.from_user.id)
+        overview = build_faction_group_overview(storage, player.telegram_id)
+        await edit_menu_message(
+            callback,
+            f"{result.text}\n\n{overview}",
+            _faction_group_keyboard_for(player.telegram_id),
+        )
+    except Exception:
+        logger.exception("Faction bots count callback failed for %s", callback.from_user.id)
+        await safe_callback_answer(callback, "Ошибка набора ботов. Попробуй ещё раз.", show_alert=True)
 
 
 @router.callback_query(F.data == "faction:buildings:menu")
