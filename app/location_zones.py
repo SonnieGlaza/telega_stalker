@@ -58,8 +58,6 @@ def location_requires_blockpost(storage: Storage, player) -> bool:
 
 def fight_blockpost(storage: Storage, telegram_id: int, location: str) -> ActionResult:
     """Прорыв блокпоста: 2 лёгких бойца ГП, урон и шанс по силе игрока."""
-    from app.game_logic import effective_max_health, weapon_damage
-
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
         return ActionResult(False, "Сначала создай персонажа через /start.")

@@ -10031,11 +10031,15 @@ async def faction_goals_callback(callback: CallbackQuery) -> None:
     if player is None or not player.faction:
         await callback.answer("Сначала вступи в группировку.", show_alert=True)
         return
-    from app.faction_goals import build_faction_goals_text
+    try:
+        from app.faction_goals import build_faction_goals_text
 
-    text = build_faction_goals_text(storage, player.faction)
-    await edit_menu_message(callback, text, _faction_group_keyboard_for(player.telegram_id))
-    await callback.answer()
+        text = build_faction_goals_text(storage, player.faction)
+        await edit_menu_message(callback, text, _faction_group_keyboard_for(player.telegram_id))
+        await callback.answer()
+    except Exception:
+        logger.exception("Faction goals callback failed for %s", callback.from_user.id)
+        await safe_callback_answer(callback, "Ошибка целей недели. Попробуй ещё раз.", show_alert=True)
 
 
 @router.callback_query(F.data == "faction:goals:claim")
@@ -10045,13 +10049,17 @@ async def faction_goals_claim_callback(callback: CallbackQuery) -> None:
     if player is None or not player.faction:
         await callback.answer("Сначала вступи в группировку.", show_alert=True)
         return
-    from app.faction_goals import try_claim_faction_goal_reward
+    try:
+        from app.faction_goals import try_claim_faction_goal_reward
 
-    ok, note = try_claim_faction_goal_reward(storage, player.faction, player.telegram_id)
-    await callback.answer(note, show_alert=True)
-    if ok:
-        overview = build_faction_group_overview(storage, player.telegram_id)
-        await edit_menu_message(callback, overview, _faction_group_keyboard_for(player.telegram_id))
+        ok, note = try_claim_faction_goal_reward(storage, player.faction, player.telegram_id)
+        await callback.answer(note, show_alert=True)
+        if ok:
+            overview = build_faction_group_overview(storage, player.telegram_id)
+            await edit_menu_message(callback, overview, _faction_group_keyboard_for(player.telegram_id))
+    except Exception:
+        logger.exception("Faction goals claim callback failed for %s", callback.from_user.id)
+        await safe_callback_answer(callback, "Ошибка бонуса недели. Попробуй ещё раз.", show_alert=True)
 
 
 @router.callback_query(F.data == "faction:change")
