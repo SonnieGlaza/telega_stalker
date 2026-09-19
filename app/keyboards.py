@@ -542,8 +542,15 @@ def blockpost_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="⚔️ Прорвать блокпост", callback_data="locmap:blockpost")],
+            [InlineKeyboardButton(text="⬅️ В меню", callback_data="locmap:menu")],
         ]
     )
+
+
+def _special_event_button(special_label: str | None) -> list[InlineKeyboardButton] | None:
+    if not special_label:
+        return None
+    return [InlineKeyboardButton(text=special_label, callback_data="special_event:join")]
 
 
 def location_zones_keyboard(
@@ -553,6 +560,7 @@ def location_zones_keyboard(
     is_home_base: bool,
     show_secret_trader: bool = False,
     resupply_cooldown: str | None = None,
+    special_label: str | None = None,
 ) -> InlineKeyboardMarkup:
     """Клавиатура карты локации: торговец на базе + кнопки зон локации.
 
@@ -626,6 +634,9 @@ def location_zones_keyboard(
             rows.append(
                 [InlineKeyboardButton(text=f"🧪 {label}", callback_data=f"locmap:lab:{zone_id}")]
             )
+    special_row = _special_event_button(special_label)
+    if special_row:
+        rows.append(special_row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -637,6 +648,7 @@ def location_walk_keyboard(
     is_home: bool = False,
     show_secret_trader: bool = False,
     resupply_cooldown: str | None = None,
+    special_label: str | None = None,
 ) -> InlineKeyboardMarkup:
     """Клавиатура «открытой локации»: стрелки-ходы + действие зоны, в которой стоишь.
 
@@ -705,6 +717,9 @@ def location_walk_keyboard(
                 )
         elif kind == "lab":
             rows.append([InlineKeyboardButton(text=f"🧪 {label}", callback_data=f"locmap:lab:{zone_id}")])
+    special_row = _special_event_button(special_label)
+    if special_row:
+        rows.append(special_row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

@@ -6501,12 +6501,24 @@ async def show_location_zones(message: Message) -> None:
         lines.append("Здесь пока нет исследованных зон.")
     caption = "\n".join(lines)
 
+    from app.special_events import (
+        special_event_button_label,
+        special_event_is_joinable,
+    )
+
+    special_label = (
+        special_event_button_label(storage)
+        if special_event_is_joinable(storage, player.telegram_id)
+        else None
+    )
+
     fallback_keyboard = location_zones_keyboard(
         location,
         zones_status,
         is_home_base=is_home,
         show_secret_trader=is_secret_trader_spot,
         resupply_cooldown=resupply_cooldown_text(storage, player.telegram_id) if is_home else None,
+        special_label=special_label,
     )
 
     from app.player_busy import player_busy_reason
@@ -6527,6 +6539,7 @@ async def show_location_zones(message: Message) -> None:
                 is_home=is_home,
                 show_secret_trader=is_secret_trader_spot,
                 resupply_cooldown=resupply_cooldown_text(storage, player.telegram_id) if is_home else None,
+                special_label=special_label,
             )
             walk_caption = caption + f"\n\n🗺 Ты на клетке X {x} · Y {y}"
             if current_zone is not None:
@@ -7326,6 +7339,14 @@ async def location_map_callback(callback: CallbackQuery) -> None:
             await callback.answer("Зона ещё восстанавливается.", show_alert=True)
             return
 
+        if action == "menu":
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if player is None or player.health <= 0:
+                await safe_callback_answer(callback, "Сначала создай персонажа через /start.", show_alert=True)
+                return
+            await edit_menu_message(callback, "Главное меню открыто.", main_menu_keyboard())
+            return
+
         if action == "resupply":
             player = storage.get_character(telegram_id, refresh_energy=False)
             if player is None:
@@ -7383,6 +7404,10 @@ async def location_map_callback(callback: CallbackQuery) -> None:
 
         if action == "blockpost":
             from app.location_zones import fight_blockpost, location_requires_blockpost
+            from app.special_events import (
+                special_event_button_label,
+                special_event_is_joinable,
+            )
 
             player = storage.get_character(telegram_id, refresh_energy=False)
             if player is None:
@@ -7392,8 +7417,9 @@ async def location_map_callback(callback: CallbackQuery) -> None:
                 await show_death_screen(callback, player)
                 return
             result = fight_blockpost(storage, telegram_id, player.location)
+            player = storage.get_character(telegram_id, refresh_energy=False) or player
             if not result.ok and player.health <= 0:
-                await show_death_screen(callback, storage.get_character(telegram_id, refresh_energy=False))
+                await show_death_screen(callback, player)
                 return
             if not location_requires_blockpost(storage, player) and result.ok:
                 # Прорыв удался — открываем карту локации.
@@ -7428,6 +7454,11 @@ async def location_map_callback(callback: CallbackQuery) -> None:
                     is_home=is_home,
                     show_secret_trader=player.location == SECRET_TRADER_LOCATION,
                     resupply_cooldown=resupply_cooldown_text(storage, telegram_id) if is_home else None,
+                    special_label=(
+                        special_event_button_label(storage)
+                        if special_event_is_joinable(storage, telegram_id)
+                        else None
+                    ),
                 )
                 if image_bytes:
                     from io import BytesIO
@@ -7629,6 +7660,11 @@ async def location_walk_callback(callback: CallbackQuery) -> None:
             is_home=is_home,
             show_secret_trader=location == SECRET_TRADER_LOCATION,
             resupply_cooldown=resupply_cooldown_text(storage, telegram_id) if is_home else None,
+            special_label=(
+                special_event_button_label(storage)
+                if special_event_is_joinable(storage, telegram_id)
+                else None
+            ),
         )
         await _send_or_edit_walk_frame(
             callback,

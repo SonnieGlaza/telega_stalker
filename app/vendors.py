@@ -432,8 +432,27 @@ def medic_heal(storage: Storage, telegram_id: int) -> ActionResult:
 
     Этап 1 — лечения нет; 2 — до 25% HP; 3 — до 50% HP и −10 рад;
     4 — до 75% HP и −15 рад; 5 — до 100% HP и −20 рад.
+    КД между бесплатными сеансами — 30 минут.
     """
+    from datetime import datetime, timedelta, timezone
+
     from app.game_logic import ActionResult, _dead_block_text, _is_dead, effective_max_health
+
+    heal_cd_key = f"medic_heal_cd:{int(telegram_id)}"
+    raw_cd = storage.get_meta(heal_cd_key)
+    if raw_cd:
+        try:
+            ready_at = datetime.fromisoformat(raw_cd)
+        except (TypeError, ValueError):
+            ready_at = None
+        if ready_at is not None:
+            if ready_at.tzinfo is None:
+                ready_at = ready_at.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            if ready_at > now:
+                left_sec = max(1, int((ready_at - now).total_seconds()))
+                mins = left_sec // 60
+                return ActionResult(False, f"💉 Медик ещё занят — следующий бесплатный сеанс через {mins} мин.")
 
     player = storage.get_character(telegram_id, refresh_energy=False)
     if player is None:
@@ -457,6 +476,7 @@ def medic_heal(storage: Storage, telegram_id: int) -> ActionResult:
     storage.change_health(telegram_id, heal_amount, max_health=max_hp)
     if rad_remove > 0:
         storage.adjust_survival(telegram_id, radiation_delta=-rad_remove)
+    storage.set_meta(heal_cd_key, (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat())
     parts: list[str] = []
     if heal_amount > 0:
         parts.append(f"+{heal_amount} HP")

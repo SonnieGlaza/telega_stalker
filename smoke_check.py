@@ -393,6 +393,11 @@ def run_smoke_check() -> None:
         )
 
         storage.restore_energy(111, 100)
+        _ch_hp = storage.get_character(111, refresh_energy=False)
+        if _ch_hp is not None and _ch_hp.health <= 0:
+            from app.game_logic import effective_max_health
+
+            storage.change_health(111, int(effective_max_health(_ch_hp)) - _ch_hp.health)
         assert start_artifact_hunt(storage, 111).ok
         with patch("app.stash_hunt.random.random", return_value=0.0):
             assert try_random_stash_coordinates(storage, 111)
