@@ -721,7 +721,13 @@ def _load_location_thumb(location: str) -> Image.Image | None:
 
 
 def _load_hunt_field_background(location: str) -> Image.Image | None:
-    """Фон поля охоты/схрона: карта из assets/maps."""
+    """Фон поля охоты/схрона: assets/pict.jpg при наличии, иначе карта из assets/maps."""
+    pict = PROJECT_ROOT / "assets" / "pict.jpg"
+    if pict.exists():
+        try:
+            return Image.open(pict).convert("RGB")
+        except Exception:
+            pass
     return _load_hunt_map(location)
 
 
