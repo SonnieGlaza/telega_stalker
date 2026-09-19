@@ -556,6 +556,14 @@ def lobby_join_keyboard(callback_data: str) -> InlineKeyboardMarkup:
     )
 
 
+def lobby_join_url_keyboard(url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🤝 Открыть лобби в боте", url=url)]
+        ]
+    )
+
+
 def _special_event_button(special_label: str | None) -> list[InlineKeyboardButton] | None:
     if not special_label:
         return None

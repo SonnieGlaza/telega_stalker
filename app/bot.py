@@ -1074,6 +1074,10 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject,
         if dead is not None:
             await show_death_screen(message, dead, bot=bot)
             return
+        args = str(command.args or "").strip()
+        if args.startswith("lobby:"):
+            await _open_lobby_from_payload(message, args)
+            return
         hint = maybe_daily_login_hint(db, telegram_id)
         await message.answer(
             f"С возвращением, {h(player.nickname)}! Добро пожаловать в Зону.{hint}\n\n"
@@ -8520,9 +8524,10 @@ async def coop_callback(callback: CallbackQuery, bot: Bot) -> None:
             mission_title = COOP_MISSION_TYPES.get(lobby.mission_kind, {}).get("title", "Кооп") if lobby else "Кооп"
             await _announce_lobby_to_common_chat(
                 bot,
+                telegram_id,
                 title=f"🫂 {nick} создал кооп-лобби!",
                 text=f"📍 {lobby.location} · Тип: {mission_title}" if lobby else "",
-                join_callback=f"coop:join:{lobby.lobby_id}" if lobby else "coop:list",
+                lobby_payload=f"lobby:coop:{lobby.lobby_id}" if lobby else "lobby:coop",
             )
             return
 
@@ -8960,23 +8965,102 @@ async def _announce_monolith_to_common_chat(bot: Bot, html: str) -> None:
 
 async def _announce_lobby_to_common_chat(
     bot: Bot,
+    telegram_id: int,
     *,
     title: str,
     text: str,
-    join_callback: str,
+    lobby_payload: str,
 ) -> None:
-    """Одно уведомление о новом лобби в общий чат Зоны + кнопка «Присоединиться»."""
-    from app.season_chat_titles import ZONE_COMMON_CHAT_ID
-    from app.keyboards import lobby_join_keyboard
+    """Одно уведомление о новом лобби в чат группировки игрока + кнопка-ссылка в бота."""
+    from app.season_chat_titles import ZONE_FACTION_CHAT_IDS
+    from app.keyboards import lobby_join_url_keyboard
 
+    player = get_storage().get_character(telegram_id, refresh_energy=False)
+    faction = str(player.faction or "") if player else ""
+    chat_id = ZONE_FACTION_CHAT_IDS.get(faction)
+    if chat_id is None:
+        return
     try:
-        await bot.send_message(
-            ZONE_COMMON_CHAT_ID,
-            f"{title}\n{text}",
-            reply_markup=lobby_join_keyboard(join_callback),
-        )
+        me = await bot.get_me()
+        username = (me.username or "").strip()
+        if not username:
+            return
+        url = f"https://t.me/{username}?start={lobby_payload}"
+        await bot.send_message(chat_id, f"{title}\n{text}", reply_markup=lobby_join_url_keyboard(url))
     except Exception:
-        logger.exception("Failed to post lobby announcement to common chat")
+        logger.exception("Failed to post lobby announcement to faction chat")
+
+
+async def _open_lobby_from_payload(message: Message, args: str) -> None:
+    """Открыть меню лобби из deep-link при /start lobby:..."""
+    storage = get_storage()
+    telegram_id = message.from_user.id
+    raw = args.removeprefix("lobby:").strip()
+    kind = raw.split(":", maxsplit=1)[0]
+    try:
+        if kind == "coop":
+            lobby_id = raw.split(":", maxsplit=1)[1] if ":" in raw else ""
+            if lobby_id:
+                from app.coop_mission import join_coop_lobby
+
+                result = join_coop_lobby(storage, telegram_id, lobby_id)
+                if result.ok:
+                    await message.answer(
+                        f"{result.text}\n\n{coop_menu_text(storage, telegram_id)}",
+                        reply_markup=coop_menu_keyboard(in_lobby=True, is_host=False, lobby_id=lobby_id),
+                    )
+                    return
+                await message.answer(result.text)
+            lobby = get_coop_lobby_by_player(storage, telegram_id)
+            from app.coop_mission import list_open_coop_lobbies
+
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            lobbies = list_open_coop_lobbies(storage, player.location) if player else []
+            text = coop_menu_text(storage, telegram_id)
+            kb = coop_menu_keyboard(
+                in_lobby=lobby is not None,
+                is_host=lobby.host_id == telegram_id if lobby else False,
+                lobby_id=lobby.lobby_id if lobby else None,
+            )
+            await message.answer(
+                f"{text}\n\nОткрытые группы на «{player.location if player else '?'}»:",
+                reply_markup=coop_lobby_list_keyboard(lobbies) if lobbies else kb,
+            )
+            return
+        if kind == "war":
+            db = storage
+            player = db.get_character(telegram_id, refresh_energy=False)
+            if player is None:
+                await message.answer("Сначала создай персонажа.")
+                return
+            overview = build_war_lobby_overview(db, telegram_id)
+            can_dissolve = can_dissolve_war_lobby(db, telegram_id)
+            from app.monolith_war import monolith_join_button_visible, monolith_join_button_label
+
+            markup = war_lobby_keyboard(
+                db.get_locations(),
+                can_dissolve=can_dissolve,
+                monolith_join=monolith_join_button_visible(db, telegram_id),
+                monolith_join_label=monolith_join_button_label(db),
+            )
+            await message.answer(overview, reply_markup=markup)
+            return
+        if kind == "raid":
+            db = storage
+            player = db.get_character(telegram_id, refresh_energy=False)
+            if player is None or player.faction is None:
+                await message.answer("Сначала создай персонажа и выбери группировку.")
+                return
+            led_raids = db.list_open_raids_led_by(telegram_id)
+            war_enemies = list_war_enemy_factions(db, player.faction)
+            await message.answer(
+                build_raids_overview(db, telegram_id),
+                reply_markup=raid_keyboard(db.get_locations(), led_raids=led_raids, war_enemy_factions=war_enemies),
+            )
+            return
+    except Exception:
+        logger.exception("Failed to open lobby from start payload for %s", telegram_id)
+    await message.answer("Не удалось открыть лобби. Меню доступно в личке бота.", reply_markup=main_menu_keyboard())
 
 
 @router.callback_query(F.data == "war:section:monolith_attack")
@@ -9164,9 +9248,10 @@ async def war_lobby_create_callback(callback: CallbackQuery, bot: Bot) -> None:
         nick = h(player.nickname) if player else str(callback.from_user.id)
         await _announce_lobby_to_common_chat(
             bot,
+            callback.from_user.id,
             title=f"⚔️ {nick} создал военное лобби!",
             text=f"Цель: «{location}» · фракция: {player.faction if player else '—'}",
-            join_callback="war_lobby:join",
+            lobby_payload="lobby:war",
         )
 
 
@@ -9432,9 +9517,10 @@ async def create_raid_callback(callback: CallbackQuery, bot: Bot) -> None:
         nick = h(player.nickname) if player else str(callback.from_user.id)
         await _announce_lobby_to_common_chat(
             bot,
+            callback.from_user.id,
             title=f"🪖 {nick} создал открытый рейд!",
             text=f"Цель: «{location}»" + (f" · фракция: {player.faction}" if player and player.faction else ""),
-            join_callback="raid:join",
+            lobby_payload="lobby:raid",
         )
 
 
