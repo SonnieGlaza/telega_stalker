@@ -77,7 +77,7 @@ def sortie_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="⚔️ Война"), KeyboardButton(text="🗺 Переход")],
             [KeyboardButton(text="⚔️ Арена"), KeyboardButton(text="🪖 Рейды")],
-            [KeyboardButton(text="👥 Совместная вылазка"), KeyboardButton(text="📍 Локация")],
+            [KeyboardButton(text="📍 Локация")],
             [KeyboardButton(text="⬅️ В меню")],
         ],
         resize_keyboard=True,
@@ -127,6 +127,7 @@ def quests_keyboard(
             ]
         )
     rows.append([InlineKeyboardButton(text="🚚 Контрабанда", callback_data="eco:smuggle:menu")])
+    rows.append([InlineKeyboardButton(text="👥 Совместная вылазка", callback_data="coop:menu")])
     rows.append(
         [
             InlineKeyboardButton(text="ℹ️ Справка", callback_data="quests:info"),
