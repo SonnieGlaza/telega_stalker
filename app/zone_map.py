@@ -31,7 +31,7 @@ MAP_POINTS_PX: dict[str, tuple[int, int]] = {
     "Радар": (429, 531),
     "Припять": (391, 368),
     "ЧАЭС": (315, 135),
-    "Тунель": (330, 700),
+    "Тунель": (370, 1050),
 }
 
 LOCATION_DISPLAY_NAMES: dict[str, str] = {
