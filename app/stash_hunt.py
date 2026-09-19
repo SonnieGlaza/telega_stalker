@@ -54,6 +54,29 @@ STASH_COORDINATE_KEY = "stash_coordinates"
 STASH_COORDS_DROP_CHANCE = 3
 STASH_INTEL_DIARY_CHANCE = 10  # независимый шанс на дневник в обычном схроне
 
+# Раскладка «здания»: комнаты 5×5, соединённые дверными проёмами.
+# Стены — клетки сетки; walkable — всё, кроме стен. Проёмы — середины стен.
+STASH_WALLS: set[tuple[int, int]] = set()
+for _x in (5, 10):
+    for _y in range(15):
+        if _y not in (2, 7, 12):  # вертикальные стены, проёмы по серединам рядов
+            STASH_WALLS.add((_x, _y))
+for _y in (5, 10):
+    for _x in range(15):
+        if _x not in (2, 7, 12):  # горизонтальные стены, проёмы по центрам комнат
+            STASH_WALLS.add((_x, _y))
+for _i in range(15):  # внешний периметр
+    STASH_WALLS.add((_i, 0))
+    STASH_WALLS.add((_i, 14))
+    STASH_WALLS.add((0, _i))
+    STASH_WALLS.add((14, _i))
+STASH_WALLS -= {(7, 0), (7, 14), (0, 7), (14, 7)}  # проёмы внутрь здания
+
+
+STASH_WALKABLE: set[tuple[int, int]] = (
+    {(x, y) for x in range(STASH_GRID_SIZE) for y in range(STASH_GRID_SIZE)} - STASH_WALLS
+)
+
 MOVE_DELTAS: dict[str, tuple[int, int]] = {
     "up": (0, -1),
     "down": (0, 1),
@@ -148,7 +171,7 @@ def _chebyshev(a: tuple[int, int], b: tuple[int, int]) -> int:
 
 
 def _random_free_cell(grid: int, forbidden: set[tuple[int, int]]) -> tuple[int, int]:
-    free = [(x, y) for x in range(grid) for y in range(grid) if (x, y) not in forbidden]
+    free = [(x, y) for x in range(grid) for y in range(grid) if (x, y) not in forbidden and (x, y) in STASH_WALKABLE]
     if not free:
         return (0, 0)
     return random.choice(free)
@@ -156,8 +179,9 @@ def _random_free_cell(grid: int, forbidden: set[tuple[int, int]]) -> tuple[int, 
 
 def _build_stash_session(character: Any, source: str) -> StashSession:
     grid = STASH_GRID_SIZE
-    player = (random.randrange(grid), random.randrange(grid))
-    forbidden: set[tuple[int, int]] = {player}
+    forbidden: set[tuple[int, int]] = set()
+    player = _random_free_cell(grid, forbidden)
+    forbidden.add(player)
     stash = _random_free_cell(grid, forbidden)
     while _chebyshev(player, stash) < grid // 3:
         stash = _random_free_cell(grid, forbidden)
@@ -387,6 +411,13 @@ def move_stash_hunt(storage: Storage, telegram_id: int, direction: str) -> Actio
             "Край карты — туда не пройти.",
             payload={"stash_image": image, "stash_active": True, "caption": stash_status_caption(session, player)},
         )
+    if (nx, ny) in STASH_WALLS:
+        image = render_stash_for_player(storage, telegram_id, session, player)
+        return ActionResult(
+            False,
+            "Стена — здесь не пройти.",
+            payload={"stash_image": image, "stash_active": True, "caption": stash_status_caption(session, player)},
+        )
 
     session.player = (nx, ny)
     session.moves += 1
@@ -453,6 +484,25 @@ def move_stash_hunt(storage: Storage, telegram_id: int, direction: str) -> Actio
     dist = _chebyshev(session.player, session.stash)
     if dist <= 1:
         return _finish_stash_success(storage, telegram_id, session)
+
+    # Мутанты двигаются к игроку по комнатам (по 1 клетке за ход), не выходя за стены.
+    if session.mutants:
+        from app.tactical_combat import best_step_toward
+
+        moved: list[tuple[int, int]] = []
+        occupied: set[tuple[int, int]] = set(session.mutants)
+        for m in session.mutants:
+            occupied.discard(m)
+            nxt = best_step_toward(
+                m,
+                session.player,
+                grid=session.grid,
+                blocked=occupied | {session.player},
+                forbidden=STASH_WALLS,
+            )
+            occupied.add(nxt)
+            moved.append(nxt)
+        session.mutants = moved
 
     if session.moves >= session.max_moves:
         clear_stash_session(storage, telegram_id)
@@ -534,6 +584,14 @@ def render_stash_frame(
         for gx in range(grid):
             left = margin + gx * cell
             top = margin + gy * cell
+            if (gx, gy) in STASH_WALLS:
+                ImageDraw.Draw(canvas).rectangle(
+                    (left, top, left + cell - 1, top + cell - 1),
+                    fill=(34, 32, 32),
+                    outline=(22, 24, 26),
+                    width=1,
+                )
+                continue
             if loc_bg is None:
                 _draw_cell(canvas, left, top, cell)
             else:
