@@ -10679,9 +10679,14 @@ def _schedule_next_zone_event(storage: Storage, now: datetime | None = None) -> 
 
 def apply_dynamic_zone_event(storage: Storage) -> ActionResult:
     storage.delete_expired_map_events()
-    locations = storage.get_locations()
+    # События Зоны не спавнятся на базах группировок — только на обычных локациях.
+    locations = [
+        loc
+        for loc in storage.get_locations()
+        if str(loc.get("point_type") or "") != "база"
+    ]
     if not locations:
-        return ActionResult(False, "Локации пока недоступны.")
+        return ActionResult(False, "Локации (без баз) пока недоступны.")
     target = random.choice(locations)
     event_type, modifier, description = random.choice(ZONE_EVENT_POOL)
     expires_at = (datetime.now(timezone.utc) + timedelta(minutes=45)).isoformat()
