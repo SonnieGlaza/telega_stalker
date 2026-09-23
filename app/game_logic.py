@@ -264,7 +264,7 @@ SHOP_ITEMS: dict[str, dict[str, int | str]] = {
     "diesel_can": {"name": "Канистра дизеля (+5)", "buy_price": 199, "sell_price": 89},
     "gasoline_can": {"name": "Канистра бензина (+5)", "buy_price": 100, "sell_price": 44},
     "fuel_can": {"name": "Канистра дизеля (+5)", "buy_price": 199, "sell_price": 89},
-    "stash_case": {"name": "Тайник", "buy_price": 2000, "sell_price": 500},
+    "stash_case": {"name": "Тайник", "buy_price": 5000, "sell_price": 1200},
     "stash_coordinates": {"name": "Координаты хабара", "buy_price": 3500, "sell_price": 0},
     "radio_set": {"name": "Рация", "buy_price": 30000, "sell_price": 12000},
 }
@@ -1885,7 +1885,11 @@ def armor_block_chance(character: Character) -> int:
 
 
 def apply_incoming_damage(raw_damage: int, character: Character, *, min_damage: int = 1) -> int:
-    """Блок брони → 0; иначе урон − смягчение брони − апгрейды − арты (не ниже min_damage)."""
+    """Блок брони → 0; иначе урон − смягчение брони − апгрейды − арты.
+
+    Нижняя граница поднята на +10: даже сильная броня не срежет удар ниже
+    (min_damage + 10) — против «урона по 1 HP».
+    """
     chance = armor_block_chance(character)
     if chance > 0 and random.randint(1, 100) <= chance:
         return 0
@@ -1896,7 +1900,7 @@ def apply_incoming_damage(raw_damage: int, character: Character, *, min_damage: 
     except Exception:
         art_reduce = 0
     reduced = int(raw_damage) - armor_flat_mitigation(character) - armor_defense(character) - art_reduce
-    return max(min_damage, reduced)
+    return max(min_damage + 10, reduced)
 
 
 def _inventory_has_named_gear(character: Character, catalog: dict[str, dict[str, int | str]], name: str) -> bool:
@@ -6693,14 +6697,8 @@ def travel_to(
             f"«{MONOLITH_BASE}» — закрытая база Монолита. Чужим вход запрещён.",
         )
 
-    # Базы группировок: чужим вход запрещён (пополнение/квартирование — только свои).
-    base_owner = {base: faction for faction, base in FACTION_HOME_BASE.items()}
-    owner_faction = base_owner.get(destination)
-    if owner_faction is not None and owner_faction != character.faction:
-        return ActionResult(
-            False,
-            f"«{destination}» — база группировки «{owner_faction}». Чужим вход запрещён.",
-        )
+    # Базы группировок: чужим вход не запрещён — это вражеская локация,
+    # и на ней сработает блокпост (см. location_requires_blockpost).
 
     bound_transport = storage.get_bound_transport(telegram_id)
     if bound_transport in ("niva", "truck"):

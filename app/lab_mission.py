@@ -955,7 +955,7 @@ def _mutant_attack_damage(
     if ranged:
         raw = max(1, int(raw * 0.72))
     dmg = apply_incoming_damage(raw, character, min_damage=1) if character is not None else raw
-    dmg = max(10, int(round(dmg * mult)))
+    dmg = max(20, int(round(dmg * mult)))
     return dmg, side
 
 
@@ -1002,7 +1002,7 @@ def _npc_melee_attack(
 ) -> str:
     raw = npc_weapon_damage(weapon or "ПМ")
     dmg = apply_incoming_damage(raw, character, min_damage=1) if character is not None else raw
-    dmg = max(10, int(round(dmg * mult)))
+    dmg = max(20, int(round(dmg * mult)))
     _apply_damage_to_player(session, dmg, cause="npc", killer_name=_enemy_label(kind, npc=True))
     phrase = encounter_phrase_for_kind(kind, npc=True)
     return f"Бой {phrase}: −{dmg} HP."

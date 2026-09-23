@@ -428,7 +428,9 @@ def render_walk_frame(storage: Storage, player: Character) -> bytes:
         size=160,
         rating_points=_character_rating_points(storage, player.telegram_id),
     )
-    _paste_circle(canvas, token, pcx, pcy, 40, ring_color=(72, 220, 90), ring_width=3)
+    # На Тунеле маркер игрока рисуется без зелёного кольца (по просьбе).
+    ring_color = None if location == "Тунель" else (72, 220, 90)
+    _paste_circle(canvas, token, pcx, pcy, 40, ring_color=ring_color, ring_width=3)
 
     pl = margin + grid_px + 16
     pr = width - margin

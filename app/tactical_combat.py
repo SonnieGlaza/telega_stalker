@@ -236,7 +236,7 @@ def extra_armor_from_cell(
 
 
 def apply_armor_bonus(raw_damage: int, extra_armor: int, *, min_damage: int = 1) -> int:
-    return max(min_damage, raw_damage - extra_armor)
+    return max(min_damage + 10, raw_damage - extra_armor)
 
 
 def random_cardinal_direction() -> str:

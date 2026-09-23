@@ -39,7 +39,6 @@ BLOCKADE_STOCK_AMOUNT = 2  # штук на всю Зону, пока логов�
 
 SPECIAL_LOCATIONS: tuple[str, ...] = (
     "Болото",
-    "Свалка",
     "НИИ Агропром",
     "Темная долина",
     "Янтарь",
@@ -51,9 +50,14 @@ GIANT_LOCATIONS: tuple[str, ...] = (
     "Рыжий лес",
     "Темная долина",
     "Янтарь",
-    "Свалка",
     "Болото",
 )
+
+# Базы группировок исключены из локаций ивентов: событие на чужой базе
+# не даёт шанс поучаствовать игрокам других группировок.
+def _locations_without_bases(locations: tuple[str, ...]) -> tuple[str, ...]:
+    bases = set(FACTION_HOME_BASE.values())
+    return tuple(loc for loc in locations if loc not in bases)
 
 MARCH_TARGET_BASES: tuple[str, ...] = tuple(
     base
@@ -277,7 +281,7 @@ def _build_anomaly_storm(now: datetime) -> dict[str, Any]:
     return {
         "id": now.strftime("%Y%m%d%H%M%S"),
         "kind": "anomaly_storm",
-        "location": random.choice(SPECIAL_LOCATIONS),
+        "location": random.choice(_locations_without_bases(SPECIAL_LOCATIONS)),
         "title": "Аномальный шторм",
         "call_text": (
             "🌪 Аномальный шторм перекрыл переходы между локациями. "
@@ -354,7 +358,7 @@ def _build_monolith_rescue(now: datetime) -> dict[str, Any]:
 
 
 def _build_giant(now: datetime) -> dict[str, Any]:
-    loc = random.choice(GIANT_LOCATIONS)
+    loc = random.choice(_locations_without_bases(GIANT_LOCATIONS))
     return {
         "id": now.strftime("%Y%m%d%H%M%S"),
         "kind": "giant",
@@ -403,7 +407,7 @@ def _build_monolith_march(now: datetime) -> dict[str, Any]:
 def start_special_event(storage: Storage, *, kind: str | None = None) -> dict[str, Any]:
     now = _utc_now()
     picked = kind or random.choice(EVENT_KINDS)
-    location = random.choice(SPECIAL_LOCATIONS)
+    location = random.choice(_locations_without_bases(SPECIAL_LOCATIONS))
     if picked == "heli_crash":
         event = _build_heli_crash(location, now)
     elif picked == "anomaly_storm":

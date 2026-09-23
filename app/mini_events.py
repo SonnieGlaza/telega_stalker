@@ -10,6 +10,7 @@ from typing import Any
 from app.game_logic import (
     QUESTS,
     ActionResult,
+    FACTION_HOME_BASE,
     h,
 )
 from app.storage import Storage
@@ -29,12 +30,17 @@ HELP_THANKS_SPEAKERS: dict[str, str] = {
 
 HELP_EVENT_LOCATIONS: tuple[str, ...] = (
     "Болото",
-    "Свалка",
     "НИИ Агропром",
     "Темная долина",
     "Янтарь",
     "Рыжий лес",
 )
+
+# Базы группировок исключены из локаций ивентов: иначе чужим на базу не пройти
+# и часть игроков не сможет поучаствовать в событии (запросы игроков, см. git log).
+def _event_locations_without_bases() -> tuple[str, ...]:
+    bases = set(FACTION_HOME_BASE.values())
+    return tuple(loc for loc in HELP_EVENT_LOCATIONS if loc not in bases)
 
 HELP_CALLS: tuple[tuple[str, str, str], ...] = (
     (
@@ -109,7 +115,7 @@ def help_event_is_joinable(storage: Storage, telegram_id: int) -> bool:
 
 def start_help_event(storage: Storage) -> dict[str, Any]:
     kind, speaker, template = random.choice(HELP_CALLS)
-    location = random.choice(HELP_EVENT_LOCATIONS)
+    location = random.choice(_event_locations_without_bases())
     now = _utc_now()
     event = {
         "id": now.strftime("%Y%m%d%H%M%S"),

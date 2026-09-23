@@ -6443,6 +6443,15 @@ async def show_zone_map(message: Message) -> None:
         )
 
 
+def _work_available_on_location(storage, player, location: str) -> bool:
+    """Активный контракт «работа» на текущей локации → кнопка «Выполнить работу»."""
+    active = storage.get_active_contract(player.telegram_id) or {}
+    if str(active.get("stage", "")) != "work":
+        return False
+    template = QUEST_CONTRACTS.get(str(active.get("template_key", "")))
+    return bool(template and str(template.work_location) == str(location))
+
+
 @router.message(nav_button("📍 Локация"))
 async def show_location_zones(message: Message) -> None:
     player = ensure_character(message)
@@ -6523,6 +6532,7 @@ async def show_location_zones(message: Message) -> None:
         show_secret_trader=is_secret_trader_spot,
         resupply_cooldown=resupply_cooldown_text(storage, player.telegram_id) if is_home else None,
         special_label=special_label,
+        work_available=_work_available_on_location(storage, player, location),
     )
 
     from app.player_busy import player_busy_reason
@@ -6544,6 +6554,7 @@ async def show_location_zones(message: Message) -> None:
                 show_secret_trader=is_secret_trader_spot,
                 resupply_cooldown=resupply_cooldown_text(storage, player.telegram_id) if is_home else None,
                 special_label=special_label,
+                work_available=_work_available_on_location(storage, player, location),
             )
             walk_caption = caption + f"\n\n🗺 Ты на клетке X {x} · Y {y}"
             if current_zone is not None:
@@ -7463,6 +7474,7 @@ async def location_map_callback(callback: CallbackQuery) -> None:
                         if special_event_is_joinable(storage, telegram_id)
                         else None
                     ),
+                    work_available=_work_available_on_location(storage, player, player.location),
                 )
                 if image_bytes:
                     from io import BytesIO
@@ -7674,6 +7686,7 @@ async def location_walk_callback(callback: CallbackQuery) -> None:
                 if special_event_is_joinable(storage, telegram_id)
                 else None
             ),
+            work_available=_work_available_on_location(storage, player, location),
         )
         await _send_or_edit_walk_frame(
             callback,
@@ -10287,6 +10300,92 @@ async def faction_group_root_callback(callback: CallbackQuery) -> None:
         return
     text = build_faction_group_overview(get_storage(), player.telegram_id)
     await edit_menu_message(callback, text, _faction_group_keyboard_for(player.telegram_id))
+
+
+@router.callback_query(F.data == "eco:warehouse:menu:deposit")
+async def warehouse_deposit_menu_callback(callback: CallbackQuery) -> None:
+    from app.keyboards import warehouse_deposit_keyboard
+
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Сначала выбери группировку.", show_alert=True)
+        return
+    await edit_menu_message(callback, "Сдать на склад группировки (своё количество):", warehouse_deposit_keyboard())
+
+
+@router.callback_query(F.data == "eco:warehouse:menu:withdraw")
+async def warehouse_withdraw_menu_callback(callback: CallbackQuery) -> None:
+    from app.keyboards import warehouse_withdraw_keyboard
+
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Сначала выбери группировку.", show_alert=True)
+        return
+    if not can_withdraw_faction_warehouse(storage, player):
+        await callback.answer(
+            "Забирать со склада можно с 5 ранга (или лидеру группировки).",
+            show_alert=True,
+        )
+        return
+    await edit_menu_message(callback, "Забрать со склада группировки (своё количество):", warehouse_withdraw_keyboard())
+
+
+@router.callback_query(F.data == "eco:warehouse:menu:deposit:artifacts")
+async def warehouse_deposit_artifacts_callback(callback: CallbackQuery) -> None:
+    from app.keyboards import warehouse_artifacts_keyboard
+
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Сначала выбери группировку.", show_alert=True)
+        return
+    await edit_menu_message(
+        callback, "Сдать артефакты на склад (своё количество):", warehouse_artifacts_keyboard(action="deposit")
+    )
+
+
+@router.callback_query(F.data == "eco:warehouse:menu:withdraw:artifacts")
+async def warehouse_withdraw_artifacts_callback(callback: CallbackQuery) -> None:
+    from app.keyboards import warehouse_artifacts_keyboard
+
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None or player.faction is None:
+        await callback.answer("Сначала выбери группировку.", show_alert=True)
+        return
+    if not can_withdraw_faction_warehouse(storage, player):
+        await callback.answer(
+            "Забирать со склада можно с 5 ранга (или лидеру группировки).",
+            show_alert=True,
+        )
+        return
+    await edit_menu_message(
+        callback, "Забрать артефакты со склада (своё количество):", warehouse_artifacts_keyboard(action="withdraw")
+    )
+
+
+@router.callback_query(F.data == "faction:upgrades:menu")
+async def faction_upgrades_menu_callback(callback: CallbackQuery) -> None:
+    from app.keyboards import faction_upgrades_keyboard
+
+    storage = get_storage()
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        await callback.answer("Персонаж не найден.", show_alert=True)
+        return
+    if not player_ready(player):
+        await callback.answer("Сначала выбери группировку.", show_alert=True)
+        return
+    if storage.get_faction_leader_id(player.faction) != callback.from_user.id:
+        await callback.answer("Улучшения базы доступны только лидеру группировки.", show_alert=True)
+        return
+    await edit_menu_message(
+        callback,
+        "🏗 Улучшения базы: выбери направление.",
+        faction_upgrades_keyboard(faction=player.faction),
+    )
 
 
 @router.callback_query(F.data == "faction:base:fortify")

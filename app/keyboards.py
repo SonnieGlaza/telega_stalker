@@ -532,7 +532,7 @@ def inventory_equipment_keyboard(*, money: int | None = None) -> InlineKeyboardM
     rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(text="🧰 Расходники", callback_data="inventory:consumables")],
         [InlineKeyboardButton(text="🗄 Хабар", callback_data="stash:menu")],
-        [InlineKeyboardButton(text="🛒 Купить тайник (от 2000)", callback_data="invbuyqty:stash_case")],
+        [InlineKeyboardButton(text="🛒 Купить тайник (от 5000)", callback_data="invbuyqty:stash_case")],
         [InlineKeyboardButton(text="📦 Открыть тайник", callback_data="use:stash_case")],
         [InlineKeyboardButton(text="⚙️ Экипировка", callback_data="equip:root")],
     ]
@@ -578,6 +578,7 @@ def location_zones_keyboard(
     show_secret_trader: bool = False,
     resupply_cooldown: str | None = None,
     special_label: str | None = None,
+    work_available: bool = False,
 ) -> InlineKeyboardMarkup:
     """Клавиатура карты локации: торговец на базе + кнопки зон локации.
 
@@ -586,8 +587,11 @@ def location_zones_keyboard(
     информационную неактивную кнопку с остатком времени.
     show_secret_trader=True — в Припяти добавляет вход к тайному торговцу.
     resupply_cooldown — остаток кулдауна бесплатного пополнения на базе.
+    work_available — активный контракт «работа» на этой локации: кнопка «Выполнить работу».
     """
     rows: list[list[InlineKeyboardButton]] = []
+    if work_available:
+        rows.append([InlineKeyboardButton(text="⚙️ Выполнить работу", callback_data="contract:work")])
     if is_home_base:
         rows.append(
             [InlineKeyboardButton(text="🎒 Пополнить снаряжение", callback_data="locmap:resupply")]
@@ -666,25 +670,27 @@ def location_walk_keyboard(
     show_secret_trader: bool = False,
     resupply_cooldown: str | None = None,
     special_label: str | None = None,
+    work_available: bool = False,
 ) -> InlineKeyboardMarkup:
     """Клавиатура «открытой локации»: стрелки-ходы + действие зоны, в которой стоишь.
 
     walk_state — словарь {"x", "y", "zone"}: текущая клетка и зона под ней
     (dict из app.location_walk.zone_at) или None, если рядом зон нет.
-    Ряд действий показывается только для зоны, в которой стоит игрок; все
-    callback_data действий — существующие колбэки location_map_callback.
-    location/show_secret_trader оставлены для сигнатуры/будущих расширений.
+    work_available — активный контракт «работа» на этой локации.
     """
     del location, show_secret_trader
     zone = walk_state.get("zone") if isinstance(walk_state, dict) else None
-    rows: list[list[InlineKeyboardButton]] = [
+    rows: list[list[InlineKeyboardButton]] = []
+    if work_available:
+        rows.append([InlineKeyboardButton(text="⚙️ Выполнить работу", callback_data="contract:work")])
+    rows.extend([
         [InlineKeyboardButton(text="⬆️ Вперёд", callback_data="locwalk:up")],
         [
             InlineKeyboardButton(text="⬅️ Влево", callback_data="locwalk:left"),
             InlineKeyboardButton(text="⬇️ Назад", callback_data="locwalk:down"),
             InlineKeyboardButton(text="➡️ Вправо", callback_data="locwalk:right"),
         ],
-    ]
+    ])
     if isinstance(zone, dict) and zone:
         kind = str(zone.get("kind") or "")
         zone_id = str(zone.get("id") or "")
@@ -1460,33 +1466,38 @@ def monolith_attack_targets_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _warehouse_custom_item_rows(*, action: str) -> list[list[InlineKeyboardButton]]:
-    """Кнопки сдачи/выдачи предметов на склад ГП (своё количество)."""
+def _warehouse_custom_item_rows(*, action: str, artifacts_only: bool = False) -> list[list[InlineKeyboardButton]]:
+    """Кнопки сдачи/выдачи предметов на склад ГП (своё количество).
+
+    artifacts_only=True — только артефакты (подменю «💎 Артефакты»).
+    """
     from app.game_logic import ITEM_LABELS
 
     if action == "deposit":
         emoji, verb = "📥", "Сдать"
     else:
         emoji, verb = "📤", "Забрать"
-    rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text=f"{emoji} {verb} патрон — своё количество", callback_data=f"eco:warehouse:{action}:ammo_pack")],
-        [InlineKeyboardButton(text=f"{emoji} {verb} аптечку — своё количество", callback_data=f"eco:warehouse:{action}:medkit")],
-        [
-            InlineKeyboardButton(
-                text=f"{emoji} {verb} энергетик — своё количество",
-                callback_data=f"eco:warehouse:{action}:energy_drink",
-            )
-        ],
-    ]
-    if action == "deposit":
+    rows: list[list[InlineKeyboardButton]] = []
+    if not artifacts_only:
+        rows.append([InlineKeyboardButton(text=f"{emoji} {verb} патрон — своё количество", callback_data=f"eco:warehouse:{action}:ammo_pack")])
+        rows.append([InlineKeyboardButton(text=f"{emoji} {verb} аптечку — своё количество", callback_data=f"eco:warehouse:{action}:medkit")])
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{emoji} {verb} стройматериалы — своё количество",
-                    callback_data="eco:warehouse:deposit:materials",
+                    text=f"{emoji} {verb} энергетик — своё количество",
+                    callback_data=f"eco:warehouse:{action}:energy_drink",
                 )
             ]
         )
+        if action == "deposit":
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"{emoji} {verb} стройматериалы — своё количество",
+                        callback_data="eco:warehouse:deposit:materials",
+                    )
+                ]
+            )
     for art_key in ARTIFACT_DROP_KEYS:
         label = ITEM_LABELS.get(art_key, art_key)
         rows.append(
@@ -1500,6 +1511,29 @@ def _warehouse_custom_item_rows(*, action: str) -> list[list[InlineKeyboardButto
     return rows
 
 
+def warehouse_deposit_keyboard() -> InlineKeyboardMarkup:
+    """Подменю сдачи на склад: расходники + кнопка «Артефакты»."""
+    rows = _warehouse_custom_item_rows(action="deposit", artifacts_only=False)
+    rows.append([InlineKeyboardButton(text="💎 Артефакты", callback_data="eco:warehouse:menu:deposit:artifacts")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="faction:group")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def warehouse_withdraw_keyboard() -> InlineKeyboardMarkup:
+    """Подменю выдачи со склада: расходники + кнопка «Артефакты»."""
+    rows = _warehouse_custom_item_rows(action="withdraw", artifacts_only=False)
+    rows.append([InlineKeyboardButton(text="💎 Артефакты", callback_data="eco:warehouse:menu:withdraw:artifacts")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="faction:group")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def warehouse_artifacts_keyboard(*, action: str) -> InlineKeyboardMarkup:
+    """Список артефактов для сдачи/выдачи со склада."""
+    rows = _warehouse_custom_item_rows(action=action, artifacts_only=True)
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="faction:group")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def faction_group_keyboard(
     *,
     is_leader: bool = False,
@@ -1509,7 +1543,8 @@ def faction_group_keyboard(
     pending_garage_requests: int = 0,
     faction: str | None = None,
 ) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = _warehouse_custom_item_rows(action="deposit") + [
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text="📥 Сдать на склад", callback_data="eco:warehouse:menu:deposit")],
         [InlineKeyboardButton(text="💰 Внести своё количество", callback_data="eco:treasury:deposit:custom")],
         [InlineKeyboardButton(text="🏚 Гараж: сдать канистру бензина", callback_data="faction:garage:deposit:gasoline")],
         [InlineKeyboardButton(text="🏚 Гараж: сдать канистру дизеля", callback_data="faction:garage:deposit:diesel")],
@@ -1535,7 +1570,7 @@ def faction_group_keyboard(
         rows.extend(
             [
                 [InlineKeyboardButton(text=request_label, callback_data="faction:garage:requests")],
-                *_warehouse_custom_item_rows(action="withdraw"),
+                [InlineKeyboardButton(text="📤 Забрать со склада", callback_data="eco:warehouse:menu:withdraw")],
                 [InlineKeyboardButton(text="🏚 Гараж: забрать канистру бензина", callback_data="faction:garage:withdraw:gasoline")],
                 [InlineKeyboardButton(text="🏚 Гараж: забрать канистру дизеля", callback_data="faction:garage:withdraw:diesel")],
                 [InlineKeyboardButton(text="🏚 Забрать Ниву из гаража", callback_data="faction:garage:withdraw:niva")],
@@ -1549,40 +1584,47 @@ def faction_group_keyboard(
             ]
         )
     if is_leader:
-        from app.game_logic import BASE_FORTIFY_COST_RU
-
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"🛡 Укрепить базу ({BASE_FORTIFY_COST_RU} RU из казны)",
-                    callback_data="faction:base:fortify",
-                )
-            ]
-        )
-        rows.append([InlineKeyboardButton(text="🏗 Постройки", callback_data="faction:buildings:menu")])
-        if faction != "Монолит":
-            rows.append(
-                [
-                    InlineKeyboardButton(
-                        text="🤖 Улучшить ботов до 2-го тира (50000 RU)",
-                        callback_data="faction:bots:upgrade",
-                    )
-                ]
-            )
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="🤖 +1 оборонительный бот (100000 RU)",
-                    callback_data="faction:bots:count",
-                )
-            ]
-        )
+        rows.append([InlineKeyboardButton(text="🏗 Улучшения базы", callback_data="faction:upgrades:menu")])
         rows.append([InlineKeyboardButton(text="🎖 Назначить звание", callback_data="rank:menu")])
         rows.append([InlineKeyboardButton(text="📅 Цели недели", callback_data="faction:goals")])
         rows.append(
             [InlineKeyboardButton(text="🎁 Забрать бонус недели", callback_data="faction:goals:claim")]
         )
     rows.append([InlineKeyboardButton(text="🔄 Сменить группировку", callback_data="faction:change")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def faction_upgrades_keyboard(*, faction: str | None = None) -> InlineKeyboardMarkup:
+    """Подменю «Улучшения базы»: постройки, боты, укрепление."""
+    from app.game_logic import BASE_FORTIFY_COST_RU
+
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text=f"🛡 Укрепить базу ({BASE_FORTIFY_COST_RU} RU из казны)",
+                callback_data="faction:base:fortify",
+            )
+        ],
+        [InlineKeyboardButton(text="🏗 Постройки", callback_data="faction:buildings:menu")],
+    ]
+    if faction != "Монолит":
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🤖 Улучшить ботов до 2-го тира (50000 RU)",
+                    callback_data="faction:bots:upgrade",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🤖 +1 оборонительный бот (100000 RU)",
+                callback_data="faction:bots:count",
+            )
+        ]
+    )
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="faction:group")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

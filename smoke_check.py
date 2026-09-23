@@ -793,7 +793,7 @@ def run_smoke_check() -> None:
         # Кнопка/команда атаки Монолита.
         from app.monolith_war import start_monolith_attack
         from app.faction_bots import upgrade_faction_bots as upgrade_mono_bots
-        from app.keyboards import faction_group_keyboard, war_lobby_keyboard
+        from app.keyboards import faction_group_keyboard, faction_upgrades_keyboard, war_lobby_keyboard
 
         storage.create_character(444, "MonoLead", "Мужской")
         admin_set_player_faction(storage, target="444", faction=MONOLITH_FACTION)
@@ -809,8 +809,16 @@ def run_smoke_check() -> None:
             for btn in row
             if btn.callback_data
         }
-        assert "faction:bots:upgrade" not in mono_cbs
-        assert "faction:bots:count" in mono_cbs
+        assert "faction:upgrades:menu" in mono_cbs
+        mono_up_kb = faction_upgrades_keyboard(faction=MONOLITH_FACTION)
+        mono_up_cbs = {
+            btn.callback_data
+            for row in mono_up_kb.inline_keyboard
+            for btn in row
+            if btn.callback_data
+        }
+        assert "faction:bots:upgrade" not in mono_up_cbs
+        assert "faction:bots:count" in mono_up_cbs
         lobby_kb = war_lobby_keyboard([], monolith_join=True)
         lobby_cbs = {
             btn.callback_data
@@ -1009,7 +1017,8 @@ def run_smoke_check() -> None:
         assert installed.ok, installed.text
         assert armor_defense(storage.get_character(111, refresh_energy=False)) == 1
         player_111 = storage.get_character(111, refresh_energy=False)
-        assert apply_incoming_damage(10, player_111) == 4
+        # Нижняя граница урона поднята на +10 (см. apply_incoming_damage).
+        assert apply_incoming_damage(10, player_111) == 11
         upgraded2 = upgrade_armor(storage, 111)
         assert upgraded2.ok, upgraded2.text
         installed2 = install_armor_upgrade(storage, 111)
@@ -2371,8 +2380,8 @@ def run_smoke_check() -> None:
         assert ch is not None
         _rnd.randint = lambda a, b: 100  # блок не срабатывает
         try:
-            # 15 − 23 смягчение − 0 апгрейд = -8, но min_damage=1
-            assert apply_incoming_damage(15, ch, min_damage=1) == 1
+            # 15 − 23 смягчение − 0 апгрейд = -8, но нижняя граница = min_damage + 10 = 11
+            assert apply_incoming_damage(15, ch, min_damage=1) == 11
         finally:
             _rnd.randint = _orig
         assert "Тяжёлая артиллерия" in buy_g.text or "Тяжёлая артиллерия" in buy_n.text or (

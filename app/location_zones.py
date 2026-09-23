@@ -73,7 +73,7 @@ def fight_blockpost(storage: Storage, telegram_id: int, location: str) -> Action
     # 2 лёгких бойца: урон ~14-22 суммарно, шанс по силе.
     guard_power = 10 + power // 4
     chance = min(95, 35 + power * 3)
-    damage = max(10, random.randint(14, 22))
+    damage = max(20, random.randint(14, 22))
     if random.randint(1, 100) <= chance:
         mark_blockpost_passed(storage, telegram_id, location)
         return ActionResult(

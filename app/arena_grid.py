@@ -32,7 +32,6 @@ from app.tactical_combat import (
     STALE_TURN_MESSAGE,
     best_step_toward,
     collect_player_shot_hits,
-    consume_shot_ammo,
     manhattan_distance,
     npc_weapon_damage,
     random_hostile_shots,
@@ -578,9 +577,7 @@ def arena_shoot(storage: Storage, telegram_id: int, direction: str) -> ActionRes
         return ActionResult(False, "Некорректный выстрел.")
     turn_seq = session.turn_seq
     weapon = session.player_weapon
-    ammo_result = consume_shot_ammo(storage, telegram_id, weapon)
-    if ammo_result is not None:
-        return ammo_result
+    # Арена — тренировка: патроны не расходуются (бесплатные пули).
     origin = session.player_pos
     cover_set = set(session.cover) | set(session.base_cover)
     targets = {pos: "host" for pos in session.hostiles}
