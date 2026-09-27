@@ -662,7 +662,7 @@ _HUNT_MAP_FILES: dict[str, str] = {
     "Радар": "радар.jpg",
     "Припять": "припять.jpg",
     "ЧАЭС": "завод.jpg",
-    "Тунель": "туннель.jpg",
+    "Тунель": "тунель.jpg",
 }
 
 _HUNT_MARKED_MAP_FILES: dict[str, str] = {

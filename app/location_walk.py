@@ -72,59 +72,61 @@ _SECRET_ZONE: dict[str, str] = {"id": "secrettrader", "kind": "secrettrader", "l
 _DEFAULT_ZONE_RADIUS = 2
 _BASE_SPOT: tuple[int, int, int] = (11, 11, _DEFAULT_ZONE_RADIUS)
 
-# Разметка зон на сетке локации: location -> {zone_id: (cx, cy, radius)}.
+# Разметка зон на сетке локации: location -> {zone_id: spot}.
+# spot — (x, y) или (x, y, radius). Если радиус не указан, бот сам
+# подставит «квадрат» _DEFAULT_ZONE_RADIUS (см. _normalize_spot).
 # «base» добавляется динамически только на базе текущей фракции (см. walk_spots_for).
-LOCATION_WALK_SPOTS: dict[str, dict[str, tuple[int, int, int]]] = {
+LOCATION_WALK_SPOTS: dict[str, dict[str, tuple[int, int] | tuple[int, int, int]]] = {
     "Кордон": {
-        "anomaly": (4, 4, 2),
-        "search_1": (11, 4, 2),
-        "base": (11, 11, 2),
+        "anomaly": (4, 4),
+        "search_1": (11, 4),
+        "base": (11, 11),
     },
     "Свалка": {
-        "anomaly": (4, 4, 2),
-        "search_1": (11, 11, 2),
-        "base": (4, 11, 2),
+        "anomaly": (4, 4),
+        "search_1": (11, 11),
+        "base": (4, 11),
     },
     "Росток": {
-        "anomaly": (4, 4, 2),
-        "search_1": (11, 4, 2),
-        "base": (4, 11, 2),
+        "anomaly": (4, 4),
+        "search_1": (11, 4),
+        "base": (4, 11),
     },
     "Армейские склады": {
-        "anomaly": (11, 4, 2),
-        "search_1": (4, 4, 2),
-        "base": (7, 11, 2),
+        "anomaly": (11, 4),
+        "search_1": (4, 4),
+        "base": (7, 11),
     },
     "НИИ Агропром": {
-        "anomaly": (4, 4, 2),
-        "search_1": (11, 11, 2),
+        "anomaly": (4, 4),
+        "search_1": (11, 11),
     },
     "Янтарь": {
-        "anomaly": (4, 4, 2),
-        "search_1": (11, 4, 2),
-        "lab_limit2": (11, 11, 2),
+        "anomaly": (4, 4),
+        "search_1": (11, 4),
+        "lab_limit2": (11, 11),
     },
     "Болото": {
-        "anomaly": (4, 11, 2),
-        "search_1": (11, 4, 2),
+        "anomaly": (4, 11),
+        "search_1": (11, 4),
     },
     "Темная долина": {
-        "anomaly": (4, 4, 2),
-        "search_1": (11, 11, 2),
-        "lab_limit1": (4, 11, 2),
+        "anomaly": (4, 4),
+        "search_1": (11, 11),
+        "lab_limit1": (4, 11),
     },
     "Рыжий лес": {
-        "anomaly": (11, 11, 2),
-        "search_1": (4, 4, 2),
+        "anomaly": (11, 11),
+        "search_1": (4, 4),
     },
     "Радар": {
-        "anomaly": (4, 4, 2),
-        "search_1": (11, 11, 2),
-        "lab_limit3": (11, 4, 2),
+        "anomaly": (4, 4),
+        "search_1": (11, 11),
+        "lab_limit3": (11, 4),
     },
     "Припять": {
-        "anomaly": (4, 4, 2),
-        "search_1": (11, 4, 2),
+        "anomaly": (4, 4),
+        "search_1": (11, 4),
         "secrettrader": (7, 10, 1),
     },
     "ЧАЭС": {
@@ -135,6 +137,16 @@ LOCATION_WALK_SPOTS: dict[str, dict[str, tuple[int, int, int]]] = {
         "trade": (11, 7, 1),
     },
 }
+
+
+def _normalize_spot(spot: tuple[int, int] | tuple[int, int, int]) -> tuple[int, int, int]:
+    """(x, y) -> (x, y, _DEFAULT_ZONE_RADIUS); (x, y, radius) — как есть.
+
+    Радиус — размер «квадрата» зоны вокруг центра (круг по Чебышёву).
+    """
+    if len(spot) == 2:
+        return int(spot[0]), int(spot[1]), _DEFAULT_ZONE_RADIUS
+    return int(spot[0]), int(spot[1]), max(1, int(spot[2]))
 
 
 def _walk_meta_key(telegram_id: int) -> str:
@@ -220,8 +232,12 @@ def _fallback_spots(location: str) -> dict[str, tuple[int, int, int]]:
 
 
 def walk_spots_for(location: str, faction: str | None) -> dict[str, tuple[int, int, int]]:
-    """Точки зон для локации; «base» только на базе текущей фракции."""
-    spots = dict(LOCATION_WALK_SPOTS.get(location) or _fallback_spots(location))
+    """Точки зон для локации; «base» только на базе текущей фракции.
+
+    Записи формата (x, y) автоматически получают дефолтный радиус «квадрата».
+    """
+    raw_spots = LOCATION_WALK_SPOTS.get(location) or _fallback_spots(location)
+    spots = {key: _normalize_spot(value) for key, value in raw_spots.items()}
     from app.game_logic import faction_home_base
 
     is_own_base = bool(faction) and location == faction_home_base(faction)
