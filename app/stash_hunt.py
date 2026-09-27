@@ -18,6 +18,7 @@ from app.artifact_hunt import (
     _load_font,
     _load_hunt_map,
     _load_location_thumb,
+    _load_search_field_background,
     _paste_circle,
     _paste_rounded,
     _player_grid_token,
@@ -574,8 +575,8 @@ def render_stash_frame(
     field = (margin - 6, margin - 6, margin + grid_px + 6, margin + grid_px + 6)
     draw.rounded_rectangle(field, radius=10, fill=(34, 36, 40, 255), outline=(70, 74, 80), width=2)
 
-    # Фон схрона — карта локации (pict.jpg используется только в охоте за артами).
-    loc_bg = _load_hunt_map(session.location)
+    # Фон поиска схрона — «фон для поиска.jpg»; если файла нет, карта локации.
+    loc_bg = _load_search_field_background() or _load_hunt_map(session.location)
     if loc_bg is not None:
         field_img = _cover_crop(loc_bg, grid_px, grid_px).convert("RGBA")
         field_img.putalpha(225)

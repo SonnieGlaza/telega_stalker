@@ -648,6 +648,7 @@ def _load_font(size: int) -> ImageFont.ImageFont:
 
 _LOCATION_THUMB_DIR = PROJECT_ROOT / "assets" / "locations"
 _HUNT_MAP_DIR = PROJECT_ROOT / "assets" / "maps"
+_SEARCH_FIELD_BG = PROJECT_ROOT / "assets" / "maps" / "фон для поиска.jpg"
 
 _HUNT_MAP_FILES: dict[str, str] = {
     "Кордон": "Кордон.jpg",
@@ -724,6 +725,14 @@ def _load_location_thumb(location: str) -> Image.Image | None:
 def _load_hunt_field_background(location: str) -> Image.Image | None:
     """Фон поля охоты/схрона/осмотра локации: карта из assets/maps."""
     return _load_hunt_map(location)
+
+
+def _load_search_field_background() -> Image.Image | None:
+    """Единый фон поля поиска (вылазка за артом, поиск схрона)."""
+    try:
+        return Image.open(_SEARCH_FIELD_BG).convert("RGB")
+    except Exception:
+        return None
 
 
 def _marked_cells_from_image(image: Image.Image, grid: int, color: str) -> list[tuple[int, int]]:
@@ -976,14 +985,8 @@ def render_hunt_frame(
     field = (margin - 6, margin - 6, margin + grid_px + 6, margin + grid_px + 6)
     draw.rounded_rectangle(field, radius=10, fill=(34, 36, 40, 255), outline=(70, 74, 80), width=2)
 
-    # Фон для охоты за артами (не для схрона/осмотра локации).
-    loc_bg = _load_hunt_field_background(session.location)
-    _pict = PROJECT_ROOT / "assets" / "maps" / "фон для поиска.jpg"
-    if _pict.exists():
-        try:
-            loc_bg = Image.open(_pict).convert("RGB")
-        except Exception:
-            pass
+    # Фон вылазки — только единая картинка «фон для поиска.jpg» (без карт локаций).
+    loc_bg = _load_search_field_background()
     if loc_bg is not None:
         field_img = _cover_crop(loc_bg, grid_px, grid_px).convert("RGBA")
         field_img.putalpha(225)
