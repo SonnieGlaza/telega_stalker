@@ -544,7 +544,6 @@ def run_smoke_check() -> None:
             process_help_event_cycle,
             thanks_text,
         )
-        from app.quest_mission import clear_mission_session as _clear_help_mission
 
         storage.set_meta(HELP_EVENT_NEXT_META, datetime.now(timezone.utc).isoformat())
         radio = process_help_event_cycle(storage)
@@ -553,11 +552,9 @@ def run_smoke_check() -> None:
         assert event is not None
         assert help_event_is_joinable(storage, 111)
         idle_join = join_help_event(storage, 111)
-        # По рации можно откликнуться из любой точки Зоны — полевая вылазка стартует сразу.
-        assert idle_join.ok, idle_join.text
-        assert "откликнулся" in idle_join.text.lower()
-        _clear_help_mission(storage, 111)
-        storage.set_active_contract(111, None)
+        # Отклик по рации — полевая вылазка: нужно сначала доехать до локации события.
+        assert not idle_join.ok
+        assert "локаци" in idle_join.text.lower()
         thanks = thanks_text({"helper_names": ["Старый"], "helper_factions": ["Долг"], "thanks_speaker": "Группа учёных"})
         assert "Старый" in thanks and "Долг" in thanks
 
@@ -1770,8 +1767,7 @@ def run_smoke_check() -> None:
         assert int(after.inventory.get("medkit", 0)) == entry_medkits
         assert storage.get_player_stats(111)["deaths"] == deaths_before
         money_after = after.money
-        assert money_after - money_before >= QUESTS["easy"].reward_min
-        assert money_after - money_before <= QUESTS["easy"].reward_max
+        assert money_after - money_before == 100  # 100 RU за 1 пройденную волну
 
         # Forfeit path also soft-restores entry HP.
         money_before = storage.get_character(111, refresh_energy=False).money
@@ -1785,8 +1781,7 @@ def run_smoke_check() -> None:
         assert arena_end.ok, arena_end.text
         assert get_arena_session(storage, 111) is None
         money_after = storage.get_character(111, refresh_energy=False).money
-        assert money_after - money_before >= QUESTS["easy"].reward_min
-        assert money_after - money_before <= QUESTS["easy"].reward_max
+        assert money_after - money_before == 100  # 100 RU за 1 пройденную волну
         assert storage.get_character(111, refresh_energy=False).health == entry_hp
 
         # War lobby.

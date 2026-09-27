@@ -662,6 +662,7 @@ _HUNT_MAP_FILES: dict[str, str] = {
     "Радар": "радар.jpg",
     "Припять": "припять.jpg",
     "ЧАЭС": "завод.jpg",
+    "Тунель": "туннель.jpg",
 }
 
 _HUNT_MARKED_MAP_FILES: dict[str, str] = {
@@ -975,9 +976,9 @@ def render_hunt_frame(
     field = (margin - 6, margin - 6, margin + grid_px + 6, margin + grid_px + 6)
     draw.rounded_rectangle(field, radius=10, fill=(34, 36, 40, 255), outline=(70, 74, 80), width=2)
 
-    # pict.jpg — фон только для охоты за артами (не для схрона/осмотра локации).
+    # Фон для охоты за артами (не для схрона/осмотра локации).
     loc_bg = _load_hunt_field_background(session.location)
-    _pict = PROJECT_ROOT / "assets" / "pict.jpg"
+    _pict = PROJECT_ROOT / "assets" / "maps" / "фон для поиска.jpg"
     if _pict.exists():
         try:
             loc_bg = Image.open(_pict).convert("RGB")

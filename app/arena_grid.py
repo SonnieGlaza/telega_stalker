@@ -14,8 +14,6 @@ from typing import Any
 from PIL import Image, ImageDraw
 
 from app.game_logic import (
-    QUESTS,
-    QUEST_RATING_BY_DIFFICULTY,
     ActionResult,
     _add_rating,
     effective_max_health,
@@ -361,11 +359,11 @@ def _arena_apply_damage(raw: int, armor_level: int) -> int:
 
 def _finalize_arena_reward(storage: Storage, session: ArenaGridSession, *, reason: str) -> ActionResult:
     """Награда за ≥1 волну; смерть на арене не отменяет выплату и не даёт штрафов."""
-    quest = QUESTS["easy"]
-    rating_gain = QUEST_RATING_BY_DIFFICULTY["easy"][0]
     fell = session.hp <= 0
     if session.waves_cleared >= 1:
-        reward = random.randint(quest.reward_min, quest.reward_max)
+        # 1 рейтинг + 100 RU за каждую пройденную волну.
+        reward = 100 * session.waves_cleared
+        rating_gain = session.waves_cleared
         storage.change_money(session.telegram_id, reward)
         _add_rating(storage, session.telegram_id, rating_gain)
         storage.add_player_stat(session.telegram_id, "money_earned", reward)
@@ -374,7 +372,7 @@ def _finalize_arena_reward(storage: Storage, session: ArenaGridSession, *, reaso
             f"🏟 Арена «{session.home_base}» завершена.\n"
             f"{outcome}\n"
             f"Пройдено волн: {session.waves_cleared}.\n"
-            f"Награда (как лёгкое задание): {reward} RU, рейтинг +{rating_gain}.\n"
+            f"Награда: {reward} RU, рейтинг +{rating_gain} (за каждую волну: 100 RU и 1 рейтинг).\n"
             "Тренировка: HP и ресурсы как при входе, без штрафов смерти."
         )
     else:

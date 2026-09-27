@@ -650,6 +650,12 @@ ITEM_LABELS = {
     "weapon_rp74": "РП-74",
     "weapon_gauss": "Гаусс-пушка",
     "weapon_raccoon": "Енот",
+    "weapon_season_champion": "РПК «Чемпион Зоны»",
+    "weapon_season_silver": "ВСС «Серебряный сталкер»",
+    "armor_season_champion": "Костюм «Чемпион Зоны»",
+    "armor_season_bronze": "Бронекостюм «Бронза сезона»",
+    "artifact_fire": "Арт «Жар»",
+    "artifact_blood": "Арт «Кровь»",
 }
 
 FUEL_CAN_DIESEL_AMOUNT = 5

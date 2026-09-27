@@ -131,8 +131,8 @@ LOCATION_WALK_SPOTS: dict[str, dict[str, tuple[int, int, int]]] = {
         "base": (7, 7, 4),
     },
     "Тунель": {
-        "bazaar": (4, 4, 2),
-        "trade": (11, 11, 2),
+        "bazaar": (6, 8, 2),
+        "trade": (7, 11, 1),
     },
 }
 

@@ -158,9 +158,13 @@ def join_help_event(storage: Storage, telegram_id: int) -> ActionResult:
     busy = player_busy_reason(storage, telegram_id)
     if busy:
         return ActionResult(False, busy)
-    # Локация не требуется: отклик по рации — полевая вылазка из любой точки Зоны
-    # (раньше кнопка «Помочь» в заданиях упиралась в «нужно стоять на локации»,
-    # и выполнить ивент было невозможно из меню).
+    # Отклик по рации — полевая вылазка: сначала доехать до локации события,
+    # потом помогать (иначе зачистка «по рации» с другой локации обесценивает переходы).
+    if player.location != str(event.get("location") or ""):
+        return ActionResult(
+            False,
+            f"Нужно быть на локации «{event.get('location')}», чтобы помочь. Сейчас ты на «{player.location}».",
+        )
 
     from app.game_logic import QuestContractTemplate
 
