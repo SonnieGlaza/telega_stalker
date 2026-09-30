@@ -44,8 +44,8 @@ MOVE_DELTAS: dict[str, tuple[int, int]] = {
 
 WALK_DIRECTION_KEYS = frozenset(MOVE_DELTAS)
 
-# Цвета зон на поле: base/торговец — «радужная» база (заливка голубая, кольцо дугами),
-# search — жёлтая, anomaly — сине-бирюзовая, lab — фиолетовая, тайный торговец — янтарная.
+# Цвета зон на поле: base — красное поле, search — жёлтая, anomaly — белая,
+# lab — зелёная, тайный торговец — янтарная.
 ZONE_COLORS: dict[str, tuple[int, int, int]] = {
     "base": (220, 60, 60),
     "search": (245, 210, 70),
@@ -166,7 +166,7 @@ LOCATION_WALK_RECTS: dict[str, dict[str, tuple[tuple[int, int, int, int], ...]]]
             (15, 6, 15, 6),
             (14, 8, 14, 8),
         ),
-        "lab_limit4": (
+        "lab_limit1": (
             (5, 10, 5, 10),
         ),
     },
@@ -187,7 +187,6 @@ _WALK_LEGACY_CENTER_SPOTS: dict[str, dict[str, tuple[int, int] | tuple[int, int,
     "Темная долина": {
         "anomaly": (4, 4),
         "search_1": (11, 11),
-        "lab_limit1": (4, 11),
     },
     "Рыжий лес": {
         "anomaly": (11, 11),
@@ -399,37 +398,13 @@ def _draw_zone(
     )
     canvas.alpha_composite(overlay)
     draw = ImageDraw.Draw(canvas)
-    if kind == "base":
-        rainbow = (
-            (255, 80, 80),
-            (255, 170, 50),
-            (250, 220, 70),
-            (90, 210, 90),
-            (80, 170, 255),
-            (180, 120, 240),
-        )
-        segments = 4 * len(rainbow)
-        step = 1.0 / (len(rainbow) * 4)
-        for idx, arc_color in enumerate(rainbow):
-            for seg in range(4):
-                start = idx * 4 + seg
-                f0, f1 = start * step, (start + 1) * step
-                if seg == 0:  # top
-                    a, b, c, d = (left + f0 * w, top, left + f1 * w, top + 8)
-                elif seg == 1:  # right
-                    a, b, c, d = (right - 8, top + f0 * h, right, top + f1 * h)
-                elif seg == 2:  # bottom
-                    a, b, c, d = (right - f1 * w, bottom - 8, right - f0 * w, bottom)
-                else:  # left
-                    a, b, c, d = (left, bottom - f1 * h, left + 8, bottom - f0 * h)
-                draw.rectangle((a, b, c, d), fill=arc_color)
-    else:
-        draw.rounded_rectangle(
-            box,
-            radius=radius,
-            outline=color,
-            width=5,
-        )
+    # У базы — простое красное поле с обводкой (без «радужной» рамки).
+    draw.rounded_rectangle(
+        box,
+        radius=radius,
+        outline=color,
+        width=5,
+    )
     if kind == "anomaly":
         # «Пузырьки» аномалий — только на достаточно крупных зонах.
         if w >= cell * 2 and h >= cell * 2:
@@ -548,7 +523,7 @@ def render_walk_frame(storage: Storage, player: Character) -> bytes:
     panel_text_width = pr - pl - 30
     draw.text((pl + 14, pt + 106), location, fill=(245, 245, 245), font=loc_font)
     draw.text((pl + 14, pt + 132), "Осмотр локации", fill=(180, 200, 150), font=body)
-    draw.text((pl + 16, pt + 160), f"Координаты: X {x + 1} · Y {y + 1}", fill=(200, 200, 200), font=body)
+    draw.text((pl + 16, pt + 160), f"Координаты: X {x} · Y {y}", fill=(200, 200, 200), font=body)
 
     zone_y = pt + 190
     if current_zone is not None:

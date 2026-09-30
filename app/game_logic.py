@@ -615,7 +615,6 @@ ITEM_LABELS = {
     "artifact_predel1": "Артефакт «Предел-1»",
     "artifact_predel2": "Артефакт «Предел-2»",
     "artifact_predel3": "Артефакт «Предел-3»",
-    "artifact_predel4": "Артефакт «Предел-4»",
     "artifact_predel": "Артефакт «Предел»",
     "materials": "Стройматериалы",
     "armor_leather": "Кожаная куртка",
@@ -6241,6 +6240,49 @@ def repair_niva(storage: Storage, telegram_id: int) -> ActionResult:
     achievements_text = _progress_and_unlock_achievements(storage, telegram_id)
     discount_note = f" (−{discount_pct}% у техника)" if discount_pct > 0 else ""
     return ActionResult(True, f"Нива полностью отремонтирована за {price} RU{discount_note}.{achievements_text}")
+
+
+# Полевой ремонт: наскоро подлатать технику, чтобы уехать с локации.
+# Полный ремонт — только у техника; здесь доводим до минимума прочности.
+FIELD_REPAIR_MIN_DURABILITY = 5
+
+
+def needs_field_repair(character: Character) -> bool:
+    """Сломана ли своя техника (грузовик/Нива) — нужен полевой ремонт."""
+    return bool(
+        (character.truck_owned and int(character.truck_durability) < FIELD_REPAIR_MIN_DURABILITY)
+        or (character.niva_owned and int(character.niva_durability) < FIELD_REPAIR_MIN_DURABILITY)
+    )
+
+
+def field_repair_vehicle(storage: Storage, telegram_id: int) -> ActionResult:
+    """Бесплатно подлатать сломанную технику до FIELD_REPAIR_MIN_DURABILITY%.
+
+    Нужно, когда техника «умерла» вдали от базы: на ней нельзя уехать,
+    а без неё не уйти (привязанный транспорт).
+    """
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        return ActionResult(False, "Сначала создай персонажа через /start.")
+    if _is_dead(player):
+        return ActionResult(False, _dead_block_text())
+    if is_traveling(player):
+        return ActionResult(False, "Нельзя чинить технику во время перехода.")
+    fixed: list[str] = []
+    if player.truck_owned and int(player.truck_durability) < FIELD_REPAIR_MIN_DURABILITY:
+        storage.set_truck_durability(telegram_id, FIELD_REPAIR_MIN_DURABILITY)
+        fixed.append("грузовик")
+    if player.niva_owned and int(player.niva_durability) < FIELD_REPAIR_MIN_DURABILITY:
+        storage.set_niva_durability(telegram_id, FIELD_REPAIR_MIN_DURABILITY)
+        fixed.append("Ниву")
+    if not fixed:
+        return ActionResult(False, "Вся техника в порядке — чинить нечего.")
+    what = " и ".join(fixed)
+    return ActionResult(
+        True,
+        f"🔧 Ты наскоро подлатал {what} до {FIELD_REPAIR_MIN_DURABILITY}% — "
+        "хватит доехать до базы или гаража.",
+    )
 
 
 def equip_artifact(

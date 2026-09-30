@@ -131,16 +131,6 @@ NOTE_LIMIT3_FINAL_TEXT = (
     "самый сильный артефакт в Зоне. Выноси его на поверхность — и берегись засады: "
     "за ним уже охотятся."
 )
-NOTE_LIMIT4_LEVEL2_TEXT = (
-    "Я, Осадчая Вера, начальник исследовательского комплекса при Агропроме. "
-    "Здесь хранился ещё один контур «Предела» — резервный. Техперсонал от него "
-    "обезумел, охрана держит только третий этаж. Забери фрагмент, пока цел."
-)
-NOTE_LIMIT4_FINAL_TEXT = (
-    "Резервный фрагмент готов. Он не входит в сборку трёх частей — это отдельный "
-    "контур, заряженный под нужды комплекса. Выноси его на поверхность: за ним "
-    "уже охотятся."
-)
 AMBUSH_INTRO_TEXT = (
     "При выходе на поверхность тебя встречает засада — 6 Хай сталкеров в хорошей "
     "броне и с оружием."
@@ -236,7 +226,7 @@ LAB_DEFS: dict[str, dict[str, Any]] = {
     "limit1": {
         "lab_id": "limit1",
         "label": "Предел-1",
-        "location": "Темная долина",
+        "location": "НИИ Агропром",
         "note_author": "Бунзова",
         "note_level2_text": NOTE_LEVEL2_TEXT,
         "note_final_text": NOTE_FINAL_TEXT,
@@ -532,42 +522,6 @@ LAB_DEFS["limit3"] = _lab_variant(
     note_level2_text=NOTE_LIMIT3_LEVEL2_TEXT,
     note_final_text=NOTE_LIMIT3_FINAL_TEXT,
     level_intros=LEVEL_INTROS_LIMIT3,
-)
-
-# Предел-4 (НИИ Агропром): резервный контур комплекса — техперсонал и кровососы,
-# охрана Монолита. Средняя сложность, как у «Предел-2».
-LAB_DEFS["limit4"] = _lab_variant(
-    "limit4",
-    "Предел-4",
-    "НИИ Агропром",
-    guard_weapon="АКС-74У",
-    guard_hp=40,
-    level1_extra=[
-        {
-            "pos": (2, 5),
-            "type": "npc",
-            "kind": "monolith",
-            "weapon": "СПАС-12",
-            "armor": "Бронежилет комплекса",
-            "hp": 30,
-            "damage_mult": 1.1,
-        }
-    ],
-    level2_enemies=[
-        {"pos": (2, 3), "type": "mutant", "kind": "bloodsucker", "hp_mult": 1.8, "hp": 60, "damage_mult": 1.6},
-        {"pos": (6, 3), "type": "mutant", "kind": "bloodsucker", "hp_mult": 1.8, "hp": 60, "damage_mult": 1.6},
-        {"pos": (3, 5), "type": "mutant", "kind": "zombie", "hp": 24, "damage_mult": 1.0},
-        {"pos": (5, 5), "type": "mutant", "kind": "zombie", "hp": 24, "damage_mult": 1.0},
-    ],
-    boss_hp=300,
-    boss_escort=[
-        {"pos": (2, 4), "type": "mutant", "kind": "pseudodog", "hp": 24, "damage_mult": 0.9},
-        {"pos": (7, 4), "type": "mutant", "kind": "pseudodog", "hp": 24, "damage_mult": 0.9},
-    ],
-    ambush_weapons=("Винтарь ВС", "Гаусс-пушка"),
-    note_author="Осадчей",
-    note_level2_text=NOTE_LIMIT4_LEVEL2_TEXT,
-    note_final_text=NOTE_LIMIT4_FINAL_TEXT,
 )
 
 

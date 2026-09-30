@@ -288,6 +288,8 @@ from app.game_logic import (
     travel_to,
     list_available_travel_modes,
     describe_travel_fuel_status,
+    needs_field_repair,
+    field_repair_vehicle,
     can_travel_by_truck,
     use_energy_drink,
     use_nitrous_oxide,
@@ -6556,7 +6558,7 @@ async def show_location_zones(message: Message) -> None:
                 special_label=special_label,
                 work_available=_work_available_on_location(storage, player, location),
             )
-            walk_caption = caption + f"\n\n🗺 Ты на клетке X {x + 1} · Y {y + 1}"
+            walk_caption = caption + f"\n\n🗺 Ты на клетке X {x} · Y {y}"
             if current_zone is not None:
                 walk_caption += f"\n📍 Ты в зоне: {current_zone.get('label') or current_zone.get('id')}"
             image = BufferedInputFile(walk_image, filename="location_walk.png")
@@ -7459,7 +7461,7 @@ async def location_map_callback(callback: CallbackQuery) -> None:
                 is_home = player.location == faction_home_base(player.faction)
                 caption = (
                     f"📍 Локация: {player.location}\n"
-                    f"Координаты: {x + 1},{y + 1} · Зона: {current_zone.get('label') if current_zone else '—'}\n\n"
+                    f"Координаты: {x},{y} · Зона: {current_zone.get('label') if current_zone else '—'}\n\n"
                     f"{result.text}"
                 )
                 markup = location_walk_keyboard(
@@ -7664,7 +7666,7 @@ async def location_walk_callback(callback: CallbackQuery) -> None:
 
         x, y = move_walk_position(storage, telegram_id, action)
         current_zone = zone_at(location, x, y, player.faction)
-        walk_caption = caption + f"\n\n🗺 Ты на клетке X {x + 1} · Y {y + 1}"
+        walk_caption = caption + f"\n\n🗺 Ты на клетке X {x} · Y {y}"
         if current_zone is not None:
             walk_caption += f"\n📍 Ты в зоне: {current_zone.get('label') or current_zone.get('id')}"
 
@@ -8685,6 +8687,7 @@ async def show_travel(message: Message) -> None:
     locations = filter_travel_locations_for_faction(db.get_locations(), player.faction)
     traveling = is_traveling(player)
     show_n2o = traveling and can_use_n2o_during_travel(db, player.telegram_id)
+    needs_repair = not traveling and needs_field_repair(player)
     if traveling:
         loc = format_location_display(player)
         text = (
@@ -8700,10 +8703,18 @@ async def show_travel(message: Message) -> None:
             f"Нива ×{TRAVEL_SPEED_NIVA:g}, грузовик ×{TRAVEL_SPEED_TRUCK:g} (+ дизель).\n"
             "Переход занимает реальное время (1 игровая мин ≈ 10 сек).\n\n"
             f"{describe_travel_fuel_status(player)}"
+            "\n\n⚠️ Техника сломана — подлатай её кнопкой ниже (бесплатно, до 5%), чтобы уехать."
+            if needs_repair
+            else ""
         )
     await message.answer(
         text,
-        reply_markup=travel_keyboard(locations, traveling=traveling, show_n2o_button=show_n2o),
+        reply_markup=travel_keyboard(
+            locations,
+            traveling=traveling,
+            show_n2o_button=show_n2o,
+            show_field_repair=needs_repair,
+        ),
     )
 
 
@@ -8747,6 +8758,45 @@ async def travel_back_callback(callback: CallbackQuery) -> None:
     storage = get_storage()
     traveling = is_traveling(player)
     show_n2o = traveling and can_use_n2o_during_travel(storage, player.telegram_id)
+    needs_repair = not traveling and needs_field_repair(player)
+    text = (
+        "Выбери локацию, затем транспорт.\n\n"
+        f"{describe_travel_fuel_status(player)}"
+        "\n\n⚠️ Техника сломана — подлатай её кнопкой ниже (бесплатно, до 5%), чтобы уехать."
+        if needs_repair
+        else ""
+    )
+    await edit_menu_message(
+        callback,
+        text,
+        travel_keyboard(
+            locations,
+            traveling=traveling,
+            show_n2o_button=show_n2o,
+            show_field_repair=needs_repair,
+        ),
+    )
+
+
+@router.callback_query(F.data == "travel:fieldrepair")
+async def travel_field_repair_callback(callback: CallbackQuery) -> None:
+    """Бесплатно подлатать технику до 5% — чтобы уехать с локации."""
+    storage = get_storage()
+    if storage.get_character(callback.from_user.id) is None:
+        await callback.answer("Сначала создай персонажа.", show_alert=True)
+        return
+    result = field_repair_vehicle(storage, callback.from_user.id)
+    if not result.ok:
+        await safe_callback_answer(callback, result.text, show_alert=True)
+        return
+    await safe_callback_answer(callback, result.text)
+    player = storage.get_character(callback.from_user.id, refresh_energy=False)
+    if player is None:
+        return
+    from app.monolith_war import filter_travel_locations_for_faction
+
+    locations = filter_travel_locations_for_faction(storage.get_locations(), player.faction)
+    traveling = is_traveling(player)
     text = (
         "Выбери локацию, затем транспорт.\n\n"
         f"{describe_travel_fuel_status(player)}"
@@ -8754,7 +8804,12 @@ async def travel_back_callback(callback: CallbackQuery) -> None:
     await edit_menu_message(
         callback,
         text,
-        travel_keyboard(locations, traveling=traveling, show_n2o_button=show_n2o),
+        travel_keyboard(
+            locations,
+            traveling=traveling,
+            show_n2o_button=False,
+            show_field_repair=needs_field_repair(player),
+        ),
     )
 
 

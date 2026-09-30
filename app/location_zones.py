@@ -123,7 +123,7 @@ LOCATION_ZONES: dict[str, list[dict]] = {
     "НИИ Агропром": [
         {"id": "anomaly", "kind": "anomaly", "label": "Аномальный участок"},
         {"id": "search_1", "kind": "search", "label": "Тоннели Агропрома"},
-        {"id": "lab_limit4", "kind": "lab", "label": "Лаборатория «Предел-4»"},
+        {"id": "lab_limit1", "kind": "lab", "label": "Лаборатория «Предел-1»"},
     ],
     "Янтарь": [
         {"id": "anomaly", "kind": "anomaly", "label": "Аномальный участок"},
@@ -137,7 +137,6 @@ LOCATION_ZONES: dict[str, list[dict]] = {
     "Темная долина": [
         {"id": "anomaly", "kind": "anomaly", "label": "Аномальный участок"},
         {"id": "search_1", "kind": "search", "label": "Развалины деревни"},
-        {"id": "lab_limit1", "kind": "lab", "label": "Лаборатория «Предел-1»"},
     ],
     "Рыжий лес": [
         {"id": "anomaly", "kind": "anomaly", "label": "Аномальный участок"},
