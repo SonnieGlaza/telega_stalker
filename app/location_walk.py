@@ -79,7 +79,8 @@ _BASE_SPOT: tuple[int, int, int] = (11, 11, _DEFAULT_ZONE_RADIUS)
 LOCATION_WALK_SPOTS: dict[str, dict[str, tuple[int, int] | tuple[int, int, int]]] = {
     "Кордон": {
         "anomaly": (4, 4),
-        "search_1": (11, 4),
+        "search_1": (11, 4, 0),
+        "search_2": (14, 5, 0),
         "base": (11, 11),
     },
     "Свалка": {
@@ -89,7 +90,7 @@ LOCATION_WALK_SPOTS: dict[str, dict[str, tuple[int, int] | tuple[int, int, int]]
     },
     "Росток": {
         "anomaly": (4, 4),
-        "search_1": (11, 4),
+        "search_1": (7, 5, 0),
         "base": (4, 11),
     },
     "Армейские склады": {
