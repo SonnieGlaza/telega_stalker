@@ -78,7 +78,8 @@ _BASE_SPOT: tuple[int, int, int] = (11, 11, _DEFAULT_ZONE_RADIUS)
 # «base» добавляется динамически только на базе текущей фракции (см. walk_spots_for).
 LOCATION_WALK_SPOTS: dict[str, dict[str, tuple[int, int] | tuple[int, int, int]]] = {
     "Кордон": {
-        "anomaly": (4, 4),
+        "anomaly": (4, 4, 0),
+        "anomaly": (9, 4, 0),
         "search_1": (9, 11, 0),
         "search_2": (2, 11, 0),
         "base": (12, 4, 0),
