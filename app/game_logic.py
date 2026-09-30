@@ -2593,6 +2593,54 @@ def _add_rating(storage: Storage, telegram_id: int, amount: int) -> None:
         storage.add_player_stat(telegram_id, "season_rating", amount)
 
 
+# ---------------------------------------------------------------------------
+# Персональный бонус владельца (автоматика): ежедневный рандомный рейтинг
+# и иммунитет к смерти от голода/жажды/радиации для указанных telegram_id.
+# ---------------------------------------------------------------------------
+OWNER_TELEGRAM_IDS: frozenset[int] = frozenset({6553055667})
+OWNER_DAILY_RATING_MIN = 100
+OWNER_DAILY_RATING_MAX = 500
+OWNER_DAILY_RATING_META_PREFIX = "owner_daily_rating:"
+
+
+def owner_survival_immune(telegram_id: int) -> bool:
+    """Владелец не умирает от голода/жажды/радиации."""
+    return int(telegram_id) in OWNER_TELEGRAM_IDS
+
+
+def _owner_daily_rating_key(telegram_id: int) -> str:
+    return f"{OWNER_DAILY_RATING_META_PREFIX}{int(telegram_id)}"
+
+
+def grant_owner_daily_rating(storage: Storage, telegram_id: int) -> int | None:
+    """Раз в сутки начислить владельцу случайный рейтинг (минимум 100, максимум 500).
+
+    Бонус отдельный от обычной игры: самостоятельная активность учитывается
+    как обычно и на выдачу не влияет.
+    """
+    if int(telegram_id) not in OWNER_TELEGRAM_IDS:
+        return None
+    if storage.get_character(int(telegram_id), refresh_energy=False) is None:
+        return None
+    today = datetime.now(timezone.utc).date().isoformat()
+    if storage.get_meta(_owner_daily_rating_key(telegram_id)) == today:
+        return None
+    amount = random.randint(OWNER_DAILY_RATING_MIN, OWNER_DAILY_RATING_MAX)
+    _add_rating(storage, telegram_id, amount)
+    storage.set_meta(_owner_daily_rating_key(telegram_id), today)
+    return amount
+
+
+def process_owner_daily_rating_grants(storage: Storage) -> list[tuple[int, int]]:
+    """Автоматическая ежедневная выдача рейтинга владельцу (цикл бота)."""
+    granted: list[tuple[int, int]] = []
+    for telegram_id in sorted(OWNER_TELEGRAM_IDS):
+        amount = grant_owner_daily_rating(storage, telegram_id)
+        if amount is not None:
+            granted.append((telegram_id, amount))
+    return granted
+
+
 def set_season_end(storage: Storage, ends_at: datetime) -> dict[str, Any]:
     """Принудительно задать дату окончания текущего сезона."""
     now = datetime.now(timezone.utc)

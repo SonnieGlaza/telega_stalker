@@ -72,6 +72,16 @@ SURVIVAL_DAMAGE_TICK_MINUTES = 30
 SURVIVAL_NEED_MAX = 100  # голод / жажда / радиация
 SURVIVAL_CRITICAL_NEED = 100  # голод/жажда/радиация ≥ порога → урон HP
 
+
+def _survival_immune(telegram_id: int) -> bool:
+    """Персонаж с иммунитетом (телеграм-владелец) не умирает от выживания."""
+    try:
+        from app.game_logic import owner_survival_immune
+
+        return owner_survival_immune(telegram_id)
+    except Exception:
+        return False
+
 # Telegram user id > 2^31-1 → Postgres INTEGER overflow. Everywhere BIGINT.
 TELEGRAM_ID_COLUMNS: tuple[tuple[str, str], ...] = (
     ("characters", "telegram_id"),
@@ -2091,13 +2101,18 @@ class Storage:
                     (now - survival_damage_at).total_seconds() // (SURVIVAL_DAMAGE_TICK_MINUTES * 60)
                 )
                 if ticks > 0:
-                    # Радиация бьёт сильнее голодного тика, если фон критический.
-                    per_tick = SURVIVAL_DAMAGE_PER_TICK
-                    if radiation >= SURVIVAL_CRITICAL_NEED:
-                        per_tick = SURVIVAL_DAMAGE_PER_TICK + 5
-                    health = max(0, health - ticks * per_tick)
-                    survival_damage_at = now
-                    changed = True
+                    if _survival_immune(telegram_id):
+                        # Владелец не умирает от голода/жажды/радиации — без урона HP.
+                        survival_damage_at = now
+                        changed = True
+                    else:
+                        # Радиация бьёт сильнее голодного тика, если фон критический.
+                        per_tick = SURVIVAL_DAMAGE_PER_TICK
+                        if radiation >= SURVIVAL_CRITICAL_NEED:
+                            per_tick = SURVIVAL_DAMAGE_PER_TICK + 5
+                        health = max(0, health - ticks * per_tick)
+                        survival_damage_at = now
+                        changed = True
 
             if not changed:
                 return
@@ -2169,6 +2184,9 @@ class Storage:
         except Exception:
             max_hp = 100
         new_health = max(0, min(max_hp, character.health + health_delta))
+        if _survival_immune(telegram_id):
+            # Владелец не умирает от голода/жажды/радиации.
+            new_health = max(1, new_health)
         died = character.health > 0 and new_health <= 0
         with self._connect() as conn:
             conn.execute(

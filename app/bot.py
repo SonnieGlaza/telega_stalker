@@ -4842,6 +4842,7 @@ async def _handle_quest_mission_death_callback(
 
 SURVIVAL_DEATH_CHECK_EVERY_TICKS = 5  # ~раз в 5 мин при POINTS_INCOME_TICK_SECONDS=60
 SURVIVAL_DEATH_CHECK_YIELD_EVERY = 50
+OWNER_DAILY_RATING_EVERY_TICKS = 10  # проверка бонуса владельца ~раз в 10 мин
 
 
 async def _push_offline_survival_deaths(bot: Bot, storage: Storage) -> None:
@@ -11390,6 +11391,20 @@ async def run_bot() -> None:
                     await _push_offline_survival_deaths(bot, get_storage())
                 except Exception:
                     logger.exception("Offline survival death tick failed")
+            if zone_tick_counter["n"] % OWNER_DAILY_RATING_EVERY_TICKS == 0:
+                try:
+                    from app.game_logic import process_owner_daily_rating_grants
+
+                    for owner_id, amount in process_owner_daily_rating_grants(get_storage()):
+                        try:
+                            await bot.send_message(
+                                owner_id,
+                                f"⚡ Ежедневный бонус владельца: +{amount} рейтинга.",
+                            )
+                        except Exception:
+                            logger.debug("Failed owner daily rating notify to %s", owner_id)
+                except Exception:
+                    logger.exception("Owner daily rating tick failed")
 
     async def periodic_travel_live_eta() -> None:
         """Каждую секунду правит сообщение «сколько осталось ехать»."""
