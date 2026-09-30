@@ -615,6 +615,7 @@ ITEM_LABELS = {
     "artifact_predel1": "Артефакт «Предел-1»",
     "artifact_predel2": "Артефакт «Предел-2»",
     "artifact_predel3": "Артефакт «Предел-3»",
+    "artifact_predel4": "Артефакт «Предел-4»",
     "artifact_predel": "Артефакт «Предел»",
     "materials": "Стройматериалы",
     "armor_leather": "Кожаная куртка",

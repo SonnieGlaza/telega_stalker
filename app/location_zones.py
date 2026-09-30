@@ -123,6 +123,7 @@ LOCATION_ZONES: dict[str, list[dict]] = {
     "НИИ Агропром": [
         {"id": "anomaly", "kind": "anomaly", "label": "Аномальный участок"},
         {"id": "search_1", "kind": "search", "label": "Тоннели Агропрома"},
+        {"id": "lab_limit4", "kind": "lab", "label": "Лаборатория «Предел-4»"},
     ],
     "Янтарь": [
         {"id": "anomaly", "kind": "anomaly", "label": "Аномальный участок"},
