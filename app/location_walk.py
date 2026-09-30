@@ -72,18 +72,33 @@ _SECRET_ZONE: dict[str, str] = {"id": "secrettrader", "kind": "secrettrader", "l
 _DEFAULT_ZONE_RADIUS = 2
 _BASE_SPOT: tuple[int, int, int] = (11, 11, _DEFAULT_ZONE_RADIUS)
 
-# Разметка зон на сетке локации: location -> {zone_id: spot}.
-# spot — (x, y) или (x, y, radius). Если радиус не указан, бот сам
-# подставит «квадрат» _DEFAULT_ZONE_RADIUS (см. _normalize_spot).
-# «base» добавляется динамически только на базе текущей фракции (см. walk_spots_for).
-LOCATION_WALK_SPOTS: dict[str, dict[str, tuple[int, int] | tuple[int, int, int]]] = {
+# Разметка зон на сетке локации (новый формат): location -> {zone_id: точки}.
+# Каждая точка — (x1, y1, x2, y2) в координатах игрока: (1,1) — левая верхняя
+# клетка поля. «X1-X2, Y1-Y2» = прямоугольник клеток; одна клетка = X1==X2, Y1==Y2.
+# Точки перечисляются через «;» — мест одной зоны (аномалий/обыска) может быть несколько.
+LOCATION_WALK_RECTS: dict[str, dict[str, tuple[tuple[int, int, int, int], ...]]] = {
     "Кордон": {
-        "anomaly": (4, 4, 0),
-        "anomaly": (9, 4, 0),
-        "search_1": (9, 11, 0),
-        "search_2": (2, 11, 0),
-        "base": (12, 4, 0),
+        "anomaly": (
+            (2, 10, 3, 10),
+            (4, 8, 4, 8),
+            (9, 4, 9, 4),
+            (10, 8, 10, 8),
+        ),
+        "search_1": (
+            (7, 5, 7, 5),
+            (14, 5, 14, 5),
+            (7, 8, 7, 8),
+            (9, 9, 10, 10),
+        ),
+        "base": (
+            (3, 12, 4, 13),
+        ),
     },
+}
+
+# Старый формат (центр + радиус «квадрата», 0-индексный) для локаций, координаты
+# которых ещё не переведены в LOCATION_WALK_RECTS. Переводим по мере поступления.
+_WALK_LEGACY_CENTER_SPOTS: dict[str, dict[str, tuple[int, int] | tuple[int, int, int]]] = {
     "Свалка": {
         "anomaly": (4, 4),
         "search_1": (11, 11),
@@ -144,11 +159,12 @@ LOCATION_WALK_SPOTS: dict[str, dict[str, tuple[int, int] | tuple[int, int, int]]
 def _normalize_spot(spot: tuple[int, int] | tuple[int, int, int]) -> tuple[int, int, int]:
     """(x, y) -> (x, y, _DEFAULT_ZONE_RADIUS); (x, y, radius) — как есть.
 
-    Радиус — размер «квадрата» зоны вокруг центра (круг по Чебышёву).
+    Радиус — размер «квадрата» зоны вокруг центра (круг по Чебышёву);
+    0 — одна клетка.
     """
     if len(spot) == 2:
         return int(spot[0]), int(spot[1]), _DEFAULT_ZONE_RADIUS
-    return int(spot[0]), int(spot[1]), max(1, int(spot[2]))
+    return int(spot[0]), int(spot[1]), max(0, int(spot[2]))
 
 
 def _walk_meta_key(telegram_id: int) -> str:
@@ -233,51 +249,66 @@ def _fallback_spots(location: str) -> dict[str, tuple[int, int, int]]:
     return spots
 
 
-def walk_spots_for(location: str, faction: str | None) -> dict[str, tuple[int, int, int]]:
-    """Точки зон для локации; «base» только на базе текущей фракции.
+def _zone_dict_for(zone_id: str, location: str) -> dict[str, str]:
+    """Словарь зоны {id, kind, label} по id (base/secrettrader — особые)."""
+    if zone_id == "base":
+        return dict(_BASE_ZONE)
+    if zone_id == "secrettrader":
+        return dict(_SECRET_ZONE)
+    zone_by_id = {str(z.get("id") or ""): z for z in location_zones_for(location)}
+    source = zone_by_id.get(zone_id)
+    return {
+        "id": zone_id,
+        "kind": str((source or {}).get("kind") or ""),
+        "label": str((source or {}).get("label") or zone_id),
+    }
 
-    Записи формата (x, y) автоматически получают дефолтный радиус «квадрата».
+
+def walk_zone_rects(
+    location: str,
+    faction: str | None,
+) -> list[tuple[dict[str, str], tuple[int, int, int, int]]]:
+    """Зоны локации как прямоугольники клеток (0-индексные, включительно).
+
+    Новый формат (LOCATION_WALK_RECTS) — точные квадраты (x1, y1, x2, y2)
+    в координатах игрока, где (1,1) — левая верхняя клетка. Старый формат
+    (центр + радиус) переводится в «квадрат» для ещё не переведённых локаций.
+    «base» показывается только фракции-владельцу локации.
     """
-    raw_spots = LOCATION_WALK_SPOTS.get(location) or _fallback_spots(location)
-    spots = {key: _normalize_spot(value) for key, value in raw_spots.items()}
     from app.game_logic import faction_home_base
 
     is_own_base = bool(faction) and location == faction_home_base(faction)
+    rects = LOCATION_WALK_RECTS.get(location)
+    if rects is not None:
+        result: list[tuple[dict[str, str], tuple[int, int, int, int]]] = []
+        for zone_id, spots in rects.items():
+            if zone_id == "base" and not is_own_base:
+                continue
+            zone = _zone_dict_for(zone_id, location)
+            for x1, y1, x2, y2 in spots:
+                result.append((zone, (x1 - 1, y1 - 1, x2 - 1, y2 - 1)))
+        return result
+
+    raw_spots = _WALK_LEGACY_CENTER_SPOTS.get(location) or _fallback_spots(location)
     if is_own_base:
-        spots.setdefault("base", _BASE_SPOT)
-    elif "base" in spots:
-        # «base» в разметке показываем только своей фракции, чужим — нет.
-        spots = {key: value for key, value in spots.items() if key != "base"}
-    return spots
-
-
-def walk_zones_with_spots(
-    location: str,
-    faction: str | None,
-) -> list[tuple[dict[str, str], tuple[int, int, int]]]:
-    """[(zone_dict, (cx, cy, radius)), ...] — зоны локации в порядке отрисовки."""
-    zone_by_id = {str(z.get("id") or ""): z for z in location_zones_for(location)}
-    result: list[tuple[dict[str, str], tuple[int, int, int]]] = []
-    for zone_id, spot in walk_spots_for(location, faction).items():
-        if zone_id == "base":
-            zone: dict[str, str] = dict(_BASE_ZONE)
-        elif zone_id == "secrettrader":
-            zone = dict(_SECRET_ZONE)
-        else:
-            source = zone_by_id.get(zone_id)
-            zone = {
-                "id": zone_id,
-                "kind": str((source or {}).get("kind") or ""),
-                "label": str((source or {}).get("label") or zone_id),
-            }
-        result.append((zone, spot))
+        raw_spots = dict(raw_spots)
+        raw_spots.setdefault("base", _BASE_SPOT)
+    result = []
+    for zone_id, spot in raw_spots.items():
+        if zone_id == "base" and not is_own_base:
+            # «base» в разметке показываем только своей фракции, чужим — нет.
+            continue
+        cx, cy, radius = _normalize_spot(spot)
+        result.append(
+            (_zone_dict_for(zone_id, location), (cx - radius, cy - radius, cx + radius, cy + radius))
+        )
     return result
 
 
 def zone_at(location: str, x: int, y: int, faction: str | None = None) -> dict[str, str] | None:
-    """Зона под точкой (круг по Чебышёву: max(|dx|, |dy|) ≤ radius) или None."""
-    for zone, (cx, cy, radius) in walk_zones_with_spots(location, faction):
-        if max(abs(int(x) - cx), abs(int(y) - cy)) <= radius:
+    """Зона под клеткой (прямоугольник) или None."""
+    for zone, (x0, y0, x1, y1) in walk_zone_rects(location, faction):
+        if x0 <= int(x) <= x1 and y0 <= int(y) <= y1:
             return zone
     return None
 
@@ -295,29 +326,23 @@ def _draw_zone(
     canvas: Image.Image,
     kind: str,
     color: tuple[int, int, int],
-    cx: int,
-    cy: int,
-    radius: int,
+    box: tuple[int, int, int, int],
 ) -> None:
-    """Полупрозрачный квадрат зоны + жирная обводка (у базы — «радужная» рамка)."""
+    """Прямоугольник-зона из клеток: полупрозрачная заливка + жирная обводка."""
     cell = 44
-    # cx/cy — центр в пикселях, radius — «пиксельный радиус» (круг был 2*radius,
-    # квадрат занимает тот же периметр: сторона = 2*radius).
-    half = max(1, int(radius))
-    left = cx - half
-    top = cy - half
-    right = cx + half
-    bottom = cy + half
+    left, top, right, bottom = box
+    w = max(1, right - left)
+    h = max(1, bottom - top)
+    radius = max(4, min(cell // 3, min(w, h) // 2))
 
     overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     ImageDraw.Draw(overlay).rounded_rectangle(
         (left, top, right, bottom),
-        radius=max(6, cell // 3),
+        radius=radius,
         fill=(*color, 46),
     )
     canvas.alpha_composite(overlay)
     draw = ImageDraw.Draw(canvas)
-    box = (left, top, right, bottom)
     if kind == "base":
         rainbow = (
             (255, 80, 80),
@@ -329,50 +354,42 @@ def _draw_zone(
         )
         segments = 4 * len(rainbow)
         step = 1.0 / (len(rainbow) * 4)
-        w, h = right - left, bottom - top
         for idx, arc_color in enumerate(rainbow):
             for seg in range(4):
                 start = idx * 4 + seg
                 f0, f1 = start * step, (start + 1) * step
                 if seg == 0:  # top
-                    a, b, c, d = (
-                        left + f0 * w, top, left + f1 * w, top + 8
-                    )
+                    a, b, c, d = (left + f0 * w, top, left + f1 * w, top + 8)
                 elif seg == 1:  # right
-                    a, b, c, d = (
-                        right - 8, top + f0 * h, right, top + f1 * h
-                    )
+                    a, b, c, d = (right - 8, top + f0 * h, right, top + f1 * h)
                 elif seg == 2:  # bottom
-                    a, b, c, d = (
-                        right - f1 * w, bottom - 8, right - f0 * w, bottom
-                    )
+                    a, b, c, d = (right - f1 * w, bottom - 8, right - f0 * w, bottom)
                 else:  # left
-                    a, b, c, d = (
-                        left, bottom - f1 * h, left + 8, bottom - f0 * h
-                    )
+                    a, b, c, d = (left, bottom - f1 * h, left + 8, bottom - f0 * h)
                 draw.rectangle((a, b, c, d), fill=arc_color)
     else:
         draw.rounded_rectangle(
             box,
-            radius=max(6, cell // 3),
+            radius=radius,
             outline=color,
             width=5,
         )
     if kind == "anomaly":
-        # «Пузырьки» аномалий — маленькие окружности внутри квадрата.
-        offsets = (
-            (-0.55, -0.45),
-            (0.45, -0.6),
-            (0.65, 0.3),
-            (-0.3, 0.6),
-            (-0.8, 0.1),
-            (0.15, 0.8),
-        )
-        for fx, fy in offsets[: 3 + 3 * max(0, min(1, radius - 1))]:
-            br = max(4, cell // 2)
-            bx = int(left + (fx + 1) / 2 * (right - left))
-            by = int(top + (fy + 1) / 2 * (bottom - top))
-            draw.ellipse((bx - br, by - br, bx + br, by + br), outline=(*color, 220), width=2)
+        # «Пузырьки» аномалий — только на достаточно крупных зонах.
+        if w >= cell * 2 and h >= cell * 2:
+            offsets = (
+                (-0.55, -0.45),
+                (0.45, -0.6),
+                (0.65, 0.3),
+                (-0.3, 0.6),
+                (-0.8, 0.1),
+                (0.15, 0.8),
+            )
+            for fx, fy in offsets[: 3 + 3 * max(0, min(1, min(w, h) // cell - 1))]:
+                br = max(4, cell // 2)
+                bx = int(left + (fx + 1) / 2 * w)
+                by = int(top + (fy + 1) / 2 * h)
+                draw.ellipse((bx - br, by - br, bx + br, by + br), outline=(*color, 220), width=2)
     if kind == "lab":
         glyph = render_emoji_glyph("🧪", 26)
         if glyph is not None:
@@ -398,7 +415,7 @@ def render_walk_frame(storage: Storage, player: Character) -> bytes:
 
     location = str(player.location)
     faction = str(player.faction or "")
-    zones_here = walk_zones_with_spots(location, faction)
+    zones_here = walk_zone_rects(location, faction)
     x, y = get_walk_position(storage, player.telegram_id)
     current_zone = zone_at(location, x, y, faction)
 
@@ -429,13 +446,16 @@ def render_walk_frame(storage: Storage, player: Character) -> bytes:
                     width=1,
                 )
 
-    for zone, (zx, zy, zr) in zones_here:
+    for zone, (rx0, ry0, rx1, ry1) in zones_here:
         kind = str(zone.get("kind") or "")
         color = ZONE_COLORS.get(kind, (200, 200, 200))
-        zcx = margin + zx * cell + cell // 2
-        zcy = margin + zy * cell + cell // 2
-        zrad = zr * cell + cell // 2
-        _draw_zone(canvas, kind, color, zcx, zcy, zrad)
+        box = (
+            margin + rx0 * cell,
+            margin + ry0 * cell,
+            margin + (rx1 + 1) * cell - 1,
+            margin + (ry1 + 1) * cell - 1,
+        )
+        _draw_zone(canvas, kind, color, box)
 
     pcx = margin + x * cell + cell // 2
     pcy = margin + y * cell + cell // 2
@@ -472,7 +492,7 @@ def render_walk_frame(storage: Storage, player: Character) -> bytes:
     panel_text_width = pr - pl - 30
     draw.text((pl + 14, pt + 106), location, fill=(245, 245, 245), font=loc_font)
     draw.text((pl + 14, pt + 132), "Осмотр локации", fill=(180, 200, 150), font=body)
-    draw.text((pl + 16, pt + 160), f"Координаты: X {x} · Y {y}", fill=(200, 200, 200), font=body)
+    draw.text((pl + 16, pt + 160), f"Координаты: X {x + 1} · Y {y + 1}", fill=(200, 200, 200), font=body)
 
     zone_y = pt + 190
     if current_zone is not None:

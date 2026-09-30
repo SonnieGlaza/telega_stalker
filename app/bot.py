@@ -6556,7 +6556,7 @@ async def show_location_zones(message: Message) -> None:
                 special_label=special_label,
                 work_available=_work_available_on_location(storage, player, location),
             )
-            walk_caption = caption + f"\n\n🗺 Ты на клетке X {x} · Y {y}"
+            walk_caption = caption + f"\n\n🗺 Ты на клетке X {x + 1} · Y {y + 1}"
             if current_zone is not None:
                 walk_caption += f"\n📍 Ты в зоне: {current_zone.get('label') or current_zone.get('id')}"
             image = BufferedInputFile(walk_image, filename="location_walk.png")
@@ -7459,7 +7459,7 @@ async def location_map_callback(callback: CallbackQuery) -> None:
                 is_home = player.location == faction_home_base(player.faction)
                 caption = (
                     f"📍 Локация: {player.location}\n"
-                    f"Координаты: {x},{y} · Зона: {current_zone.get('label') if current_zone else '—'}\n\n"
+                    f"Координаты: {x + 1},{y + 1} · Зона: {current_zone.get('label') if current_zone else '—'}\n\n"
                     f"{result.text}"
                 )
                 markup = location_walk_keyboard(
@@ -7664,7 +7664,7 @@ async def location_walk_callback(callback: CallbackQuery) -> None:
 
         x, y = move_walk_position(storage, telegram_id, action)
         current_zone = zone_at(location, x, y, player.faction)
-        walk_caption = caption + f"\n\n🗺 Ты на клетке X {x} · Y {y}"
+        walk_caption = caption + f"\n\n🗺 Ты на клетке X {x + 1} · Y {y + 1}"
         if current_zone is not None:
             walk_caption += f"\n📍 Ты в зоне: {current_zone.get('label') or current_zone.get('id')}"
 
