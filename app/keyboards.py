@@ -176,6 +176,7 @@ def travel_keyboard(
     *,
     traveling: bool = False,
     show_n2o_button: bool = False,
+    show_field_repair: bool = False,
     back_callback: str | None = None,
 ) -> InlineKeyboardMarkup:
     display_names = {"Тунель": "Тунель (Барахолка)"}
@@ -189,6 +190,10 @@ def travel_keyboard(
             owner = location["controlled_by"] or "нейтрал"
             label = f"{display_names.get(name, name)} [{ptype}, {owner}]"
             rows.append([InlineKeyboardButton(text=label, callback_data=f"travel:to:{name}")])
+        if show_field_repair:
+            rows.append(
+                [InlineKeyboardButton(text="🔧 Подлатать технику до 5%", callback_data="travel:fieldrepair")]
+            )
     if back_callback:
         rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)])
     return InlineKeyboardMarkup(inline_keyboard=rows)

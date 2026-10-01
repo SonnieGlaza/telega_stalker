@@ -273,7 +273,7 @@ LOCATION_WALK_RECTS: dict[str, dict[str, tuple[tuple[int, int, int, int], ...]]]
             (9, 7, 9, 7),
         ),
         "bazaar": (
-            (11, 8, 11, 8),
+            (12, 8, 12, 8),
         ),
     },
 }
@@ -410,6 +410,9 @@ def walk_zone_rects(
     if rects is not None:
         result: list[tuple[dict[str, str], tuple[int, int, int, int]]] = []
         for zone_id, spots in rects.items():
+            if zone_id == "base" and location == "ЧАЭС" and str(faction or "") != "Монолит":
+                # База «завода» (ЧАЭС) видна только Монолиту.
+                continue
             zone = _zone_dict_for(zone_id, location)
             for x1, y1, x2, y2 in spots:
                 result.append((zone, (x1 - 1, y1 - 1, x2 - 1, y2 - 1)))
