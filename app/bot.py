@@ -8709,6 +8709,11 @@ async def _show_travel_inner(message: Message) -> None:
             "Пока идёт переход, другие действия на точке недоступны."
         )
     else:
+        repair_hint = (
+            "\n\n⚠️ Техника сломана — подлатай её кнопкой ниже (бесплатно, до 5%), чтобы уехать."
+            if needs_repair
+            else ""
+        )
         text = (
             "Выбери локацию, затем транспорт (велик доступен даже если есть Нива/грузовик).\n"
             f"Пешком ×1, велосипед ×{TRAVEL_SPEED_BICYCLE:g} "
@@ -8716,9 +8721,7 @@ async def _show_travel_inner(message: Message) -> None:
             f"Нива ×{TRAVEL_SPEED_NIVA:g}, грузовик ×{TRAVEL_SPEED_TRUCK:g} (+ дизель).\n"
             "Переход занимает реальное время (1 игровая мин ≈ 10 сек).\n\n"
             f"{describe_travel_fuel_status(player)}"
-            "\n\n⚠️ Техника сломана — подлатай её кнопкой ниже (бесплатно, до 5%), чтобы уехать."
-            if needs_repair
-            else ""
+            f"{repair_hint}"
         )
     await message.answer(
         text,
@@ -8787,12 +8790,15 @@ async def _travel_back_inner(callback: CallbackQuery) -> None:
     traveling = is_traveling(player)
     show_n2o = traveling and can_use_n2o_during_travel(storage, player.telegram_id)
     needs_repair = not traveling and needs_field_repair(player)
-    text = (
-        "Выбери локацию, затем транспорт.\n\n"
-        f"{describe_travel_fuel_status(player)}"
+    repair_hint = (
         "\n\n⚠️ Техника сломана — подлатай её кнопкой ниже (бесплатно, до 5%), чтобы уехать."
         if needs_repair
         else ""
+    )
+    text = (
+        "Выбери локацию, затем транспорт.\n\n"
+        f"{describe_travel_fuel_status(player)}"
+        f"{repair_hint}"
     )
     await edit_menu_message(
         callback,
