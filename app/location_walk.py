@@ -44,8 +44,8 @@ MOVE_DELTAS: dict[str, tuple[int, int]] = {
 
 WALK_DIRECTION_KEYS = frozenset(MOVE_DELTAS)
 
-# Цвета зон на поле: base — красное поле, search — жёлтая, anomaly — белая,
-# lab — зелёная, тайный торговец — янтарная.
+# Цвета зон на поле: base/торговец — «радужная» база (заливка голубая, кольцо дугами),
+# search — жёлтая, anomaly — сине-бирюзовая, lab — фиолетовая, тайный торговец — янтарная.
 ZONE_COLORS: dict[str, tuple[int, int, int]] = {
     "base": (220, 60, 60),
     "search": (245, 210, 70),
@@ -170,46 +170,117 @@ LOCATION_WALK_RECTS: dict[str, dict[str, tuple[tuple[int, int, int, int], ...]]]
             (5, 10, 5, 10),
         ),
     },
-}
-
-# Старый формат (центр + радиус «квадрата», 0-индексный) для локаций, координаты
-# которых ещё не переведены в LOCATION_WALK_RECTS. Переводим по мере поступления.
-_WALK_LEGACY_CENTER_SPOTS: dict[str, dict[str, tuple[int, int] | tuple[int, int, int]]] = {
     "Янтарь": {
-        "anomaly": (4, 4),
-        "search_1": (11, 4),
-        "lab_limit2": (11, 11),
+        "search_1": (
+            (9, 6, 9, 6),
+            (8, 7, 8, 7),
+            (11, 8, 11, 8),
+        ),
+        "lab_limit2": (
+            (8, 4, 8, 4),
+        ),
+        "anomaly": (
+            (6, 11, 7, 12),
+            (3, 6, 3, 6),
+            (11, 3, 11, 3),
+            (10, 4, 10, 4),
+            (11, 7, 11, 7),
+        ),
     },
     "Болото": {
-        "anomaly": (4, 11),
-        "search_1": (11, 4),
+        "search_1": (
+            (3, 2, 3, 2),
+            (5, 4, 5, 4),
+            (7, 4, 7, 4),
+            (15, 2, 15, 2),
+            (6, 8, 6, 9),
+            (3, 13, 4, 14),
+            (6, 11, 6, 11),
+            (8, 10, 8, 10),
+            (10, 5, 10, 5),
+            (13, 10, 14, 11),
+        ),
+        "anomaly": (
+            (11, 2, 11, 2),
+            (3, 7, 3, 7),
+            (4, 9, 4, 9),
+            (7, 6, 7, 6),
+            (10, 9, 10, 9),
+        ),
     },
     "Темная долина": {
-        "anomaly": (4, 4),
-        "search_1": (11, 11),
+        "search_1": (
+            (9, 8, 9, 8),
+            (11, 7, 11, 7),
+            (7, 10, 7, 10),
+        ),
+        "anomaly": (
+            (14, 2, 14, 2),
+            (9, 12, 9, 12),
+        ),
+        "base": (
+            (6, 1, 12, 4),
+        ),
     },
     "Рыжий лес": {
-        "anomaly": (11, 11),
-        "search_1": (4, 4),
+        "search_1": (
+            (7, 4, 8, 5),
+            (4, 9, 4, 9),
+            (3, 10, 3, 10),
+        ),
+        "anomaly": (
+            (11, 7, 11, 7),
+            (10, 10, 10, 10),
+            (7, 10, 7, 10),
+        ),
     },
     "Радар": {
-        "anomaly": (4, 4),
-        "search_1": (11, 11),
-        "lab_limit3": (11, 4),
+        "search_1": (
+            (10, 4, 10, 4),
+            (14, 3, 14, 3),
+        ),
+        "anomaly": (
+            (9, 9, 9, 9),
+            (12, 10, 12, 10),
+            (11, 12, 11, 12),
+        ),
+        "lab_limit3": (
+            (2, 5, 4, 8),
+        ),
     },
     "Припять": {
-        "anomaly": (4, 4),
-        "search_1": (11, 4),
-        "secrettrader": (7, 10, 1),
+        "secrettrader": (
+            (8, 14, 8, 14),
+        ),
+        "search_1": (
+            (10, 13, 10, 13),
+            (6, 10, 6, 10),
+            (10, 8, 10, 8),
+        ),
+        "anomaly": (
+            (7, 5, 9, 6),
+            (7, 7, 7, 8),
+            (9, 10, 9, 10),
+        ),
     },
     "ЧАЭС": {
-        "base": (7, 7, 4),
+        "base": (
+            (4, 12, 4, 12),
+        ),
     },
     "Тунель": {
-        "bazaar": (8, 6, 1),
-        "trade": (11, 7, 1),
+        "trade": (
+            (9, 7, 9, 7),
+        ),
+        "bazaar": (
+            (11, 8, 11, 8),
+        ),
     },
 }
+
+# Старый формат (центр + радиус) больше не используется: все локации переведены
+# в LOCATION_WALK_RECTS. Пустой словарь оставлен ради фолбэка (_fallback_spots).
+_WALK_LEGACY_CENTER_SPOTS: dict[str, dict[str, tuple[int, int] | tuple[int, int, int]]] = {}
 
 
 def _normalize_spot(spot: tuple[int, int] | tuple[int, int, int]) -> tuple[int, int, int]:
@@ -398,13 +469,37 @@ def _draw_zone(
     )
     canvas.alpha_composite(overlay)
     draw = ImageDraw.Draw(canvas)
-    # У базы — простое красное поле с обводкой (без «радужной» рамки).
-    draw.rounded_rectangle(
-        box,
-        radius=radius,
-        outline=color,
-        width=5,
-    )
+    if kind == "base":
+        rainbow = (
+            (255, 80, 80),
+            (255, 170, 50),
+            (250, 220, 70),
+            (90, 210, 90),
+            (80, 170, 255),
+            (180, 120, 240),
+        )
+        segments = 4 * len(rainbow)
+        step = 1.0 / (len(rainbow) * 4)
+        for idx, arc_color in enumerate(rainbow):
+            for seg in range(4):
+                start = idx * 4 + seg
+                f0, f1 = start * step, (start + 1) * step
+                if seg == 0:  # top
+                    a, b, c, d = (left + f0 * w, top, left + f1 * w, top + 8)
+                elif seg == 1:  # right
+                    a, b, c, d = (right - 8, top + f0 * h, right, top + f1 * h)
+                elif seg == 2:  # bottom
+                    a, b, c, d = (right - f1 * w, bottom - 8, right - f0 * w, bottom)
+                else:  # left
+                    a, b, c, d = (left, bottom - f1 * h, left + 8, bottom - f0 * h)
+                draw.rectangle((a, b, c, d), fill=arc_color)
+    else:
+        draw.rounded_rectangle(
+            box,
+            radius=radius,
+            outline=color,
+            width=5,
+        )
     if kind == "anomaly":
         # «Пузырьки» аномалий — только на достаточно крупных зонах.
         if w >= cell * 2 and h >= cell * 2:
@@ -523,7 +618,7 @@ def render_walk_frame(storage: Storage, player: Character) -> bytes:
     panel_text_width = pr - pl - 30
     draw.text((pl + 14, pt + 106), location, fill=(245, 245, 245), font=loc_font)
     draw.text((pl + 14, pt + 132), "Осмотр локации", fill=(180, 200, 150), font=body)
-    draw.text((pl + 16, pt + 160), f"Координаты: X {x} · Y {y}", fill=(200, 200, 200), font=body)
+    draw.text((pl + 16, pt + 160), f"Координаты: X {x + 1} · Y {y + 1}", fill=(200, 200, 200), font=body)
 
     zone_y = pt + 190
     if current_zone is not None:

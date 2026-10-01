@@ -99,7 +99,8 @@ AMBUSH_TYPES: tuple[tuple[str, str, int], ...] = (
 class StashSession:
     location: str
     player: tuple[int, int]
-    stash: tuple[int, int]
+    stashes: list[tuple[int, int]]
+    collected: list[tuple[int, int]]
     moves: int
     steps: int
     rad_gained: int
@@ -109,11 +110,20 @@ class StashSession:
     source: str = "found"
     mutants: list[tuple[int, int]] = field(default_factory=list)
 
+    @property
+    def stash_count(self) -> int:
+        return max(1, len(self.stashes))
+
+    @property
+    def collected_count(self) -> int:
+        return len(self.collected)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "location": self.location,
             "player": list(self.player),
-            "stash": list(self.stash),
+            "stashes": [list(p) for p in self.stashes],
+            "collected": [list(p) for p in self.collected],
             "moves": self.moves,
             "steps": self.steps,
             "rad_gained": self.rad_gained,
@@ -127,10 +137,23 @@ class StashSession:
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> StashSession:
         raw_mutants = raw.get("mutants") or []
+        raw_stashes = raw.get("stashes")
+        if not isinstance(raw_stashes, list) or not raw_stashes:
+            # Старые сессии: один тайник в поле stash.
+            old_stash = raw.get("stash")
+            if isinstance(old_stash, (list, tuple)) and len(old_stash) >= 2:
+                raw_stashes = [old_stash]
+            else:
+                raw_stashes = [(7, 7)]
+        stashes = [(int(p[0]), int(p[1])) for p in raw_stashes if len(p) >= 2]
+        if not stashes:
+            stashes = [(7, 7)]
+        collected = [(int(p[0]), int(p[1])) for p in (raw.get("collected") or []) if len(p) >= 2]
         return cls(
             location=str(raw.get("location") or ""),
             player=(int(raw["player"][0]), int(raw["player"][1])),
-            stash=(int(raw["stash"][0]), int(raw["stash"][1])),
+            stashes=stashes,
+            collected=collected,
             moves=int(raw.get("moves") or 0),
             steps=int(raw.get("steps") or 0),
             rad_gained=int(raw.get("rad_gained") or 0),
@@ -183,24 +206,32 @@ def _build_stash_session(character: Any, source: str) -> StashSession:
     forbidden: set[tuple[int, int]] = set()
     player = _random_free_cell(grid, forbidden)
     forbidden.add(player)
-    stash = _random_free_cell(grid, forbidden)
-    while _chebyshev(player, stash) < grid // 3:
+    # На карте 3–4 тайника — собери все, чтобы завершить поиск.
+    stash_count = random.randint(3, 4)
+    stashes: list[tuple[int, int]] = []
+    for _ in range(stash_count):
         stash = _random_free_cell(grid, forbidden)
-    forbidden.add(stash)
+        attempts = 0
+        while _chebyshev(player, stash) < grid // 3 and attempts < 50:
+            stash = _random_free_cell(grid, forbidden)
+            attempts += 1
+        stashes.append(stash)
+        forbidden.add(stash)
     # Мутанты на поле: 50% — один, 25% — двое (остальное — никого).
     mutants: list[tuple[int, int]] = []
     roll = random.random()
     mutant_count = 2 if roll < 0.25 else (1 if roll < 0.75 else 0)
     for _ in range(mutant_count):
         cell = _random_free_cell(grid, forbidden)
-        if cell == player or cell == stash:
+        if cell == player or cell in stashes:
             continue
         mutants.append(cell)
         forbidden.add(cell)
     return StashSession(
         location=character.location,
         player=player,
-        stash=stash,
+        stashes=stashes,
+        collected=[],
         moves=0,
         steps=0,
         rad_gained=0,
@@ -213,13 +244,14 @@ def stash_status_caption(session: StashSession, character: Any | None = None) ->
     lines = [
         f"Поиск схрона — {session.location}",
         f"Ход {session.moves}/{session.max_moves} · рад +{session.rad_gained}",
+        f"Тайники: {session.collected_count}/{session.stash_count}",
     ]
     if character is not None:
         lines.append(
             f"HP {character.health}/{effective_max_health(character)} · "
             f"☢ {character.radiation} · ⚡ {character.energy}"
         )
-    lines.append("Найди схрон на карте. Берегись мутантов и бандитов.")
+    lines.append("Собери все тайники на карте. Берегись мутантов и бандитов.")
     return "\n".join(lines)
 
 
@@ -325,25 +357,31 @@ def _roll_stash_loot(storage: Storage, telegram_id: int, location: str) -> list[
     return loot
 
 
-def _finish_stash_success(storage: Storage, telegram_id: int, session: StashSession) -> ActionResult:
+def _finish_stash_success(
+    storage: Storage,
+    telegram_id: int,
+    session: StashSession,
+    *,
+    collected_text: str = "",
+) -> ActionResult:
     clear_stash_session(storage, telegram_id)
-    loot_keys = _roll_stash_loot(storage, telegram_id, session.location)
-    labels: list[str] = []
-    for key, qty in loot_keys:
-        storage.add_item(telegram_id, key, qty)
-        label = ITEM_LABELS.get(key, key)
-        if qty == 1:
-            labels.append(f"{label} x1")
-        else:
-            labels.append(f"{label} x{qty}")
+    if not collected_text:
+        # Страховка для старых сессий: единственный тайник собирается здесь же.
+        loot_keys = _roll_stash_loot(storage, telegram_id, session.location)
+        labels: list[str] = []
+        for key, qty in loot_keys:
+            storage.add_item(telegram_id, key, qty)
+            label = ITEM_LABELS.get(key, key)
+            labels.append(f"{label} x{qty}" if qty != 1 else f"{label} x1")
+        collected_text = ", ".join(labels)
     storage.add_player_stat(telegram_id, "quests_completed", 1)
-    loot_text = ", ".join(labels)
+    total = session.stash_count
     return ActionResult(
         True,
-        f"Схрон найден на «{session.location}»!\n"
-        f"Содержимое: {loot_text}.\n"
+        f"Все тайники собраны на «{session.location}» ({session.collected_count}/{total})!\n"
+        f"Содержимое: {collected_text}.\n"
         f"Ходов: {session.moves}, рад +{session.rad_gained}.",
-        payload={"stash_active": False, "stash_done": True, "loot": loot_keys},
+        payload={"stash_active": False, "stash_done": True},
     )
 
 
@@ -482,9 +520,46 @@ def move_stash_hunt(storage: Storage, telegram_id: int, direction: str) -> Actio
             payload={"stash_active": False, "stash_dead": True},
         )
 
-    dist = _chebyshev(session.player, session.stash)
-    if dist <= 1:
-        return _finish_stash_success(storage, telegram_id, session)
+    # Сбор тайников: подойди вплотную — каждый найденный даёт награду.
+    collected_now: list[tuple[int, int]] = []
+    loot_texts: list[str] = []
+    for s_pos in list(session.stashes):
+        if s_pos in session.collected:
+            continue
+        if _chebyshev(session.player, s_pos) <= 1:
+            session.collected.append(s_pos)
+            collected_now.append(s_pos)
+            loot = _roll_stash_loot(storage, telegram_id, session.location)
+            labels: list[str] = []
+            for key, qty in loot:
+                storage.add_item(telegram_id, key, qty)
+                label = ITEM_LABELS.get(key, key)
+                labels.append(f"{label} x{qty}" if qty != 1 else f"{label} x1")
+            loot_texts.append(", ".join(labels))
+
+    if collected_now:
+        save_stash_session(storage, telegram_id, session)
+        player = storage.get_character(telegram_id, refresh_energy=False) or player
+        image = render_stash_for_player(storage, telegram_id, session, player)
+        if session.collected_count >= session.stash_count:
+            return _finish_stash_success(
+                storage,
+                telegram_id,
+                session,
+                collected_text=", ".join(loot_texts),
+            )
+        remaining_count = session.stash_count - session.collected_count
+        note = f"📦 Тайник найден: {', '.join(loot_texts)}. Осталось: {remaining_count}."
+        return ActionResult(
+            True,
+            note,
+            payload={
+                "stash_image": image,
+                "stash_active": True,
+                "caption": stash_status_caption(session, player),
+                "move_note": note,
+            },
+        )
 
     # Мутанты двигаются к игроку по комнатам (по 1 клетке за ход), не выходя за стены.
     if session.mutants:
@@ -518,14 +593,16 @@ def move_stash_hunt(storage: Storage, telegram_id: int, direction: str) -> Actio
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = render_stash_for_player(storage, telegram_id, session, player)
 
-    if dist <= 3:
-        note = "Рядом! Схрон где-то совсем близко."
-    elif dist <= 6:
+    remaining = [s for s in session.stashes if s not in session.collected]
+    nearest = min((_chebyshev(session.player, s) for s in remaining), default=0) if remaining else 0
+    if nearest <= 3:
+        note = "Рядом! Тайник где-то совсем близко."
+    elif nearest <= 6:
         note = "Тёплый след… продолжай искать."
-    elif dist <= 10:
-        note = "Холодно. Схрон ещё далеко."
+    elif nearest <= 10:
+        note = "Холодно. Тайник ещё далеко."
     else:
-        note = "Очень далеко от схрона."
+        note = "Очень далеко до тайника."
     if rad_add:
         note += f" Рад +{rad_add}."
     if ambush is not None:
@@ -611,43 +688,48 @@ def render_stash_frame(
     token = _player_grid_token(character, size=160, rating_points=rating_points)
     _paste_circle(canvas, token, pcx, pcy, 40, ring_color=(72, 220, 90), ring_width=3)
 
-    dist = _chebyshev(session.player, session.stash)
+    remaining = [s for s in getattr(session, "stashes", []) if s not in getattr(session, "collected", [])]
+    if not remaining and getattr(session, "stashes", []):
+        remaining = [session.stashes[0]]
+    nearest = min((_chebyshev(session.player, s) for s in remaining), default=None) if remaining else None
 
-    # Вместо абстрактных маркеров — пара ящиков у схрона (декор + ориентир).
-    sx, sy = session.stash
-    scx = margin + sx * cell + cell // 2
-    scy = margin + sy * cell + cell // 2
+    # Вместо абстрактных маркеров — ящики у каждого тайника (декор + ориентир).
     crate_color = (176, 140, 80)
-    for off_x, off_y in ((-1, 0), (0, 1)):
-        if 0 <= sx + off_x < grid and 0 <= sy + off_y < grid and (sx + off_x, sy + off_y) != session.player:
-            bx = margin + (sx + off_x) * cell + 6
-            by = margin + (sy + off_y) * cell + 6
-            ImageDraw.Draw(canvas).rounded_rectangle(
-                (bx, by, bx + cell - 12, by + cell - 12),
-                radius=6,
-                fill=(90, 68, 40),
-                outline=crate_color,
-                width=3,
-            )
-            bar = ImageDraw.Draw(canvas)
-            bar.line((bx + 6, by + 6, bx + cell - 18, by + cell - 18), fill=crate_color, width=3)
-            bar.line((bx + cell - 18, by + 6, bx + 6, by + cell - 18), fill=crate_color, width=3)
-    # Сам схрон — ящик с яркой меткой.
-    ImageDraw.Draw(canvas).rounded_rectangle(
-        (scx - cell // 2 + 4, scy - cell // 2 + 4, scx + cell // 2 - 4, scy + cell // 2 - 4),
-        radius=8,
-        fill=(60, 78, 58),
-        outline=(150, 220, 120),
-        width=4,
-    )
-    bar = ImageDraw.Draw(canvas)
-    bar.line(
-        (scx - cell // 2 + 10, scy - cell // 2 + 10, scx + cell // 2 - 10, scy + cell // 2 - 10),
-        fill=(150, 220, 120),
-        width=3,
-    )
-    if dist <= 3:
-        _glow(canvas, scx, scy, (255, 200, 50), radius=16)
+    for sx, sy in remaining:
+        scx = margin + sx * cell + cell // 2
+        scy = margin + sy * cell + cell // 2
+        for off_x, off_y in ((-1, 0), (0, 1)):
+            nx, ny = sx + off_x, sy + off_y
+            if 0 <= nx < grid and 0 <= ny < grid and (nx, ny) != session.player:
+                bx = margin + nx * cell + 6
+                by = margin + ny * cell + 6
+                ImageDraw.Draw(canvas).rounded_rectangle(
+                    (bx, by, bx + cell - 12, by + cell - 12),
+                    radius=6,
+                    fill=(90, 68, 40),
+                    outline=crate_color,
+                    width=3,
+                )
+                bar = ImageDraw.Draw(canvas)
+                bar.line((bx + 6, by + 6, bx + cell - 18, by + cell - 18), fill=crate_color, width=3)
+                bar.line((bx + cell - 18, by + 6, bx + 6, by + cell - 18), fill=crate_color, width=3)
+        # Сам тайник — ящик с яркой меткой.
+        ImageDraw.Draw(canvas).rounded_rectangle(
+            (scx - cell // 2 + 4, scy - cell // 2 + 4, scx + cell // 2 - 4, scy + cell // 2 - 4),
+            radius=8,
+            fill=(60, 78, 58),
+            outline=(150, 220, 120),
+            width=4,
+        )
+        bar = ImageDraw.Draw(canvas)
+        bar.line(
+            (scx - cell // 2 + 10, scy - cell // 2 + 10, scx + cell // 2 - 10, scy + cell // 2 - 10),
+            fill=(150, 220, 120),
+            width=3,
+        )
+    if nearest is not None and nearest <= 3:
+        nsx, nsy = min(remaining, key=lambda s: _chebyshev(session.player, s))
+        _glow(canvas, margin + nsx * cell + cell // 2, margin + nsy * cell + cell // 2, (255, 200, 50), radius=16)
 
     # Мутанты на поле: красная точка-индикатор (если спрайт недоступен).
     from app.mutant_assets import load_mutant_grid_sprite
@@ -699,17 +781,22 @@ def render_stash_frame(
     draw.text((pl + 14, pt + 132), "Поиск схрона", fill=(200, 180, 120), font=body)
 
     info_y = pt + 162
-    draw.text((pl + 14, info_y), f"Ход {session.moves}/{session.max_moves}", fill=(200, 200, 200), font=body)
+    draw.text(
+        (pl + 14, info_y),
+        f"Ход {session.moves}/{session.max_moves} · Тайники {session.collected_count}/{session.stash_count}",
+        fill=(200, 200, 200),
+        font=body,
+    )
     draw.text((pl + 14, info_y + 24), f"Рад +{session.rad_gained}", fill=(200, 160, 120), font=small)
 
-    if dist <= 3:
-        hint = "🔥 Схрон очень близко!"
-    elif dist <= 6:
-        hint = "🌡 Тёплый след"
-    elif dist <= 10:
-        hint = "❄ Холодно"
-    else:
+    if nearest is None or nearest > 10:
         hint = "🧊 Очень далеко"
+    elif nearest <= 3:
+        hint = "🔥 Тайник очень близко!"
+    elif nearest <= 6:
+        hint = "🌡 Тёплый след"
+    else:
+        hint = "❄ Холодно"
     draw.text((pl + 14, info_y + 48), hint, fill=(220, 220, 200), font=small)
 
     hp = int(character.health) if character else 0

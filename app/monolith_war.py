@@ -528,7 +528,9 @@ def filter_travel_locations_for_faction(
     locations: list[dict[str, Any]],
     faction: str | None,
 ) -> list[dict[str, Any]]:
-    """«Завод» (ЧАЭС) убран из переходов — функционала как точки перехода нет."""
+    """ЧАЭС видна в переходах только Монолиту."""
+    if faction == MONOLITH_FACTION:
+        return locations
     return [loc for loc in locations if str(loc.get("name") or "") != MONOLITH_BASE]
 
 

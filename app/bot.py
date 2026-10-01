@@ -288,8 +288,6 @@ from app.game_logic import (
     travel_to,
     list_available_travel_modes,
     describe_travel_fuel_status,
-    needs_field_repair,
-    field_repair_vehicle,
     can_travel_by_truck,
     use_energy_drink,
     use_nitrous_oxide,
@@ -8674,6 +8672,17 @@ async def coop_callback(callback: CallbackQuery, bot: Bot) -> None:
 
 @router.message(nav_button("🗺 Переход"))
 async def show_travel(message: Message) -> None:
+    try:
+        await _show_travel_inner(message)
+    except Exception:
+        logger.exception("Travel menu failed for %s", getattr(getattr(message, "from_user", None), "id", None))
+        try:
+            await message.answer("⚠️ Меню перехода временно сломано. Попробуй ещё раз или /fixme.")
+        except Exception:
+            pass
+
+
+async def _show_travel_inner(message: Message) -> None:
     player = ensure_character(message)
     if player is None:
         await message.answer("Сначала создай персонажа через /start.")
@@ -8688,7 +8697,6 @@ async def show_travel(message: Message) -> None:
     locations = filter_travel_locations_for_faction(db.get_locations(), player.faction)
     traveling = is_traveling(player)
     show_n2o = traveling and can_use_n2o_during_travel(db, player.telegram_id)
-    needs_repair = not traveling and needs_field_repair(player)
     if traveling:
         loc = format_location_display(player)
         text = (
@@ -8704,18 +8712,10 @@ async def show_travel(message: Message) -> None:
             f"Нива ×{TRAVEL_SPEED_NIVA:g}, грузовик ×{TRAVEL_SPEED_TRUCK:g} (+ дизель).\n"
             "Переход занимает реальное время (1 игровая мин ≈ 10 сек).\n\n"
             f"{describe_travel_fuel_status(player)}"
-            "\n\n⚠️ Техника сломана — подлатай её кнопкой ниже (бесплатно, до 5%), чтобы уехать."
-            if needs_repair
-            else ""
         )
     await message.answer(
         text,
-        reply_markup=travel_keyboard(
-            locations,
-            traveling=traveling,
-            show_n2o_button=show_n2o,
-            show_field_repair=needs_repair,
-        ),
+        reply_markup=travel_keyboard(locations, traveling=traveling, show_n2o_button=show_n2o),
     )
 
 
@@ -8747,6 +8747,17 @@ async def travel_status_callback(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "travel:back")
 async def travel_back_callback(callback: CallbackQuery) -> None:
+    try:
+        await _travel_back_inner(callback)
+    except Exception:
+        logger.exception("Travel back failed for %s", getattr(getattr(callback, "from_user", None), "id", None))
+        try:
+            await safe_callback_answer(callback, "Ошибка перехода. Попробуй ещё раз или /fixme", show_alert=True)
+        except Exception:
+            pass
+
+
+async def _travel_back_inner(callback: CallbackQuery) -> None:
     player = get_storage().get_character(callback.from_user.id)
     if player is None:
         await callback.answer("Сначала создай персонажа.", show_alert=True)
@@ -8759,45 +8770,6 @@ async def travel_back_callback(callback: CallbackQuery) -> None:
     storage = get_storage()
     traveling = is_traveling(player)
     show_n2o = traveling and can_use_n2o_during_travel(storage, player.telegram_id)
-    needs_repair = not traveling and needs_field_repair(player)
-    text = (
-        "Выбери локацию, затем транспорт.\n\n"
-        f"{describe_travel_fuel_status(player)}"
-        "\n\n⚠️ Техника сломана — подлатай её кнопкой ниже (бесплатно, до 5%), чтобы уехать."
-        if needs_repair
-        else ""
-    )
-    await edit_menu_message(
-        callback,
-        text,
-        travel_keyboard(
-            locations,
-            traveling=traveling,
-            show_n2o_button=show_n2o,
-            show_field_repair=needs_repair,
-        ),
-    )
-
-
-@router.callback_query(F.data == "travel:fieldrepair")
-async def travel_field_repair_callback(callback: CallbackQuery) -> None:
-    """Бесплатно подлатать технику до 5% — чтобы уехать с локации."""
-    storage = get_storage()
-    if storage.get_character(callback.from_user.id) is None:
-        await callback.answer("Сначала создай персонажа.", show_alert=True)
-        return
-    result = field_repair_vehicle(storage, callback.from_user.id)
-    if not result.ok:
-        await safe_callback_answer(callback, result.text, show_alert=True)
-        return
-    await safe_callback_answer(callback, result.text)
-    player = storage.get_character(callback.from_user.id, refresh_energy=False)
-    if player is None:
-        return
-    from app.monolith_war import filter_travel_locations_for_faction
-
-    locations = filter_travel_locations_for_faction(storage.get_locations(), player.faction)
-    traveling = is_traveling(player)
     text = (
         "Выбери локацию, затем транспорт.\n\n"
         f"{describe_travel_fuel_status(player)}"
@@ -8805,17 +8777,23 @@ async def travel_field_repair_callback(callback: CallbackQuery) -> None:
     await edit_menu_message(
         callback,
         text,
-        travel_keyboard(
-            locations,
-            traveling=traveling,
-            show_n2o_button=False,
-            show_field_repair=needs_field_repair(player),
-        ),
+        travel_keyboard(locations, traveling=traveling, show_n2o_button=show_n2o),
     )
 
 
 @router.callback_query(F.data.startswith("travel:to:"))
 async def travel_pick_destination(callback: CallbackQuery) -> None:
+    try:
+        await _travel_pick_destination_inner(callback)
+    except Exception:
+        logger.exception("Travel pick failed for %s", getattr(getattr(callback, "from_user", None), "id", None))
+        try:
+            await safe_callback_answer(callback, "Ошибка перехода. Попробуй ещё раз или /fixme", show_alert=True)
+        except Exception:
+            pass
+
+
+async def _travel_pick_destination_inner(callback: CallbackQuery) -> None:
     destination = (callback.data or "").removeprefix("travel:to:").strip()
     storage = get_storage()
     player = storage.get_character(callback.from_user.id)
@@ -8840,6 +8818,17 @@ async def travel_pick_destination(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("travel:go:"))
 async def travel_go_callback(callback: CallbackQuery, bot: Bot) -> None:
+    try:
+        await _travel_go_inner(callback, bot)
+    except Exception:
+        logger.exception("Travel go failed for %s", getattr(getattr(callback, "from_user", None), "id", None))
+        try:
+            await safe_callback_answer(callback, "Ошибка перехода. Попробуй ещё раз или /fixme", show_alert=True)
+        except Exception:
+            pass
+
+
+async def _travel_go_inner(callback: CallbackQuery, bot: Bot) -> None:
     parts = (callback.data or "").split(":", maxsplit=3)
     if len(parts) < 4:
         await callback.answer("Некорректный переход.", show_alert=True)
