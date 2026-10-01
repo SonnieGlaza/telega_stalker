@@ -8676,10 +8676,11 @@ async def coop_callback(callback: CallbackQuery, bot: Bot) -> None:
 async def show_travel(message: Message) -> None:
     try:
         await _show_travel_inner(message)
-    except Exception:
+    except Exception as exc:
         logger.exception("Travel menu failed for %s", getattr(getattr(message, "from_user", None), "id", None))
         try:
-            await message.answer("⚠️ Меню перехода временно сломано. Попробуй ещё раз или /fixme.")
+            detail = _travel_error_detail(message.from_user, exc)
+            await message.answer(f"⚠️ Меню перехода временно сломано. Попробуй ещё раз или /fixme.{detail}")
         except Exception:
             pass
 
@@ -8760,10 +8761,14 @@ async def travel_status_callback(callback: CallbackQuery) -> None:
 async def travel_back_callback(callback: CallbackQuery) -> None:
     try:
         await _travel_back_inner(callback)
-    except Exception:
+    except Exception as exc:
         logger.exception("Travel back failed for %s", getattr(getattr(callback, "from_user", None), "id", None))
         try:
-            await safe_callback_answer(callback, "Ошибка перехода. Попробуй ещё раз или /fixme", show_alert=True)
+            await safe_callback_answer(
+                callback,
+                f"Ошибка перехода. Попробуй ещё раз или /fixme.{_travel_error_detail(callback.from_user, exc)}",
+                show_alert=True,
+            )
         except Exception:
             pass
 
@@ -8843,14 +8848,30 @@ async def travel_field_repair_callback(callback: CallbackQuery) -> None:
             pass
 
 
+def _travel_error_detail(from_user: Any | None, exc: Exception) -> str:
+    """Детальный текст ошибки — только владельцу бота, остальным пусто."""
+    try:
+        from app.game_logic import OWNER_TELEGRAM_IDS
+
+        if from_user is not None and int(getattr(from_user, "id", 0) or 0) in OWNER_TELEGRAM_IDS:
+            return f"\n[{type(exc).__name__}: {exc}]"
+    except Exception:
+        pass
+    return ""
+
+
 @router.callback_query(F.data.startswith("travel:to:"))
 async def travel_pick_destination(callback: CallbackQuery) -> None:
     try:
         await _travel_pick_destination_inner(callback)
-    except Exception:
+    except Exception as exc:
         logger.exception("Travel pick failed for %s", getattr(getattr(callback, "from_user", None), "id", None))
         try:
-            await safe_callback_answer(callback, "Ошибка перехода. Попробуй ещё раз или /fixme", show_alert=True)
+            await safe_callback_answer(
+                callback,
+                f"Ошибка перехода. Попробуй ещё раз или /fixme.{_travel_error_detail(callback.from_user, exc)}",
+                show_alert=True,
+            )
         except Exception:
             pass
 
@@ -8882,10 +8903,14 @@ async def _travel_pick_destination_inner(callback: CallbackQuery) -> None:
 async def travel_go_callback(callback: CallbackQuery, bot: Bot) -> None:
     try:
         await _travel_go_inner(callback, bot)
-    except Exception:
+    except Exception as exc:
         logger.exception("Travel go failed for %s", getattr(getattr(callback, "from_user", None), "id", None))
         try:
-            await safe_callback_answer(callback, "Ошибка перехода. Попробуй ещё раз или /fixme", show_alert=True)
+            await safe_callback_answer(
+                callback,
+                f"Ошибка перехода. Попробуй ещё раз или /fixme.{_travel_error_detail(callback.from_user, exc)}",
+                show_alert=True,
+            )
         except Exception:
             pass
 

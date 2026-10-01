@@ -185,9 +185,9 @@ def travel_keyboard(
         rows.extend(travel_in_transit_keyboard(show_n2o_button=show_n2o_button).inline_keyboard)
     else:
         for location in locations:
-            name = str(location["name"])
-            ptype = str(location["point_type"])
-            owner = location["controlled_by"] or "нейтрал"
+            name = str(location.get("name") or "")
+            ptype = str(location.get("point_type") or "")
+            owner = location.get("controlled_by") or "нейтрал"
             label = f"{display_names.get(name, name)} [{ptype}, {owner}]"
             rows.append([InlineKeyboardButton(text=label, callback_data=f"travel:to:{name}")])
         if show_field_repair:
