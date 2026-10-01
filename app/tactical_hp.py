@@ -110,8 +110,17 @@ def commit_tactical_death(
     """Записать тактическое падение (HP=0) в БД — для экрана смерти и респавна."""
     from app.game_logic import remember_death_cause, remember_death_killer
 
-    sync_session_hp_to_db(storage, telegram_id, int(session_hp), force=True)
-    if int(session_hp) > 0:
+    hp = int(session_hp)
+    try:
+        from app.game_logic import is_immortal_player
+
+        if hp <= 0 and is_immortal_player(telegram_id):
+            # Бессмертный не умирает и на тактическом поле: оставляем 1 HP в БД.
+            hp = 1
+    except Exception:
+        pass
+    sync_session_hp_to_db(storage, telegram_id, hp, force=True)
+    if hp > 0:
         return
     if cause:
         remember_death_cause(storage, telegram_id, cause)

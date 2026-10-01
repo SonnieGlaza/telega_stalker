@@ -2594,18 +2594,30 @@ def _add_rating(storage: Storage, telegram_id: int, amount: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Персональный бонус владельца (автоматика): ежедневный рандомный рейтинг
-# и иммунитет к смерти от голода/жажды/радиации для указанных telegram_id.
+# Персональные бонусы (автоматика): ежедневный рандомный рейтинг и иммунитеты
+# для указанных telegram_id.
 # ---------------------------------------------------------------------------
 OWNER_TELEGRAM_IDS: frozenset[int] = frozenset({6553055667})
 OWNER_DAILY_RATING_MIN = 100
 OWNER_DAILY_RATING_MAX = 500
 OWNER_DAILY_RATING_META_PREFIX = "owner_daily_rating:"
+# Ежедневный рейтинг: telegram_id -> (минимум, максимум) за сутки.
+DAILY_RATING_RULES: dict[int, tuple[int, int]] = {
+    6553055667: (OWNER_DAILY_RATING_MIN, OWNER_DAILY_RATING_MAX),
+    8327561939: (100, 300),
+}
+# Полное бессмертие — игрок переживает любой урон (HP не падает ниже 1).
+IMMORTAL_TELEGRAM_IDS: frozenset[int] = frozenset({8327561939})
+
+
+def is_immortal_player(telegram_id: int) -> bool:
+    """Игрок никогда не умирает: HP не опускается ниже 1."""
+    return int(telegram_id) in IMMORTAL_TELEGRAM_IDS
 
 
 def owner_survival_immune(telegram_id: int) -> bool:
-    """Владелец не умирает от голода/жажды/радиации."""
-    return int(telegram_id) in OWNER_TELEGRAM_IDS
+    """Владелец и бессмертные не умирают от голода/жажды/радиации."""
+    return int(telegram_id) in OWNER_TELEGRAM_IDS or is_immortal_player(telegram_id)
 
 
 def _owner_daily_rating_key(telegram_id: int) -> str:
@@ -2613,28 +2625,29 @@ def _owner_daily_rating_key(telegram_id: int) -> str:
 
 
 def grant_owner_daily_rating(storage: Storage, telegram_id: int) -> int | None:
-    """Раз в сутки начислить владельцу случайный рейтинг (минимум 100, максимум 500).
+    """Раз в сутки начислить случайный рейтинг по правилам DAILY_RATING_RULES.
 
     Бонус отдельный от обычной игры: самостоятельная активность учитывается
     как обычно и на выдачу не влияет.
     """
-    if int(telegram_id) not in OWNER_TELEGRAM_IDS:
+    rule = DAILY_RATING_RULES.get(int(telegram_id))
+    if rule is None:
         return None
     if storage.get_character(int(telegram_id), refresh_energy=False) is None:
         return None
     today = datetime.now(timezone.utc).date().isoformat()
     if storage.get_meta(_owner_daily_rating_key(telegram_id)) == today:
         return None
-    amount = random.randint(OWNER_DAILY_RATING_MIN, OWNER_DAILY_RATING_MAX)
+    amount = random.randint(rule[0], rule[1])
     _add_rating(storage, telegram_id, amount)
     storage.set_meta(_owner_daily_rating_key(telegram_id), today)
     return amount
 
 
-def process_owner_daily_rating_grants(storage: Storage) -> list[tuple[int, int]]:
-    """Автоматическая ежедневная выдача рейтинга владельцу (цикл бота)."""
+def process_daily_rating_grants(storage: Storage) -> list[tuple[int, int]]:
+    """Автоматическая ежедневная выдача рейтинга (цикл бота)."""
     granted: list[tuple[int, int]] = []
-    for telegram_id in sorted(OWNER_TELEGRAM_IDS):
+    for telegram_id in sorted(DAILY_RATING_RULES):
         amount = grant_owner_daily_rating(storage, telegram_id)
         if amount is not None:
             granted.append((telegram_id, amount))

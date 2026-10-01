@@ -11475,16 +11475,16 @@ async def run_bot() -> None:
                     logger.exception("Offline survival death tick failed")
             if zone_tick_counter["n"] % OWNER_DAILY_RATING_EVERY_TICKS == 0:
                 try:
-                    from app.game_logic import process_owner_daily_rating_grants
+                    from app.game_logic import process_daily_rating_grants
 
-                    for owner_id, amount in process_owner_daily_rating_grants(get_storage()):
+                    for recipient_id, amount in process_daily_rating_grants(get_storage()):
                         try:
                             await bot.send_message(
-                                owner_id,
-                                f"⚡ Ежедневный бонус владельца: +{amount} рейтинга.",
+                                recipient_id,
+                                f"⚡ Ежедневный бонус: +{amount} рейтинга.",
                             )
                         except Exception:
-                            logger.debug("Failed owner daily rating notify to %s", owner_id)
+                            logger.debug("Failed daily rating notify to %s", recipient_id)
                 except Exception:
                     logger.exception("Owner daily rating tick failed")
 

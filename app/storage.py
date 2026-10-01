@@ -82,6 +82,16 @@ def _survival_immune(telegram_id: int) -> bool:
     except Exception:
         return False
 
+
+def _immortal(telegram_id: int) -> bool:
+    """Персонаж с полным бессмертием: не умирает ни от какого урона."""
+    try:
+        from app.game_logic import is_immortal_player
+
+        return is_immortal_player(telegram_id)
+    except Exception:
+        return False
+
 # Telegram user id > 2^31-1 → Postgres INTEGER overflow. Everywhere BIGINT.
 TELEGRAM_ID_COLUMNS: tuple[tuple[str, str], ...] = (
     ("characters", "telegram_id"),
@@ -2980,6 +2990,9 @@ class Storage:
                 return False
             old_health = int(row["health"])
             new_health = max(0, min(cap, old_health + int(delta)))
+            if new_health <= 0 and _immortal(telegram_id):
+                # Бессмертный не умирает: HP держится на 1.
+                new_health = 1
             conn.execute(
                 "UPDATE characters SET health = ? WHERE telegram_id = ?",
                 (new_health, telegram_id),
