@@ -456,7 +456,13 @@ def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) ->
         if key == session.detector_key:
             base_chance = chance
             break
-    art_key = roll_location_artifact_drop(session.location, base_chance)
+    from app.game_logic import anomaly_search_bonus
+
+    anomaly_bonus = anomaly_search_bonus(storage, telegram_id)
+    art_key = roll_location_artifact_drop(session.location, base_chance + anomaly_bonus)
+    anomaly_text = (
+        f"\n☢ Бафф аномалий: +{anomaly_bonus}% к шансу арта." if anomaly_bonus else ""
+    )
     survival_text = _apply_active_survival(storage, telegram_id)
     spawn_hint = describe_location_artifact_spawns(session.location)
     if art_key is None:
@@ -464,7 +470,7 @@ def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) ->
             True,
             f"Сигнал пойман на «{session.location}», но арт сорвался в аномалию.\n"
             f"Ходов: {session.moves}, рад +{session.rad_gained}.\n"
-            f"Базовые шансы здесь: {spawn_hint}.{survival_text}",
+            f"Базовые шансы здесь: {spawn_hint}.{anomaly_text}{survival_text}",
             payload={"hunt_active": False, "hunt_done": True},
         )
     storage.add_item(telegram_id, art_key, 1)
@@ -476,7 +482,7 @@ def _finish_success(storage: Storage, telegram_id: int, session: HuntSession) ->
         f"Арт найден на «{session.location}»!\n"
         f"Детектор «{session.detector_name}»: {session.circles_filled}/{session.circles_needed}.\n"
         f"Найден {kind}: {label} x1.\n"
-        f"Ходов: {session.moves}, рад за вылазку +{session.rad_gained}.{survival_text}",
+        f"Ходов: {session.moves}, рад за вылазку +{session.rad_gained}.{anomaly_text}{survival_text}",
         payload={"hunt_active": False, "hunt_done": True, "art_key": art_key},
     )
 

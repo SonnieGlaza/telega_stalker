@@ -163,7 +163,29 @@ LOCATION_ZONES: dict[str, list[dict]] = {
 
 
 def location_zones_for(location: str) -> list[dict]:
-    return list(LOCATION_ZONES.get(location, []))
+    """Зоны локации; точки обыска разворачиваются в отдельные зоны (персональный КД)."""
+    zones = list(LOCATION_ZONES.get(location, []))
+    search_base = next(
+        (z for z in zones if str(z.get("id") or "") == "search_1" and str(z.get("kind") or "") == "search"),
+        None,
+    )
+    if search_base is None:
+        return zones
+    try:
+        from app.location_walk import LOCATION_WALK_RECTS
+
+        rects = LOCATION_WALK_RECTS.get(location) or {}
+        count = len(rects.get("search_1") or ())
+    except Exception:
+        count = 1
+    if count <= 1:
+        return zones
+    out = [z for z in zones if str(z.get("id") or "") != "search_1"]
+    for i in range(1, count + 1):
+        z = dict(search_base)
+        z["id"] = f"search_{i}"
+        out.append(z)
+    return out
 
 
 def _zone_cooldown_key(telegram_id: int, location: str, zone_id: str) -> str:

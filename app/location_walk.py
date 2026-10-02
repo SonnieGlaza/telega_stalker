@@ -391,17 +391,38 @@ def _zone_dict_for(zone_id: str, location: str) -> dict[str, str]:
     }
 
 
+def _base_zone_visible(storage: Storage | None, location: str, faction: str | None) -> bool:
+    """База показывается своей фракции и союзникам; вражеские — скрыты."""
+    if not faction:
+        return False
+    if location == "ЧАЭС":
+        return faction == "Монолит"
+    if storage is None:
+        return True  # фолбэк без хранилища (тесты) — как раньше
+    loc = storage.get_location(location)
+    owner = str((loc or {}).get("controlled_by") or "")
+    if not owner:
+        return True
+    if owner == faction:
+        return True
+    try:
+        return storage.are_factions_allied(faction, owner)
+    except Exception:
+        return False
+
+
 def walk_zone_rects(
     location: str,
     faction: str | None,
+    storage: Storage | None = None,
 ) -> list[tuple[dict[str, str], tuple[int, int, int, int]]]:
     """Зоны локации как прямоугольники клеток (0-индексные, включительно).
 
     Новый формат (LOCATION_WALK_RECTS) — точные квадраты (x1, y1, x2, y2)
-    в координатах игрока, где (1,1) — левая верхняя клетка. Старый формат
-    (центр + радиус) переводится в «квадрат» для ещё не переведённых локаций.
-    В новом формате база — часть раскладки игрока и рисуется всем; в старом
-    «base» показывается только фракции-владельцу локации.
+    в координатах игрока, где (1,1) — левая верхняя клетка. Точки обыска
+    разворачиваются в отдельные зоны search_1..N (у каждой свой КД).
+    База показывается своей фракции и союзникам (storage), иначе скрыта.
+    В старом формате (центр + радиус) «base» — только фракции-владельцу.
     """
     from app.game_logic import faction_home_base
 
@@ -409,12 +430,16 @@ def walk_zone_rects(
     rects = LOCATION_WALK_RECTS.get(location)
     if rects is not None:
         result: list[tuple[dict[str, str], tuple[int, int, int, int]]] = []
+        search_seq = 1
         for zone_id, spots in rects.items():
-            if zone_id == "base" and location == "ЧАЭС" and str(faction or "") != "Монолит":
-                # База «завода» (ЧАЭС) видна только Монолиту.
+            if zone_id == "base" and not _base_zone_visible(storage, location, faction):
                 continue
-            zone = _zone_dict_for(zone_id, location)
             for x1, y1, x2, y2 in spots:
+                emit_id = zone_id
+                if zone_id == "search_1":
+                    emit_id = f"search_{search_seq}"
+                    search_seq += 1
+                zone = _zone_dict_for(emit_id, location)
                 result.append((zone, (x1 - 1, y1 - 1, x2 - 1, y2 - 1)))
         return result
 
@@ -424,8 +449,8 @@ def walk_zone_rects(
         raw_spots.setdefault("base", _BASE_SPOT)
     result = []
     for zone_id, spot in raw_spots.items():
-        if zone_id == "base" and not is_own_base:
-            # «base» в разметке показываем только своей фракции, чужим — нет.
+        if zone_id == "base" and not _base_zone_visible(storage, location, faction):
+            # «base» показываем своей фракции и союзникам, чужим — нет.
             continue
         cx, cy, radius = _normalize_spot(spot)
         result.append(
@@ -434,9 +459,15 @@ def walk_zone_rects(
     return result
 
 
-def zone_at(location: str, x: int, y: int, faction: str | None = None) -> dict[str, str] | None:
+def zone_at(
+    location: str,
+    x: int,
+    y: int,
+    faction: str | None = None,
+    storage: Storage | None = None,
+) -> dict[str, str] | None:
     """Зона под клеткой (прямоугольник) или None."""
-    for zone, (x0, y0, x1, y1) in walk_zone_rects(location, faction):
+    for zone, (x0, y0, x1, y1) in walk_zone_rects(location, faction, storage=storage):
         if x0 <= int(x) <= x1 and y0 <= int(y) <= y1:
             return zone
     return None
@@ -544,9 +575,9 @@ def render_walk_frame(storage: Storage, player: Character) -> bytes:
 
     location = str(player.location)
     faction = str(player.faction or "")
-    zones_here = walk_zone_rects(location, faction)
+    zones_here = walk_zone_rects(location, faction, storage=storage)
     x, y = get_walk_position(storage, player.telegram_id)
-    current_zone = zone_at(location, x, y, faction)
+    current_zone = zone_at(location, x, y, faction, storage=storage)
 
     canvas = Image.new("RGBA", (width, height), (16, 18, 20, 255))
     draw = ImageDraw.Draw(canvas)

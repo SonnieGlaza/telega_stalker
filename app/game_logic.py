@@ -2654,6 +2654,67 @@ def process_daily_rating_grants(storage: Storage) -> list[tuple[int, int]]:
     return granted
 
 
+# ---------------------------------------------------------------------------
+# Бафф аномалий: каждая пройденная точка аномалии даёт +5% к поиску
+# артефактов на 10 минут (разные точки складываются в стеки).
+# ---------------------------------------------------------------------------
+ANOMALY_BUFF_META_PREFIX = "anomaly_buff:"
+ANOMALY_BUFF_MINUTES = 10
+ANOMALY_BUFF_PERCENT_PER_STACK = 5
+
+
+def _anomaly_buff_key(telegram_id: int) -> str:
+    return f"{ANOMALY_BUFF_META_PREFIX}{int(telegram_id)}"
+
+
+def anomaly_search_bonus(storage: Storage, telegram_id: int) -> int:
+    """Сколько процентов к шансу артефакта даёт бафф прямо сейчас (0, если истёк)."""
+    raw = storage.get_meta(_anomaly_buff_key(telegram_id))
+    if not raw:
+        return 0
+    try:
+        data = json.loads(raw)
+        expires = datetime.fromisoformat(str(data.get("expires_at") or ""))
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        count = max(0, int(data.get("count") or 0))
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return 0
+    if expires <= datetime.now(timezone.utc):
+        return 0
+    return count * ANOMALY_BUFF_PERCENT_PER_STACK
+
+
+def register_anomaly_visit(storage: Storage, telegram_id: int, point_key: str) -> int:
+    """Зафиксировать прохождение точки аномалии (одна точка — один стек, окно 10 мин)."""
+    now = datetime.now(timezone.utc)
+    raw = storage.get_meta(_anomaly_buff_key(telegram_id))
+    data: dict[str, Any] = {}
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                expires = datetime.fromisoformat(str(parsed.get("expires_at") or ""))
+                if expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=timezone.utc)
+                if expires > now:
+                    data = parsed
+        except (ValueError, TypeError, json.JSONDecodeError):
+            data = {}
+    points = [str(p) for p in (data.get("points") or [])]
+    if point_key not in points:
+        points.append(point_key)
+    data.update(
+        {
+            "points": points,
+            "count": len(points),
+            "expires_at": (now + timedelta(minutes=ANOMALY_BUFF_MINUTES)).isoformat(),
+        }
+    )
+    storage.set_meta(_anomaly_buff_key(telegram_id), json.dumps(data, ensure_ascii=False))
+    return len(points)
+
+
 def set_season_end(storage: Storage, ends_at: datetime) -> dict[str, Any]:
     """Принудительно задать дату окончания текущего сезона."""
     now = datetime.now(timezone.utc)

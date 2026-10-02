@@ -1404,6 +1404,17 @@ def lab_move(storage: Storage, telegram_id: int, direction: str) -> ActionResult
     player = storage.get_character(telegram_id, refresh_energy=False)
     session.set_pos(telegram_id, nxt)
     session.player_facing = direction
+    # Ближний бой: подойдя к врагу вплотную, игрок бьёт ножом до хода врагов.
+    melee_note = ""
+    if session.stage in ("combat", "ambush_combat") and session.enemies:
+        for idx, e_raw in enumerate(session.enemies):
+            e_pos = (int(e_raw[0]), int(e_raw[1]))
+            if manhattan_distance(nxt, e_pos) == 1 and int(session.enemy_hp[idx] or 0) > 0:
+                knife = max(3, int(round(weapon_damage("Нож"))))
+                session.enemy_hp[idx] = max(0, int(session.enemy_hp[idx]) - knife)
+                label = _enemy_label(session.enemy_kinds[idx] if idx < len(session.enemy_kinds) else "mutant")
+                melee_note = f"🗡 Ближний бой: {label} —{knife} HP."
+                break
     hazard_cells = set((_lab_level_cfg(session.lab_id, 1).get("hazard_cells") or ())) if session.level == 1 else set()
     if session.stage == "combat" and nxt in hazard_cells:
         _apply_damage_to_player(session, LAB_HAZARD_DAMAGE, cause="hazard", killer_name="Аномальная растяжка")
@@ -1417,7 +1428,7 @@ def lab_move(storage: Storage, telegram_id: int, direction: str) -> ActionResult
         return ActionResult(False, STALE_TURN_MESSAGE)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = render_lab_for_player(storage, telegram_id, session, player)
-    note = session.log[-1] if session.log else "Шаг."
+    note = melee_note or (session.log[-1] if session.log else "Шаг.")
     return ActionResult(
         True,
         "Шаг.",
@@ -1760,10 +1771,18 @@ def _grant_level3_reward(storage: Storage, session: LabSession, turn_seq: int) -
         f"Записка:\n«{final_note}»\n\n"
         f"⚠️ {AMBUSH_INTRO_TEXT}"
     )
+    payload: dict[str, Any] = {"lab_ambush_choice": True, "lab_stage": "ambush_choice", "lab_active": True}
+    player = storage.get_character(tid, refresh_energy=False)
+    if player is not None:
+        try:
+            payload["lab_image"] = render_lab_for_player(storage, tid, session, player)
+            payload["caption"] = lab_status_caption(session, player)
+        except Exception:
+            payload.pop("lab_image", None)
     return ActionResult(
         True,
         text,
-        payload={"lab_ambush_choice": True, "lab_stage": "ambush_choice", "lab_active": True},
+        payload=payload,
     )
 
 

@@ -6547,7 +6547,7 @@ async def show_location_zones(message: Message) -> None:
     if busy is None:
         try:
             x, y = get_walk_position(storage, player.telegram_id)
-            current_zone = zone_at(location, x, y, player.faction)
+            current_zone = zone_at(location, x, y, player.faction, storage=storage)
             walk_image = render_walk_frame(storage, player)
             walk_keyboard = location_walk_keyboard(
                 {"x": x, "y": y, "zone": current_zone},
@@ -7449,7 +7449,7 @@ async def location_map_callback(callback: CallbackQuery) -> None:
                 from app.keyboards import location_walk_keyboard
 
                 x, y = get_walk_position(storage, telegram_id)
-                current_zone = zone_at(player.location, x, y, player.faction)
+                current_zone = zone_at(player.location, x, y, player.faction, storage=storage)
                 try:
                     image_bytes = render_walk_frame(storage, player)
                 except Exception:
@@ -7666,10 +7666,20 @@ async def location_walk_callback(callback: CallbackQuery) -> None:
         caption = "\n".join(lines)
 
         x, y = move_walk_position(storage, telegram_id, action)
-        current_zone = zone_at(location, x, y, player.faction)
+        current_zone = zone_at(location, x, y, player.faction, storage=storage)
         walk_caption = caption + f"\n\n🗺 Ты на клетке X {x + 1} · Y {y + 1}"
         if current_zone is not None:
             walk_caption += f"\n📍 Ты в зоне: {current_zone.get('label') or current_zone.get('id')}"
+            if current_zone.get("kind") == "anomaly":
+                try:
+                    from app.game_logic import register_anomaly_visit
+
+                    stacks = register_anomaly_visit(storage, telegram_id, f"a:{x}:{y}")
+                    walk_caption += (
+                        f"\n☢ Аномалия исследована: +5% к поиску артефактов ×{stacks} (10 мин)."
+                    )
+                except Exception:
+                    logger.exception("Anomaly buff registration failed for %s", telegram_id)
 
         from app.special_events import (
             special_event_button_label,
