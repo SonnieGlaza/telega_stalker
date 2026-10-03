@@ -165,6 +165,14 @@ LOCATION_ZONES: dict[str, list[dict]] = {
 def location_zones_for(location: str) -> list[dict]:
     """Зоны локации; точки обыска разворачиваются в отдельные зоны (персональный КД)."""
     zones = list(LOCATION_ZONES.get(location, []))
+    try:
+        from app.location_walk import LOCATION_WALK_RECTS
+
+        if location in LOCATION_WALK_RECTS:
+            zones = [z for z in zones if str(z.get("id") or "") != "lair_1"]
+            zones.append({"id": "lair_1", "kind": "lair", "label": "Логово мутантов"})
+    except Exception:
+        pass
     search_base = next(
         (z for z in zones if str(z.get("id") or "") == "search_1" and str(z.get("kind") or "") == "search"),
         None,

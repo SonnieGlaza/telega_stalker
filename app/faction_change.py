@@ -9,9 +9,7 @@ from app.storage import Storage, utc_now
 
 FACTION_CHANGE_COST_RU = 5000
 FACTION_CHANGE_COOLDOWN_DAYS = 14
-FACTION_CHANGE_TARGETS: tuple[str, ...] = ("Долг", "Свобода", "Нейтралы", "Бандиты")
-# «Монолит» — админская группировка: смена на неё через игру недоступна,
-# назначение — только через админку (/setfaction).
+FACTION_CHANGE_TARGETS: tuple[str, ...] = ("Долг", "Свобода", "Нейтралы", "Бандиты", "Монолит")
 
 
 def _cooldown_key(telegram_id: int) -> str:

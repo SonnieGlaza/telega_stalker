@@ -4373,9 +4373,12 @@ def _quests_compact_status(storage, player) -> str:
         )
     event = get_active_help_event(storage)
     if event:
-        lines.append(
-            f"📡 Рация: {event.get('speaker')} на «{event.get('location')}» — 15 мин."
-        )
+        from app.faction_buildings import faction_building_active
+
+        if faction_building_active(storage, player.faction, "antenna"):
+            lines.append(
+                f"📡 Рация: {event.get('speaker')} на «{event.get('location')}» — 15 мин."
+            )
     from app.special_events import get_active_special_event, special_events_status_line
 
     if get_active_special_event(storage) is not None:
@@ -4433,7 +4436,11 @@ def _quests_menu_payload(storage, player):
         work_location=work_location,
         show_go_home=show_go_home,
         show_cancel=show_cancel,
-        show_help=help_event_is_joinable(storage, player.telegram_id),
+        show_help=(
+            not traveling
+            and faction_building_active(storage, player.faction, "antenna")
+            and help_event_is_joinable(storage, player.telegram_id)
+        ),
         show_special=show_special,
         special_label=special_event_button_label(storage) if show_special else None,
     )
@@ -6547,7 +6554,7 @@ async def show_location_zones(message: Message) -> None:
     if busy is None:
         try:
             x, y = get_walk_position(storage, player.telegram_id)
-            current_zone = zone_at(location, x, y, player.faction, storage=storage)
+            current_zone = zone_at(location, x, y, player.faction)
             walk_image = render_walk_frame(storage, player)
             walk_keyboard = location_walk_keyboard(
                 {"x": x, "y": y, "zone": current_zone},
@@ -7071,6 +7078,68 @@ async def _send_or_edit_hunt_frame(
         await safe_callback_answer(callback)
 
 
+async def _send_or_edit_lair_frame(
+    callback: CallbackQuery,
+    *,
+    image_bytes: bytes,
+    caption: str,
+    note: str | None = None,
+) -> None:
+    from app.lair_hunt import lair_keyboard
+
+    media = BufferedInputFile(image_bytes, filename="lair_hunt.png")
+    text = caption if not note else f"{caption}\n\n{note}"
+    markup = lair_keyboard()
+    try:
+        if callback.message and callback.message.photo:
+            await callback.message.edit_media(
+                media=InputMediaPhoto(media=media, caption=text),
+                reply_markup=markup,
+            )
+        elif callback.message:
+            await callback.message.answer_photo(photo=media, caption=text, reply_markup=markup)
+            try:
+                await callback.message.delete()
+            except TelegramBadRequest:
+                pass
+        else:
+            await callback.bot.send_photo(callback.from_user.id, photo=media, caption=text, reply_markup=markup)
+    except TelegramBadRequest:
+        await callback.bot.send_photo(callback.from_user.id, photo=media, caption=text, reply_markup=markup)
+    finally:
+        await safe_callback_answer(callback)
+
+
+@router.callback_query(F.data.startswith("lair:"))
+async def lair_action_callback(callback: CallbackQuery) -> None:
+    """Зачистка логова мутантов: ходы и выход."""
+    action = (callback.data or "").removeprefix("lair:").strip()
+    storage = get_storage()
+    telegram_id = callback.from_user.id
+    try:
+        from app.lair_hunt import abandon_lair_hunt, move_lair_hunt
+
+        if action == "leave":
+            result = abandon_lair_hunt(storage, telegram_id)
+            await reply_action_result(callback, result.text)
+            return
+        result = move_lair_hunt(storage, telegram_id, action)
+        payload = result.payload or {}
+        image = payload.get("lair_image")
+        if image and payload.get("lair_active"):
+            await _send_or_edit_lair_frame(
+                callback,
+                image_bytes=image,
+                caption=str(payload.get("caption") or result.text),
+                note=str(payload.get("move_note") or "") or None,
+            )
+            return
+        await reply_action_result(callback, result.text)
+    except Exception:
+        logger.exception("Lair callback failed for %s action=%s", telegram_id, action)
+        await safe_callback_answer(callback, "Ошибка логова. Попробуй ещё раз или /fixme", show_alert=True)
+
+
 @router.callback_query(F.data == "artifact:search")
 async def artifact_search_callback(callback: CallbackQuery) -> None:
     result = start_artifact_hunt(get_storage(), callback.from_user.id)
@@ -7449,7 +7518,7 @@ async def location_map_callback(callback: CallbackQuery) -> None:
                 from app.keyboards import location_walk_keyboard
 
                 x, y = get_walk_position(storage, telegram_id)
-                current_zone = zone_at(player.location, x, y, player.faction, storage=storage)
+                current_zone = zone_at(player.location, x, y, player.faction)
                 try:
                     image_bytes = render_walk_frame(storage, player)
                 except Exception:
@@ -7519,6 +7588,23 @@ async def location_map_callback(callback: CallbackQuery) -> None:
                     image_bytes=image,
                     caption=str(payload.get("caption") or result.text),
                     note=result.text if payload.get("hunt_started") else None,
+                )
+                return
+            await reply_action_result(callback, result.text)
+            return
+
+        if action == "lair":
+            from app.lair_hunt import start_lair_hunt
+
+            result = start_lair_hunt(storage, telegram_id)
+            payload = result.payload or {}
+            image = payload.get("lair_image")
+            if image and payload.get("lair_active"):
+                await _send_or_edit_lair_frame(
+                    callback,
+                    image_bytes=image,
+                    caption=str(payload.get("caption") or result.text),
+                    note=result.text if payload.get("lair_started") else None,
                 )
                 return
             await reply_action_result(callback, result.text)
@@ -7666,7 +7752,7 @@ async def location_walk_callback(callback: CallbackQuery) -> None:
         caption = "\n".join(lines)
 
         x, y = move_walk_position(storage, telegram_id, action)
-        current_zone = zone_at(location, x, y, player.faction, storage=storage)
+        current_zone = zone_at(location, x, y, player.faction)
         walk_caption = caption + f"\n\n🗺 Ты на клетке X {x + 1} · Y {y + 1}"
         if current_zone is not None:
             walk_caption += f"\n📍 Ты в зоне: {current_zone.get('label') or current_zone.get('id')}"
@@ -7675,9 +7761,7 @@ async def location_walk_callback(callback: CallbackQuery) -> None:
                     from app.game_logic import register_anomaly_visit
 
                     stacks = register_anomaly_visit(storage, telegram_id, f"a:{x}:{y}")
-                    walk_caption += (
-                        f"\n☢ Аномалия исследована: +5% к поиску артефактов ×{stacks} (10 мин)."
-                    )
+                    walk_caption += f"\n☢ Аномалия исследована: +5% к поиску артефактов ×{stacks} (10 мин)."
                 except Exception:
                     logger.exception("Anomaly buff registration failed for %s", telegram_id)
 
@@ -8719,11 +8803,6 @@ async def _show_travel_inner(message: Message) -> None:
             "Пока идёт переход, другие действия на точке недоступны."
         )
     else:
-        repair_hint = (
-            "\n\n⚠️ Техника сломана — подлатай её кнопкой ниже (бесплатно, до 5%), чтобы уехать."
-            if needs_repair
-            else ""
-        )
         text = (
             "Выбери локацию, затем транспорт (велик доступен даже если есть Нива/грузовик).\n"
             f"Пешком ×1, велосипед ×{TRAVEL_SPEED_BICYCLE:g} "
@@ -8731,7 +8810,9 @@ async def _show_travel_inner(message: Message) -> None:
             f"Нива ×{TRAVEL_SPEED_NIVA:g}, грузовик ×{TRAVEL_SPEED_TRUCK:g} (+ дизель).\n"
             "Переход занимает реальное время (1 игровая мин ≈ 10 сек).\n\n"
             f"{describe_travel_fuel_status(player)}"
-            f"{repair_hint}"
+            "\n\n⚠️ Техника сломана — подлатай её кнопкой ниже (бесплатно, до 5%), чтобы уехать."
+            if needs_repair
+            else ""
         )
     await message.answer(
         text,
@@ -8800,15 +8881,12 @@ async def _travel_back_inner(callback: CallbackQuery) -> None:
     traveling = is_traveling(player)
     show_n2o = traveling and can_use_n2o_during_travel(storage, player.telegram_id)
     needs_repair = not traveling and needs_field_repair(player)
-    repair_hint = (
-        "\n\n⚠️ Техника сломана — подлатай её кнопкой ниже (бесплатно, до 5%), чтобы уехать."
-        if needs_repair
-        else ""
-    )
     text = (
         "Выбери локацию, затем транспорт.\n\n"
         f"{describe_travel_fuel_status(player)}"
-        f"{repair_hint}"
+        "\n\n⚠️ Техника сломана — подлатай её кнопкой ниже (бесплатно, до 5%), чтобы уехать."
+        if needs_repair
+        else ""
     )
     await edit_menu_message(
         callback,
@@ -11485,16 +11563,16 @@ async def run_bot() -> None:
                     logger.exception("Offline survival death tick failed")
             if zone_tick_counter["n"] % OWNER_DAILY_RATING_EVERY_TICKS == 0:
                 try:
-                    from app.game_logic import process_daily_rating_grants
+                    from app.game_logic import process_owner_daily_rating_grants
 
-                    for recipient_id, amount in process_daily_rating_grants(get_storage()):
+                    for owner_id, amount in process_owner_daily_rating_grants(get_storage()):
                         try:
                             await bot.send_message(
-                                recipient_id,
-                                f"⚡ Ежедневный бонус: +{amount} рейтинга.",
+                                owner_id,
+                                f"⚡ Ежедневный бонус владельца: +{amount} рейтинга.",
                             )
                         except Exception:
-                            logger.debug("Failed daily rating notify to %s", recipient_id)
+                            logger.debug("Failed owner daily rating notify to %s", owner_id)
                 except Exception:
                     logger.exception("Owner daily rating tick failed")
 

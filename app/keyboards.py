@@ -725,6 +725,8 @@ def location_walk_keyboard(
             rows.append([InlineKeyboardButton(text="🛒 Торговец", callback_data="locmap:vendor")])
         elif kind == "anomaly":
             rows.append([InlineKeyboardButton(text="☢ Поиск артов", callback_data="locmap:anomaly")])
+        elif kind == "lair":
+            rows.append([InlineKeyboardButton(text="👹 Зачистка логова", callback_data="locmap:lair")])
         elif kind == "search":
             remaining = next(
                 (rem for z, rem in zones_status if str(z.get("id") or "") == zone_id),

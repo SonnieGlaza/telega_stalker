@@ -4342,42 +4342,12 @@ def _spend_quest_resources(
     telegram_id: int,
     quest: QuestType,
 ) -> ActionResult | None:
-    """Списать энергию/патроны/аптечки. None = ок, иначе ошибка."""
-    from app.tactical_combat import weapon_ammo_type
-
-    character = storage.get_character(telegram_id, refresh_energy=False)
-    if character is None:
-        return ActionResult(False, "Персонаж не найден.")
-
-    weapon_name = str(character.equipment.get("weapon", "Нож"))
-    ammo_key = weapon_ammo_type(weapon_name)
-    medkit_stock = _total_medkit_stock(character)
-    if ammo_key is not None:
-        ammo_stock = int(character.inventory.get(ammo_key, 0))
-        ammo_label = ITEM_LABELS.get(ammo_key, ammo_key)
-        if ammo_stock < quest.ammo_required:
-            return ActionResult(
-                False,
-                f"Недостаточно {ammo_label.lower()}. Нужно {quest.ammo_required}, у тебя {ammo_stock}.",
-            )
-    if medkit_stock < quest.medkit_required:
-        return ActionResult(
-            False,
-            f"Недостаточно аптечек. Нужно {quest.medkit_required}, у тебя {medkit_stock}.",
-        )
+    """Списать энергию за миссию. Патроны и аптечки больше не требуются/не списываются."""
     if not storage.spend_energy(telegram_id, quest.energy_cost):
         return ActionResult(
             False,
             f"Не хватает энергии. Нужно {quest.energy_cost} ед.",
         )
-    if ammo_key is not None and not storage.remove_item(telegram_id, ammo_key, quest.ammo_required):
-        storage.restore_energy(telegram_id, quest.energy_cost)
-        return ActionResult(False, "Ошибка расхода патронов.")
-    if quest.medkit_required > 0 and not _consume_quest_medkits(storage, telegram_id, quest.medkit_required):
-        if ammo_key is not None:
-            storage.add_item(telegram_id, ammo_key, quest.ammo_required)
-        storage.restore_energy(telegram_id, quest.energy_cost)
-        return ActionResult(False, "Ошибка расхода аптечек.")
     return None
 
 
@@ -5369,7 +5339,6 @@ BULK_BUY_ITEM_KEYS: frozenset[str] = frozenset(
     }
 )
 BULK_BUY_MAX_QTY = 25
-
 
 def buy_item(storage: Storage, telegram_id: int, item_key: str, amount: int = 1) -> ActionResult:
     item_key = normalize_shop_item_key(item_key)
