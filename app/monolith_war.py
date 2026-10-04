@@ -528,8 +528,8 @@ def filter_travel_locations_for_faction(
     locations: list[dict[str, Any]],
     faction: str | None,
 ) -> list[dict[str, Any]]:
-    """«Завод» (ЧАЭС) убран из переходов для всех — точки перехода в ней нет."""
-    return [loc for loc in locations if str(loc.get("name") or "") != MONOLITH_BASE]
+    """Убираем из переходов мусорную локацию «Завод»; ЧАЭС остаётся доступной."""
+    return [loc for loc in locations if str(loc.get("name") or "") != "Завод"]
 
 
 def start_monolith_attack(
