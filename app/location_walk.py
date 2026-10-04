@@ -267,7 +267,7 @@ LOCATION_WALK_RECTS: dict[str, dict[str, tuple[tuple[int, int, int, int], ...]]]
     },
     "ЧАЭС": {
         "base": (
-            (4, 12, 4, 12),
+            (4, 4, 12, 12),
         ),
     },
     "Тунель": {
