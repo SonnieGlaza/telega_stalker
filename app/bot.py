@@ -8788,6 +8788,7 @@ async def _show_travel_inner(message: Message) -> None:
         return
     if await reject_if_busy(message, player.telegram_id, skip="travel"):
         return
+
     db = get_storage()
     from app.monolith_war import filter_travel_locations_for_faction
 
@@ -8795,6 +8796,7 @@ async def _show_travel_inner(message: Message) -> None:
     traveling = is_traveling(player)
     show_n2o = traveling and can_use_n2o_during_travel(db, player.telegram_id)
     needs_repair = not traveling and needs_field_repair(player)
+
     if traveling:
         loc = format_location_display(player)
         text = (
@@ -8802,7 +8804,7 @@ async def _show_travel_inner(message: Message) -> None:
             "⏱ Отсчёт времени — в отдельном сообщении с таймером.\n\n"
             "Пока идёт переход, другие действия на точке недоступны."
         )
-        else:
+    else:
         text = (
             "Выбери локацию, затем транспорт (велик доступен даже если есть Нива/грузовик).\n"
             f"Пешком ×1, велосипед ×{TRAVEL_SPEED_BICYCLE:g} "
@@ -8823,7 +8825,6 @@ async def _show_travel_inner(message: Message) -> None:
             show_field_repair=needs_repair,
         ),
     )
-
 
 @router.callback_query(F.data == "travel:status")
 async def travel_status_callback(callback: CallbackQuery) -> None:
