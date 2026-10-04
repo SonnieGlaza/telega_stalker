@@ -8813,7 +8813,7 @@ async def _show_travel_inner(message: Message) -> None:
         )
         if needs_repair:
             text += "\n\n⚠️ Техника сломана — подлатай её кнопкой ниже (бесплатно, до 5%), чтобы уехать."
-        )
+
     await message.answer(
         text,
         reply_markup=travel_keyboard(
