@@ -165,6 +165,8 @@ LOCATION_ZONES: dict[str, list[dict]] = {
 def location_zones_for(location: str) -> list[dict]:
     """Зоны локации; точки обыска разворачиваются в отдельные зоны (персональный КД)."""
     zones = list(LOCATION_ZONES.get(location, []))
+    if location == "Рыжий лес" and not any(str(z.get("id")) == "forester" for z in zones):
+        zones.append({"id": "forester", "kind": "forester", "label": "Лесник"})
     try:
         from app.location_walk import LOCATION_WALK_RECTS
 

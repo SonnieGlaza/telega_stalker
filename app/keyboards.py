@@ -614,9 +614,6 @@ def location_zones_keyboard(
         rows.append(
             [InlineKeyboardButton(text="🛒 Торговец", callback_data="locmap:vendor")]
         )
-        rows.append(
-            [InlineKeyboardButton(text="🏦 Барахолка", callback_data="locmap:bazaar")]
-        )
     if show_secret_trader:
         rows.append(
             [InlineKeyboardButton(text="🕵 Бунс (тайный торговец)", callback_data="locmap:secrettrader")]
@@ -632,6 +629,10 @@ def location_zones_keyboard(
         elif kind == "bazaar":
             rows.append(
                 [InlineKeyboardButton(text="🏦 Барахолка", callback_data="locmap:bazaar")]
+            )
+        elif kind == "forester":
+            rows.append(
+                [InlineKeyboardButton(text="🪵 Лесник: трофеи ×3", callback_data="locmap:forester")]
             )
         elif kind == "trade":
             rows.append(
@@ -704,7 +705,6 @@ def location_walk_keyboard(
             action_row = [InlineKeyboardButton(text="🛒 Торговец", callback_data="locmap:vendor")]
             if is_home:
                 action_row.append(InlineKeyboardButton(text="📋 Задания", callback_data="locmap:quests"))
-                action_row.append(InlineKeyboardButton(text="🏦 Барахолка", callback_data="locmap:bazaar"))
                 if resupply_cooldown:
                     action_row.append(
                         InlineKeyboardButton(
@@ -721,6 +721,8 @@ def location_walk_keyboard(
             rows.append([InlineKeyboardButton(text="🕵 Бунс (тайный торговец)", callback_data="locmap:secrettrader")])
         elif kind == "bazaar":
             rows.append([InlineKeyboardButton(text="🏦 Барахолка", callback_data="locmap:bazaar")])
+        elif kind == "forester":
+            rows.append([InlineKeyboardButton(text="🪵 Лесник: трофеи ×3", callback_data="locmap:forester")])
         elif kind == "trade":
             rows.append([InlineKeyboardButton(text="🛒 Торговец", callback_data="locmap:vendor")])
         elif kind == "anomaly":

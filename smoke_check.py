@@ -1169,6 +1169,7 @@ def run_smoke_check() -> None:
         heavy_sess.enemy_kinds = []
         heavy_sess.turn_seq = 0
         save_mission_session(storage, 111, heavy_sess)
+        storage.add_item(111, "ammo_pistol", 20)
         storage.set_equipment_item(111, "weapon", "ПМ")
         shoot = shoot_quest_mission(storage, 111, "right")
         assert shoot.ok, shoot.text

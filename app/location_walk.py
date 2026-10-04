@@ -55,6 +55,7 @@ ZONE_COLORS: dict[str, tuple[int, int, int]] = {
     "bazaar": (255, 190, 80),
     "trade": (80, 170, 255),
     "lair": (150, 100, 60),
+    "forester": (90, 160, 90),
 }
 
 ZONE_LEGEND_LABELS: dict[str, str] = {
@@ -66,6 +67,7 @@ ZONE_LEGEND_LABELS: dict[str, str] = {
     "bazaar": "Барахолка",
     "trade": "Торговец",
     "lair": "Логово мутантов",
+    "forester": "Лесник",
 }
 
 _BASE_ZONE: dict[str, str] = {"id": "base", "kind": "base", "label": "База группировки"}
@@ -451,6 +453,9 @@ def walk_zone_rects(
             lx = 2 + (seed * 7) % (WALK_GRID - 3)
             ly = 2 + (seed * 13) % (WALK_GRID - 3)
             result.append((_zone_dict_for("lair_1", location), (lx - 1, ly - 1, lx - 1, ly - 1)))
+        # Лесник (Рыжий лес): скупает трофеи мутантов втрое.
+        if location == "Рыжий лес" and "forester" not in rects:
+            result.append((_zone_dict_for("forester", location), (11, 0, 11, 0)))
         return result
 
     raw_spots = _WALK_LEGACY_CENTER_SPOTS.get(location) or _fallback_spots(location)

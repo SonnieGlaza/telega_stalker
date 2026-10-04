@@ -6513,13 +6513,23 @@ async def show_location_zones(message: Message) -> None:
     if zones:
         lines.append("")
         lines.append("Зоны:")
+        search_counts: dict[str, int] = {}
+        search_order: list[str] = []
         for zone, remaining in zones_status:
+            kind = str(zone.get("kind") or "")
             label = str(zone.get("label") or zone.get("id") or "")
-            if zone.get("kind") == "anomaly":
+            if kind == "search":
+                if label not in search_counts:
+                    search_counts[label] = 0
+                    search_order.append(label)
+                search_counts[label] += 1
+            elif kind == "anomaly":
                 lines.append(f"• ☢ {label} — поиск артефактов")
             else:
                 suffix = f" (КД {remaining})" if remaining else ""
                 lines.append(f"• 🔍 {label} — обыск схрона{suffix}")
+        for label in search_order:
+            lines.append(f"• 🔍 {label} — обыск схрона ({search_counts[label]})")
     else:
         lines.append("Здесь пока нет исследованных зон.")
     caption = "\n".join(lines)
@@ -7593,6 +7603,37 @@ async def location_map_callback(callback: CallbackQuery) -> None:
             await reply_action_result(callback, result.text)
             return
 
+        if action == "forester":
+            from app.game_logic import ITEM_LABELS, SHOP_ITEMS
+
+            player = storage.get_character(telegram_id, refresh_energy=False)
+            if player is None:
+                await safe_callback_answer(callback, "Сначала создай персонажа.", show_alert=True)
+                return
+            trophy_keys = [
+                k for k in SHOP_ITEMS
+                if k.startswith("mutant_") and int(SHOP_ITEMS[k].get("sell_price", 0)) > 0
+            ]
+            sold: list[str] = []
+            total = 0
+            for key in trophy_keys:
+                count = int(player.inventory.get(key, 0))
+                if count <= 0:
+                    continue
+                price = int(SHOP_ITEMS[key]["sell_price"]) * 3
+                storage.remove_item(telegram_id, key, count)
+                storage.change_money(telegram_id, price * count)
+                total += price * count
+                sold.append(f"{ITEM_LABELS.get(key, key)} x{count} — {price * count} RU")
+            if not sold:
+                await reply_action_result(callback, "🪵 Лесник: «Трофеев мутантов нет. Принеси клыки и шкуры — заплачу втрое.»")
+                return
+            await reply_action_result(
+                callback,
+                "🪵 Лесник забрал трофеи:\n" + "\n".join(sold) + f"\nИтого: {total} RU.",
+            )
+            return
+
         if action == "lair":
             from app.lair_hunt import start_lair_hunt
 
@@ -7740,13 +7781,23 @@ async def location_walk_callback(callback: CallbackQuery) -> None:
         if zones_status:
             lines.append("")
             lines.append("Зоны:")
+            search_counts: dict[str, int] = {}
+            search_order: list[str] = []
             for zone, remaining in zones_status:
+                kind = str(zone.get("kind") or "")
                 label = str(zone.get("label") or zone.get("id") or "")
-                if zone.get("kind") == "anomaly":
+                if kind == "search":
+                    if label not in search_counts:
+                        search_counts[label] = 0
+                        search_order.append(label)
+                    search_counts[label] += 1
+                elif kind == "anomaly":
                     lines.append(f"• ☢ {label} — поиск артефактов")
                 else:
                     suffix = f" (КД {remaining})" if remaining else ""
                     lines.append(f"• 🔍 {label} — обыск схрона{suffix}")
+            for label in search_order:
+                lines.append(f"• 🔍 {label} — обыск схрона ({search_counts[label]})")
         else:
             lines.append("Здесь пока нет исследованных зон.")
         caption = "\n".join(lines)
