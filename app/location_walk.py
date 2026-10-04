@@ -54,6 +54,7 @@ ZONE_COLORS: dict[str, tuple[int, int, int]] = {
     "secrettrader": (255, 170, 90),
     "bazaar": (255, 190, 80),
     "trade": (80, 170, 255),
+    "lair": (150, 100, 60),
 }
 
 ZONE_LEGEND_LABELS: dict[str, str] = {
@@ -64,6 +65,7 @@ ZONE_LEGEND_LABELS: dict[str, str] = {
     "secrettrader": "Бунс",
     "bazaar": "Барахолка",
     "trade": "Торговец",
+    "lair": "Логово мутантов",
 }
 
 _BASE_ZONE: dict[str, str] = {"id": "base", "kind": "base", "label": "База группировки"}
@@ -443,6 +445,12 @@ def walk_zone_rects(
                     search_seq += 1
                 zone = _zone_dict_for(emit_id, location)
                 result.append((zone, (x1 - 1, y1 - 1, x2 - 1, y2 - 1)))
+        # Логово мутантов: псевдослучайная, но стабильная точка на карте локации.
+        if "lair_1" not in rects:
+            seed = sum(ord(ch) for ch in location)
+            lx = 2 + (seed * 7) % (WALK_GRID - 3)
+            ly = 2 + (seed * 13) % (WALK_GRID - 3)
+            result.append((_zone_dict_for("lair_1", location), (lx - 1, ly - 1, lx - 1, ly - 1)))
         return result
 
     raw_spots = _WALK_LEGACY_CENTER_SPOTS.get(location) or _fallback_spots(location)
