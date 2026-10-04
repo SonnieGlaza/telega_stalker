@@ -3290,6 +3290,22 @@ async def show_profile(message: Message) -> None:
     await send_profile_snapshot(message, player, reply_markup=_pda_keyboard_for(player))
 
 
+def _enemy_base_block(storage, player) -> str | None:
+    """Запрет покупать на территории вражеской группировки: текст или None."""
+    if player is None or not player.faction:
+        return None
+    loc = storage.get_location(str(player.location))
+    owner = str((loc or {}).get("controlled_by") or "")
+    if not owner or owner == player.faction:
+        return None
+    try:
+        if storage.are_factions_allied(player.faction, owner):
+            return None
+    except Exception:
+        pass
+    return f"⛔ Это территория группировки «{owner}» — чужим здесь не торгуют."
+
+
 @router.message(F.text == "🛒 Торговец")
 async def show_trader(message: Message) -> None:
     player = ensure_character(message)
@@ -3300,6 +3316,10 @@ async def show_trader(message: Message) -> None:
         await show_death_screen(message, player)
         return
     if await reject_if_busy(message, player.telegram_id):
+        return
+    block = _enemy_base_block(get_storage(), player)
+    if block:
+        await message.answer(block)
         return
     await message.answer(
         _trader_text(message.from_user.id, "Торговая зона. Выбери специалиста:"),
@@ -7462,6 +7482,10 @@ async def location_map_callback(callback: CallbackQuery) -> None:
                 await show_death_screen(callback, player)
                 return
             if await reject_if_busy(callback, telegram_id):
+                return
+            block = _enemy_base_block(storage, player)
+            if block:
+                await safe_callback_answer(callback, block, show_alert=True)
                 return
             await edit_menu_message(
                 callback,
