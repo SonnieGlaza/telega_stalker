@@ -8802,7 +8802,7 @@ async def _show_travel_inner(message: Message) -> None:
             "⏱ Отсчёт времени — в отдельном сообщении с таймером.\n\n"
             "Пока идёт переход, другие действия на точке недоступны."
         )
-    else:
+        else:
         text = (
             "Выбери локацию, затем транспорт (велик доступен даже если есть Нива/грузовик).\n"
             f"Пешком ×1, велосипед ×{TRAVEL_SPEED_BICYCLE:g} "
@@ -8810,9 +8810,9 @@ async def _show_travel_inner(message: Message) -> None:
             f"Нива ×{TRAVEL_SPEED_NIVA:g}, грузовик ×{TRAVEL_SPEED_TRUCK:g} (+ дизель).\n"
             "Переход занимает реальное время (1 игровая мин ≈ 10 сек).\n\n"
             f"{describe_travel_fuel_status(player)}"
-            "\n\n⚠️ Техника сломана — подлатай её кнопкой ниже (бесплатно, до 5%), чтобы уехать."
-            if needs_repair
-            else ""
+        )
+        if needs_repair:
+            text += "\n\n⚠️ Техника сломана — подлатай её кнопкой ниже (бесплатно, до 5%), чтобы уехать."
         )
     await message.answer(
         text,
