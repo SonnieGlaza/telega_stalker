@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import random
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import Any
 
@@ -16,8 +17,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.artifact_hunt import (
     _character_rating_points,
+    _cover_crop,
     _draw_cell,
     _load_font,
+    _load_location_thumb,
     _player_grid_token,
     _paste_circle,
 )
@@ -42,6 +45,7 @@ LAIR_REWARD_MIN_RU = 400
 LAIR_REWARD_MAX_RU = 900
 LAIR_REWARD_RATING = 6
 LAIR_MELEE_DAMAGE = 5
+LAIR_COOLDOWN_MINUTES = 20
 
 MOVE_DELTAS: dict[str, tuple[int, int]] = {
     "up": (0, -1),
@@ -201,6 +205,9 @@ def start_lair_hunt(storage: Storage, telegram_id: int) -> ActionResult:
             "Ты уже в логове. Продолжай зачистку.",
             payload={"lair_image": image, "lair_active": True, "caption": lair_status_caption(session, player)},
         )
+    cd_left = _lair_cooldown_left(storage, telegram_id)
+    if cd_left:
+        return ActionResult(False, f"Логово ещё не остыло: до входа {cd_left} мин.")
     from app.player_busy import player_busy_reason
 
     busy = player_busy_reason(storage, telegram_id, skip="lair", auto_recover=False)
@@ -209,6 +216,7 @@ def start_lair_hunt(storage: Storage, telegram_id: int) -> ActionResult:
 
     session = _build_session(player)
     _save_session(storage, telegram_id, session)
+    _set_lair_cooldown(storage, telegram_id)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = render_lair_for_player(storage, telegram_id, session, player)
     return ActionResult(
@@ -321,6 +329,106 @@ def move_lair_hunt(storage: Storage, telegram_id: int, direction: str) -> Action
     )
 
 
+def _lair_cd_key(telegram_id: int) -> str:
+    return f"lair_cd:{int(telegram_id)}"
+
+
+def _lair_cooldown_left(storage: Storage, telegram_id: int) -> int:
+    """Сколько минут осталось до входа в логово (0 — можно заходить)."""
+    raw = storage.get_meta(_lair_cd_key(telegram_id))
+    if not raw:
+        return 0
+    try:
+        dt = datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        return 0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return max(0, int((dt - datetime.now(timezone.utc)).total_seconds() // 60))
+
+
+def _set_lair_cooldown(storage: Storage, telegram_id: int) -> None:
+    storage.set_meta(
+        _lair_cd_key(telegram_id),
+        (datetime.now(timezone.utc) + timedelta(minutes=LAIR_COOLDOWN_MINUTES)).isoformat(),
+    )
+
+
+def shoot_lair_hunt(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
+    """Выстрел в направлении: первый мутант на линии погибает (прототип — 1 попадание)."""
+    session = get_lair_session(storage, telegram_id)
+    if session is None:
+        return ActionResult(False, "Сначала зайди в логово мутантов.")
+    player = storage.get_character(telegram_id, refresh_energy=False)
+    if player is None:
+        _clear_session(storage, telegram_id)
+        return ActionResult(False, "Сначала создай персонажа.")
+    if _is_dead(player):
+        _clear_session(storage, telegram_id)
+        return ActionResult(False, _dead_block_text())
+    delta = MOVE_DELTAS.get(direction)
+    if delta is None:
+        return ActionResult(False, "Некорректный выстрел.")
+    from app.tactical_combat import consume_shot_ammo, weapon_shoot_range
+
+    weapon = str(player.equipment.get("weapon", "Нож"))
+    if weapon_shoot_range(weapon) <= 0:
+        return _frame(session, storage, telegram_id, player, "Это оружие не стреляет на дистанции.")
+    ammo_result = consume_shot_ammo(storage, telegram_id, weapon)
+    if ammo_result is not None:
+        return ammo_result
+    px, py = session.player
+    dx, dy = delta
+    hit = None
+    sx, sy = px + dx, py + dy
+    while 0 <= sx < session.grid and 0 <= sy < session.grid:
+        if (sx, sy) in session.mutants and (sx, sy) not in session.cleared:
+            hit = (sx, sy)
+            break
+        sx += dx
+        sy += dy
+    if hit is None:
+        return _frame(session, storage, telegram_id, player, "Мимо. Мутанты где-то в другом месте.")
+    session.cleared.append(hit)
+    session.moves += 1
+    if session.done:
+        return _finish_lair_success(storage, telegram_id, session)
+    _save_session(storage, telegram_id, session)
+    player = storage.get_character(telegram_id, refresh_energy=False) or player
+    image = render_lair_for_player(storage, telegram_id, session, player)
+    remaining = session.mutant_count - session.cleared_count
+    note = f"🔫 Попадание! Мутант повержен. Осталось: {remaining}."
+    return ActionResult(
+        True,
+        note,
+        payload={
+            "lair_image": image,
+            "lair_active": True,
+            "caption": lair_status_caption(session, player),
+            "move_note": note,
+        },
+    )
+
+
+def _frame(
+    session: LairSession,
+    storage: Storage,
+    telegram_id: int,
+    player: Character | None,
+    text: str,
+) -> ActionResult:
+    image = render_lair_for_player(storage, telegram_id, session, player)
+    return ActionResult(
+        False,
+        text,
+        payload={
+            "lair_image": image,
+            "lair_active": True,
+            "caption": lair_status_caption(session, player),
+        },
+    )
+
+
 def render_lair_for_player(
     storage: Storage,
     telegram_id: int,
@@ -353,11 +461,26 @@ def render_lair_frame(
     field = (margin - 6, margin - 6, margin + grid_px + 6, margin + grid_px + 6)
     draw.rounded_rectangle(field, radius=10, fill=(26, 28, 24, 255), outline=(70, 74, 80), width=2)
 
+    # Фон поля — как в заданиях: превью локации из assets/locations.
+    loc_bg = _load_location_thumb(session.location)
+    if loc_bg is not None:
+        field_img = _cover_crop(loc_bg, grid_px, grid_px).convert("RGBA")
+        field_img.putalpha(160)
+        canvas.paste(field_img, (margin, margin), field_img)
     for gy in range(grid):
         for gx in range(grid):
             left = margin + gx * cell
             top = margin + gy * cell
-            _draw_cell(canvas, left, top, cell, tone=52)
+            if loc_bg is None:
+                _draw_cell(canvas, left, top, cell, tone=52)
+            else:
+                overlay = Image.new("RGBA", (cell, cell), (12, 14, 16, 28))
+                canvas.alpha_composite(overlay, (left, top))
+                ImageDraw.Draw(canvas).rectangle(
+                    (left, top, left + cell - 1, top + cell - 1),
+                    outline=(28, 30, 32),
+                    width=1,
+                )
 
     from app.mutant_assets import load_mutant_grid_sprite
 
@@ -456,6 +579,12 @@ def lair_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="⬅️ Влево", callback_data="lair:left"),
             InlineKeyboardButton(text="⬇️ Назад", callback_data="lair:down"),
             InlineKeyboardButton(text="➡️ Вправо", callback_data="lair:right"),
+        ],
+        [
+            InlineKeyboardButton(text="🔫 ⬆️", callback_data="lair:shoot:up"),
+            InlineKeyboardButton(text="🔫 ⬅️", callback_data="lair:shoot:left"),
+            InlineKeyboardButton(text="🔫 ⬇️", callback_data="lair:shoot:down"),
+            InlineKeyboardButton(text="🔫 ➡️", callback_data="lair:shoot:right"),
         ],
         [InlineKeyboardButton(text="🚪 Бросить", callback_data="lair:leave")],
     ]

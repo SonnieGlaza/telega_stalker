@@ -7147,10 +7147,24 @@ async def lair_action_callback(callback: CallbackQuery) -> None:
     storage = get_storage()
     telegram_id = callback.from_user.id
     try:
-        from app.lair_hunt import abandon_lair_hunt, move_lair_hunt
+        from app.lair_hunt import abandon_lair_hunt, move_lair_hunt, shoot_lair_hunt
 
         if action == "leave":
             result = abandon_lair_hunt(storage, telegram_id)
+            await reply_action_result(callback, result.text)
+            return
+        if action.startswith("shoot:"):
+            result = shoot_lair_hunt(storage, telegram_id, action.removeprefix("shoot:").strip())
+            payload = result.payload or {}
+            image = payload.get("lair_image")
+            if image and payload.get("lair_active"):
+                await _send_or_edit_lair_frame(
+                    callback,
+                    image_bytes=image,
+                    caption=str(payload.get("caption") or result.text),
+                    note=str(payload.get("move_note") or "") or None,
+                )
+                return
             await reply_action_result(callback, result.text)
             return
         result = move_lair_hunt(storage, telegram_id, action)
