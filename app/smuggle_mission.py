@@ -21,7 +21,6 @@ from app.game_logic import (
     begin_smuggling_travel_after_grid,
     clear_active_smuggling,
     fail_smuggling_delivery,
-    remember_death_cause,
 )
 from app.mission_icons import ANOMALY_ICON_KEY, MISSION_ICON_GRID_DIAMETER, mission_icon_image
 from app.mutant_assets import (
@@ -79,6 +78,15 @@ TRANSPORT_LABELS: dict[str, str] = {
     "truck": "грузовик",
 }
 
+# ХП техники на маршруте контрабанды: урон (мутанты, НПС, аномалии)
+# принимает на себя техника, а не персонаж.
+TRANSPORT_MAX_HP: dict[str, int] = {
+    "foot": 100,
+    "bicycle": 125,
+    "niva": 160,
+    "truck": 200,
+}
+
 
 @dataclass
 class SmuggleMissionSession:
@@ -88,6 +96,8 @@ class SmuggleMissionSession:
     success_chance: int
     player: tuple[int, int]
     route: list[tuple[int, int]]
+    vehicle_hp: int = 100
+    vehicle_max_hp: int = 100
     player_facing: str = "down"
     route_index: int = 0
     hazards: list[tuple[int, int]] = field(default_factory=list)
@@ -109,6 +119,8 @@ class SmuggleMissionSession:
             "origin": self.origin,
             "transport": self.transport,
             "success_chance": self.success_chance,
+            "vehicle_hp": int(self.vehicle_hp),
+            "vehicle_max_hp": int(self.vehicle_max_hp),
             "player": list(self.player),
             "player_facing": self.player_facing,
             "route": [list(p) for p in self.route],
@@ -129,11 +141,15 @@ class SmuggleMissionSession:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> SmuggleMissionSession:
+        transport = str(raw.get("transport") or "foot")
+        vehicle_max = int(raw.get("vehicle_max_hp") or TRANSPORT_MAX_HP.get(transport, 100))
         return cls(
             destination=str(raw.get("destination") or ""),
             origin=str(raw.get("origin") or ""),
-            transport=str(raw.get("transport") or "foot"),
+            transport=transport,
             success_chance=int(raw.get("success_chance") or 50),
+            vehicle_max_hp=vehicle_max,
+            vehicle_hp=int(raw.get("vehicle_hp") or vehicle_max),
             player=(int(raw["player"][0]), int(raw["player"][1])),
             player_facing=str(raw.get("player_facing") or "down"),
             route=[(int(p[0]), int(p[1])) for p in (raw.get("route") or [])],
@@ -346,6 +362,8 @@ def _build_smuggle_session(
         origin=origin,
         transport=transport,
         success_chance=success_chance,
+        vehicle_max_hp=TRANSPORT_MAX_HP.get(transport, 100),
+        vehicle_hp=TRANSPORT_MAX_HP.get(transport, 100),
         player=start,
         route=route,
         route_index=1 if start == route[0] else 0,
@@ -444,8 +462,12 @@ def _resolve_smuggle_hostile(
     kinds_attr: str | None = None,
     npc: bool = False,
 ) -> tuple[Character, str | None, ActionResult | None, int]:
-    """Вернуть (player, note, dead_result, damage) без записи урона в БД."""
-    from app.death_flavor import encounter_phrase_for_kind, killer_label_for_kind
+    """Вернуть (player, note, dead_result, damage) без записи урона в БД.
+
+    Урон по маршруту принимает на себя техника (HP машины), поэтому
+    смерть персонажа здесь не наступает — dead_result всегда None.
+    """
+    from app.death_flavor import encounter_phrase_for_kind
 
     compat = _as_quest_compat(session)
     units: list[tuple[int, int]] = getattr(compat, unit_attr)
@@ -464,29 +486,7 @@ def _resolve_smuggle_hostile(
     else:
         setattr(compat, unit_attr, [e for e in units if e != session.player])
     phrase = encounter_phrase_for_kind(kind, npc=npc) if kind else f"с {label}"
-    note = f"Бой {phrase}: −{dmg} HP."
-    projected_hp = int(player.health) - dmg
-    if projected_hp <= 0:
-        remember_death_cause(storage, telegram_id, "npc" if npc else "mutant")
-        killer_name = killer_label_for_kind(kind, npc=npc) if kind else label
-        from app.game_logic import remember_death_killer
-
-        remember_death_killer(storage, telegram_id, killer_name)
-        return (
-            player,
-            note,
-            ActionResult(
-                False,
-                f"Ограбили на маршруте «{session.origin}» → «{session.destination}».",
-                payload={
-                    "mission_active": False,
-                    "mission_dead": True,
-                    "death_location": session.location,
-                    "death_cause": "npc" if npc else "mutant",
-                },
-            ),
-            dmg,
-        )
+    note = f"Бой {phrase}: технике −{dmg} HP."
     return player, note, None, dmg
 
 
@@ -570,9 +570,11 @@ def _paste_transport_token(
 
 def smuggle_status_caption(session: SmuggleMissionSession, player: Character | None) -> str:
     transport = TRANSPORT_LABELS.get(session.transport, session.transport)
+    hp = max(0, int(session.vehicle_hp))
+    hpmax = max(1, int(session.vehicle_max_hp))
     return (
         f"🚚 Контрабанда → «{session.destination}»\n"
-        f"Транспорт: {transport} · маршрут {session.route_index}/{len(session.route)}\n"
+        f"Транспорт: {transport} · HP {hp}/{hpmax} · маршрут {session.route_index}/{len(session.route)}\n"
         f"Ход {session.moves + 1}/{session.max_moves}"
     )
 
@@ -693,7 +695,21 @@ def render_smuggle_frame(
         fill=(255, 210, 120),
         font=body,
     )
-    y = pt + 190
+    y = pt + 188
+    hp = max(0, int(session.vehicle_hp))
+    hpmax = max(1, int(session.vehicle_max_hp))
+    draw.rounded_rectangle((pl + 18, y, pr - 18, y + 18), radius=5, fill=(30, 30, 34), outline=(90, 90, 95))
+    fill_w = int((pr - pl - 40) * (hp / hpmax))
+    if fill_w > 0:
+        if hp <= hpmax * 0.2:
+            bar_color = (200, 60, 50)
+        elif hp <= hpmax * 0.4:
+            bar_color = (220, 160, 40)
+        else:
+            bar_color = (60, 180, 80)
+        draw.rounded_rectangle((pl + 20, y + 2, pl + 20 + fill_w, y + 16), radius=4, fill=bar_color)
+    draw.text((pl + 24, y + 2), f"HP {hp}/{hpmax}", fill=(255, 255, 255), font=small)
+    y += 34
     draw.text((pl + 18, y), f"Маршрут: {session.route_index}/{len(session.route)}", fill=(150, 230, 170), font=body)
     draw.text((pl + 18, y + 26), f"Ход {session.moves + 1}/{session.max_moves}", fill=(200, 200, 200), font=small)
     draw.text((pl + 18, y + 48), "Жёлтые — точки, линия — путь", fill=(170, 170, 170), font=small)
@@ -824,12 +840,11 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
     session.moves += 1
     notes: list[str] = []
     compat = _as_quest_compat(session)
-    pending_damage = 0
-    death_result: ActionResult | None = None
+    vehicle_damage = 0
 
     def _fight(label: str, unit_attr: str, *, kinds_attr: str | None = None, npc: bool = False) -> None:
-        nonlocal player, notes, pending_damage, death_result
-        player, note, dead, dmg = _resolve_smuggle_hostile(
+        nonlocal player, notes, vehicle_damage
+        player, note, _dead, dmg = _resolve_smuggle_hostile(
             storage,
             telegram_id,
             session,
@@ -839,32 +854,18 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
             kinds_attr=kinds_attr,
             npc=npc,
         )
-        pending_damage += dmg
+        vehicle_damage += dmg
         if note:
             notes.append(note)
-        if dead is not None:
-            death_result = dead
 
     _fight("мутантом", "enemies", kinds_attr="enemy_kinds")
     _fight("НПС", "npcs", kinds_attr="npc_kinds", npc=True)
 
     if session.player in session.hazards:
         dmg = _hazard_damage("scout", player)
-        pending_damage += dmg
+        vehicle_damage += dmg
         session.hazards = [h for h in session.hazards if h != session.player]
-        notes.append(f"Аномалия: −{dmg} HP.")
-        if int(player.health) - pending_damage <= 0:
-            remember_death_cause(storage, telegram_id, "anomaly")
-            death_result = ActionResult(
-                False,
-                "Аномалия на маршруте. Груз потерян.",
-                payload={
-                    "mission_active": False,
-                    "mission_dead": True,
-                    "death_location": session.location,
-                    "death_cause": "anomaly",
-                },
-            )
+        notes.append(f"Аномалия: технике −{dmg} HP.")
 
     route_note = _visit_route_checkpoint(session)
     if route_note:
@@ -874,20 +875,27 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
     _fight("мутанта", "enemies", kinds_attr="enemy_kinds")
     _fight("НПС", "npcs", kinds_attr="npc_kinds", npc=True)
 
+    def _apply_vehicle_damage() -> str | None:
+        """Списать урон маршрута с HP техники; текст провала, если техника разбита."""
+        if vehicle_damage > 0:
+            session.vehicle_hp = max(0, int(session.vehicle_hp) - vehicle_damage)
+        if int(session.vehicle_hp) <= 0:
+            return "Техника разбита — груз потерян."
+        return None
+
     if _route_complete(session):
         session.turn_seq = expected_seq + 1
+        break_reason = _apply_vehicle_damage()
         if not _save_smuggle_if_turn_ok(storage, telegram_id, session, expected_seq):
             from app.tactical_combat import STALE_TURN_MESSAGE
 
             return ActionResult(False, STALE_TURN_MESSAGE)
-        if pending_damage:
-            storage.change_health(telegram_id, -pending_damage)
-        if death_result is not None:
-            fail_text = _abort_smuggle_combat_death(
-                storage, telegram_id, "Погиб на маршруте — груз потерян."
+        if break_reason is not None:
+            return ActionResult(
+                False,
+                _fail_smuggle_run(storage, telegram_id, break_reason),
+                payload={"mission_active": False, "mission_done": True},
             )
-            payload = death_result.payload or {}
-            return ActionResult(False, fail_text, payload=payload)
         delivery = begin_smuggling_travel_after_grid(storage, telegram_id)
         if not delivery.ok:
             return delivery
@@ -899,18 +907,17 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
 
     if session.moves >= session.max_moves:
         session.turn_seq = expected_seq + 1
+        break_reason = _apply_vehicle_damage()
         if not _save_smuggle_if_turn_ok(storage, telegram_id, session, expected_seq):
             from app.tactical_combat import STALE_TURN_MESSAGE
 
             return ActionResult(False, STALE_TURN_MESSAGE)
-        if pending_damage:
-            storage.change_health(telegram_id, -pending_damage)
-        if death_result is not None:
-            fail_text = _abort_smuggle_combat_death(
-                storage, telegram_id, "Погиб на маршруте — груз потерян."
+        if break_reason is not None:
+            return ActionResult(
+                False,
+                _fail_smuggle_run(storage, telegram_id, break_reason),
+                payload={"mission_active": False, "mission_done": True},
             )
-            payload = death_result.payload or {}
-            return ActionResult(False, fail_text, payload=payload)
         return check_smuggle_session_timeout(storage, telegram_id) or ActionResult(
             False,
             _fail_smuggle_run(storage, telegram_id, "Время рейса вышло — ограбили."),
@@ -918,18 +925,17 @@ def move_smuggle_mission(storage: Storage, telegram_id: int, direction: str) -> 
         )
 
     session.turn_seq = expected_seq + 1
+    break_reason = _apply_vehicle_damage()
     if not _save_smuggle_if_turn_ok(storage, telegram_id, session, expected_seq):
         from app.tactical_combat import STALE_TURN_MESSAGE
 
         return ActionResult(False, STALE_TURN_MESSAGE)
-    if pending_damage:
-        storage.change_health(telegram_id, -pending_damage)
-    if death_result is not None:
-        fail_text = _abort_smuggle_combat_death(
-            storage, telegram_id, "Погиб на маршруте — груз потерян."
+    if break_reason is not None:
+        return ActionResult(
+            False,
+            _fail_smuggle_run(storage, telegram_id, break_reason),
+            payload={"mission_active": False, "mission_done": True},
         )
-        payload = death_result.payload or {}
-        return ActionResult(False, fail_text, payload=payload)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = render_smuggle_for_player(storage, telegram_id, session, player)
     note = " ".join(notes) if notes else "Дорога чистая."

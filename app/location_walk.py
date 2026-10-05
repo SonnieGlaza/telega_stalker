@@ -27,6 +27,7 @@ from app.artifact_hunt import (
     _paste_circle,
     _paste_rounded,
     _player_grid_token,
+    legend_icon_for,
 )
 from app.image_text import render_emoji_glyph
 from app.location_zones import location_zones_for
@@ -72,6 +73,36 @@ ZONE_LEGEND_LABELS: dict[str, str] = {
 
 _BASE_ZONE: dict[str, str] = {"id": "base", "kind": "base", "label": "База группировки"}
 _SECRET_ZONE: dict[str, str] = {"id": "secrettrader", "kind": "secrettrader", "label": "Бунс"}
+
+_LEGEND_ICON_SIZE = 30
+_LEGEND_ROW_HEIGHT = 34
+
+
+def _legend_row(
+    canvas: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    pl: int,
+    entry_y: int,
+    kind: str,
+    label: str,
+    font: Any,
+) -> int:
+    """Одна строка легенды: иконка из «Метки легенд» или цветная точка. Возвращает новую y."""
+    icon = legend_icon_for(kind, size=_LEGEND_ICON_SIZE)
+    if icon is not None:
+        canvas.paste(icon, (pl + 20, entry_y), icon)
+        label_x = pl + 20 + _LEGEND_ICON_SIZE + 10
+        text_y = entry_y + 6
+    else:
+        dot_y = entry_y + 9
+        draw.ellipse(
+            (pl + 22, dot_y - 6, pl + 34, dot_y + 6),
+            fill=ZONE_COLORS.get(kind, (200, 200, 200)),
+        )
+        label_x = pl + 44
+        text_y = entry_y
+    draw.text((label_x, text_y), label, fill=(210, 210, 210), font=font)
+    return entry_y + _LEGEND_ROW_HEIGHT
 
 _DEFAULT_ZONE_RADIUS = 2
 _BASE_SPOT: tuple[int, int, int] = (11, 11, _DEFAULT_ZONE_RADIUS)
@@ -693,11 +724,16 @@ def render_walk_frame(storage: Storage, player: Character) -> bytes:
         if not kind or kind in seen_kinds:
             continue
         seen_kinds.add(kind)
-        dot_y = entry_y + 9
-        draw.ellipse((pl + 22, dot_y - 6, pl + 34, dot_y + 6), fill=ZONE_COLORS.get(kind, (200, 200, 200)))
-        draw.text((pl + 44, entry_y), ZONE_LEGEND_LABELS.get(kind, kind), fill=(210, 210, 210), font=small)
-        entry_y += 24
-    # Постоянная легенда цветов зон (видна на любой локации).
+        entry_y = _legend_row(
+            canvas,
+            draw,
+            pl,
+            entry_y,
+            kind,
+            ZONE_LEGEND_LABELS.get(kind, kind),
+            small,
+        )
+    # Постоянная легенда (видна на любой локации).
     for kind, label in (
         ("lab", "Лаборатория"),
         ("search", "Обыск"),
@@ -706,10 +742,7 @@ def render_walk_frame(storage: Storage, player: Character) -> bytes:
     ):
         if kind in seen_kinds:
             continue
-        dot_y = entry_y + 9
-        draw.ellipse((pl + 22, dot_y - 6, pl + 34, dot_y + 6), fill=ZONE_COLORS.get(kind, (200, 200, 200)))
-        draw.text((pl + 44, entry_y), label, fill=(210, 210, 210), font=small)
-        entry_y += 24
+        entry_y = _legend_row(canvas, draw, pl, entry_y, kind, label, small)
 
     draw.text((pl + 14, pb - 42), "Стрелки — шаг по локации (бесплатно)", fill=(210, 210, 210), font=small)
     draw.text((pl + 14, pb - 24), "Зайди в круг зоны — появится действие", fill=(190, 190, 190), font=small)

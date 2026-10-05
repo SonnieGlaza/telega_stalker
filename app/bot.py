@@ -487,6 +487,8 @@ from app.faction_ranks import ranks_for_faction
 from app.storage import Character, Storage, NicknameTakenError
 from app.zone_map import TELEGRAM_PHOTO_MAX_BYTES, build_zone_map_image
 from app.location_zones import (
+    artifact_hunt_cd_remaining_text,
+    build_location_zones_caption,
     location_zones_for,
     resupply_cooldown_text,
     resupply_equipment,
@@ -6515,7 +6517,9 @@ async def show_location_zones(message: Message) -> None:
     zones_status = [
         (
             zone,
-            zone_cooldown_remaining_text(storage, player.telegram_id, location, zone["id"]),
+            artifact_hunt_cd_remaining_text(storage, player.telegram_id, location)
+            if str(zone.get("kind") or "") == "anomaly"
+            else zone_cooldown_remaining_text(storage, player.telegram_id, location, zone["id"]),
         )
         for zone in zones
     ]
@@ -6532,24 +6536,7 @@ async def show_location_zones(message: Message) -> None:
         lines.append("Здесь орудует Бунс — тайный торговец, скупает информацию")
     if zones:
         lines.append("")
-        lines.append("Зоны:")
-        search_counts: dict[str, int] = {}
-        search_order: list[str] = []
-        for zone, remaining in zones_status:
-            kind = str(zone.get("kind") or "")
-            label = str(zone.get("label") or zone.get("id") or "")
-            if kind == "search":
-                if label not in search_counts:
-                    search_counts[label] = 0
-                    search_order.append(label)
-                search_counts[label] += 1
-            elif kind == "anomaly":
-                lines.append(f"• ☢ {label} — поиск артефактов")
-            else:
-                suffix = f" (КД {remaining})" if remaining else ""
-                lines.append(f"• 🔍 {label} — обыск схрона{suffix}")
-        for label in search_order:
-            lines.append(f"• 🔍 {label} — обыск схрона ({search_counts[label]})")
+        lines.extend(build_location_zones_caption(storage, player.telegram_id, location, zones_status))
     else:
         lines.append("Здесь пока нет исследованных зон.")
     caption = "\n".join(lines)
@@ -7573,7 +7560,12 @@ async def location_map_callback(callback: CallbackQuery) -> None:
                     image_bytes = None
                 zones = location_zones_for(player.location)
                 zones_status = [
-                    (zone, zone_cooldown_remaining_text(storage, telegram_id, player.location, zone["id"]))
+                    (
+                        zone,
+                        artifact_hunt_cd_remaining_text(storage, telegram_id, player.location)
+                        if str(zone.get("kind") or "") == "anomaly"
+                        else zone_cooldown_remaining_text(storage, telegram_id, player.location, zone["id"]),
+                    )
                     for zone in zones
                 ]
                 is_home = player.location == faction_home_base(player.faction)
@@ -7802,7 +7794,9 @@ async def location_walk_callback(callback: CallbackQuery) -> None:
         zones_status = [
             (
                 zone,
-                zone_cooldown_remaining_text(storage, telegram_id, location, zone["id"]),
+                artifact_hunt_cd_remaining_text(storage, telegram_id, location)
+                if str(zone.get("kind") or "") == "anomaly"
+                else zone_cooldown_remaining_text(storage, telegram_id, location, zone["id"]),
             )
             for zone in location_zones_for(location)
         ]
@@ -7818,24 +7812,7 @@ async def location_walk_callback(callback: CallbackQuery) -> None:
             lines.append("Здесь орудует Бунс — тайный торговец, скупает информацию")
         if zones_status:
             lines.append("")
-            lines.append("Зоны:")
-            search_counts: dict[str, int] = {}
-            search_order: list[str] = []
-            for zone, remaining in zones_status:
-                kind = str(zone.get("kind") or "")
-                label = str(zone.get("label") or zone.get("id") or "")
-                if kind == "search":
-                    if label not in search_counts:
-                        search_counts[label] = 0
-                        search_order.append(label)
-                    search_counts[label] += 1
-                elif kind == "anomaly":
-                    lines.append(f"• ☢ {label} — поиск артефактов")
-                else:
-                    suffix = f" (КД {remaining})" if remaining else ""
-                    lines.append(f"• 🔍 {label} — обыск схрона{suffix}")
-            for label in search_order:
-                lines.append(f"• 🔍 {label} — обыск схрона ({search_counts[label]})")
+            lines.extend(build_location_zones_caption(storage, telegram_id, location, zones_status))
         else:
             lines.append("Здесь пока нет исследованных зон.")
         caption = "\n".join(lines)
@@ -9253,6 +9230,14 @@ async def war_transfer_section_callback(callback: CallbackQuery) -> None:
             callback,
             f"Передача доступна только на точке под контролем «{player.faction}».\n"
             f"Сейчас ты на «{loc_name}».",
+            _war_sections_markup_for(player),
+        )
+        return
+    if str(location.get("point_type") or "") == "база":
+        await edit_menu_message(
+            callback,
+            f"«{loc_name}» — база группировки, её нельзя передать союзнику.\n"
+            "Передавать можно только обычные контролируемые точки.",
             _war_sections_markup_for(player),
         )
         return

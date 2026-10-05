@@ -4,6 +4,7 @@ import json
 import random
 from collections import deque
 from dataclasses import dataclass
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,10 @@ from app.mission_icons import (
     ANOMALY_ICON_KEY,
     MISSION_ICON_GRID_DIAMETER,
     mission_icon_image,
+)
+from app.location_zones import (
+    artifact_hunt_cd_remaining_text,
+    mark_artifact_hunt_cooled_down,
 )
 from app.storage import Character, Storage
 
@@ -401,6 +406,14 @@ def start_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
             payload={"hunt_image": image, "hunt_active": True, "caption": hunt_status_caption(session, player)},
         )
 
+    # Отдельный кулдаун поиска артефактов (20 минут на метку-локацию).
+    cd_left = artifact_hunt_cd_remaining_text(storage, telegram_id, player.location)
+    if cd_left:
+        return ActionResult(
+            False,
+            f"Аномалии ещё не остыли: следующий поиск артефактов через {cd_left}.",
+        )
+
     from app.player_busy import player_busy_reason
 
     busy = player_busy_reason(storage, telegram_id, skip="hunt", auto_recover=False)
@@ -420,6 +433,7 @@ def start_artifact_hunt(storage: Storage, telegram_id: int) -> ActionResult:
 
     session = _build_session(player, detector_key, detector_name)
     save_hunt_session(storage, telegram_id, session)
+    mark_artifact_hunt_cooled_down(storage, telegram_id, player.location)
     player = storage.get_character(telegram_id, refresh_energy=False) or player
     image = render_hunt_for_player(storage, telegram_id, session, player)
     caption = hunt_status_caption(session, player)
@@ -655,6 +669,17 @@ def _load_font(size: int) -> ImageFont.ImageFont:
 _LOCATION_THUMB_DIR = PROJECT_ROOT / "assets" / "locations"
 _HUNT_MAP_DIR = PROJECT_ROOT / "assets" / "maps"
 _SEARCH_FIELD_BG = PROJECT_ROOT / "assets" / "maps" / "фон для поиска.jpg"
+_LEGEND_ICONS_DIR = PROJECT_ROOT / "assets" / "Метки легенд"
+
+# Иконки легенды зон («Метки легенд») — соответствие kind зоны → файл.
+_LEGEND_ICON_FILES: dict[str, str] = {
+    "anomaly": "аномалия.png",
+    "base": "база.png",
+    "bazaar": "барахолка.png",
+    "lab": "лаборатория.png",
+    "lair": "логово мутантов.png",
+    "search": "обыск.png",
+}
 
 _HUNT_MAP_FILES: dict[str, str] = {
     "Кордон": "Кордон.jpg",
@@ -726,6 +751,30 @@ def _load_location_thumb(location: str) -> Image.Image | None:
         return Image.open(_LOCATION_THUMB_DIR / filename).convert("RGB")
     except Exception:
         return None
+
+
+@lru_cache(maxsize=12)
+def _cached_legend_icon(name: str) -> Image.Image | None:
+    path = _LEGEND_ICONS_DIR / name
+    if not path.is_file():
+        return None
+    try:
+        return Image.open(path).convert("RGBA")
+    except Exception:
+        return None
+
+
+def legend_icon_for(kind: str, size: int = 30) -> Image.Image | None:
+    """Иконка зоны из «Метки легенд» (RGBA size×size) или None, если нет."""
+    name = _LEGEND_ICON_FILES.get(kind)
+    if name is None:
+        return None
+    img = _cached_legend_icon(name)
+    if img is None:
+        return None
+    if img.size == (int(size), int(size)):
+        return img.copy()
+    return img.resize((int(size), int(size)), Image.Resampling.LANCZOS)
 
 
 def _load_hunt_field_background(location: str) -> Image.Image | None:
@@ -991,8 +1040,8 @@ def render_hunt_frame(
     field = (margin - 6, margin - 6, margin + grid_px + 6, margin + grid_px + 6)
     draw.rounded_rectangle(field, radius=10, fill=(34, 36, 40, 255), outline=(70, 74, 80), width=2)
 
-    # Фон вылазки — только единая картинка «фон для поиска.jpg» (без карт локаций).
-    loc_bg = _load_search_field_background()
+    # Фон вылазки — карта текущей локации; если карты нет — единый фон поиска.
+    loc_bg = _load_hunt_field_background(session.location) or _load_search_field_background()
     if loc_bg is not None:
         field_img = _cover_crop(loc_bg, grid_px, grid_px).convert("RGBA")
         field_img.putalpha(225)
@@ -1108,6 +1157,30 @@ def render_hunt_frame(
     if fill_w > 0:
         draw.rounded_rectangle((pl + 14, bar_top + 70, pl + 14 + fill_w, bar_top + 90), radius=4, fill=(50, 120, 210))
     draw.text((pl + 16, bar_top + 72), f"EN {energy}/{max_energy}", fill=(255, 255, 255), font=small)
+
+    # Обозначения зон — иконки из «Метки легенд».
+    legend_y = bar_top + 96
+    draw.text((pl + 16, legend_y), "Обозначения:", fill=(220, 220, 220), font=small)
+    legend_entries = (
+        ("anomaly", "Аномалия"),
+        ("base", "База"),
+        ("bazaar", "Барахолка"),
+        ("lab", "Лаборатория"),
+        ("lair", "Логово"),
+        ("search", "Обыск"),
+    )
+    legend_font = _load_font(12)
+    legend_cols = (pl + 16, pl + 140)
+    for i, (kind, label) in enumerate(legend_entries):
+        lx = legend_cols[0] if i % 2 == 0 else legend_cols[1]
+        ly = legend_y + 16 + (i // 2) * 30
+        icon = legend_icon_for(kind, size=24)
+        if icon is not None:
+            canvas.paste(icon, (lx, ly), icon)
+            draw.text((lx + 28, ly + 4), label, fill=(210, 210, 210), font=legend_font)
+        else:
+            draw.ellipse((lx + 3, ly + 6, lx + 17, ly + 20), fill=(150, 150, 150), outline=(90, 90, 90))
+            draw.text((lx + 20, ly + 4), label, fill=(210, 210, 210), font=legend_font)
 
     draw.text((pl + 14, pb - 42), "Дойди до сигнала детектора", fill=(210, 210, 210), font=small)
     draw.text((pl + 14, pb - 24), "Стрелки - ход, кнопка - бросить", fill=(190, 190, 190), font=small)

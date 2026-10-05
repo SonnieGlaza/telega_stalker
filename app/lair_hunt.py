@@ -354,6 +354,19 @@ def _set_lair_cooldown(storage: Storage, telegram_id: int) -> None:
     )
 
 
+def lair_cooldown_remaining_text(storage: Storage, telegram_id: int) -> str | None:
+    """Человекочитаемый остаток кулдауна входа в логово; None — можно заходить."""
+    minutes = _lair_cooldown_left(storage, telegram_id)
+    if minutes <= 0:
+        return None
+    hours, rem = divmod(minutes, 60)
+    if hours and rem:
+        return f"{hours}ч {rem}м"
+    if hours:
+        return f"{hours}ч"
+    return f"{minutes}м"
+
+
 def shoot_lair_hunt(storage: Storage, telegram_id: int, direction: str) -> ActionResult:
     """Выстрел в направлении: первый мутант на линии погибает (прототип — 1 попадание)."""
     session = get_lair_session(storage, telegram_id)

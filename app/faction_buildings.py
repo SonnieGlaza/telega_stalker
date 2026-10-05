@@ -147,10 +147,13 @@ def build_building(storage: Storage, telegram_id: int, key: str) -> ActionResult
 
 
 def faction_buildings_status_text(storage: Storage, faction: str | None) -> str:
-    """Статус всех построек фракции, по строке на каждую."""
+    """Статус всех построек фракции, по строке на каждую (с ценой строительства)."""
     if faction is None or str(faction).strip() == "":
         return "Постройки: нет группировки."
-    lines: list[str] = []
+    cost_ru = f"{BUILDING_COST_RU:,}".replace(",", " ")
+    lines: list[str] = [
+        f"💰 Стоимость постройки: {BUILDING_COST_MATERIALS} стройматериалов + {cost_ru} RU из казны",
+    ]
     for key in BUILDING_KEYS:
         icon = BUILDING_ICONS.get(key, "🏚")
         title = BUILDING_TITLES[key]

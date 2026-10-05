@@ -623,9 +623,14 @@ def location_zones_keyboard(
         zone_id = str(zone.get("id") or "")
         label = str(zone.get("label") or zone_id)
         if kind == "anomaly":
-            rows.append(
-                [InlineKeyboardButton(text="☢ Поиск артов", callback_data="locmap:anomaly")]
-            )
+            if remaining:
+                rows.append(
+                    [InlineKeyboardButton(text=f"☢ Поиск артов (КД {remaining})", callback_data="locmap:noop")]
+                )
+            else:
+                rows.append(
+                    [InlineKeyboardButton(text="☢ Поиск артов", callback_data="locmap:anomaly")]
+                )
         elif kind == "bazaar":
             rows.append(
                 [InlineKeyboardButton(text="🏦 Барахолка", callback_data="locmap:bazaar")]
@@ -726,7 +731,12 @@ def location_walk_keyboard(
         elif kind == "trade":
             rows.append([InlineKeyboardButton(text="🛒 Торговец", callback_data="locmap:vendor")])
         elif kind == "anomaly":
-            rows.append([InlineKeyboardButton(text="☢ Поиск артов", callback_data="locmap:anomaly")])
+            if remaining:
+                rows.append(
+                    [InlineKeyboardButton(text=f"☢ Поиск артов (КД {remaining})", callback_data="locmap:noop")]
+                )
+            else:
+                rows.append([InlineKeyboardButton(text="☢ Поиск артов", callback_data="locmap:anomaly")])
         elif kind == "lair":
             rows.append([InlineKeyboardButton(text="👹 Зачистка логова", callback_data="locmap:lair")])
         elif kind == "search":

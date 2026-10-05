@@ -136,7 +136,7 @@ LOCATION_ZONES: dict[str, list[dict]] = {
     ],
     "Темная долина": [
         {"id": "anomaly", "kind": "anomaly", "label": "Аномальный участок"},
-        {"id": "search_1", "kind": "search", "label": "Развалины деревни"},
+        {"id": "search_1", "kind": "search", "label": "обыск"},
     ],
     "Рыжий лес": [
         {"id": "anomaly", "kind": "anomaly", "label": "Аномальный участок"},
@@ -245,6 +245,91 @@ def zone_cooldown_remaining_text(
     if hours:
         return f"{hours}ч"
     return f"{minutes}м"
+
+
+# Отдельный кулдаун поиска артефактов (аномальный участок): 20 минут на метку-локацию,
+# хранится отдельно от кулдаунов зон обыска / логова / пополнения.
+ARTIFACT_HUNT_CD_MINUTES = 20
+ARTIFACT_HUNT_CD_PREFIX = "huntcd:"
+
+
+def _artifact_hunt_cd_key(telegram_id: int, location: str) -> str:
+    return f"{ARTIFACT_HUNT_CD_PREFIX}{int(telegram_id)}:{location}"
+
+
+def artifact_hunt_cd_remaining_text(storage: Storage, telegram_id: int, location: str) -> str | None:
+    """Остаток кулдауна поиска артефактов («20м»); None — можно искать."""
+    raw = storage.get_meta(_artifact_hunt_cd_key(telegram_id, location))
+    if not raw:
+        return None
+    try:
+        ready_at = datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None
+    if ready_at.tzinfo is None:
+        ready_at = ready_at.replace(tzinfo=timezone.utc)
+    total_sec = max(0, int((ready_at - datetime.now(timezone.utc)).total_seconds()))
+    if total_sec <= 0:
+        return None
+    hours, rem = divmod(total_sec, 3600)
+    minutes = rem // 60
+    if hours and minutes:
+        return f"{hours}ч {minutes}м"
+    if hours:
+        return f"{hours}ч"
+    return f"{minutes}м"
+
+
+def mark_artifact_hunt_cooled_down(storage: Storage, telegram_id: int, location: str) -> None:
+    """Поставить кулдаун поиска артефактов на локацию (20 минут)."""
+    ready_at = datetime.now(timezone.utc) + timedelta(minutes=ARTIFACT_HUNT_CD_MINUTES)
+    storage.set_meta(_artifact_hunt_cd_key(telegram_id, location), ready_at.isoformat())
+
+
+def build_location_zones_caption(
+    storage: Storage,
+    telegram_id: int,
+    location: str,
+    zones_status: list[tuple[dict, str | None]],
+) -> list[str]:
+    """Строки блока «Зоны:» для подписи «📍 Локация».
+
+    Аномалия — поиск артефактов (с отдельным КД поиска), логово мутантов —
+    зачистка (с КД входа в логово), остальное — обыск схрона. Зона с названием
+    «обыск» (Тёмная долина) показывается просто как «обыск».
+    """
+    lines: list[str] = ["Зоны:"]
+    search_counts: dict[str, int] = {}
+    search_order: list[str] = []
+    for zone, remaining in zones_status:
+        kind = str(zone.get("kind") or "")
+        label = str(zone.get("label") or zone.get("id") or "")
+        if kind == "search":
+            search_counts[label] = search_counts.get(label, 0) + 1
+            if label not in search_order:
+                search_order.append(label)
+        elif kind == "anomaly":
+            suffix = f" (КД {remaining})" if remaining else ""
+            lines.append(f"• ☢ {label} — поиск артефактов{suffix}")
+        elif kind == "lair":
+            from app.lair_hunt import lair_cooldown_remaining_text
+
+            lair_left = lair_cooldown_remaining_text(storage, telegram_id)
+            suffix = f" (КД {lair_left})" if lair_left else ""
+            lines.append(f"• 🔍 {label} — зачистка{suffix}.")
+        else:
+            suffix = f" (КД {remaining})" if remaining else ""
+            lines.append(f"• 🔍 {label} — обыск схрона{suffix}")
+    for label in search_order:
+        count = search_counts[label]
+        if label == "обыск":
+            lines.append(f"• 🔍 обыск{(' (' + str(count) + ')') if count > 1 else ''}")
+        else:
+            line = f"• 🔍 {label} — обыск схрона"
+            if count > 1:
+                line += f" ({count})"
+            lines.append(line)
+    return lines
 
 
 def start_search_zone(

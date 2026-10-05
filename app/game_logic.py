@@ -9049,6 +9049,8 @@ def transfer_location_to_ally(storage: Storage, telegram_id: int, location_name:
         return ActionResult(False, "Локация не найдена.")
     if str(location.get("controlled_by") or "") != player.faction:
         return ActionResult(False, "Передавать можно только локацию своей группировки.")
+    if str(location.get("point_type") or "") == "база":
+        return ActionResult(False, "Базы нельзя передавать союзнику — только обычные точки.")
     from app.faction_bots import apply_location_control
 
     apply_location_control(storage, location_name, ally_faction)
@@ -9750,6 +9752,31 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
             f"Укрепление: +{bonus} (доп. защитники и урон при тактическом штурме)"
         )
 
+    # Дипломатия: союзы и войны с другими группировками.
+    diplomacy_lines: list[str] = []
+    for other in FACTION_RATING_ORDER:
+        if other == player.faction:
+            continue
+        if storage.are_factions_allied(player.faction, other):
+            diplomacy_lines.append(f"🟩 {other} — союзники")
+        else:
+            diplomacy_lines.append(f"🟥 {other} — война")
+
+    # Живой рейтинг: пара онлайн-игроков группировки с их очками.
+    online_members: list[tuple[str, int]] = []
+    for member in storage.list_faction_members(player.faction):
+        member_id = int(member.get("telegram_id") or 0)
+        if member_id and is_player_online(storage, member_id):
+            stats = storage.get_player_stats(member_id)
+            online_members.append(
+                (str(member.get("nickname") or str(member_id)), int(stats.get("rating_points") or 0))
+            )
+    online_members.sort(key=lambda row: -row[1])
+    if online_members:
+        live_rating_lines = [f"🟢 {h(nick)} — {rating} очк." for nick, rating in online_members[:2]]
+    else:
+        live_rating_lines = ["Сейчас никого в сети."]
+
     garage_overview = build_faction_garage_overview(storage, player.faction)
     from app.faction_bots import build_faction_bots_overview
 
@@ -9760,6 +9787,8 @@ def build_faction_group_overview(storage: Storage, telegram_id: int) -> str:
         f"Казна: {treasury} RU"
         f"{income_note}"
         f"{base_line}\n\n"
+        f"⚔️ Отношения:\n{chr(10).join(diplomacy_lines)}\n\n"
+        f"🔥 Живой рейтинг:\n{chr(10).join(live_rating_lines)}\n\n"
         f"Склад:\n{chr(10).join(warehouse_lines)}\n\n"
         f"{garage_overview}\n\n"
         f"{bots_overview}\n\n"
@@ -10379,6 +10408,7 @@ def build_smuggling_overview(storage: Storage, telegram_id: int) -> str:
         f"Награда: {SMUGGLING_REWARD_MIN}–{SMUGGLING_REWARD_MAX} RU gross (⅓ в казну) + дроп.",
         "Провал / тайм-аут = ограбление (−RU, −HP).",
         "Бонусы шанса: пешком 0, велосипед +3, Нива +6, грузовик +12.",
+        "ХП техники на маршруте: пешком 100, велосипед 125, Нива 160, грузовик 200.",
         "",
     ]
     grid = get_smuggle_session(storage, telegram_id)
@@ -10750,6 +10780,7 @@ def start_smuggling_run(
         f"🚚 Тактический рейс контрабанды!\n"
         f"Маршрут: левый угол → правый угол → точка сдачи.\n"
         f"Груз: «{origin}» → «{destination}» ({transport_labels.get(transport_mode, transport_mode)}).\n"
+        f"ХП техники: {session.vehicle_hp}/{session.vehicle_max_hp} HP — урон с маршрута идёт по машине.\n"
         f"Шанс сдачи ~{success_chance}%. Ходов: {session.max_moves} (−⅓ от вылазки).\n"
         f"После карты — выезд к точке сдачи (таймер прибытия). Провал = ограбление.{fuel_text}"
         + (f"\n{note}" if note else ""),

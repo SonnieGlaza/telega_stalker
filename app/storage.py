@@ -896,7 +896,7 @@ class Storage:
                     ("Свалка", "база", "Бандиты", BASE_LOCATION_NPC_POWER),
                     ("Болото", "точка ресурсов", None, REGULAR_LOCATION_NPC_POWER),
                     ("НИИ Агропром", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
-                    ("Темная долина", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
+                    ("Темная долина", "точка интереса", "Долг", REGULAR_LOCATION_NPC_POWER),
                     ("Рыжий лес", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                     ("Радар", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
                     ("Припять", "точка интереса", None, REGULAR_LOCATION_NPC_POWER),
@@ -916,6 +916,9 @@ class Storage:
             )
             conn.execute(
                 "UPDATE locations SET point_type = 'точка ресурсов' WHERE name = 'Тунель'"
+            )
+            conn.execute(
+                "UPDATE locations SET controlled_by = 'Долг' WHERE name = 'Темная долина'"
             )
             self._restore_from_snapshot_if_needed(conn)
             self._ensure_characters_schema(conn)
