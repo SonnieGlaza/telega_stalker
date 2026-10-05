@@ -766,15 +766,23 @@ def _cached_legend_icon(name: str) -> Image.Image | None:
 
 def legend_icon_for(kind: str, size: int = 30) -> Image.Image | None:
     """Иконка зоны из «Метки легенд» (RGBA size×size) или None, если нет."""
+    img = legend_icon_raw(kind)
+    if img is None:
+        return None
+    if img.size == (int(size), int(size)):
+        return img
+    return img.resize((int(size), int(size)), Image.Resampling.LANCZOS)
+
+
+def legend_icon_raw(kind: str) -> Image.Image | None:
+    """Оригинал иконки зоны из «Метки легенд» (RGBA) без изменения размера."""
     name = _LEGEND_ICON_FILES.get(kind)
     if name is None:
         return None
     img = _cached_legend_icon(name)
     if img is None:
         return None
-    if img.size == (int(size), int(size)):
-        return img.copy()
-    return img.resize((int(size), int(size)), Image.Resampling.LANCZOS)
+    return img.copy()
 
 
 def _load_hunt_field_background(location: str) -> Image.Image | None:
