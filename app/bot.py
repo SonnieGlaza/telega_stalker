@@ -1967,6 +1967,45 @@ async def successful_payment_handler(message: Message) -> None:
 
 
 ADMIN_GIVE_MAX_RU = 500_000
+ADMIN_GIVE_MAX_MATERIALS = 100_000
+
+
+@router.message(Command("givematerials"), F.chat.type == "private")
+async def cmd_give_materials(message: Message, command: CommandObject) -> None:
+    """Выдать стройматериалы (inventory: materials) — команда для администратора."""
+    sender_id = message.from_user.id
+    if not is_admin_user(sender_id):
+        await message.answer("Команда доступна только администратору.")
+        return
+
+    target_token, amount = parse_target_and_int(command.args)
+    if target_token is None or amount is None:
+        await message.answer("Использование: /givematerials [telegram_id|прозвище] [количество]")
+        return
+    if amount <= 0:
+        await message.answer("Количество должно быть положительным числом.")
+        return
+    if amount > ADMIN_GIVE_MAX_MATERIALS:
+        await message.answer(f"Максимум за одну выдачу: {ADMIN_GIVE_MAX_MATERIALS} стройматериалов.")
+        return
+
+    db = get_storage()
+    target_telegram_id = resolve_player_id(db, target_token)
+    if target_telegram_id is None:
+        await message.answer(f"Игрок «{h(target_token)}» не найден.")
+        return
+    target = db.get_character(target_telegram_id, refresh_energy=False)
+    if target is None:
+        await message.answer("Игрок не найден.")
+        return
+
+    db.add_item(target_telegram_id, "materials", amount)
+    updated = db.get_character(target_telegram_id, refresh_energy=False) or target
+    new_count = int((updated.inventory or {}).get("materials", 0))
+    await message.answer(
+        f"Выдано {amount} стройматериалов игроку {h(target.nickname)} ({target_telegram_id}).\n"
+        f"В инвентаре теперь: {new_count} стройматериалов."
+    )
 
 
 @router.message(Command("give"), F.chat.type == "private")
@@ -2691,6 +2730,7 @@ DEAD_BYPASS_MESSAGE_COMMANDS = frozenset({
     "/setseason",
     "/deleteplayer",
     "/give",
+    "/givematerials",
     "/setfaction",
     "/monolith_attack",
     "/unstick",
@@ -7720,9 +7760,14 @@ async def location_map_callback(callback: CallbackQuery) -> None:
             return
 
         await callback.answer("Неизвестное действие.", show_alert=True)
-    except Exception:
+    except Exception as exc:
         logger.exception("Location map callback failed for %s action=%s", telegram_id, action)
-        await safe_callback_answer(callback, "Ошибка карты локации. Попробуй ещё раз или /fixme", show_alert=True)
+        detail = f"[{type(exc).__name__}: {exc}]" if is_admin_user(telegram_id) else ""
+        await safe_callback_answer(
+            callback,
+            (f"Ошибка карты локации. Попробуй ещё раз или /fixme {detail}")[:CALLBACK_ALERT_MAX_LEN],
+            show_alert=True,
+        )
 
 
 async def _send_or_edit_walk_frame(
@@ -7857,9 +7902,14 @@ async def location_walk_callback(callback: CallbackQuery) -> None:
             caption=walk_caption,
             markup=markup,
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("Location walk callback failed for %s action=%s", telegram_id, action)
-        await safe_callback_answer(callback, "Ошибка осмотра локации. Попробуй ещё раз или /fixme", show_alert=True)
+        detail = f"[{type(exc).__name__}: {exc}]" if is_admin_user(telegram_id) else ""
+        await safe_callback_answer(
+            callback,
+            (f"Ошибка осмотра локации. Попробуй ещё раз или /fixme {detail}")[:CALLBACK_ALERT_MAX_LEN],
+            show_alert=True,
+        )
 
 
 @router.callback_query(F.data.startswith("selltrade:"))
