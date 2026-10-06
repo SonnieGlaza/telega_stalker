@@ -28,7 +28,6 @@ from app.artifact_hunt import (
     _paste_rounded,
     _player_grid_token,
     legend_icon_for,
-    legend_icon_raw,
 )
 from app.location_zones import location_zones_for
 from app.storage import Character, Storage
@@ -534,27 +533,20 @@ def _draw_zone(
     color: tuple[int, int, int],
     box: tuple[int, int, int, int],
 ) -> None:
-    """Зона на карте: жирная обводка + метка-иконка, растянутая на всю область.
-
-    Если у типа зоны есть иконка из «Метки легенд» — цветной фон не рисуем,
-    картинка растягивается на всё поле зоны. Без иконки — полупрозрачная
-    заливка + обводка (как раньше).
-    """
+    """Прямоугольник-зона из клеток: полупрозрачная заливка + жирная обводка."""
     cell = 44
     left, top, right, bottom = box
     w = max(1, right - left)
     h = max(1, bottom - top)
     radius = max(4, min(cell // 3, min(w, h) // 2))
 
-    icon = legend_icon_raw(kind)
-    if icon is None:
-        overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        ImageDraw.Draw(overlay).rounded_rectangle(
-            (left, top, right, bottom),
-            radius=radius,
-            fill=(*color, 46),
-        )
-        canvas.alpha_composite(overlay)
+    overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    ImageDraw.Draw(overlay).rounded_rectangle(
+        (left, top, right, bottom),
+        radius=radius,
+        fill=(*color, 46),
+    )
+    canvas.alpha_composite(overlay)
     draw = ImageDraw.Draw(canvas)
     if kind == "base":
         rainbow = (
@@ -587,7 +579,7 @@ def _draw_zone(
             outline=color,
             width=5,
         )
-    if kind == "anomaly" and icon is None:
+    if kind == "anomaly":
         # «Пузырьки» аномалий — только на достаточно крупных зонах.
         if w >= cell * 2 and h >= cell * 2:
             offsets = (
@@ -603,11 +595,15 @@ def _draw_zone(
                 bx = int(left + (fx + 1) / 2 * w)
                 by = int(top + (fy + 1) / 2 * h)
                 draw.ellipse((bx - br, by - br, bx + br, by + br), outline=(*color, 220), width=2)
-    # Метка-иконка занимает всю зону: растягиваем изображение на всё поле.
+    # Иконка зоны из «Метки легенд» — рисуем в центре зоны на карте.
+    icon = legend_icon_for(kind, size=36)
     if icon is not None:
-        if icon.size != (w, h):
-            icon = icon.resize((w, h), Image.Resampling.LANCZOS)
-        canvas.paste(icon, (left, top), icon)
+        iw, ih = icon.size
+        canvas.paste(
+            icon,
+            ((left + right) // 2 - iw // 2, (top + bottom) // 2 - ih // 2),
+            icon,
+        )
 
 
 def render_walk_frame(storage: Storage, player: Character) -> bytes:

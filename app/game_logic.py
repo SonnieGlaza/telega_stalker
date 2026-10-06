@@ -10408,7 +10408,6 @@ def build_smuggling_overview(storage: Storage, telegram_id: int) -> str:
         f"Награда: {SMUGGLING_REWARD_MIN}–{SMUGGLING_REWARD_MAX} RU gross (⅓ в казну) + дроп.",
         "Провал / тайм-аут = ограбление (−RU, −HP).",
         "Бонусы шанса: пешком 0, велосипед +3, Нива +6, грузовик +12.",
-        "ХП техники на маршруте: пешком 100, велосипед 125, Нива 160, грузовик 200.",
         "",
     ]
     grid = get_smuggle_session(storage, telegram_id)
@@ -10780,7 +10779,6 @@ def start_smuggling_run(
         f"🚚 Тактический рейс контрабанды!\n"
         f"Маршрут: левый угол → правый угол → точка сдачи.\n"
         f"Груз: «{origin}» → «{destination}» ({transport_labels.get(transport_mode, transport_mode)}).\n"
-        f"ХП техники: {session.vehicle_hp}/{session.vehicle_max_hp} HP — урон с маршрута идёт по машине.\n"
         f"Шанс сдачи ~{success_chance}%. Ходов: {session.max_moves} (−⅓ от вылазки).\n"
         f"После карты — выезд к точке сдачи (таймер прибытия). Провал = ограбление.{fuel_text}"
         + (f"\n{note}" if note else ""),

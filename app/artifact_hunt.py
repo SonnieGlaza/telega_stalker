@@ -759,23 +759,9 @@ def _cached_legend_icon(name: str) -> Image.Image | None:
     if not path.is_file():
         return None
     try:
-        img = Image.open(path).convert("RGBA")
+        return Image.open(path).convert("RGBA")
     except Exception:
         return None
-    return _strip_legend_background(img)
-
-
-def _strip_legend_background(img: Image.Image) -> Image.Image:
-    """Убрать полупрозрачную цветную подложку иконки, оставив символ.
-
-    Иконки «Метки легенд» — символ на полупрозрачной цветной «плите»
-    (белой/жёлтой и т.п.). При растягивании метки на всю зону плита
-    превращается в сплошной фон. Отбрасываем все пиксели с частичной
-    прозрачностью (плита и мягкие края), оставляя непрозрачный символ.
-    """
-    mask = img.getchannel("A").point(lambda v: 255 if v >= 250 else 0)
-    img.putalpha(mask)
-    return img
 
 
 def legend_icon_for(kind: str, size: int = 30) -> Image.Image | None:
